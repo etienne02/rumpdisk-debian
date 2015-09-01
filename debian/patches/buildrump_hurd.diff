@@ -1,0 +1,147 @@
+Index: rumpkernel-0~20150715/buildrump.sh/buildrump.sh
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/buildrump.sh	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/buildrump.sh	2015-08-18 08:02:02.000000000 +0200
+@@ -993,6 +993,13 @@
+ 		cppdefines _LITTLE_ENDIAN \
+ 		    && appendvar RUMPKERN_UNDEF -U_LITTLE_ENDIAN
+ 		;;
++	*-gnu*)
++		RUMPKERN_UNDEF='-U__GNU__'
++		cppdefines _BIG_ENDIAN \
++		    && appendvar RUMPKERN_UNDEF -U_BIG_ENDIAN
++		cppdefines _LITTLE_ENDIAN \
++		    && appendvar RUMPKERN_UNDEF -U_LITTLE_ENDIAN
++		;;
+ 	*-dragonflybsd)
+ 		RUMPKERN_UNDEF='-U__DragonFly__'
+ 		;;
+@@ -1064,6 +1071,11 @@
+ 		doesitbuild '#include <linux/if_tun.h>' -c && RUMP_VIRTIF=yes
+ 		cppdefines '__ANDROID__' || HIJACK=true
+ 		;;
++	*-gnu*)
++		EXTRA_RUMPCOMMON='-ldl'
++		EXTRA_RUMPCLIENT='-lpthread'
++		appendvar EXTRA_CFLAGS -DMAXHOSTNAMELEN=256 -DPATH_MAX=1024
++		;;
+ 	*-openbsd*)
+ 		EXTRA_RUMPCLIENT='-lpthread'
+ 		;;
+Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/lib/librumpuser/rumpuser_port.h	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_port.h	2015-08-18 08:02:02.000000000 +0200
+@@ -63,7 +63,7 @@
+ #include "rumpuser_config.h"
+ #endif
+ 
+-#ifdef __linux__
++#if defined(__linux__) || defined(__GNU__) || defined(__GLIBC__)
+ #define _GNU_SOURCE
+ #endif
+ 
+Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c	2015-08-18 08:02:02.000000000 +0200
+@@ -90,7 +90,7 @@
+ 
+ 
+ /* how to use atomic ops on Linux? */
+-#if defined(__linux__) || defined(__APPLE__) || defined(__CYGWIN__) || defined(__OpenBSD__)
++#if defined(__linux__) || defined(__APPLE__) || defined(__CYGWIN__) || defined(__OpenBSD__) || defined(__GNU__) || defined(__GLIBC__)
+ static pthread_mutex_t discomtx = PTHREAD_MUTEX_INITIALIZER;
+ 
+ static void
+Index: rumpkernel-0~20150715/buildrump.sh/src/sys/sys/syscallargs.h
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/sys/sys/syscallargs.h	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/sys/sys/syscallargs.h	2015-08-18 08:02:02.000000000 +0200
+@@ -10,8 +10,8 @@
+ #ifndef _SYS_SYSCALLARGS_H_
+ #define	_SYS_SYSCALLARGS_H_
+ 
+-#include <sys/mount.h>
+ #ifndef RUMP_CLIENT
++#include <sys/mount.h>
+ #include <sys/sched.h>
+ #endif
+ #include <sys/socket.h>
+Index: rumpkernel-0~20150715/buildrump.sh/src/tools/compat/Makefile
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/compat/Makefile	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/tools/compat/Makefile	2015-08-18 08:02:02.000000000 +0200
+@@ -38,6 +38,11 @@
+ CPPFLAGS+=	-I. -I./include -I${.CURDIR} -I${.CURDIR}/sys \
+ 		-DHAVE_NBTOOL_CONFIG_H=1 -D_FILE_OFFSET_BITS=64
+ 
++# Define MAXPATHLEN limit on GNU/Hurd
++.if ${BUILD_OSTYPE} == "GNU"
++CPPFLAGS+=	-DMAXPATHLEN=1024 -DPATH_MAX=1024
++.endif
++
+ .PATH:		${.CURDIR}/../../lib/libc/cdb \
+ 		${.CURDIR}/../../lib/libc/gen \
+ 		${.CURDIR}/../../lib/libc/hash \
+Index: rumpkernel-0~20150715/buildrump.sh/src/tools/compat/defs.mk.in
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/compat/defs.mk.in	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/tools/compat/defs.mk.in	2015-08-18 08:02:02.000000000 +0200
+@@ -79,6 +79,11 @@
+ HOST_CPPFLAGS+=	${COMPATINCFLAGS} -I${NETBSDSRCDIR}/tools/compat \
+ 		-DHAVE_NBTOOL_CONFIG_H=1 -D_FILE_OFFSET_BITS=64
+ 
++# Define MAXPATHLEN limit on GNU/Hurd
++.if ${BUILD_OSTYPE} == "GNU"
++HOST_CPPFLAGS+= -DMAXPATHLEN=1024 -DPATH_MAX=1024
++.endif
++
+ .if "${COMPATLIB_NO_LIB}" != "yes"
+ DPADD+=		${COMPATLIBDIR}/libnbcompat.a
+ LDADD+=		-L${COMPATLIBDIR} -lnbcompat @LIBS@
+Index: rumpkernel-0~20150715/buildrump.sh/src/tools/make/configure
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/make/configure	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/tools/make/configure	2015-08-29 23:25:22.389044018 +0200
+@@ -971,6 +971,14 @@
+ #define DEFSHELL_CUSTOM "${BSHELL}"
+ EOF
+ 
++if [ $(uname) = GNU ] ; then
++
++cat >>confdefs.h <<EOF
++#define MAXPATHLEN 1024
++EOF
++
++fi
++
+ # Make sure we have POSIX regex ability.
+ ac_ext=c
+ ac_cpp='$CPP $CPPFLAGS'
+Index: rumpkernel-0~20150715/buildrump.sh/src/tools/make/configure.ac
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/make/configure.ac	2015-08-15 12:10:39.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/tools/make/configure.ac	2015-08-18 08:02:02.000000000 +0200
+@@ -24,6 +24,7 @@
+ 
+ AC_INIT([make], [noversion], [bin-bug-people@NetBSD.org])
+ AC_CONFIG_FILES(buildmake.sh)
++AC_CANONICAL_HOST()
+ 
+ AC_PATH_PROG(BSHELL, sh)
+ if test x"$BSHELL" = x; then
+@@ -31,6 +32,13 @@
+ fi
+ AC_DEFINE_UNQUOTED(DEFSHELL_CUSTOM, "${BSHELL}")
+ 
++case $host_os in
++	gnu*)
++		# Define MAXPATHLEN limit on GNU/Hurd
++		AC_DEFINE_UNQUOTED(MAXPATHLEN, 1024)
++	;;
++esac
++
+ # Make sure we have POSIX regex ability.
+ AC_CHECK_HEADER(regex.h,, AC_MSG_ERROR([POSIX regex.h is required]))
+ 

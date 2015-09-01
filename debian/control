@@ -1,0 +1,38 @@
+Source: rumpkernel
+Priority: extra
+Maintainer: Robert Millan <rmh@debian.org>
+Build-Depends:
+ debhelper (>= 8.0.0),
+ autotools-dev,
+ libpciaccess-dev [hurd-any],
+ gnumach-dev (>= 2:1.5+git20150827-1~) [hurd-any],
+ mig [hurd-any],
+Standards-Version: 3.9.6
+Section: libs
+Homepage: http://rumpkernel.org/
+
+Package: librump-dev
+Section: libdevel
+Architecture: any
+Depends: ${misc:Depends}, librump0 (= ${binary:Version})
+Description: Rump kernel library (development files)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, PCI device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the development files for Rump kernel library.
+
+Package: librump0
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Rump kernel library (runtime)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, PCI device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the runtime for Rump kernel library.
