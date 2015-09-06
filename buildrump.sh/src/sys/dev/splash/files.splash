@@ -1,0 +1,6 @@
+# $NetBSD: files.splash,v 1.4 2015/05/01 02:00:41 nat Exp $
+
+define splash: stbi
+file dev/splash/splash.c	splash & splashscreen
+
+defflag opt_splash.h	SPLASHSCREEN
