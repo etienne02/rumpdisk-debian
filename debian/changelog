@@ -1,13 +1,5 @@
-rumpkernel (0~20150715-2) unstable; urgency=low
-
-  * Rework ldflags.diff into equivalent change based on make includes.
-  * Auto-generate experimentalUser.c using mig instead of embedding it.
-  * Use intr.h from <device/intr.h> now that gnumach-dev provides it.
-
- -- Robert Millan <rmh@debian.org>  Tue, 01 Sep 2015 22:41:45 +0200
-
 rumpkernel (0~20150715-1) unstable; urgency=low
 
   * Initial release. (Closes: #797411)
 
- -- Robert Millan <rmh@debian.org>  Sun, 30 Aug 2015 16:21:35 +0200
+ -- Robert Millan <rmh@debian.org>  Tue, 01 Sep 2015 22:41:45 +0200
