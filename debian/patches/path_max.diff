@@ -1,0 +1,16 @@
+Index: rumpkernel-0~20150715/buildrump.sh/src/usr.bin/make/make.h
+===================================================================
+--- rumpkernel-0~20150715.orig/buildrump.sh/src/usr.bin/make/make.h	2015-07-23 22:54:05.000000000 +0200
++++ rumpkernel-0~20150715/buildrump.sh/src/usr.bin/make/make.h	2015-09-05 12:31:02.556270631 +0200
+@@ -503,4 +503,11 @@
+ #define MAX(a, b) ((a > b) ? a : b)
+ #endif
+ 
++/* GNU/Hurd systems lack MAXPATHLEN */
++#include <limits.h>
++#ifndef MAXPATHLEN
++#warning "MAXPATHLEN undefined on this system, forcing an arbitrary limit"
++#define MAXPATHLEN	4096
++#endif
++
+ #endif /* _MAKE_H_ */

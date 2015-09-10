@@ -1,6 +1,7 @@
 rumpkernel (0~20150715-2) UNRELEASED; urgency=medium
 
   * Fix FTBFS on hurd-i386 due to incorrect experimentalUser.c path.
+  * Simplify MAXPATHLEN patch
 
  -- Robert Millan <rmh@debian.org>  Mon, 07 Sep 2015 23:28:35 +0200
 
