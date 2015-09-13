@@ -4,6 +4,7 @@ rumpkernel (0~20150715-2) UNRELEASED; urgency=medium
   * Simplify MAXPATHLEN patch.
   * Add Vcs-* URLs.
   * Fix error reporting in pci_user-gnu.c.
+  * Fix copyright years for buildrump.sh/brlib/libnetconfig/dhcp_main.c.
 
  -- Robert Millan <rmh@debian.org>  Mon, 07 Sep 2015 23:28:35 +0200
 

@@ -25,7 +25,7 @@ Copyright: 2013, Antti Kantee <pooka@iki.fi>
 License: BSD-2-clause
 
 Files: buildrump.sh/brlib/libnetconfig/dhcp_main.c
-Copyright: 2005-2015, Antti Kantee.
+Copyright: 2011, 2013, Antti Kantee.
 License: BSD-2-clause
 
 Files: buildrump.sh/brlib/libnetconfig/inet_pton6.c
