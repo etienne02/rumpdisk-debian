@@ -1,7 +1,7 @@
-Index: rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile
+Index: rumpkernel/pci-userspace/src-gnu/Makefile
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile	2015-08-31 16:08:48.023998727 +0200
++++ rumpkernel/pci-userspace/src-gnu/Makefile	2015-09-13 12:38:44.174174956 +0200
 @@ -0,0 +1,21 @@
 +RUMPTOP= ${TOPRUMP}
 +
@@ -24,10 +24,10 @@ Index: rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile
 +.endfor
 +
 +.include <bsd.subdir.mk>
-Index: rumpkernel-0~20150715/pci-userspace/src-gnu/pci_user-gnu.c
+Index: rumpkernel/pci-userspace/src-gnu/pci_user-gnu.c
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ rumpkernel-0~20150715/pci-userspace/src-gnu/pci_user-gnu.c	2015-08-31 16:08:13.839997787 +0200
++++ rumpkernel/pci-userspace/src-gnu/pci_user-gnu.c	2015-09-13 12:39:45.594177862 +0200
 @@ -0,0 +1,384 @@
 +/*-
 + * Copyright (c) 2014 Antti Kantee.  All Rights Reserved.
@@ -114,7 +114,7 @@ Index: rumpkernel-0~20150715/pci-userspace/src-gnu/pci_user-gnu.c
 +	is_init = 1;
 +
 +	if (get_privileged_ports (&master_host, &master_device))
-+		errx(1, "get_privileged_ports");
++		err(1, "get_privileged_ports");
 +
 +	pci_system_init ();
 +	struct pci_device_iterator *dev_iter;
@@ -207,26 +207,26 @@ Index: rumpkernel-0~20150715/pci-userspace/src-gnu/pci_user-gnu.c
 +	ret = mach_port_allocate (mach_task_self (), MACH_PORT_RIGHT_RECEIVE,
 +				&delivery_port);
 +	if (ret)
-+		errx(ret, "mach_port_allocate");
++		err(ret, "mach_port_allocate");
 +
 +	ret = thread_get_assignment (mach_thread_self (), &pset);
 +	if (ret)
-+		errx(ret, "thread_get_assignment");
++		err(ret, "thread_get_assignment");
 +
 +	ret = host_processor_set_priv (master_host, pset, &psetcntl);
 +	if (ret)
-+		errx(ret, "host_processor_set_priv");
++		err(ret, "host_processor_set_priv");
 +
 +	thread_max_priority (mach_thread_self (), psetcntl, 0);
 +	ret = thread_priority (mach_thread_self (), RUMP_IRQ_PRIO, 0);
 +	if (ret)
-+		errx(ret, "thread_priority");
++		err(ret, "thread_priority");
 +
 +	ret = device_intr_register(master_device, irq->intrline,
 +					0, 0x04000000, delivery_port,
 +					MACH_MSG_TYPE_MAKE_SEND);
 +	if (ret) {
-+		warnx("device_intr_register");
++		warn("device_intr_register");
 +		return 0;
 +	}
 +
@@ -413,17 +413,17 @@ Index: rumpkernel-0~20150715/pci-userspace/src-gnu/pci_user-gnu.c
 +	}
 +	return 0;
 +}
-Index: rumpkernel-0~20150715/pci-userspace/src-gnu/rumpcomp_userfeatures_pci.h
+Index: rumpkernel/pci-userspace/src-gnu/rumpcomp_userfeatures_pci.h
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ rumpkernel-0~20150715/pci-userspace/src-gnu/rumpcomp_userfeatures_pci.h	2015-08-31 16:08:13.839997787 +0200
++++ rumpkernel/pci-userspace/src-gnu/rumpcomp_userfeatures_pci.h	2015-09-13 12:38:44.174174956 +0200
 @@ -0,0 +1,2 @@
 +#define RUMPCOMP_USERFEATURE_PCI_IOSPACE
 +#define RUMPCOMP_USERFEATURE_PCI_DMAFREE
-Index: rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile.inc
+Index: rumpkernel/pci-userspace/src-gnu/Makefile.inc
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile.inc	2015-08-31 16:32:20.708037551 +0200
++++ rumpkernel/pci-userspace/src-gnu/Makefile.inc	2015-09-13 12:38:44.174174956 +0200
 @@ -0,0 +1,9 @@
 +LDFLAGS += -lpciaccess
 +
@@ -434,10 +434,10 @@ Index: rumpkernel-0~20150715/pci-userspace/src-gnu/Makefile.inc
 +			-user experimentalUser.c \
 +			-server /dev/null \
 +			-header experimental_U.h
-Index: rumpkernel-0~20150715/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile
 ===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile	2015-08-15 12:10:33.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile	2015-08-31 16:19:58.220017146 +0200
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile	2015-09-13 12:38:44.198174957 +0200
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci/Makefile	2015-09-13 12:38:44.198174957 +0200
 @@ -41,6 +41,10 @@
  # XXX: messy
  .undef RUMPKERN_ONLY
