@@ -1,3 +1,6 @@
+
+Status: Pending on upstream to decide what to do with buildrump.sh bits
+
 Index: rumpkernel/pci-userspace/src-gnu/Makefile
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000

@@ -1,8 +1,11 @@
-Index: rumpkernel-0~20150715/buildrump.sh/buildrump.sh
+
+Status: Merged in buildrump.sh and src-netbsd
+
+Index: rumpkernel/buildrump.sh/buildrump.sh
 ===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/buildrump.sh	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/buildrump.sh	2015-08-18 08:02:02.000000000 +0200
-@@ -993,6 +993,13 @@
+--- rumpkernel.orig/buildrump.sh/buildrump.sh
++++ rumpkernel/buildrump.sh/buildrump.sh
+@@ -993,6 +993,13 @@ evaltoolchain ()
  		cppdefines _LITTLE_ENDIAN \
  		    && appendvar RUMPKERN_UNDEF -U_LITTLE_ENDIAN
  		;;
@@ -16,22 +19,21 @@ Index: rumpkernel-0~20150715/buildrump.sh/buildrump.sh
  	*-dragonflybsd)
  		RUMPKERN_UNDEF='-U__DragonFly__'
  		;;
-@@ -1064,6 +1071,11 @@
+@@ -1064,6 +1071,10 @@ evalplatform ()
  		doesitbuild '#include <linux/if_tun.h>' -c && RUMP_VIRTIF=yes
  		cppdefines '__ANDROID__' || HIJACK=true
  		;;
 +	*-gnu*)
 +		EXTRA_RUMPCOMMON='-ldl'
 +		EXTRA_RUMPCLIENT='-lpthread'
-+		appendvar EXTRA_CFLAGS -DMAXHOSTNAMELEN=256 -DPATH_MAX=1024
 +		;;
  	*-openbsd*)
  		EXTRA_RUMPCLIENT='-lpthread'
  		;;
-Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
+Index: rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
 ===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/lib/librumpuser/rumpuser_port.h	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_port.h	2015-08-18 08:02:02.000000000 +0200
+--- rumpkernel.orig/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
++++ rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
 @@ -63,7 +63,7 @@
  #include "rumpuser_config.h"
  #endif
@@ -41,11 +43,11 @@ Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_port.h
  #define _GNU_SOURCE
  #endif
  
-Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
+Index: rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
 ===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c	2015-08-18 08:02:02.000000000 +0200
-@@ -90,7 +90,7 @@
+--- rumpkernel.orig/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
++++ rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
+@@ -90,7 +90,7 @@ static char banner[MAXBANNER];
  
  
  /* how to use atomic ops on Linux? */
@@ -54,10 +56,10 @@ Index: rumpkernel-0~20150715/buildrump.sh/src/lib/librumpuser/rumpuser_sp.c
  static pthread_mutex_t discomtx = PTHREAD_MUTEX_INITIALIZER;
  
  static void
-Index: rumpkernel-0~20150715/buildrump.sh/src/sys/sys/syscallargs.h
+Index: rumpkernel/buildrump.sh/src/sys/sys/syscallargs.h
 ===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/sys/sys/syscallargs.h	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/sys/sys/syscallargs.h	2015-08-18 08:02:02.000000000 +0200
+--- rumpkernel.orig/buildrump.sh/src/sys/sys/syscallargs.h
++++ rumpkernel/buildrump.sh/src/sys/sys/syscallargs.h
 @@ -10,8 +10,8 @@
  #ifndef _SYS_SYSCALLARGS_H_
  #define	_SYS_SYSCALLARGS_H_
@@ -68,35 +70,3 @@ Index: rumpkernel-0~20150715/buildrump.sh/src/sys/sys/syscallargs.h
  #include <sys/sched.h>
  #endif
  #include <sys/socket.h>
-Index: rumpkernel-0~20150715/buildrump.sh/src/tools/compat/Makefile
-===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/compat/Makefile	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/tools/compat/Makefile	2015-08-18 08:02:02.000000000 +0200
-@@ -38,6 +38,11 @@
- CPPFLAGS+=	-I. -I./include -I${.CURDIR} -I${.CURDIR}/sys \
- 		-DHAVE_NBTOOL_CONFIG_H=1 -D_FILE_OFFSET_BITS=64
- 
-+# Define MAXPATHLEN limit on GNU/Hurd
-+.if ${BUILD_OSTYPE} == "GNU"
-+CPPFLAGS+=	-DMAXPATHLEN=1024 -DPATH_MAX=1024
-+.endif
-+
- .PATH:		${.CURDIR}/../../lib/libc/cdb \
- 		${.CURDIR}/../../lib/libc/gen \
- 		${.CURDIR}/../../lib/libc/hash \
-Index: rumpkernel-0~20150715/buildrump.sh/src/tools/compat/defs.mk.in
-===================================================================
---- rumpkernel-0~20150715.orig/buildrump.sh/src/tools/compat/defs.mk.in	2015-08-15 12:10:39.000000000 +0200
-+++ rumpkernel-0~20150715/buildrump.sh/src/tools/compat/defs.mk.in	2015-08-18 08:02:02.000000000 +0200
-@@ -79,6 +79,11 @@
- HOST_CPPFLAGS+=	${COMPATINCFLAGS} -I${NETBSDSRCDIR}/tools/compat \
- 		-DHAVE_NBTOOL_CONFIG_H=1 -D_FILE_OFFSET_BITS=64
- 
-+# Define MAXPATHLEN limit on GNU/Hurd
-+.if ${BUILD_OSTYPE} == "GNU"
-+HOST_CPPFLAGS+= -DMAXPATHLEN=1024 -DPATH_MAX=1024
-+.endif
-+
- .if "${COMPATLIB_NO_LIB}" != "yes"
- DPADD+=		${COMPATLIBDIR}/libnbcompat.a
- LDADD+=		-L${COMPATLIBDIR} -lnbcompat @LIBS@
