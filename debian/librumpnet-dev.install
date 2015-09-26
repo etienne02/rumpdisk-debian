@@ -1,0 +1,4 @@
+usr/lib/librumpnet.a
+usr/lib/librumpnet_*.a
+usr/lib/librumpnet.so
+usr/lib/librumpnet_*.so

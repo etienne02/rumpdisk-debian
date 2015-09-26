@@ -1,1 +1,4 @@
-usr/lib/lib*.so.*
+usr/lib/librump.so.*
+usr/lib/librumpuser.so.*
+usr/lib/librumpvfs.so.*
+usr/lib/librumpdev.so.*

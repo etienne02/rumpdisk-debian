@@ -1,0 +1,7 @@
+usr/lib/librump.so.*
+usr/lib/librumpdev_audio.so.*
+usr/lib/librumpdev_audio_ac97.so.*
+usr/lib/librumpdev_pci_auich.so.*
+usr/lib/librumpdev_pci_hdaudio.so.*
+usr/lib/librumpdev_hdaudio_hdafg.so.*
+usr/lib/librumpdev_pci_eap.so.*
