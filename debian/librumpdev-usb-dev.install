@@ -1,0 +1,6 @@
+usr/lib/librumpdev_usb.a
+usr/lib/librumpdev_usb.so
+usr/lib/librumpdev_pci_usbhc.a
+usr/lib/librumpdev_pci_usbhc.so
+usr/lib/librumpdev_ugenhc.a
+usr/lib/librumpdev_ugenhc.so

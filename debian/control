@@ -117,6 +117,58 @@ Description: Rump PCI device library (runtime)
  .
  This package contains the runtime for the Rump PCI device library.
 
+Package: librumpdev-usb-dev
+Section: libdevel
+Architecture: linux-any hurd-any
+Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
+Description: Rump USB device library (development files)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, USB device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the development files for the Rump USB device library.
+
+Package: librumpdev-usb0
+Section: libs
+Architecture: linux-any hurd-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version})
+Description: Rump USB device library (runtime)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, USB device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the runtime for the Rump USB device library.
+
+Package: librumpdev-disk-dev
+Section: libdevel
+Architecture: linux-any hurd-any
+Depends: ${misc:Depends}, librumpdev-pci-dev (= ${binary:Version}), librumpdev-disk0 (= ${binary:Version})
+Description: Rump disk device libraries (development files)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, PCI device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the development files for Rump disk device libraries.
+
+Package: librumpdev-disk0
+Section: libs
+Architecture: linux-any hurd-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
+Description: Rump disk device libraries (runtime)
+ Rump kernels provide free, portable, componentized, kernel quality drivers
+ such as file systems, POSIX system call handlers, PCI device drivers, a
+ SCSI protocol stack, virtio and a TCP/IP stack. These drivers may be
+ integrated into existing systems, or run as standalone unikernels on
+ cloud hypervisors and embedded systems.
+ .
+ This package contains the runtime for Rump disk device libraries.
+
 Package: librumpdev-audio-dev
 Section: libdevel
 Architecture: linux-any hurd-any
