@@ -104,7 +104,7 @@ Description: Rump PCI device library (development files)
  .
  This package contains the development files for the Rump PCI device library.
 
-Package: librumpdev-pci-0
+Package: librumpdev-pci0
 Section: libs
 Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
@@ -130,10 +130,10 @@ Description: Rump audio device libraries (development files)
  .
  This package contains the development files for Rump audio device libraries.
 
-Package: librumpdev-audio-0
+Package: librumpdev-audio0
 Section: libs
 Architecture: linux-any hurd-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci-0 (= ${binary:Version})
+Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version})
 Description: Rump audio device libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -146,7 +146,7 @@ Description: Rump audio device libraries (runtime)
 Package: librumpdev-if-dev
 Section: libdevel
 Architecture: linux-any hurd-any
-Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-if-0 (= ${binary:Version})
+Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-if0 (= ${binary:Version})
 Description: Rump network interface device libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -157,7 +157,7 @@ Description: Rump network interface device libraries (development files)
  This package contains the development files for Rump network interface device
  libraries.
 
-Package: librumpdev-if-0
+Package: librumpdev-if0
 Section: libs
 Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
