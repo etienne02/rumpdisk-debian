@@ -1,0 +1,28 @@
+Template: librumpdev-pci0/hugepages
+Type: boolean
+Default: true
+Description: Automatically configure hugepages?
+ Rump drivers for PCI devices need spare hugepages in order to obtain
+ access to DMA-safe (i.e. physically-contigous) memory. A detailed
+ explanation is available at:
+ .
+   https://github.com/rumpkernel/wiki/wiki/Howto%3A-Accessing-PCI-devices-from-userspace
+ .
+ If you plan on using Rump drivers for PCI devices, you can either
+ configure them manually or have this script automatically configure
+ them for you.
+
+Template: librumpdev-pci0/nr_hugepages
+Type: string
+Default: 64
+Description: Number of hugepages available to userland:
+ From this menu you can define the number of hugepages that you wish
+ to make available to userland applications (a reasonable default value
+ has been selected for you).
+ .
+ Note: If you see errors like:
+ .
+   "iwn0: could not allocate TX ring DMA memory"
+ .
+ when trying to use Rump PCI drivers, it's possible that you need to set
+ a large value here.

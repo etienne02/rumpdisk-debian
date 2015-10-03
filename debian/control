@@ -107,7 +107,11 @@ Description: Rump PCI device library (development files)
 Package: librumpdev-pci0
 Section: libs
 Architecture: linux-any hurd-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
+Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version}),
+ sysfsutils [linux-any],
+Recommends:
+# lspci is used by librumpdev-pci0.bug-script
+ pciutils,
 Description: Rump PCI device library (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
