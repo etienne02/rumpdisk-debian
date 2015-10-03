@@ -3,11 +3,11 @@ set -e
 
 . /usr/share/debconf/confmodule
 
-db_input high librumpdev-pci0/hugepages || true
-db_get librumpdev-pci0/hugepages
+db_input high librumpdev-pci/hugepages || true
+db_get librumpdev-pci/hugepages
 
 if [ "$RET" = "true" ] ; then
-	db_input high librumpdev-pci0/nr_hugepages || true
+	db_input high librumpdev-pci/nr_hugepages || true
 fi
 
 db_go

@@ -1,4 +1,4 @@
-Template: librumpdev-pci0/hugepages
+Template: librumpdev-pci/hugepages
 Type: boolean
 Default: true
 Description: Automatically configure hugepages?
@@ -12,7 +12,7 @@ Description: Automatically configure hugepages?
  configure them manually or have this script automatically configure
  them for you.
 
-Template: librumpdev-pci0/nr_hugepages
+Template: librumpdev-pci/nr_hugepages
 Type: string
 Default: 64
 Description: Number of hugepages available to userland:

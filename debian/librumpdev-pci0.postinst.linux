@@ -5,9 +5,9 @@ case "$1" in
 	configure)
 		. /usr/share/debconf/confmodule
 
-		db_get librumpdev-pci0/hugepages
+		db_get librumpdev-pci/hugepages
 		if [ "$RET" = "true" ] ; then
-			db_get librumpdev-pci0/nr_hugepages
+			db_get librumpdev-pci/nr_hugepages
 			NR_HUGEPAGES="$RET"
 			cat > /etc/sysfs.d/rump_hugepages.conf <<EOF
 #
