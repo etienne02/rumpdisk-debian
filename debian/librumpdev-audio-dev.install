@@ -1,5 +1,3 @@
-usr/lib/librump.a
-usr/lib/librump.so
 usr/lib/librumpdev_audio.a
 usr/lib/librumpdev_audio.so
 usr/lib/librumpdev_audio_ac97.a

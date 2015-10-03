@@ -1,4 +1,3 @@
-usr/lib/librump.so.*
 usr/lib/librumpdev_audio.so.*
 usr/lib/librumpdev_audio_ac97.so.*
 usr/lib/librumpdev_pci_auich.so.*
