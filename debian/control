@@ -189,7 +189,9 @@ Description: Rump audio device libraries (development files)
 Package: librumpdev-audio0
 Section: libs
 Architecture: linux-any hurd-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version})
+Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}),
+# Used by config script
+ pciutils [linux-any],
 Description: Rump audio device libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a

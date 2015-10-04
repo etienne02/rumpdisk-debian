@@ -1,0 +1,20 @@
+#!/bin/bash
+set -e
+
+. /usr/share/debconf/confmodule
+
+audio_devices=$(lspci -n | awk '{ if ($2 == "0401:" || $2 == "0403:") print $1 }')
+
+first=true
+choices=
+for dev in ${audio_devices} ; do
+	if ! $first ; then
+		choices+=", "
+	fi
+	choices+="$(basename $(readlink /sys/bus/pci/devices/0000:${dev}/driver))"
+	first=false
+done
+
+db_subst librumpdev-audio/linux-modules CHOICES "$choices"
+db_input high librumpdev-audio/linux-modules || true
+db_go
