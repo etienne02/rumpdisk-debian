@@ -43,6 +43,7 @@ Package: librumpfs-dev
 Section: libdevel
 Architecture: any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpfs0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump filesystem libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -56,6 +57,7 @@ Package: librumpfs0
 Section: libs
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump filesystem libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -69,6 +71,7 @@ Package: librumpnet-dev
 Section: libdevel
 Architecture: any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpnet0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump network libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -82,6 +85,7 @@ Package: librumpnet0
 Section: libs
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump network libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -95,6 +99,7 @@ Package: librumpdev-pci-dev
 Section: libdevel
 Architecture: linux-any hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-pci0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump PCI device library (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -112,6 +117,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version}),
 Recommends:
 # lspci is used by librumpdev-pci0.bug-script
  pciutils,
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump PCI device library (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -125,6 +131,7 @@ Package: librumpdev-usb-dev
 Section: libdevel
 Architecture: linux-any hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump USB device library (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, USB device drivers, a
@@ -138,6 +145,7 @@ Package: librumpdev-usb0
 Section: libs
 Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version})
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump USB device library (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, USB device drivers, a
@@ -151,6 +159,7 @@ Package: librumpdev-disk-dev
 Section: libdevel
 Architecture: linux-any hurd-any
 Depends: ${misc:Depends}, librumpdev-pci-dev (= ${binary:Version}), librumpdev-disk0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump disk device libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -164,6 +173,7 @@ Package: librumpdev-disk0
 Section: libs
 Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump disk device libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -177,6 +187,7 @@ Package: librumpdev-audio-dev
 Section: libdevel
 Architecture: linux-any hurd-any
 Depends: ${misc:Depends}, librumpdev-pci-dev (= ${binary:Version}), librumpdev-audio0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump audio device libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -192,6 +203,7 @@ Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}),
 # Used by config script
  pciutils [linux-any],
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump audio device libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -205,6 +217,7 @@ Package: librumpdev-if-dev
 Section: libdevel
 Architecture: linux-any hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-if0 (= ${binary:Version})
+Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump network interface device libraries (development files)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
@@ -219,6 +232,7 @@ Package: librumpdev-if0
 Section: libs
 Architecture: linux-any hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
+Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump network interface device libraries (runtime)
  Rump kernels provide free, portable, componentized, kernel quality drivers
  such as file systems, POSIX system call handlers, PCI device drivers, a
