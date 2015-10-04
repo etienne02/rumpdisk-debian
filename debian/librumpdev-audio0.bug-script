@@ -1,0 +1,5 @@
+#!/bin/sh
+
+/usr/share/bug/librumpdev-pci0
+
+exit 0

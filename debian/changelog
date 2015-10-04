@@ -9,8 +9,8 @@ rumpkernel (0~20150715-2) UNRELEASED; urgency=medium
   * Split library packages.
   * Add postinst with debconf templates to automatically configure Linux
     nr_hugepages.
-  * Add bug-script to librumpdev-pci0 to include lspci output in bug
-    reports.
+  * Add bug-script to librumpdev-pci0 and librumpdev-audio0 to include
+    lspci output in bug reports and (Linux-only) /proc/interrupts.
   * Add debconf menu to automatically blacklist conflicting Linux audio
     drivers.
   * Automatically attempt to enable Linux UIO access to audio devices.

@@ -2,4 +2,10 @@
 
 lspci -nnk >&3
 
+case $(uname -s) in
+	Linux)
+		cat /proc/interrupts >&3
+	;;
+esac
+
 exit 0
