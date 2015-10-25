@@ -3,16 +3,34 @@ set -e
 
 . /usr/share/debconf/confmodule
 
+set -euo pipefail
+
 audio_devices=$(lspci -n | awk '{ if ($2 == "0401:" || $2 == "0403:") print $1 }')
+
+if ! [ "${audio_devices}" ] ; then
+	echo "No audio devices found"
+	exit 0
+fi
 
 first=true
 choices=
 for dev in ${audio_devices} ; do
-	if ! $first ; then
-		choices+=", "
+	if driver="$(readlink /sys/bus/pci/devices/0000:${dev}/driver | xargs basename)" ; then
+		case ${driver} in
+			uio_pci_generic)
+				# Avoid blacklisting our own driver!
+				:
+			;;
+			*)
+				if $first ; then
+					choices+="${driver}"
+				else
+					choices+=", ${driver}"
+				fi
+				first=false
+			;;
+		esac
 	fi
-	choices+="$(basename $(readlink /sys/bus/pci/devices/0000:${dev}/driver))"
-	first=false
 done
 
 db_subst librumpdev-audio/linux-modules CHOICES "$choices"
