@@ -1,7 +1,7 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          uio-audio
-# Required-Start:
+# Required-Start:    $remote_fs
 # Required-Stop:
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
@@ -13,7 +13,7 @@
 # Do NOT "set -e"
 
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
-PATH=/sbin:/bin
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
 NAME=uio-audio
 SCRIPTNAME=/etc/init.d/$NAME
 
