@@ -2,6 +2,7 @@ rumpkernel (0~20150715-3) UNRELEASED; urgency=medium
 
   * Add /usr to PATH in librumpdev-audio0.init.linux (for lspci).
   * Make librumpdev-audio0.config.linux more robust.
+  * Cherry-pick addition of <rump/rumperrno2host.h> from NetBSD CVS.
 
  -- Robert Millan <rmh@debian.org>  Sun, 25 Oct 2015 14:41:34 +0100
 
