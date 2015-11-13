@@ -4,6 +4,10 @@ set -e
 case "$1" in
 	purge|remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
 		rm -f /etc/modprobe.d/rump_audio_blacklist.conf
+
+		if test -e /usr/share/update-notifier/notify-reboot-required ; then
+			/usr/share/update-notifier/notify-reboot-required
+		fi
 	;;
 
 	*)

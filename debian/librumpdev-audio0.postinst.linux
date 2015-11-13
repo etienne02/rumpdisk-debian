@@ -12,6 +12,10 @@ case "$1" in
 		for module in $(echo "$RET" | tr ',' '\n') ; do
 			echo "blacklist $module"
 		done >> /etc/modprobe.d/rump_audio_blacklist.conf
+
+		if test -e /usr/share/update-notifier/notify-reboot-required ; then
+			/usr/share/update-notifier/notify-reboot-required
+		fi
 	;;
 
 	abort-upgrade|abort-remove|abort-deconfigure)
