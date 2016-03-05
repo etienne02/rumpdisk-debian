@@ -17,6 +17,13 @@ endif
 
 RUMPMAKE := $(CURDIR)/buildrump.sh/obj/tooldir/rumpmake
 
+get-orig-src:
+	rm -rf ../rumpkernel-new
+	mkdir ../rumpkernel-new
+	git clone https://github.com/rumpkernel/buildrump.sh.git ../rumpkernel-new/buildrump.sh
+	cd ../rumpkernel-new/buildrump.sh && ./buildrump.sh checkout
+	git clone https://github.com/rumpkernel/pci-userspace.git ../rumpkernel-new/pci-userspace
+
 %:
 	rm -f debian/*.debhelper.log
 	dh $@ 
