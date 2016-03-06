@@ -2,3 +2,4 @@ path_max.diff
 buildrump_hurd.diff
 pci_userspace_hurd.diff
 rumperrno2host.diff
+rpcgen.diff

@@ -21,6 +21,8 @@ get-orig-src:
 	rm -rf ../rumpkernel-new
 	mkdir ../rumpkernel-new
 	git clone https://github.com/rumpkernel/buildrump.sh.git ../rumpkernel-new/buildrump.sh
+	# non-free
+	rm -rf ../rumpkernel-new/buildrump.sh/src/usr.bin/rpcgen
 	cd ../rumpkernel-new/buildrump.sh && ./buildrump.sh checkout
 	git clone https://github.com/rumpkernel/pci-userspace.git ../rumpkernel-new/pci-userspace
 
