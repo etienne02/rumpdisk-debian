@@ -1,4 +1,4 @@
-rumpkernel (0~20150715.1-1) UNRELEASED; urgency=medium
+rumpkernel (0~20150715.1-1) unstable; urgency=medium
 
   * Add /usr to PATH in librumpdev-audio0.init.linux (for lspci).
   * Make librumpdev-audio0.config.linux more robust.
