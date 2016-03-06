@@ -97,7 +97,7 @@ Description: Rump network libraries (runtime)
 
 Package: librumpdev-pci-dev
 Section: libdevel
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-pci0 (= ${binary:Version})
 Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump PCI device library (development files)
@@ -111,7 +111,7 @@ Description: Rump PCI device library (development files)
 
 Package: librumpdev-pci0
 Section: libs
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version}),
  sysfsutils [linux-any],
 Recommends:
@@ -129,7 +129,7 @@ Description: Rump PCI device library (runtime)
 
 Package: librumpdev-usb-dev
 Section: libdevel
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
 Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump USB device library (development files)
@@ -143,7 +143,7 @@ Description: Rump USB device library (development files)
 
 Package: librumpdev-usb0
 Section: libs
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version})
 Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump USB device library (runtime)
@@ -157,7 +157,7 @@ Description: Rump USB device library (runtime)
 
 Package: librumpdev-disk-dev
 Section: libdevel
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${misc:Depends}, librumpdev-pci-dev (= ${binary:Version}), librumpdev-disk0 (= ${binary:Version})
 Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump disk device libraries (development files)
@@ -171,7 +171,7 @@ Description: Rump disk device libraries (development files)
 
 Package: librumpdev-disk0
 Section: libs
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any-disabled
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
 Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump disk device libraries (runtime)
@@ -185,7 +185,7 @@ Description: Rump disk device libraries (runtime)
 
 Package: librumpdev-audio-dev
 Section: libdevel
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${misc:Depends}, librumpdev-pci-dev (= ${binary:Version}), librumpdev-audio0 (= ${binary:Version})
 Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump audio device libraries (development files)
@@ -199,7 +199,7 @@ Description: Rump audio device libraries (development files)
 
 Package: librumpdev-audio0
 Section: libs
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}),
 # Used by config script
  pciutils [linux-any],
@@ -215,7 +215,7 @@ Description: Rump audio device libraries (runtime)
 
 Package: librumpdev-if-dev
 Section: libdevel
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${misc:Depends}, librump-dev (= ${binary:Version}), librumpdev-if0 (= ${binary:Version})
 Replaces: librump-dev (<< 0~20150715-2~)
 Description: Rump network interface device libraries (development files)
@@ -230,7 +230,7 @@ Description: Rump network interface device libraries (development files)
 
 Package: librumpdev-if0
 Section: libs
-Architecture: linux-any hurd-any
+Architecture: linux-any-disabled hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librump0 (= ${binary:Version})
 Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump network interface device libraries (runtime)

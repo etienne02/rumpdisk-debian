@@ -6,6 +6,8 @@ rumpkernel (0~20150715.1-1) UNRELEASED; urgency=medium
   * Notify that a reboot is required in librumpdev-audio0
     postinst/postrm.
   * Repack upstream source without buildrump.sh/src/usr.bin/rpcgen
+  * Temporarily disable pci-userspace on linux-any as it FTBFS on
+    current sid.
 
  -- Robert Millan <rmh@debian.org>  Sun, 06 Mar 2016 00:09:27 +0100
 

@@ -40,7 +40,7 @@ override_dh_auto_build-arch:
 	dh_testdir -a
 	cd buildrump.sh && TARBALLMODE='Run from tarball' ./buildrump.sh -H -F CFLAGS="$(CFLAGS)" -F LDFLAGS="$(LDFLAGS)" -j$(NUMJOBS) fullbuild
 ifeq ($(DEB_HOST_ARCH_OS), linux)
-	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
+#	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
 endif
 ifeq ($(DEB_HOST_ARCH_OS), hurd)
 	cd pci-userspace/src-gnu && $(RUMPMAKE) dependall
@@ -50,7 +50,7 @@ override_dh_auto_install:
 	cd buildrump.sh && TARBALLMODE='Run from tarball' ./buildrump.sh -d $(CURDIR)/debian/tmp/usr install
 
 ifeq ($(DEB_HOST_ARCH_OS), linux)
-	cd pci-userspace/src-linux-uio && $(RUMPMAKE) install
+#	cd pci-userspace/src-linux-uio && $(RUMPMAKE) install
 endif
 ifeq ($(DEB_HOST_ARCH_OS), hurd)
 	cd pci-userspace/src-gnu && $(RUMPMAKE) install
