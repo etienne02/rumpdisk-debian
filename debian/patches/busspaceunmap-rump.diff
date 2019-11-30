@@ -1,0 +1,17 @@
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_space.c b/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_space.c
+index 8d97ea0d..31c3caa0 100644
+--- a/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_space.c
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_space.c
+@@ -271,11 +271,7 @@ void
+ bus_space_unmap(bus_space_tag_t bst, bus_space_handle_t bsh,
+ 	bus_size_t size)
+ {
+-
+-	if (bst == 0)
+-		return;
+-
+-	panic("%s: unimplemented", __func__);
++	return;
+ }
+ 
+ void

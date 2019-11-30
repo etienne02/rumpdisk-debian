@@ -1,0 +1,130 @@
+diff --git a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+index d59783d1..272304e3 100644
+--- a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
++++ b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+@@ -8,6 +8,7 @@ RUMPDEVCOMP=	audio bpf cgd disk dm drvctl fss md netsmb		\
+ RUMPUSBDEVS=	ubt ucom ugenhc ulpt umass usb
+ 
+ RUMPPCIDEVS=	pci pci_if_iwn pci_if_pcn pci_if_wm
++RUMPPCIDEVS+=	pci_piixide
+ RUMPPCIDEVS+=	pci_usbhc
+ RUMPPCIDEVS+=	pci_virtio virtio_if_vioif virtio_ld virtio_viornd
+ RUMPPCIDEVS+=	virtio_vioscsi
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/Makefile b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/Makefile
+new file mode 100644
+index 00000000..cc46c8f2
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/Makefile
+@@ -0,0 +1,19 @@
++.PATH:	${.CURDIR}/../../../../dev/pci \
++	${.CURDIR}/../../../../dev/ata \
++	${.CURDIR}/../../../../dev/scsipi \
++	${.CURDIR}/../../../../dev/ic
++
++LIB=	rumpdev_piixide
++COMMENT=PIIX IDE & ATAPI support
++
++IOCONF=	PIIXIDE.ioconf
++
++SRCS+=	pciide_common.c piixide.c
++SRCS+=	wd.c ata.c ata_wdc.c
++SRCS+=	atapi_wdc.c atapi_base.c cd.c
++SRCS+=	wdc.c
++
++SRCS+=	piixide_component.c
++
++.include <bsd.lib.mk>
++.include <bsd.klinks.mk>
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/PIIXIDE.ioconf b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/PIIXIDE.ioconf
+new file mode 100644
+index 00000000..110fc0ce
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/PIIXIDE.ioconf
+@@ -0,0 +1,20 @@
++ioconf piixide
++
++include "conf/files"
++include "dev/ata/files.ata"
++include "dev/pci/files.pci"
++include "rump/dev/files.rump"
++
++pseudo-root pci*
++
++# PIIX support
++piixide* at pci? dev ? function ?
++
++# IDE support
++atabus* at piixide? channel ?
++ata_hl* at atabus? drive ?
++wd*	at ata_hl?
++
++# ATAPI support
++atapibus*	at piixide? channel ?
++cd*		at atapibus? drive ? flags 0x0000
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_ata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_ata.h
+new file mode 100644
+index 00000000..74ab5ee2
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_ata.h
+@@ -0,0 +1 @@
++#define ATADEBUG
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wdc.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wdc.h
+new file mode 100644
+index 00000000..8bdf3d5b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wdc.h
+@@ -0,0 +1,2 @@
++#define NWD	1
++#define WDC_NO_IDS
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/piixide_component.c b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/piixide_component.c
+new file mode 100644
+index 00000000..fde63636
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/piixide_component.c
+@@ -0,0 +1,37 @@
++#include <sys/param.h>
++#include <sys/conf.h>
++#include <sys/device.h>
++#include <sys/kmem.h>
++#include <sys/stat.h>
++
++#include "ioconf.c"
++
++#include <rump-sys/kern.h>
++#include <rump-sys/vfs.h>
++
++RUMP_COMPONENT(RUMP_COMPONENT_DEV)
++{
++	extern struct bdevsw wd_bdevsw, cd_bdevsw;
++	extern struct cdevsw wd_cdevsw, cd_cdevsw;
++	devmajor_t bmaj, cmaj;
++
++	config_init_component(cfdriver_ioconf_piixide,
++	    cfattach_ioconf_piixide, cfdata_ioconf_piixide);
++
++	bmaj = cmaj = -1;
++	FLAWLESSCALL(devsw_attach("wd", &wd_bdevsw, &bmaj, &wd_cdevsw, &cmaj));
++
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd0", 'a',
++	    bmaj, 0, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd0", 'a',
++	    cmaj, 0, 4));
++/* Borked
++	bmaj = cmaj = -1;
++	FLAWLESSCALL(devsw_attach("cd", &cd_bdevsw, &bmaj, &cd_cdevsw, &cmaj));
++
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/cd0", 'a',
++	    bmaj, 0, 1));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rcd0", 'a',
++	    cmaj, 0, 1));
++*/
++}
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata.h
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata_pmp.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata_pmp.h
+new file mode 100644
+index 00000000..e69de29b
