@@ -171,7 +171,7 @@ Description: Rump disk device libraries (development files)
 
 Package: librumpdev-disk0
 Section: libs
-Architecture: linux-any-disabled hurd-any-disabled
+Architecture: linux-any-disabled hurd-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, librumpdev-pci0 (= ${binary:Version}), librumpdev-usb0 (= ${binary:Version})
 Replaces: librump0 (<< 0~20150715-2~)
 Description: Rump disk device libraries (runtime)
