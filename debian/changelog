@@ -1,3 +1,12 @@
+rumpkernel (0~20191130-1) unreleased; urgency=medium
+
+  * Update rump sources to latest
+  * Remove obsolete patches
+  * Add AHCI and PIIXIDE drivers to rump (not upstreamed yet)
+  * Add drivers to librumpdev-disk subpackage
+
+ -- Damien Zammit <damien@zamaudio.com>  Sat, 30 Nov 2019 15:45:00 +1100
+
 rumpkernel (0~20150715.1-1) unstable; urgency=medium
 
   * Add /usr to PATH in librumpdev-audio0.init.linux (for lspci).
