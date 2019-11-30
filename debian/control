@@ -10,8 +10,8 @@ Build-Depends:
 Standards-Version: 3.9.6
 Section: libs
 Homepage: http://rumpkernel.org/
-Vcs-Browser: https://alioth.debian.org/plugins/scmgit/cgi-bin/gitweb.cgi?p=pkg-hurd/rumpkernel.git;a=summary
-Vcs-Git: https://alioth.debian.org/anonscm/git/pkg-hurd/rumpkernel.git
+Vcs-Browser: https://salsa.debian.org/hurd-team/rumpkernel
+Vcs-Git: https://salsa.debian.org/hurd-team/rumpkernel.git
 
 Package: librump-dev
 Section: libdevel

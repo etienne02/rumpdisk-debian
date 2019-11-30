@@ -2,3 +2,10 @@ usr/lib/librumpdev_disk.a
 usr/lib/librumpdev_disk.so
 usr/lib/librumpdev_umass.a
 usr/lib/librumpdev_umass.so
+usr/lib/librumpdev_ahcisata.a
+usr/lib/librumpdev_ahcisata.so
+usr/lib/librumpdev_piixide.a
+usr/lib/librumpdev_piixide.so
+usr/lib/librumpdev_scsipi.a
+usr/lib/librumpdev_scsipi.so
+
