@@ -1,5 +1,6 @@
 path_max.diff
 rpcgen.diff
+buildrump.diff
 piixide-rump.diff
 ahcisata-rump.diff
 busspaceunmap-rump.diff
