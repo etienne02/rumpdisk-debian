@@ -1,4 +1,4 @@
-/*	$NetBSD: if_stf.c,v 1.80 2014/06/12 16:43:09 christos Exp $	*/
+/*	$NetBSD: if_stf.c,v 1.96 2016/07/08 04:33:30 ozaki-r Exp $	*/
 /*	$KAME: if_stf.c,v 1.62 2001/06/07 22:32:16 itojun Exp $ */
 
 /*
@@ -75,9 +75,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_stf.c,v 1.80 2014/06/12 16:43:09 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_stf.c,v 1.96 2016/07/08 04:33:30 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
+#endif
+
 #ifndef INET6
 	#error "pseudo-device stf requires options INET6"
 #endif
@@ -90,7 +93,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_stf.c,v 1.80 2014/06/12 16:43:09 christos Exp $")
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
-#include <sys/protosw.h>
 #include <sys/queue.h>
 #include <sys/syslog.h>
 
@@ -127,6 +129,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_stf.c,v 1.80 2014/06/12 16:43:09 christos Exp $")
 #include <net/if_gif.h>
 #endif
 
+#include "ioconf.h"
+
 #define IN6_IS_ADDR_6TO4(x)	(ntohs((x)->s6_addr16[0]) == 0x2002)
 #define GET_V4(x)	((const struct in_addr *)(&(x)->s6_addr16[1]))
 
@@ -153,25 +157,18 @@ static int ip_gif_ttl = 40;	/*XXX*/
 
 extern struct domain inetdomain;
 
-static const struct protosw in_stf_protosw =
+static const struct encapsw in_stf_encapsw =
 {
-	.pr_type	= SOCK_RAW,
-	.pr_domain	= &inetdomain,
-	.pr_protocol	= IPPROTO_IPV6,
-	.pr_flags	= PR_ATOMIC|PR_ADDR,
-	.pr_input	= in_stf_input,
-	.pr_output	= rip_output,
-	.pr_ctlinput	= NULL,
-	.pr_ctloutput	= rip_ctloutput,
-	.pr_usrreqs	= &rip_usrreqs,
+	.encapsw4 = {
+		.pr_input	= in_stf_input,
+		.pr_ctlinput	= NULL,
+	}
 };
-
-void	stfattach(int);
 
 static int stf_encapcheck(struct mbuf *, int, int, void *);
 static struct in6_ifaddr *stf_getsrcifa6(struct ifnet *);
 static int stf_output(struct ifnet *, struct mbuf *, const struct sockaddr *,
-	struct rtentry *);
+	const struct rtentry *);
 static int isrfc1918addr(const struct in_addr *);
 static int stf_checkaddr4(struct stf_softc *, const struct in_addr *,
 	struct ifnet *);
@@ -193,18 +190,27 @@ static int
 stf_clone_create(struct if_clone *ifc, int unit)
 {
 	struct stf_softc *sc;
+	int error;
+
+	sc = malloc(sizeof(struct stf_softc), M_DEVBUF, M_WAIT|M_ZERO);
+	if_initname(&sc->sc_if, ifc->ifc_name, unit);
+
+	error = encap_lock_enter();
+	if (error) {
+		free(sc, M_DEVBUF);
+		return error;
+	}
 
 	if (LIST_FIRST(&stf_softc_list) != NULL) {
 		/* Only one stf interface is allowed. */
+		encap_lock_exit();
+		free(sc, M_DEVBUF);
 		return (EEXIST);
 	}
 
-	sc = malloc(sizeof(struct stf_softc), M_DEVBUF, M_WAIT|M_ZERO);
-
-	if_initname(&sc->sc_if, ifc->ifc_name, unit);
-
 	sc->encap_cookie = encap_attach_func(AF_INET, IPPROTO_IPV6,
-	    stf_encapcheck, &in_stf_protosw, sc);
+	    stf_encapcheck, &in_stf_encapsw, sc);
+	encap_lock_exit();
 	if (sc->encap_cookie == NULL) {
 		printf("%s: unable to attach encap\n", if_name(&sc->sc_if));
 		free(sc, M_DEVBUF);
@@ -229,8 +235,10 @@ stf_clone_destroy(struct ifnet *ifp)
 {
 	struct stf_softc *sc = (void *) ifp;
 
+	encap_lock_enter();
 	LIST_REMOVE(sc, sc_list);
 	encap_detach(sc->encap_cookie);
+	encap_lock_exit();
 	bpf_detach(ifp);
 	if_detach(ifp);
 	rtcache_free(&sc->sc_ro);
@@ -305,10 +313,8 @@ stf_getsrcifa6(struct ifnet *ifp)
 	struct sockaddr_in6 *sin6;
 	struct in_addr in;
 
-	IFADDR_FOREACH(ifa, ifp)
+	IFADDR_READER_FOREACH(ifa, ifp)
 	{
-		if (ifa->ifa_addr == NULL)
-			continue;
 		if (ifa->ifa_addr->sa_family != AF_INET6)
 			continue;
 		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
@@ -316,7 +322,7 @@ stf_getsrcifa6(struct ifnet *ifp)
 			continue;
 
 		memcpy(&in, GET_V4(&sin6->sin6_addr), sizeof(in));
-		INADDR_TO_IA(in, ia4);
+		ia4 = in_get_ia(in);
 		if (ia4 == NULL)
 			continue;
 
@@ -328,7 +334,7 @@ stf_getsrcifa6(struct ifnet *ifp)
 
 static int
 stf_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
-    struct rtentry *rt0)
+    const struct rtentry *rt0)
 {
 	struct rtentry *rt;
 	struct stf_softc *sc;
@@ -482,8 +488,7 @@ stf_checkaddr4(struct stf_softc *sc, const struct in_addr *in,
 	/*
 	 * reject packets with broadcast
 	 */
-	TAILQ_FOREACH(ia4, &in_ifaddrhead, ia_list)
-	{
+	IN_ADDRLIST_READER_FOREACH(ia4) {
 		if ((ia4->ia_ifa.ifa_ifp->if_flags & IFF_BROADCAST) == 0)
 			continue;
 		if (in->s_addr == ia4->ia_broadaddr.sin_addr.s_addr)
@@ -556,21 +561,15 @@ stf_checkaddr6(struct stf_softc *sc, const struct in6_addr *in6,
 }
 
 void
-in_stf_input(struct mbuf *m, ...)
+in_stf_input(struct mbuf *m, int off, int proto)
 {
-	int s, off, proto;
+	int s;
 	struct stf_softc *sc;
 	struct ip *ip;
 	struct ip6_hdr *ip6;
 	uint8_t otos, itos;
 	struct ifnet *ifp;
 	size_t pktlen;
-	va_list ap;
-
-	va_start(ap, m);
-	off = va_arg(ap, int);
-	proto = va_arg(ap, int);
-	va_end(ap);
 
 	if (proto != IPPROTO_IPV6) {
 		m_freem(m);
@@ -593,7 +592,7 @@ in_stf_input(struct mbuf *m, ...)
 	 * for source, perform ingress filter as well.
 	 */
 	if (stf_checkaddr4(sc, &ip->ip_dst, NULL) < 0 ||
-	    stf_checkaddr4(sc, &ip->ip_src, m->m_pkthdr.rcvif) < 0) {
+	    stf_checkaddr4(sc, &ip->ip_src, m_get_rcvif_NOMPSAFE(m)) < 0) {
 		m_freem(m);
 		return;
 	}
@@ -613,7 +612,7 @@ in_stf_input(struct mbuf *m, ...)
 	 * for source, perform ingress filter as well.
 	 */
 	if (stf_checkaddr6(sc, &ip6->ip6_dst, NULL) < 0 ||
-	    stf_checkaddr6(sc, &ip6->ip6_src, m->m_pkthdr.rcvif) < 0) {
+	    stf_checkaddr6(sc, &ip6->ip6_src, m_get_rcvif_NOMPSAFE(m)) < 0) {
 		m_freem(m);
 		return;
 	}
@@ -627,7 +626,7 @@ in_stf_input(struct mbuf *m, ...)
 	ip6->ip6_flow |= htonl((uint32_t)itos << 20);
 
 	pktlen = m->m_pkthdr.len;
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 
 	bpf_mtap_af(ifp, AF_INET6, m);
 
@@ -646,6 +645,8 @@ in_stf_input(struct mbuf *m, ...)
 		m_freem(m);
 	}
 	splx(s);
+
+	return;
 }
 
 /* ARGSUSED */

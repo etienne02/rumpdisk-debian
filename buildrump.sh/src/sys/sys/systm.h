@@ -1,4 +1,4 @@
-/*	$NetBSD: systm.h,v 1.267 2015/03/07 16:34:55 christos Exp $	*/
+/*	$NetBSD: systm.h,v 1.271 2016/07/06 05:20:48 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1988, 1991, 1993
@@ -114,6 +114,7 @@ extern struct vnode *swapdev_vp;/* vnode equivalent to above */
 
 extern const dev_t zerodev;	/* /dev/zero */
 
+#if defined(_KERNEL)
 typedef int	sy_call_t(struct lwp *, const void *, register_t *);
 
 extern struct sysent {		/* system call table */
@@ -125,6 +126,8 @@ extern struct sysent {		/* system call table */
 	uint32_t sy_return;	/* DTrace return ID for systrace. */
 } sysent[];
 extern int nsysent;
+#endif
+
 #if	BYTE_ORDER == BIG_ENDIAN
 #define	SCARG(p,k)	((p)->k.be.datum)	/* get arg from args pointer */
 #elif	BYTE_ORDER == LITTLE_ENDIAN
@@ -164,6 +167,7 @@ extern void (*v_putc)(int); /* Virtual console putc routine */
  */
 void	voidop(void);
 int	nullop(void *);
+void*	nullret(void);
 int	enodev(void);
 int	enosys(void);
 int	enoioctl(void);
@@ -173,7 +177,8 @@ int	eopnotsupp(void);
 enum hashtype {
 	HASH_LIST,
 	HASH_SLIST,
-	HASH_TAILQ
+	HASH_TAILQ,
+	HASH_PSLIST
 };
 
 #ifdef _KERNEL
@@ -485,9 +490,9 @@ extern int db_fromconsole; /* XXX ddb/ddbvar.h */
 #else
 #define console_debugger() do {} while (/* CONSTCOND */ 0) /* NOP */
 #endif
-#endif /* _KERNEL */
 
 /* For SYSCALL_DEBUG */
+void scdebug_init(void);
 void scdebug_call(register_t, const register_t[]);
 void scdebug_ret(register_t, int, const register_t[]);
 
@@ -496,7 +501,6 @@ void	_kernel_lock(int);
 void	_kernel_unlock(int, int *);
 bool	_kernel_locked_p(void);
 
-#ifdef _KERNEL
 void	kernconfig_lock_init(void);
 void	kernconfig_lock(void);
 void	kernconfig_unlock(void);
@@ -521,11 +525,13 @@ do {						\
 #define	KERNEL_UNLOCK_ALL(l, p)		KERNEL_UNLOCK(0, (l), (p))
 #define	KERNEL_UNLOCK_ONE(l)		KERNEL_UNLOCK(1, (l), NULL)
 
-/* Preemption control. */
 #ifdef _KERNEL
+/* Preemption control. */
 void	kpreempt_disable(void);
 void	kpreempt_enable(void);
 bool	kpreempt_disabled(void);
+
+vaddr_t calc_cache_size(vsize_t , int, int);
 #endif
 
 void assert_sleepable(void);
@@ -535,6 +541,5 @@ void assert_sleepable(void);
 #define	ASSERT_SLEEPABLE()	do {} while (0)
 #endif /* defined(DEBUG) */
 
-vaddr_t calc_cache_size(vsize_t , int, int);
 
 #endif	/* !_SYS_SYSTM_H_ */

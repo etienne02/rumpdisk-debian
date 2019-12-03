@@ -1,4 +1,4 @@
-/*	$NetBSD: gem.c,v 1.102 2014/08/10 16:44:35 tls Exp $ */
+/*	$NetBSD: gem.c,v 1.106 2016/06/10 13:27:13 ozaki-r Exp $ */
 
 /*
  *
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gem.c,v 1.102 2014/08/10 16:44:35 tls Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gem.c,v 1.106 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include "opt_inet.h"
 
@@ -1149,8 +1149,10 @@ gem_init(struct ifnet *ifp)
 		(*sc->sc_hwreset)(sc);
 
 	/* step 3. Setup data structures in host memory */
-	if (gem_meminit(sc) != 0)
+	if (gem_meminit(sc) != 0) {
+		splx(s);
 		return 1;
+	}
 
 	/* step 4. TX MAC registers & counters */
 	gem_init_regs(sc);
@@ -1360,6 +1362,9 @@ gem_start(struct ifnet *ifp)
 	struct gem_txsoft *txs;
 	bus_dmamap_t dmamap;
 	int error, firsttx, nexttx = -1, lasttx = -1, ofree, seg;
+#ifdef GEM_DEBUG
+	int otxnext;
+#endif
 	uint64_t flags = 0;
 
 	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
@@ -1370,10 +1375,12 @@ gem_start(struct ifnet *ifp)
 	 * the first descriptor we'll use.
 	 */
 	ofree = sc->sc_txfree;
-	firsttx = sc->sc_txnext;
+#ifdef GEM_DEBUG
+	otxnext = sc->sc_txnext;
+#endif
 
 	DPRINTF(sc, ("%s: gem_start: txfree %d, txnext %d\n",
-	    device_xname(sc->sc_dev), ofree, firsttx));
+	    device_xname(sc->sc_dev), ofree, otxnext));
 
 	/*
 	 * Loop through the send queue, setting up transmit descriptors
@@ -1478,7 +1485,8 @@ gem_start(struct ifnet *ifp)
 		/*
 		 * Initialize the transmit descriptors.
 		 */
-		for (nexttx = sc->sc_txnext, seg = 0;
+		firsttx = sc->sc_txnext;
+		for (nexttx = firsttx, seg = 0;
 		     seg < dmamap->dm_nsegs;
 		     seg++, nexttx = GEM_NEXTTX(nexttx)) {
 
@@ -1600,7 +1608,7 @@ gem_start(struct ifnet *ifp)
 
 	if (sc->sc_txfree != ofree) {
 		DPRINTF(sc, ("%s: packets enqueued, IC on %d, OWN on %d\n",
-		    device_xname(sc->sc_dev), lasttx, firsttx));
+		    device_xname(sc->sc_dev), lasttx, otxnext));
 		/*
 		 * The entire packet chain is set up.
 		 * Kick the transmitter.
@@ -1840,7 +1848,7 @@ gem_rint(struct gem_softc *sc)
 		}
 		m->m_data += 2; /* We're already off by two */
 
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
 
 		/*
@@ -1938,7 +1946,7 @@ swcsum:
 			m->m_pkthdr.csum_flags = 0;
 #endif
 		/* Pass it on. */
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 
 	if (progress) {

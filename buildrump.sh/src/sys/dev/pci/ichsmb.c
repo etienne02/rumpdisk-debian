@@ -1,4 +1,4 @@
-/*	$NetBSD: ichsmb.c,v 1.42 2015/05/03 22:51:11 pgoyette Exp $	*/
+/*	$NetBSD: ichsmb.c,v 1.46 2016/07/07 06:55:41 msaitoh Exp $	*/
 /*	$OpenBSD: ichiic.c,v 1.18 2007/05/03 09:36:26 dlg Exp $	*/
 
 /*
@@ -22,7 +22,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ichsmb.c,v 1.42 2015/05/03 22:51:11 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ichsmb.c,v 1.46 2016/07/07 06:55:41 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -114,9 +114,11 @@ ichsmb_match(device_t parent, cfdata_t match, void *aux)
 		case PCI_PRODUCT_INTEL_7SERIES_SMB:
 		case PCI_PRODUCT_INTEL_8SERIES_SMB:
 		case PCI_PRODUCT_INTEL_9SERIES_SMB:
+		case PCI_PRODUCT_INTEL_100SERIES_SMB:
 		case PCI_PRODUCT_INTEL_CORE4G_M_SMB:
 		case PCI_PRODUCT_INTEL_CORE5G_M_SMB:
 		case PCI_PRODUCT_INTEL_BAYTRAIL_PCU_SMB:
+		case PCI_PRODUCT_INTEL_BSW_PCU_SMB:
 		case PCI_PRODUCT_INTEL_C600_SMBUS:
 		case PCI_PRODUCT_INTEL_C600_SMB_0:
 		case PCI_PRODUCT_INTEL_C600_SMB_1:
@@ -171,7 +173,8 @@ ichsmb_attach(device_t parent, device_t self, void *aux)
 	} else {
 		/* Install interrupt handler */
 		if (pci_intr_map(pa, &ih) == 0) {
-			intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
+			intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf,
+			    sizeof(intrbuf));
 			sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO,
 			    ichsmb_intr, sc);
 			if (sc->sc_ih != NULL) {
@@ -186,6 +189,7 @@ ichsmb_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_i2c_device = NULL;
 	flags = 0;
+	mutex_init(&sc->sc_i2c_mutex, MUTEX_DEFAULT, IPL_NONE);
 	ichsmb_rescan(self, "i2cbus", &flags);
 
 out:	if (!pmf_device_register(self, NULL, NULL))
@@ -205,7 +209,6 @@ ichsmb_rescan(device_t self, const char *ifattr, const int *flags)
 		return 0;
 
 	/* Attach I2C bus */
-	mutex_init(&sc->sc_i2c_mutex, MUTEX_DEFAULT, IPL_NONE);
 	sc->sc_i2c_tag.ic_cookie = sc;
 	sc->sc_i2c_tag.ic_acquire_bus = ichsmb_i2c_acquire_bus;
 	sc->sc_i2c_tag.ic_release_bus = ichsmb_i2c_release_bus;

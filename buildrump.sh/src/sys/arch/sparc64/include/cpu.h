@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.114 2015/01/03 11:22:14 palle Exp $ */
+/*	$NetBSD: cpu.h,v 1.122 2016/06/25 13:52:04 palle Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -68,11 +68,12 @@
 #include <machine/pte.h>
 #include <machine/intr.h>
 #if defined(_KERNEL)
+#include <machine/bus_defs.h>
 #include <machine/cpuset.h>
 #include <sparc64/sparc64/intreg.h>
 #endif
 #ifdef SUN4V
-#include <sparc64/hypervisor.h>
+#include <machine/hypervisor.h>
 #endif
 
 #include <sys/cpu_data.h>
@@ -263,12 +264,16 @@ void	cpu_pmap_init(struct cpu_info *);
 /* run upfront to prepare the cpu_info */
 void	cpu_pmap_prepare(struct cpu_info *, bool);
 
+/* Helper functions to retrieve cache info */
+int	cpu_ecache_associativity(int node);
+int	cpu_ecache_size(int node);
+
 #if defined(MULTIPROCESSOR)
 extern vaddr_t cpu_spinup_trampoline;
 
 extern  char   *mp_tramp_code;
 extern  u_long  mp_tramp_code_len;
-extern  u_long  mp_tramp_tlb_slots;
+extern  u_long  mp_tramp_dtlb_slots, mp_tramp_itlb_slots;
 extern  u_long  mp_tramp_func;
 extern  u_long  mp_tramp_ci;
 
@@ -337,6 +342,7 @@ struct clockframe {
  */
 void cpu_signotify(struct lwp *);
 
+
 /*
  * Interrupt handler chains.  Interrupt handlers should return 0 for
  * ``not me'' or 1 (``I took care of it'').  intr_establish() inserts a
@@ -357,6 +363,8 @@ struct intrhand {
 	struct intrhand		*ih_pending;	/* interrupt queued */
 	volatile uint64_t	*ih_map;	/* Interrupt map reg */
 	volatile uint64_t	*ih_clr;	/* clear interrupt reg */
+	void			(*ih_ack)(struct intrhand *); /* ack interrupt function */
+	bus_space_tag_t		ih_bus;		/* parent bus */
 	struct evcnt		ih_cnt;		/* counter for vmstat */
 	uint32_t		ih_ivec;
 	char			ih_name[32];	/* name for the above */
@@ -368,6 +376,7 @@ void	intr_establish(int level, bool mpsafe, struct intrhand *);
 void	*sparc_softintr_establish(int, int (*)(void *), void *);
 void	sparc_softintr_schedule(void *);
 void	sparc_softintr_disestablish(void *);
+struct intrhand *intrhand_alloc(void);
 
 /* cpu.c */
 int	cpu_myid(void);

@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.322 2015/05/13 15:33:47 skrll Exp $	*/
+/*	$NetBSD: pmap.c,v 1.335 2016/07/14 15:51:41 skrll Exp $	*/
 
 /*
  * Copyright 2003 Wasabi Systems, Inc.
@@ -213,10 +213,11 @@
 #include <sys/kernhist.h>
 
 #include <uvm/uvm.h>
+#include <uvm/pmap/pmap_pvt.h>
 
 #include <arm/locore.h>
 
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.322 2015/05/13 15:33:47 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.335 2016/07/14 15:51:41 skrll Exp $");
 
 //#define PMAP_DEBUG
 #ifdef PMAP_DEBUG
@@ -280,7 +281,6 @@ int			arm_poolpage_vmfreelist = VM_FREELIST_DEFAULT;
  * in pmap_create().
  */
 static struct pool_cache pmap_cache;
-static LIST_HEAD(, pmap) pmap_pmaps;
 
 /*
  * Pool of PV structures
@@ -514,9 +514,9 @@ bool pmap_initialized;
 
 #if defined(ARM_MMU_EXTENDED) && defined(__HAVE_MM_MD_DIRECT_MAPPED_PHYS)
 /*
- * Start of direct-mapped memory
+ * Virtual end of direct-mapped memory
  */
-vaddr_t pmap_directbase = KERNEL_BASE;
+vaddr_t pmap_directlimit;
 #endif
 
 /*
@@ -757,6 +757,7 @@ static void		pmap_flush_page(struct vm_page_md *, paddr_t, enum pmap_flush_op);
 #endif
 #endif
 static void		pmap_page_remove(struct vm_page_md *, paddr_t);
+static void		pmap_pv_remove(paddr_t);
 
 #ifndef ARM_MMU_EXTENDED
 static void		pmap_init_l1(struct l1_ttable *, pd_entry_t *);
@@ -3025,8 +3026,6 @@ pmap_create(void)
 
 	pmap_pinit(pm);
 
-	LIST_INSERT_HEAD(&pmap_pmaps, pm, pm_list);
-
 	return (pm);
 }
 
@@ -3118,15 +3117,20 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		 * If the physical address is different, lookup the
 		 * vm_page.
 		 */
-		if (l2pte_pa(opte) != pa)
+		if (l2pte_pa(opte) != pa) {
+			KASSERT(!pmap_pv_tracked(pa));
 			opg = PHYS_TO_VM_PAGE(l2pte_pa(opte));
-		else
+		} else
 			opg = pg;
 	} else
 		opg = NULL;
 
-	if (pg) {
-		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+	struct pmap_page *pp = pmap_pv_tracked(pa);
+
+	if (pg || pp) {
+		KASSERT((pg != NULL) != (pp != NULL));
+		struct vm_page_md *md = (pg != NULL) ? VM_PAGE_TO_MD(pg) :
+		    PMAP_PAGE_TO_MD(pp);
 
 		/*
 		 * This is to be a managed mapping.
@@ -3180,7 +3184,7 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		} else
 			npte |= pte_l2_s_cache_mode;
 
-		if (pg == opg) {
+		if (pg != NULL && pg == opg) {
 			/*
 			 * We're changing the attrs of an existing mapping.
 			 */
@@ -3949,6 +3953,34 @@ pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pap)
 	return true;
 }
 
+/*
+ * pmap_pv_remove: remove an unmanaged pv-tracked page from all pmaps
+ *	that map it
+ */
+
+static void
+pmap_pv_remove(paddr_t pa)
+{
+	struct pmap_page *pp;
+
+	pp = pmap_pv_tracked(pa);
+	if (pp == NULL)
+		panic("pmap_pv_protect: page not pv-tracked: 0x%"PRIxPADDR,
+		    pa);
+
+	struct vm_page_md *md = PMAP_PAGE_TO_MD(pp);
+	pmap_page_remove(md, pa);
+}
+
+void
+pmap_pv_protect(paddr_t pa, vm_prot_t prot)
+{
+
+	/* the only case is remove at the moment */
+	KASSERT(prot == VM_PROT_NONE);
+	pmap_pv_remove(pa);
+}
+
 void
 pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 {
@@ -4027,7 +4059,7 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 
 					pmap_acquire_page_lock(md);
 #ifndef ARM_MMU_EXTENDED
-					f = 
+					f =
 #endif
 					    pmap_modify_pv(md, pa, pm, sva,
 					       clr_mask, 0);
@@ -4974,12 +5006,41 @@ pmap_update(pmap_t pm)
 
 	if (pm->pm_remove_all) {
 #ifdef ARM_MMU_EXTENDED
-		KASSERTMSG(curcpu()->ci_pmap_cur != pm || pm->pm_pai[0].pai_asid == curcpu()->ci_pmap_asid_cur, "pmap/asid %p/%#x != %s cur pmap/asid %p/%#x", pm, pm->pm_pai[0].pai_asid, curcpu()->ci_data.cpu_name, curcpu()->ci_pmap_cur, curcpu()->ci_pmap_asid_cur);
+		KASSERT(pm != pmap_kernel());
+
+		KASSERTMSG(curcpu()->ci_pmap_cur != pm
+		    || pm->pm_pai[0].pai_asid == curcpu()->ci_pmap_asid_cur,
+		    "pmap/asid %p/%#x != %s cur pmap/asid %p/%#x", pm,
+		    pm->pm_pai[0].pai_asid, curcpu()->ci_data.cpu_name,
+		    curcpu()->ci_pmap_cur, curcpu()->ci_pmap_asid_cur);
+
+#ifdef MULTIPROCESSOR
 		/*
 		 * Finish up the pmap_remove_all() optimisation by flushing
 		 * all our ASIDs.
 		 */
-		pmap_tlb_asid_release_all(pm);
+		// This should be the last CPU with this pmap onproc
+		KASSERT(!kcpuset_isotherset(pm->pm_onproc, cpu_index(curcpu())));
+		if (kcpuset_isset(pm->pm_onproc, cpu_index(curcpu()))) {
+			if (pm != pmap_kernel()) {
+				struct cpu_info * const ci = curcpu();
+				KASSERT(!cpu_intr_p());
+				/*
+				 * The bits in pm_onproc that belong to this
+				 * TLB can be changed while this TLBs lock is
+				 * not held as long as we use atomic ops.
+				 */
+				kcpuset_atomic_clear(pm->pm_onproc,
+				    cpu_index(ci));
+			}
+		}
+		KASSERT(kcpuset_iszero(pm->pm_onproc));
+#endif
+		struct pmap_asid_info * const pai =
+		    PMAP_PAI(pm, cpu_tlb_info(ci));
+
+		tlb_invalidate_asids(pai->pai_asid, pai->pai_asid);
+
 #else
 		/*
 		 * Finish up the pmap_remove_all() optimisation by flushing
@@ -4997,13 +5058,18 @@ pmap_update(pmap_t pm)
 	armreg_bpiall_write(0);
 #endif
 
-#if defined(MULTIPROCESSOR) && PMAP_MAX_TLB > 1
+#if defined(MULTIPROCESSOR) && PMAP_TLB_MAX > 1
 	u_int pending = atomic_swap_uint(&pmap->pm_shootdown_pending, 0);
 	if (pending && pmap_tlb_shootdown_bystanders(pmap)) {
 		PMAP_COUNT(shootdown_ipis);
 	}
 #endif
-	KASSERTMSG(curcpu()->ci_pmap_cur != pm || pm->pm_pai[0].pai_asid == curcpu()->ci_pmap_asid_cur, "pmap/asid %p/%#x != %s cur pmap/asid %p/%#x", pm, pm->pm_pai[0].pai_asid, curcpu()->ci_data.cpu_name, curcpu()->ci_pmap_cur, curcpu()->ci_pmap_asid_cur);
+	KASSERTMSG(pm == pmap_kernel()
+	    || curcpu()->ci_pmap_cur != pm
+	    || pm->pm_pai[0].pai_asid == curcpu()->ci_pmap_asid_cur,
+	    "pmap/asid %p/%#x != %s cur pmap/asid %p/%#x", pm,
+	    pm->pm_pai[0].pai_asid, curcpu()->ci_data.cpu_name,
+	    curcpu()->ci_pmap_cur, curcpu()->ci_pmap_asid_cur);
 #else
 	if (pmap_is_current(pm)) {
 		/*
@@ -5093,8 +5159,6 @@ pmap_destroy(pmap_t pm)
 		pmap_update(pm);
 	}
 #endif
-
-	LIST_REMOVE(pm, pm_list);
 
 	pmap_free_l1(pm);
 
@@ -6240,8 +6304,6 @@ pmap_bootstrap(vaddr_t vstart, vaddr_t vend)
 	 */
 	pool_cache_bootstrap(&pmap_cache, sizeof(struct pmap), 0, 0, 0,
 	    "pmappl", NULL, IPL_NONE, pmap_pmap_ctor, NULL, NULL);
-	LIST_INIT(&pmap_pmaps);
-	LIST_INSERT_HEAD(&pmap_pmaps, pm, pm_list);
 
 	/*
 	 * Initialize the pv pool.
@@ -6684,10 +6746,8 @@ pmap_map_chunk(vaddr_t l1pt, vaddr_t va, paddr_t pa, vsize_t size,
 		if (L1_SS_PROTO && L1_SS_MAPPABLE_P(va, pa, resid)) {
 			/* Supersection are always domain 0 */
 			const pd_entry_t npde = L1_SS_PROTO | pa
-#ifdef ARM_MMU_EXTENDED_XXX
-			    | ((prot & VM_PROT_EXECUTE) ? 0 : L1_S_V6_XN)
-#endif
 #ifdef ARM_MMU_EXTENDED
+			    | ((prot & VM_PROT_EXECUTE) ? 0 : L1_S_V6_XN)
 			    | (va & 0x80000000 ? 0 : L1_S_V6_nG)
 #endif
 			    | L1_S_PROT(PTE_KERNEL, prot) | f1;
@@ -6705,10 +6765,8 @@ pmap_map_chunk(vaddr_t l1pt, vaddr_t va, paddr_t pa, vsize_t size,
 		/* See if we can use a section mapping. */
 		if (L1_S_MAPPABLE_P(va, pa, resid)) {
 			const pd_entry_t npde = L1_S_PROTO | pa
-#ifdef ARM_MMU_EXTENDED_XXX
-			    | ((prot & VM_PROT_EXECUTE) ? 0 : L1_S_V6_XN)
-#endif
 #ifdef ARM_MMU_EXTENDED
+			    | ((prot & VM_PROT_EXECUTE) ? 0 : L1_S_V6_XN)
 			    | (va & 0x80000000 ? 0 : L1_S_V6_nG)
 #endif
 			    | L1_S_PROT(PTE_KERNEL, prot) | f1
@@ -6742,10 +6800,8 @@ pmap_map_chunk(vaddr_t l1pt, vaddr_t va, paddr_t pa, vsize_t size,
 		/* See if we can use a L2 large page mapping. */
 		if (L2_L_MAPPABLE_P(va, pa, resid)) {
 			const pt_entry_t npte = L2_L_PROTO | pa
-#ifdef ARM_MMU_EXTENDED_XXX
-			    | ((prot & VM_PROT_EXECUTE) ? 0 : L2_XS_L_XN)
-#endif
 #ifdef ARM_MMU_EXTENDED
+			    | ((prot & VM_PROT_EXECUTE) ? 0 : L2_XS_L_XN)
 			    | (va & 0x80000000 ? 0 : L2_XS_nG)
 #endif
 			    | L2_L_PROT(PTE_KERNEL, prot) | f2l;
@@ -6760,18 +6816,19 @@ pmap_map_chunk(vaddr_t l1pt, vaddr_t va, paddr_t pa, vsize_t size,
 			continue;
 		}
 
-		/* Use a small page mapping. */
 #ifdef VERBOSE_INIT_ARM
 		printf("P");
 #endif
-		const pt_entry_t npte = L2_S_PROTO | pa
-#ifdef ARM_MMU_EXTENDED_XXX
-		    | ((prot & VM_PROT_EXECUTE) ? 0 : L2_XS_XN)
-#endif
+		/* Use a small page mapping. */
+		pt_entry_t npte = L2_S_PROTO | pa
 #ifdef ARM_MMU_EXTENDED
+		    | ((prot & VM_PROT_EXECUTE) ? 0 : L2_XS_XN)
 		    | (va & 0x80000000 ? 0 : L2_XS_nG)
 #endif
 		    | L2_S_PROT(PTE_KERNEL, prot) | f2s;
+#ifdef ARM_MMU_EXTENDED
+		npte &= ((prot & VM_PROT_EXECUTE) ? ~L2_XS_XN : ~0);
+#endif
 		l2pte_set(ptep, npte, 0);
 		PTE_SYNC(ptep);
 		va += PAGE_SIZE;
@@ -7206,9 +7263,9 @@ pmap_pte_init_xscale(void)
 	/*
 	 * Disable ECC protection of page table access, for now.
 	 */
-	__asm volatile("mrc p15, 0, %0, c1, c0, 1" : "=r" (auxctl));
+	auxctl = armreg_auxctl_read();
 	auxctl &= ~XSCALE_AUXCTL_P;
-	__asm volatile("mcr p15, 0, %0, c1, c0, 1" : : "r" (auxctl));
+	armreg_auxctl_write(auxctl);
 }
 
 /*
@@ -7261,9 +7318,9 @@ xscale_setup_minidata(vaddr_t l1pt, vaddr_t va, paddr_t pa)
 
 	/* Invalidate data and mini-data. */
 	__asm volatile("mcr p15, 0, %0, c7, c6, 0" : : "r" (0));
-	__asm volatile("mrc p15, 0, %0, c1, c0, 1" : "=r" (auxctl));
+	auxctl = armreg_auxctl_read();
 	auxctl = (auxctl & ~XSCALE_AUXCTL_MD_MASK) | XSCALE_AUXCTL_MD_WB_RWA;
-	__asm volatile("mcr p15, 0, %0, c1, c0, 1" : : "r" (auxctl));
+	armreg_auxctl_write(auxctl);
 }
 
 /*
@@ -7486,21 +7543,7 @@ pmap_kernel_L1_addr(void)
 /*
  * A couple of ddb-callable functions for dumping pmaps
  */
-void pmap_dump_all(void);
 void pmap_dump(pmap_t);
-
-void
-pmap_dump_all(void)
-{
-	pmap_t pm;
-
-	LIST_FOREACH(pm, &pmap_pmaps, pm_list) {
-		if (pm == pmap_kernel())
-			continue;
-		pmap_dump(pm);
-		printf("\n");
-	}
-}
 
 static pt_entry_t ncptes[64];
 static void pmap_dump_ncpg(pmap_t);
@@ -7819,13 +7862,7 @@ arm_pmap_alloc_poolpage(int flags)
 	 */
 	if (arm_poolpage_vmfreelist != VM_FREELIST_DEFAULT) {
 		return uvm_pagealloc_strat(NULL, 0, NULL, flags,
-#if defined(__HAVE_MM_MD_DIRECT_MAPPED_PHYS) && defined(ARM_MMU_EXTENDED)
-		    (pmap_directbase < KERNEL_BASE
-			? UVM_PGA_STRAT_ONLY
-			: UVM_PGA_STRAT_FALLBACK),
-#else
 		    UVM_PGA_STRAT_FALLBACK,
-#endif
 		    arm_poolpage_vmfreelist);
 	}
 
@@ -7843,7 +7880,7 @@ pmap_md_tlb_info_attach(struct pmap_tlb_info *ti, struct cpu_info *ci)
 int
 pic_ipi_shootdown(void *arg)
 {
-#if PMAP_NEED_TLB_SHOOTDOWN
+#if PMAP_TLB_NEED_SHOOTDOWN
 	pmap_tlb_shootdown_process();
 #endif
 	return 1;
@@ -7857,15 +7894,18 @@ pmap_direct_mapped_phys(paddr_t pa, bool *ok_p, vaddr_t va)
 {
 	bool ok = false;
 	if (physical_start <= pa && pa < physical_end) {
+#ifdef KERNEL_BASE_VOFFSET
+		const vaddr_t newva = pa + KERNEL_BASE_VOFFSET;
+#else
+		const vaddr_t newva = KERNEL_BASE + pa - physical_start;
+#endif
 #ifdef ARM_MMU_EXTENDED
-		const vaddr_t newva = pmap_directbase + pa - physical_start;
-		if (newva >= KERNEL_BASE) {
+		if (newva >= KERNEL_BASE && newva < pmap_directlimit) {
+#endif
 			va = newva;
 			ok = true;
+#ifdef ARM_MMU_EXTENDED
 		}
-#else
-		va = KERNEL_BASE + pa - physical_start;
-		ok = true;
 #endif
 	}
 	KASSERT(ok_p);
@@ -7878,7 +7918,7 @@ pmap_map_poolpage(paddr_t pa)
 {
 	bool ok __diagused;
 	vaddr_t va = pmap_direct_mapped_phys(pa, &ok, 0);
-	KASSERT(ok);
+	KASSERTMSG(ok, "pa %#lx not direct mappable", pa);
 #if defined(PMAP_CACHE_VIPT) && !defined(ARM_MMU_EXTENDED)
 	if (arm_cache_prefer_mask != 0) {
 		struct vm_page * const pg = PHYS_TO_VM_PAGE(pa);
@@ -7895,12 +7935,12 @@ paddr_t
 pmap_unmap_poolpage(vaddr_t va)
 {
 	KASSERT(va >= KERNEL_BASE);
-#if defined(ARM_MMU_EXTENDED)
-	return va - pmap_directbase + physical_start;
-#else
 #ifdef PMAP_CACHE_VIVT
 	cpu_idcache_wbinv_range(va, PAGE_SIZE);
 #endif
+#if defined(KERNEL_BASE_VOFFSET)
+        return va - KERNEL_BASE_VOFFSET;
+#else
         return va - KERNEL_BASE + physical_start;
 #endif
 }

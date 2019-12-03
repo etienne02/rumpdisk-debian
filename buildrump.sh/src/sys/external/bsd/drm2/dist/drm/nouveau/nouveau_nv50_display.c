@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveau_nv50_display.c,v 1.3 2015/02/25 14:57:04 riastradh Exp $	*/
+/*	$NetBSD: nouveau_nv50_display.c,v 1.5 2016/02/05 23:46:40 riastradh Exp $	*/
 
 	/*
  * Copyright 2011 Red Hat Inc.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveau_nv50_display.c,v 1.3 2015/02/25 14:57:04 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveau_nv50_display.c,v 1.5 2016/02/05 23:46:40 riastradh Exp $");
 
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
@@ -59,19 +59,7 @@ __KERNEL_RCSID(0, "$NetBSD: nouveau_nv50_display.c,v 1.3 2015/02/25 14:57:04 ria
  */
 
 #  define	__iomem		volatile
-#  define	readw		fake_readw
 #  define	writew		fake_writew
-
-static inline uint32_t
-fake_readw(const void __iomem *ptr)
-{
-	uint16_t v;
-
-	v = *(const uint16_t __iomem *)ptr;
-	membar_consumer();
-
-	return v;
-}
 
 static inline void
 fake_writew(uint16_t v, void __iomem *ptr)
@@ -184,8 +172,8 @@ nv50_dmac_destroy(struct nouveau_object *core, struct nv50_dmac *dmac)
 	if (dmac->ptr) {
 		struct pci_dev *pdev = nv_device(core)->pdev;
 #ifdef __NetBSD__
-		/* XXX pa_dmat or pa_dmat64? */
-		const bus_dma_tag_t dmat = pdev->pd_pa.pa_dmat64;
+		const bus_dma_tag_t dmat = pci_dma64_available(&pdev->pd_pa) ?
+		    pdev->pd_pa.pa_dmat64 : pdev->pd_pa.pa_dmat;
 
 		bus_dmamap_unload(dmat, dmac->dmamap);
 		bus_dmamem_unmap(dmat, dmac->dmakva, PAGE_SIZE);
@@ -343,7 +331,10 @@ nv50_dmac_create(struct nouveau_object *core, u32 bclass, u8 head,
 
 #ifdef __NetBSD__
     {
-	const bus_dma_tag_t dmat = nv_device(core)->pdev->pd_pa.pa_dmat64;
+	struct nouveau_device *device = nv_device(core);
+	const bus_dma_tag_t dmat = pci_dma64_available(&device->pdev->pd_pa) ?
+	    device->pdev->pd_pa.pa_dmat64 : device->pdev->pd_pa.pa_dmat;
+
 	int rsegs;
 
 	/* XXX errno NetBSD->Linux */

@@ -1,4 +1,4 @@
-/*	$NetBSD: cryptodev.c,v 1.83 2015/03/26 17:40:16 prlw1 Exp $ */
+/*	$NetBSD: cryptodev.c,v 1.85 2016/07/07 06:55:43 msaitoh Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptodev.c,v 1.4.2.4 2003/06/03 00:09:02 sam Exp $	*/
 /*	$OpenBSD: cryptodev.c,v 1.53 2002/07/10 22:21:30 mickey Exp $	*/
 
@@ -64,7 +64,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.83 2015/03/26 17:40:16 prlw1 Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.85 2016/07/07 06:55:43 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -95,6 +95,8 @@ __KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.83 2015/03/26 17:40:16 prlw1 Exp $")
 #include <opencrypto/cryptodev.h>
 #include <opencrypto/cryptodev_internal.h>
 #include <opencrypto/xform.h>
+
+#include "ioconf.h"
 
 struct csession {
 	TAILQ_ENTRY(csession) next;
@@ -355,7 +357,7 @@ mbail:
 			}
 		}
 		kmem_free(cnop, (mop->count * sizeof(struct crypt_n_op)));
-		break;		
+		break;
 	case CIOCKEY:
 		error = cryptodev_key((struct crypt_kop *)data);
 		DPRINTF(("cryptodev_key error = %d\n", error));
@@ -408,7 +410,7 @@ reterr:
 		kmem_free(crypt_res, (count * sizeof(struct crypt_result)));
 		break;
 	case CIOCNCRYPTRET:
-		error = cryptodev_getstatus(fcr, (struct crypt_result *)data); 
+		error = cryptodev_getstatus(fcr, (struct crypt_result *)data);
 		break;
 	default:
 #ifdef COMPAT_50
@@ -1427,7 +1429,7 @@ cryptodev_mkey(struct fcrypt *fcr, struct crypt_n_kop *kop, int count)
 			continue;
 		case CRK_MOD_MULT:
 			if (in == 3 && out == 1)
-				break;	
+				break;
 			kop[req].crk_status = EINVAL;
 			continue;
 		case CRK_MOD_MULTINV:
@@ -1931,7 +1933,7 @@ fail:
 		}
 	}
 
-	return completed;	
+	return completed;
 }
 
 static int
@@ -1942,7 +1944,7 @@ cryptodev_getstatus (struct fcrypt *fcr, struct crypt_result *crypt_res)
         struct csession *cse;
         int i, size, req = 0;
 
-	mutex_enter(&crypto_mtx);		
+	mutex_enter(&crypto_mtx);
 	/* Here we dont know for which request the user is requesting the 
 	 * response so checking in both the queues */
 	TAILQ_FOREACH_SAFE(crp, &fcr->crp_ret_mq, crp_next, cnext) {
@@ -2031,7 +2033,7 @@ fail:
 		}
 	}
 	mutex_exit(&crypto_mtx);
-	return EINPROGRESS;			
+	return EINPROGRESS;
 }
 
 static int      
@@ -2080,8 +2082,6 @@ cryptof_poll(struct file *fp, int events)
 /*
  * Pseudo-device initialization routine for /dev/crypto
  */
-void	cryptoattach(int);
-
 void
 cryptoattach(int num)
 {

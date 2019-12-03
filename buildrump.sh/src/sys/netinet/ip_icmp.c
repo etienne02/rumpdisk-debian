@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_icmp.c,v 1.140 2015/05/09 18:47:26 christos Exp $	*/
+/*	$NetBSD: ip_icmp.c,v 1.150 2016/07/08 04:33:30 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -94,9 +94,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_icmp.c,v 1.140 2015/05/09 18:47:26 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_icmp.c,v 1.150 2016/07/08 04:33:30 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_ipsec.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -337,7 +339,7 @@ icmp_error(struct mbuf *n, int type, int code, n_long dest,
 	m->m_data -= sizeof(struct ip);
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
-	m->m_pkthdr.rcvif = n->m_pkthdr.rcvif;
+	m_copy_rcvif(m, n);
 	nip = mtod(m, struct ip *);
 	/* ip_v set in ip_output */
 	nip->ip_hl = sizeof(struct ip) >> 2;
@@ -558,7 +560,10 @@ icmp_input(struct mbuf *m, ...)
 		icp->icmp_ttime = icp->icmp_rtime;	/* bogus, do later! */
 		goto reflect;
 
-	case ICMP_MASKREQ:
+	case ICMP_MASKREQ: {
+		struct ifnet *rcvif;
+		int s;
+
 		if (icmpmaskrepl == 0)
 			break;
 		/*
@@ -574,8 +579,10 @@ icmp_input(struct mbuf *m, ...)
 			icmpdst.sin_addr = ip->ip_src;
 		else
 			icmpdst.sin_addr = ip->ip_dst;
+		rcvif = m_get_rcvif(m, &s);
 		ia = ifatoia(ifaof_ifpforaddr(sintosa(&icmpdst),
-		    m->m_pkthdr.rcvif));
+		    rcvif));
+		m_put_rcvif(rcvif, &s);
 		if (ia == 0)
 			break;
 		icp->icmp_type = ICMP_MASKREPLY;
@@ -595,6 +602,7 @@ reflect:
 		}
 		icmp_reflect(m);
 		return;
+	}
 
 	case ICMP_REDIRECT:
 		if (code > 3)
@@ -684,6 +692,8 @@ icmp_reflect(struct mbuf *m)
 	struct in_addr t;
 	struct mbuf *opts = NULL;
 	int optlen = (ip->ip_hl << 2) - sizeof(struct ip);
+	struct ifnet *rcvif;
+	struct psref psref;
 
 	if (!in_canforward(ip->ip_src) &&
 	    ((ip->ip_src.s_addr & IN_CLASSA_NET) !=
@@ -702,14 +712,16 @@ icmp_reflect(struct mbuf *m)
 	 */
 
 	/* Look for packet addressed to us */
-	INADDR_TO_IA(t, ia);
+	ia = in_get_ia(t);
 	if (ia && (ia->ia4_flags & IN_IFF_NOTREADY))
 		ia = NULL;
 
+	rcvif = m_get_rcvif_psref(m, &psref);
+
 	/* look for packet sent to broadcast address */
-	if (ia == NULL && m->m_pkthdr.rcvif &&
-	    (m->m_pkthdr.rcvif->if_flags & IFF_BROADCAST)) {
-		IFADDR_FOREACH(ifa, m->m_pkthdr.rcvif) {
+	if (ia == NULL && rcvif &&
+	    (rcvif->if_flags & IFF_BROADCAST)) {
+		IFADDR_READER_FOREACH(ifa, rcvif) {
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
 			if (in_hosteq(t,ifatoia(ifa)->ia_broadaddr.sin_addr)) {
@@ -731,7 +743,7 @@ icmp_reflect(struct mbuf *m)
 	 * use that, if it's an address on the interface which
 	 * received the packet
 	 */
-	if (sin == NULL && m->m_pkthdr.rcvif) {
+	if (sin == NULL && rcvif) {
 		struct sockaddr_in sin_dst;
 		struct route icmproute;
 		int errornum;
@@ -746,14 +758,9 @@ icmp_reflect(struct mbuf *m)
 		if (sin) {
 			t = sin->sin_addr;
 			sin = NULL;
-			INADDR_TO_IA(t, ia);
-			while (ia) {
-				if (ia->ia_ifp == m->m_pkthdr.rcvif) {
-					sin = &ia->ia_addr;
-					break;
-				}
-				NEXT_IA_WITH_SAME_ADDR(ia);
-			}
+			ia = in_get_ia_on_iface(t, rcvif);
+			if (ia != NULL)
+				sin = &ia->ia_addr;
 		}
 	}
 
@@ -763,14 +770,16 @@ icmp_reflect(struct mbuf *m)
 	 * interface.  This can happen when routing is asymmetric, or
 	 * when the incoming packet was encapsulated
 	 */
-	if (sin == NULL && m->m_pkthdr.rcvif) {
-		IFADDR_FOREACH(ifa, m->m_pkthdr.rcvif) {
+	if (sin == NULL && rcvif) {
+		IFADDR_READER_FOREACH(ifa, rcvif) {
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
 			sin = &(ifatoia(ifa)->ia_addr);
 			break;
 		}
 	}
+
+	m_put_rcvif_psref(rcvif, &psref);
 
 	/*
 	 * The following happens if the packet was not addressed to us,
@@ -779,7 +788,7 @@ icmp_reflect(struct mbuf *m)
 	 * interface.
 	 */
 	if (sin == NULL)
-		TAILQ_FOREACH(ia, &in_ifaddrhead, ia_list) {
+		IN_ADDRLIST_READER_FOREACH(ia) {
 			if (ia->ia_ifp->if_flags & IFF_LOOPBACK)
 				continue;
 			sin = &ia->ia_addr;
@@ -1104,8 +1113,7 @@ icmp_mtudisc(struct icmp *icp, struct in_addr faddr)
 	if ((rt->rt_flags & RTF_HOST) == 0) {
 		struct rtentry *nrt;
 
-		error = rtrequest((int) RTM_ADD, dst,
-		    (struct sockaddr *) rt->rt_gateway, NULL,
+		error = rtrequest(RTM_ADD, dst, rt->rt_gateway, NULL,
 		    RTF_GATEWAY | RTF_HOST | RTF_DYNAMIC, &nrt);
 		if (error) {
 			rtfree(rt);
@@ -1212,12 +1220,14 @@ ip_next_mtu(u_int mtu, int dir)	/* XXX */
 static void
 icmp_mtudisc_timeout(struct rtentry *rt, struct rttimer *r)
 {
+
 	KASSERT(rt != NULL);
+	rt_assert_referenced(rt);
 
 	if ((rt->rt_flags & (RTF_DYNAMIC | RTF_HOST)) ==
 	    (RTF_DYNAMIC | RTF_HOST)) {
-		rtrequest((int) RTM_DELETE, rt_getkey(rt),
-		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+		rtrequest(RTM_DELETE, rt_getkey(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, NULL);
 	} else {
 		if ((rt->rt_rmx.rmx_locks & RTV_MTU) == 0) {
 			rt->rt_rmx.rmx_mtu = 0;
@@ -1228,12 +1238,14 @@ icmp_mtudisc_timeout(struct rtentry *rt, struct rttimer *r)
 static void
 icmp_redirect_timeout(struct rtentry *rt, struct rttimer *r)
 {
+
 	KASSERT(rt != NULL);
+	rt_assert_referenced(rt);
 
 	if ((rt->rt_flags & (RTF_DYNAMIC | RTF_HOST)) ==
 	    (RTF_DYNAMIC | RTF_HOST)) {
-		rtrequest((int) RTM_DELETE, rt_getkey(rt),
-		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+		rtrequest(RTM_DELETE, rt_getkey(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, NULL);
 	}
 }
 

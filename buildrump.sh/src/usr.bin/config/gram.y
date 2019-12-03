@@ -1,5 +1,5 @@
 %{
-/*	$NetBSD: gram.y,v 1.46 2014/11/04 23:01:23 joerg Exp $	*/
+/*	$NetBSD: gram.y,v 1.53 2016/04/29 18:18:22 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: gram.y,v 1.46 2014/11/04 23:01:23 joerg Exp $");
+__RCSID("$NetBSD: gram.y,v 1.53 2016/04/29 18:18:22 mlelstv Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -103,6 +103,7 @@ DECL_ALLOCWRAP(condexpr);
 #define	new_nx(n, x)	new0(n, NULL, NULL, 0, x)
 #define	new_ns(n, s)	new0(n, s, NULL, 0, NULL)
 #define	new_si(s, i)	new0(NULL, s, NULL, i, NULL)
+#define	new_spi(s, p, i)	new0(NULL, s, p, i, NULL)
 #define	new_nsi(n,s,i)	new0(n, s, NULL, i, NULL)
 #define	new_np(n, p)	new0(n, NULL, p, 0, NULL)
 #define	new_s(s)	new0(NULL, s, NULL, 0, NULL)
@@ -179,7 +180,7 @@ static struct loclist *namelocvals(const char *, struct loclist *);
 %token	XMACHINE MAJOR MAKEOPTIONS MAXUSERS MAXPARTITIONS MINOR
 %token	NEEDS_COUNT NEEDS_FLAG NO
 %token	XOBJECT OBSOLETE ON OPTIONS
-%token	PACKAGE PLUSEQ PREFIX PSEUDO_DEVICE PSEUDO_ROOT
+%token	PACKAGE PLUSEQ PREFIX BUILDPREFIX PSEUDO_DEVICE PSEUDO_ROOT
 %token	ROOT
 %token	SELECT SINGLE SOURCE
 %token	TYPE
@@ -317,6 +318,7 @@ definition:
 	| define_object
 	| define_device_major
 	| define_prefix
+	| define_buildprefix
 	| define_devclass
 	| define_filesystems
 	| define_attribute
@@ -343,7 +345,7 @@ define_file:
 
 /* object file: object zot.o foo|zot needs-flag */
 define_object:
-	XOBJECT filename fopts oflags	{ addobject($2, $3, $4); }
+	XOBJECT filename fopts oflags	{ addfile($2, $3, $4, NULL); }
 ;
 
 /* device major declaration */
@@ -359,6 +361,12 @@ define_device_major:
 define_prefix:
 	  PREFIX filename		{ prefix_push($2); }
 	| PREFIX			{ prefix_pop(); }
+;
+
+define_buildprefix:
+	  BUILDPREFIX filename		{ buildprefix_push($2); }
+	| BUILDPREFIX WORD		{ buildprefix_push($2); }
+	| BUILDPREFIX			{ buildprefix_pop(); }
 ;
 
 define_devclass:
@@ -473,7 +481,7 @@ oflags:
 
 /* a single flag for an object file */
 oflag:
-	NEEDS_FLAG			{ $$ = OI_NEEDSFLAG; }
+	NEEDS_FLAG			{ $$ = FI_NEEDSFLAG; }
 ;
 
 /* char 55 */
@@ -899,9 +907,14 @@ root_spec:
 
 /* device for root fs or dump */
 dev_spec:
-	  '?'				{ $$ = new_si(intern("?"),
+	  '?'				{ $$ = new_spi(intern("?"),
+					    NULL,
 					    (long long)NODEV); }
-	| WORD				{ $$ = new_si($1,
+	| QSTRING			{ $$ = new_spi($1,
+					    __UNCONST("spec"),
+					    (long long)NODEV); }
+	| WORD				{ $$ = new_spi($1,
+					    NULL,
 					    (long long)NODEV); }
 	| major_minor			{ $$ = new_si(NULL, $1); }
 ;

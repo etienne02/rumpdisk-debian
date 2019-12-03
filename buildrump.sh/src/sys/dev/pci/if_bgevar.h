@@ -1,4 +1,4 @@
-/*	$NetBSD: if_bgevar.h,v 1.19 2015/05/17 12:06:26 msaitoh Exp $	*/
+/*	$NetBSD: if_bgevar.h,v 1.21 2015/11/18 10:26:57 msaitoh Exp $	*/
 /*
  * Copyright (c) 2001 Wind River Systems
  * Copyright (c) 1997, 1998, 1999, 2001
@@ -266,9 +266,7 @@ struct bge_softc {
 	bus_space_tag_t		bge_apetag;
 	bus_size_t		bge_apesize;
 	void			*bge_intrhand;
-#ifdef __HAVE_PCI_MSI_MSIX
 	pci_intr_handle_t	*bge_pihp;
-#endif
 	pci_chipset_tag_t	sc_pc;
 	pcitag_t		sc_pcitag;
 
@@ -338,6 +336,7 @@ struct bge_softc {
 	int			bge_txcnt;
 	struct callout		bge_timeout;
 	int			bge_pending_rxintr_change;
+	int			bge_detaching;
 	SLIST_HEAD(, txdmamap_pool_entry) txdma_list;
 	struct txdmamap_pool_entry *txdma[BGE_TX_RING_CNT];
 

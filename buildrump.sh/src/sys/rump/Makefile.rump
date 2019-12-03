@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rump,v 1.113 2015/06/03 14:40:11 pooka Exp $
+#	$NetBSD: Makefile.rump,v 1.121 2016/07/09 05:52:22 matt Exp $
 #
 
 .if !defined(_RUMP_MK)
@@ -40,18 +40,20 @@ RUMP_NBCOMPAT=
 RUMP_NBCOMPAT:=	${RUMP_NBCOMPAT:S/,/ /g}
 CPPFLAGS+=	${RUMP_NBCOMPAT:C/[1-9]0/-DCOMPAT_&/g}
 
-CPPFLAGS+=	-DMAXUSERS=32
-
 CPPFLAGS+=	-nostdinc
 CFLAGS+=	-ffreestanding -fno-strict-aliasing
 
 CWARNFLAGS+=	-Wno-format-zero-length -Wno-pointer-sign
-CPPFLAGS+=	-D_KERNEL -DMULTIPROCESSOR -D_MODULE -DMODULAR
-CPPFLAGS+=	-DDEBUGPRINT
+
+CPPFLAGS+=	-imacros ${RUMPTOP}/include/opt/opt_rumpkernel.h
+.ifdef BUILDRUMP_IMACROS
+CPPFLAGS+=	-imacros ${BUILDRUMP_IMACROS}
+.endif
+
 CPPFLAGS+=	-I${.CURDIR} -I.
 CPPFLAGS+=	-I${RUMPTOP}/../../common/include
 CPPFLAGS+=	-I${RUMPTOP}/include
-CPPFLAGS+=	-I${RUMPTOP}/librump/rumpkern/opt
+CPPFLAGS+=	-I${RUMPTOP}/include/opt
 
 SHLIB_MAJOR?=	0
 SHLIB_MINOR?=	0
@@ -118,7 +120,7 @@ CPPFLAGS+=	-DKTRACE
 
 # make sure __NetBSD__ gets defined (for builds on non-NetBSD)
 # also, give those builds a way to undef the local compiler's macros
-CPPFLAGS+=	-D__NetBSD__ ${RUMPKERN_UNDEF}
+CPPFLAGS+=	${RUMPKERN_UNDEF}
 
 RUMPKERNEL=	This is NetBSD and I am the rump.  Good evening.
 
@@ -127,7 +129,7 @@ RUMPKERNEL=	This is NetBSD and I am the rump.  Good evening.
 CPPFLAGS+=	-DPPC_OEA
 .endif
 
-# If this file changes, we need a full rebuild
+# If any of these files change, we need a full rebuild
 DPSRCS+=	${RUMPTOP}/Makefile.rump
 
 #
@@ -147,19 +149,19 @@ RUMPCOMP_USER_WERROR = ${${_NOWERROR} == "no" :?-Werror:}
 .for rcusrc in ${RUMPCOMP_USER_SRCS:R}
 ${rcusrc}.d: ${rcusrc}.c
 	${_MKTARGET_CREATE}
-	${MKDEP} -f ${.TARGET} -- ${MKDEPFLAGS} ${BUILDRUMP_CPPFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${MKDEP} -f ${.TARGET} -- ${MKDEPFLAGS} ${CPUFLAGS} ${BUILDRUMP_CPPFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.o: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} ${DBG} ${CWARNFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.pico: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} -fPIC -DPIC ${DBG} ${CWARNFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} -fPIC -DPIC ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.po: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} ${PROFFLAGS} -pg ${DBG} ${CWARNFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} ${PROFFLAGS} -pg ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 RUMPOBJ_NORENAME+=${rcusrc}.o ${rcusrc}.pico ${rcusrc}.po
 SRCS+=${rcusrc}.c
@@ -239,6 +241,10 @@ __archivebuild: .USE
 	${AR} ${_ARFL} ${.TARGET} \
 	    `NM=${NM} ${LORDER} ${.ALLSRC:M*o} | ${TSORT}`
 .endif
+
+COMMENT?=	(no description)
+rumpdescribe: .PHONY
+	@printf '%-24s %s\n' '${LIB}' '${COMMENT}'
 
 _BSD_IOCONF_MK_USER_=1
 .include <bsd.ioconf.mk>

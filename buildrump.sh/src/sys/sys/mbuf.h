@@ -1,4 +1,4 @@
-/*	$NetBSD: mbuf.h,v 1.157 2015/03/02 16:16:08 christos Exp $	*/
+/*	$NetBSD: mbuf.h,v 1.166 2016/06/21 03:07:54 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1999, 2001, 2007 The NetBSD Foundation, Inc.
@@ -75,6 +75,8 @@
 #include <sys/queue.h>
 #if defined(_KERNEL)
 #include <sys/percpu_types.h>
+#include <sys/socket.h>	/* for AF_UNSPEC */
+#include <sys/psref.h>
 #endif /* defined(_KERNEL) */
 
 /* For offsetof() */
@@ -85,6 +87,8 @@
 #endif
 
 #include <uvm/uvm_param.h>	/* for MIN_PAGE_SIZE */
+
+#include <net/if.h>
 
 /*
  * Mbufs are of a single size, MSIZE (machine/param.h), which
@@ -169,14 +173,29 @@ struct m_hdr {
  * be bit-wise inverted (the final step in the calculation of an IP
  * checksum) -- this is so we can accumulate the checksum for fragmented
  * packets during reassembly.
+ *
+ * Size ILP32: 36
+ *       LP64: 56
  */
 struct	pkthdr {
-	struct ifnet	*rcvif;			/* rcv interface */
+	union {
+		void		*ctx;		/* for M_GETCTX/M_SETCTX */
+		if_index_t	index;		/* rcv interface index */
+	} _rcvif;
+#define rcvif_index		_rcvif.index
 	SLIST_HEAD(packet_tags, m_tag) tags;	/* list of packet tags */
 	int		len;			/* total packet length */
 	int		csum_flags;		/* checksum flags */
 	uint32_t	csum_data;		/* checksum data */
 	u_int		segsz;			/* segment size */
+
+	/*
+	 * Following three fields are open-coded struct altq_pktattr
+	 * to rearrange struct pkthdr fields flexibly.
+	 */
+	void	*pattr_class;		/* ALTQ: sched class set by classifier */
+	void	*pattr_hdr;		/* ALTQ: saved header position in mbuf */
+	int	pattr_af;		/* ALTQ: address family */
 };
 
 /*
@@ -360,6 +379,7 @@ MBUF_DEFINE(mbuf, MHLEN, MLEN);
 
 /* for source-level compatibility */
 #define	M_CLUSTER	M_EXT_CLUSTER
+#define	M_NOTIFICATION	M_PROTO1
 
 #define M_FLAGS_BITS \
     "\20\1EXT\2PKTHDR\3EOR\4PROTO1\5AUTHIPHDR\6DECRYPTED\7LOOP\10AUTHIPDGM" \
@@ -697,11 +717,11 @@ do {									\
 #define  m_copy(m, o, l)	m_copym((m), (o), (l), M_DONTWAIT)
 
 /*
- * Allow drivers and/or protocols to use the rcvif member of
- * PKTHDR mbufs to store private context information.
+ * Allow drivers and/or protocols to store private context information.
  */
-#define	M_GETCTX(m, t)		((t)(m)->m_pkthdr.rcvif)
-#define	M_SETCTX(m, c)		((void)((m)->m_pkthdr.rcvif = (void *)(c)))
+#define	M_GETCTX(m, t)		((t)(m)->m_pkthdr._rcvif.ctx)
+#define	M_SETCTX(m, c)		((void)((m)->m_pkthdr._rcvif.ctx = (void *)(c)))
+#define	M_CLEARCTX(m)		M_SETCTX((m), NULL)
 
 #endif /* defined(_KERNEL) */
 
@@ -913,6 +933,8 @@ struct	m_tag *m_tag_next(struct mbuf *, struct m_tag *);
 						    * loop detection/recovery
 						    */
 
+#define	PACKET_TAG_MPLS				29 /* Indicate it's for MPLS */
+
 /*
  * Return the number of bytes in the mbuf chain, m.
  */
@@ -931,8 +953,125 @@ m_length(const struct mbuf *m)
 	return pktlen;
 }
 
+static __inline void
+m_hdr_init(struct mbuf *m, short type, struct mbuf *next, char *data, int len)
+{
+
+	KASSERT(m != NULL);
+
+	mowner_init(m, type);
+	m->m_ext_ref = m; /* default */
+	m->m_type = type;
+	m->m_len = len;
+	m->m_next = next;
+	m->m_nextpkt = NULL; /* default */
+	m->m_data = data;
+	m->m_flags = 0; /* default */
+}
+
+static __inline void
+m_set_rcvif(struct mbuf *m, const struct ifnet *ifp)
+{
+
+	m->m_pkthdr.rcvif_index = ifp->if_index;
+}
+
+static __inline void
+m_reset_rcvif(struct mbuf *m)
+{
+
+	/* A caller may expect whole _rcvif union is zeroed */
+	/* m->m_pkthdr.rcvif_index = 0; */
+	m->m_pkthdr._rcvif.ctx = NULL;
+}
+
+static __inline void
+m_copy_rcvif(struct mbuf *m, const struct mbuf *n)
+{
+
+	m->m_pkthdr.rcvif_index = n->m_pkthdr.rcvif_index;
+}
+
+static __inline void
+m_pkthdr_init(struct mbuf *m)
+{
+
+	KASSERT(m != NULL);
+
+	m->m_data = m->m_pktdat;
+	m->m_flags = M_PKTHDR;
+
+	m_reset_rcvif(m);
+	m->m_pkthdr.len = 0;
+	m->m_pkthdr.csum_flags = 0;
+	m->m_pkthdr.csum_data = 0;
+	SLIST_INIT(&m->m_pkthdr.tags);
+
+	m->m_pkthdr.pattr_class = NULL;
+	m->m_pkthdr.pattr_af = AF_UNSPEC;
+	m->m_pkthdr.pattr_hdr = NULL;
+}
+
 void m_print(const struct mbuf *, const char *, void (*)(const char *, ...)
     __printflike(1, 2));
+
+/*
+ * Get rcvif of a mbuf.
+ *
+ * The caller must call m_put_rcvif after using rcvif. The caller cannot
+ * block or sleep during using rcvif. Insofar as the constraint is satisfied,
+ * the API ensures a got rcvif isn't be freed until m_put_rcvif is called.
+ */
+static __inline struct ifnet *
+m_get_rcvif(const struct mbuf *m, int *s)
+{
+
+	*s = pserialize_read_enter();
+	return if_byindex(m->m_pkthdr.rcvif_index);
+}
+
+static __inline void
+m_put_rcvif(struct ifnet *ifp, int *s)
+{
+
+	if (ifp == NULL)
+		return;
+	pserialize_read_exit(*s);
+}
+
+/*
+ * Get rcvif of a mbuf.
+ *
+ * The caller must call m_put_rcvif_psref after using rcvif. The API ensures
+ * a got rcvif isn't be freed until m_put_rcvif_psref is called.
+ */
+static __inline struct ifnet *
+m_get_rcvif_psref(const struct mbuf *m, struct psref *psref)
+{
+
+	return if_get_byindex(m->m_pkthdr.rcvif_index, psref);
+}
+
+static __inline void
+m_put_rcvif_psref(struct ifnet *ifp, struct psref *psref)
+{
+
+	if (ifp == NULL)
+		return;
+	if_put(ifp, psref);
+}
+
+/*
+ * Get rcvif of a mbuf.
+ *
+ * This is NOT an MP-safe API and shouldn't be used at where we want MP-safe.
+ */
+static __inline struct ifnet *
+m_get_rcvif_NOMPSAFE(const struct mbuf *m)
+{
+
+	return if_byindex(m->m_pkthdr.rcvif_index);
+}
 
 #endif /* _KERNEL */
 #endif /* !_SYS_MBUF_H_ */

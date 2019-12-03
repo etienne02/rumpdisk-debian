@@ -1,4 +1,4 @@
-/*	$NetBSD: time.h,v 1.44 2014/10/07 21:50:36 christos Exp $	*/
+/*	$NetBSD: time.h,v 1.46 2016/04/23 23:10:10 christos Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -156,6 +156,12 @@ int timer_gettime(timer_t, struct itimerspec *) __RENAME(__timer_gettime50);
 int timer_settime(timer_t, int, const struct itimerspec * __restrict, 
     struct itimerspec * __restrict) __RENAME(__timer_settime50);
 #endif
+#ifdef _NETBSD_SOURCE
+#include <sys/idtype.h>
+int clock_getcpuclockid2(idtype_t, id_t, clockid_t *);
+#endif
+int clock_getcpuclockid(pid_t, clockid_t *);
+
 int timer_create(clockid_t, struct sigevent * __restrict,
     timer_t * __restrict);
 int timer_delete(timer_t);
@@ -211,6 +217,7 @@ time_t posix2time_z(timezone_t __restrict, time_t) __RENAME(__posix2time_z50);
 timezone_t tzalloc(const char *) __RENAME(__tzalloc50);
 void tzfree(timezone_t __restrict) __RENAME(__tzfree50);
 const char *tzgetname(timezone_t __restrict, int) __RENAME(__tzgetname50);
+long tzgetgmtoff(timezone_t __restrict, int) __RENAME(__tzgetgmtoff50);
 #endif
 
 size_t strftime_lz(timezone_t __restrict, char * __restrict, size_t,

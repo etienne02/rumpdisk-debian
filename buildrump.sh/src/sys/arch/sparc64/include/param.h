@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.55 2014/10/08 10:30:27 macallan Exp $ */
+/*	$NetBSD: param.h,v 1.57 2016/04/15 20:29:13 martin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -108,6 +108,11 @@ extern int nbpg, pgofset, pgshift;
 #define	MAXPHYS		(64 * 1024)
 
 #ifdef __arch64__
+
+#ifdef SUN4V
+#define	MAXCPUS		256
+#endif
+
 /* We get stack overflows w/8K stacks in 64-bit mode */
 #define	SSIZE		2		/* initial stack size in pages */
 #else
@@ -197,7 +202,7 @@ extern int nbpg, pgofset, pgshift;
 #define	MCLBYTES	(1 << MCLSHIFT)	/* size of a m_buf cluster */
 
 #if !defined (MSGBUFSIZE)		/* options MSGBUFSIZE=integer	*/
-#define MSGBUFSIZE	4 * NBPG
+#define MSGBUFSIZE	(4 * NBPG)
 #else
 #if INTSTACK - MSGBUF_VA - MSGBUFSIZE < 0
 #error MSGBUFSIZE is too large

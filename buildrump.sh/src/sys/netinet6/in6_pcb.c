@@ -1,4 +1,4 @@
-/*	$NetBSD: in6_pcb.c,v 1.141 2015/05/19 01:14:40 ozaki-r Exp $	*/
+/*	$NetBSD: in6_pcb.c,v 1.147 2016/07/15 07:40:09 ozaki-r Exp $	*/
 /*	$KAME: in6_pcb.c,v 1.84 2001/02/08 18:02:08 itojun Exp $	*/
 
 /*
@@ -62,10 +62,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in6_pcb.c,v 1.141 2015/05/19 01:14:40 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in6_pcb.c,v 1.147 2016/07/15 07:40:09 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_ipsec.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -238,7 +240,7 @@ in6_pcbbind_addr(struct in6pcb *in6p, struct sockaddr_in6 *sin6, struct lwp *l)
 		struct ifaddr *ia = NULL;
 
 		if ((in6p->in6p_flags & IN6P_FAITH) == 0 &&
-		    (ia = ifa_ifwithaddr((struct sockaddr *)sin6)) == NULL)
+		    (ia = ifa_ifwithaddr(sin6tosa(sin6))) == NULL)
 			return (EADDRNOTAVAIL);
 
 		/*
@@ -255,7 +257,7 @@ in6_pcbbind_addr(struct in6pcb *in6p, struct sockaddr_in6 *sin6, struct lwp *l)
 		 * deprecated addresses (default: forbid bind(2)).
 		 */
 		if (ia &&
-		    ((struct in6_ifaddr *)ia)->ia6_flags &
+		    ifatoia6(ia)->ia6_flags &
 		    (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|IN6_IFF_DETACHED))
 			return (EADDRNOTAVAIL);
 	}
@@ -418,21 +420,6 @@ in6_pcbbind(void *v, struct sockaddr_in6 *sin6, struct lwp *l)
 }
 
 /*
- * adapter function that accepts nam as mbuf for in6_pcbconnect
- */
-int
-in6_pcbconnect_m(void *v, struct mbuf *nam, struct lwp *l)
-{
-	struct sockaddr_in6 *sin6 = mtod(nam, struct sockaddr_in6 *);
-
-	if (sizeof (*sin6) != nam->m_len) {
-		return EINVAL;
-	}
-
-	return in6_pcbconnect(v, sin6, l);
-}
-
-/*
  * Connect from a socket to a specified address.
  * Both address and port must be specified in argument sin6.
  * If don't have a local address for this socket yet,
@@ -451,6 +438,8 @@ in6_pcbconnect(void *v, struct sockaddr_in6 *sin6, struct lwp *l)
 #endif
 	struct sockaddr_in6 tmp;
 	struct vestigial_inpcb vestige;
+	struct psref psref;
+	int bound;
 
 	(void)&in6a;				/* XXX fool gcc */
 
@@ -491,6 +480,7 @@ in6_pcbconnect(void *v, struct sockaddr_in6 *sin6, struct lwp *l)
 	tmp = *sin6;
 	sin6 = &tmp;
 
+	bound = curlwp_bind();
 	/* Source address selection. */
 	if (IN6_IS_ADDR_V4MAPPED(&in6p->in6p_laddr) &&
 	    in6p->in6p_laddr.s6_addr32[3] == 0) {
@@ -525,23 +515,29 @@ in6_pcbconnect(void *v, struct sockaddr_in6 *sin6, struct lwp *l)
 		in6a = in6_selectsrc(sin6, in6p->in6p_outputopts,
 				     in6p->in6p_moptions,
 				     &in6p->in6p_route,
-				     &in6p->in6p_laddr, &ifp, &error);
+				     &in6p->in6p_laddr, &ifp, &psref, &error);
 		if (ifp && scope_ambiguous &&
 		    (error = in6_setscope(&sin6->sin6_addr, ifp, NULL)) != 0) {
+			if_put(ifp, &psref);
+			curlwp_bindx(bound);
 			return(error);
 		}
 
 		if (in6a == NULL) {
+			if_put(ifp, &psref);
+			curlwp_bindx(bound);
 			if (error == 0)
 				error = EADDRNOTAVAIL;
 			return (error);
 		}
 	}
 
-	if (ifp != NULL)
+	if (ifp != NULL) {
 		in6p->in6p_ip6.ip6_hlim = (u_int8_t)in6_selecthlim(in6p, ifp);
-	else
+		if_put(ifp, &psref);
+	} else
 		in6p->in6p_ip6.ip6_hlim = (u_int8_t)in6_selecthlim_rt(in6p);
+	curlwp_bindx(bound);
 
 	if (in6_pcblookup_connect(in6p->in6p_table, &sin6->sin6_addr,
 	    sin6->sin6_port,
@@ -825,6 +821,8 @@ in6_pcbpurgeif0(struct inpcbtable *table, struct ifnet *ifp)
 	struct ip6_moptions *im6o;
 	struct in6_multi_mship *imm, *nimm;
 
+	KASSERT(ifp != NULL);
+
 	TAILQ_FOREACH_SAFE(inph, &table->inpt_queue, inph_queue, ninph) {
 		struct in6pcb *in6p = (struct in6pcb *)inph;
 		if (in6p->in6p_af != AF_INET6)
@@ -836,8 +834,8 @@ in6_pcbpurgeif0(struct inpcbtable *table, struct ifnet *ifp)
 			 * Unselect the outgoing interface if it is being
 			 * detached.
 			 */
-			if (im6o->im6o_multicast_ifp == ifp)
-				im6o->im6o_multicast_ifp = NULL;
+			if (im6o->im6o_multicast_if_index == ifp->if_index)
+				im6o->im6o_multicast_if_index = 0;
 
 			/*
 			 * Drop multicast group membership if we joined

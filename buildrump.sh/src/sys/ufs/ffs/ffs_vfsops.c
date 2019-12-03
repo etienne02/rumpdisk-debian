@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs_vfsops.c,v 1.333 2015/05/19 06:44:42 martin Exp $	*/
+/*	$NetBSD: ffs_vfsops.c,v 1.340 2016/07/28 08:24:58 martin Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ffs_vfsops.c,v 1.333 2015/05/19 06:44:42 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ffs_vfsops.c,v 1.340 2016/07/28 08:24:58 martin Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
@@ -109,7 +109,11 @@ __KERNEL_RCSID(0, "$NetBSD: ffs_vfsops.c,v 1.333 2015/05/19 06:44:42 martin Exp 
 #include <ufs/ffs/fs.h>
 #include <ufs/ffs/ffs_extern.h>
 
+#ifdef WAPBL
+MODULE(MODULE_CLASS_VFS, ffs, "wapbl");
+#else
 MODULE(MODULE_CLASS_VFS, ffs, NULL);
+#endif
 
 static int ffs_vfs_fsync(vnode_t *, int);
 static int ffs_superblock_validate(struct fs *);
@@ -186,6 +190,54 @@ static const struct ufs_ops ffs_ufsops = {
 	.uo_bufrd = ffs_bufrd,
 	.uo_bufwr = ffs_bufwr,
 };
+
+static int
+ffs_checkrange(struct mount *mp, uint32_t ino)
+{
+	struct fs *fs = VFSTOUFS(mp)->um_fs;
+
+	if (ino < UFS_ROOTINO || ino >= fs->fs_ncg * fs->fs_ipg) {
+		DPRINTF("out of range %u\n", ino);
+		return ESTALE;
+	}
+
+	/*
+	 * Need to check if inode is initialized because ffsv2 does 
+	 * lazy initialization and we can get here from nfs_fhtovp
+	 */
+	if (fs->fs_magic != FS_UFS2_MAGIC)
+		return 0;
+
+	struct buf *bp;
+	int cg = ino_to_cg(fs, ino);
+	struct ufsmount *ump = VFSTOUFS(mp);
+
+	int error = bread(ump->um_devvp, FFS_FSBTODB(fs, cgtod(fs, cg)),
+	    (int)fs->fs_cgsize, B_MODIFY, &bp);
+	if (error) {
+		DPRINTF("error %d reading cg %d ino %u\n", error, cg, ino);
+		return error;
+	}
+
+	const int needswap = UFS_FSNEEDSWAP(fs);
+
+	struct cg *cgp = (struct cg *)bp->b_data;
+	if (!cg_chkmagic(cgp, needswap)) {
+		brelse(bp, 0);
+		DPRINTF("bad cylinder group magic cg %d ino %u\n", cg, ino);
+		return ESTALE;
+	}
+
+	int32_t initediblk = ufs_rw32(cgp->cg_initediblk, needswap);
+	brelse(bp, 0);
+
+	if (cg * fs->fs_ipg + initediblk < ino) {
+		DPRINTF("cg=%d fs->fs_ipg=%d initediblk=%d ino=%u\n",
+		    cg, fs->fs_ipg, initediblk, ino);
+		return ESTALE;
+	}
+	return 0;
+}
 
 static int
 ffs_snapshot_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
@@ -713,7 +765,7 @@ ffs_reload(struct mount *mp, kauth_cred_t cred, struct lwp *l)
 	error = vinvalbuf(devvp, 0, cred, l, 0, 0);
 	VOP_UNLOCK(devvp);
 	if (error)
-		panic("ffs_reload: dirty1");
+		panic("%s: dirty1", __func__);
 
 	/*
 	 * Step 2: re-read superblock from disk. XXX: We don't handle
@@ -870,7 +922,7 @@ ffs_reload(struct mount *mp, kauth_cred_t cred, struct lwp *l)
 			continue;
 		}
 		if (vinvalbuf(vp, 0, cred, l, 0, 0))
-			panic("ffs_reload: dirty2");
+			panic("%s: dirty2", __func__);
 		/*
 		 * Step 6: re-read inode data for all active vnodes.
 		 */
@@ -899,7 +951,7 @@ static int
 ffs_superblock_validate(struct fs *fs)
 {
 	int32_t i, fs_bshift = 0, fs_fshift = 0, fs_fragshift = 0, fs_frag;
-	int32_t fs_inopb, fs_cgsize;
+	int32_t fs_inopb;
 
 	/* Check the superblock size */
 	if (fs->fs_sbsize > SBLOCKSIZE || fs->fs_sbsize < sizeof(struct fs))
@@ -981,23 +1033,9 @@ ffs_superblock_validate(struct fs *fs)
 		return 0;
 
 	/* Check the size of cylinder groups */
-	fs_cgsize = ffs_fragroundup(fs, CGSIZE(fs));
-	if (fs->fs_cgsize != fs_cgsize) {
-		if (fs->fs_cgsize+1 == CGSIZE(fs)) {
-			printf("CGSIZE(fs) miscalculated by one - this file "
-			    "system may have been created by\n"
-			    "  an old (buggy) userland, see\n"
-			    "  http://www.NetBSD.org/"
-			    "docs/ffsv1badsuperblock.html\n");
-		} else {
-			printf("ERROR: cylinder group size mismatch: "
-			    "fs_cgsize = 0x%zx, "
-			    "fs->fs_cgsize = 0x%zx, CGSIZE(fs) = 0x%zx\n",
-			    (size_t)fs_cgsize, (size_t)fs->fs_cgsize,
-			    (size_t)CGSIZE(fs));
-			return 0;
-		}
-	}
+	if ((fs->fs_cgsize < sizeof(struct cg)) ||
+	    (fs->fs_cgsize > fs->fs_bsize))
+		return 0;
 
 	return 1;
 }
@@ -1332,6 +1370,8 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 			DPRINTF("bcount %x != fsize %x", bp->b_bcount,
 			    fs->fs_fsize);
 			error = EINVAL;
+			bset = BC_INVAL;
+			goto out;
 		}
 		brelse(bp, BC_INVAL);
 		bp = NULL;
@@ -1565,7 +1605,8 @@ ffs_oldfscompat_read(struct fs *fs, struct ufsmount *ump, daddr_t sblockloc)
 		fs->fs_old_trackskew = 0;
 	}
 
-	if (fs->fs_old_inodefmt < FS_44INODEFMT) {
+	if (fs->fs_magic == FS_UFS1_MAGIC &&
+	    fs->fs_old_inodefmt < FS_44INODEFMT) {
 		fs->fs_maxfilesize = (u_quad_t) 1LL << 39;
 		fs->fs_qbmask = ~fs->fs_bmask;
 		fs->fs_qfmask = ~fs->fs_fmask;
@@ -1862,8 +1903,7 @@ ffs_sync(struct mount *mp, int waitfor, kauth_cred_t cred)
 
 	fs = ump->um_fs;
 	if (fs->fs_fmod != 0 && fs->fs_ronly != 0) {		/* XXX */
-		printf("fs = %s\n", fs->fs_fsmnt);
-		panic("update: rofs mod");
+		panic("%s: rofs mod, fs=%s", __func__, fs->fs_fsmnt);
 	}
 
 	fstrans_start(mp, FSTRANS_SHARED);
@@ -2053,7 +2093,8 @@ ffs_loadvnode(struct mount *mp, struct vnode *vp,
 	 * fix until fsck has been changed to do the update.
 	 */
 
-	if (fs->fs_old_inodefmt < FS_44INODEFMT) {		/* XXX */
+	if (fs->fs_magic == FS_UFS1_MAGIC &&			/* XXX */
+	    fs->fs_old_inodefmt < FS_44INODEFMT) {		/* XXX */
 		ip->i_uid = ip->i_ffs1_ouid;			/* XXX */
 		ip->i_gid = ip->i_ffs1_ogid;			/* XXX */
 	}							/* XXX */
@@ -2101,14 +2142,22 @@ ffs_newvnode(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	}
 
 	ip = VTOI(vp);
-	if (ip->i_mode || DIP(ip, size) || DIP(ip, blocks)) {
-		printf("free ino %" PRId64 " on %s:\n", ino, fs->fs_fsmnt);
-		printf("dmode %x mode %x dgen %x gen %x\n",
-		    DIP(ip, mode), ip->i_mode,
-		    DIP(ip, gen), ip->i_gen);
-		printf("size %" PRIx64 " blocks %" PRIx64 "\n",
-		    DIP(ip, size), DIP(ip, blocks));
-		panic("ffs_init_vnode: dup alloc");
+	if (ip->i_mode) {
+		panic("%s: dup alloc ino=%" PRId64 " on %s: mode %x/%x "
+		    "gen %x/%x size %" PRIx64 " blocks %" PRIx64,
+		    __func__, ino, fs->fs_fsmnt, DIP(ip, mode), ip->i_mode,
+		    DIP(ip, gen), ip->i_gen, DIP(ip, size), DIP(ip, blocks));
+	}
+	if (DIP(ip, size) || DIP(ip, blocks)) {
+		printf("%s: ino=%" PRId64 " on %s: "
+		    "gen %x/%x has non zero blocks %" PRIx64 " or size %"
+		    PRIx64 "\n",
+		    __func__, ino, fs->fs_fsmnt, DIP(ip, gen), ip->i_gen,
+		    DIP(ip, blocks), DIP(ip, size));
+		if ((ip)->i_ump->um_fstype == UFS1)
+			panic("%s: dirty filesystem?", __func__);
+		DIP_ASSIGN(ip, blocks, 0);
+		DIP_ASSIGN(ip, size, 0);
 	}
 
 	/* Set uid / gid. */
@@ -2189,16 +2238,15 @@ int
 ffs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
 {
 	struct ufid ufh;
-	struct fs *fs;
+	int error;
 
 	if (fhp->fid_len != sizeof(struct ufid))
 		return EINVAL;
 
 	memcpy(&ufh, fhp, sizeof(ufh));
-	fs = VFSTOUFS(mp)->um_fs;
-	if (ufh.ufid_ino < UFS_ROOTINO ||
-	    ufh.ufid_ino >= fs->fs_ncg * fs->fs_ipg)
-		return (ESTALE);
+	if ((error = ffs_checkrange(mp, ufh.ufid_ino)) != 0)
+		return error;
+
 	return (ufs_fhtovp(mp, &ufh, vpp));
 }
 
@@ -2267,7 +2315,7 @@ ffs_sbupdate(struct ufsmount *mp, int waitfor)
 {
 	struct fs *fs = mp->um_fs;
 	struct buf *bp;
-	int error = 0;
+	int error;
 	u_int32_t saveflag;
 
 	error = ffs_getblk(mp->um_devvp,

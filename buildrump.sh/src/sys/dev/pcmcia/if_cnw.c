@@ -1,4 +1,4 @@
-/*	$NetBSD: if_cnw.c,v 1.56 2012/10/27 17:18:36 chs Exp $	*/
+/*	$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2004 The NetBSD Foundation, Inc.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.56 2012/10/27 17:18:36 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $");
 
 #include "opt_inet.h"
 
@@ -760,7 +760,7 @@ cnw_read(struct cnw_softc *sc)
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == 0)
 		return (0);
-	m->m_pkthdr.rcvif = &sc->sc_ethercom.ec_if;
+	m_set_rcvif(m, &sc->sc_ethercom.ec_if);
 	m->m_pkthdr.len = totbytes;
 	mbytes = MHLEN;
 	top = 0;
@@ -856,7 +856,7 @@ cnw_recv(struct cnw_softc *sc)
 		bpf_mtap(ifp, m);
 
 		/* Pass the packet up. */
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 }
 

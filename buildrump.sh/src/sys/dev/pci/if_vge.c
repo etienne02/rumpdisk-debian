@@ -1,4 +1,4 @@
-/* $NetBSD: if_vge.c,v 1.56 2014/03/29 19:28:25 christos Exp $ */
+/* $NetBSD: if_vge.c,v 1.58 2016/06/10 13:27:14 ozaki-r Exp $ */
 
 /*-
  * Copyright (c) 2004
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_vge.c,v 1.56 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_vge.c,v 1.58 2016/06/10 13:27:14 ozaki-r Exp $");
 
 /*
  * VIA Networking Technologies VT612x PCI gigabit ethernet NIC driver.
@@ -1327,7 +1327,7 @@ vge_rxeof(struct vge_softc *sc)
 		vge_fixup_rx(m);
 #endif
 		ifp->if_ipackets++;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 
 		/* Do RX checksumming if enabled */
 		if (ifp->if_csum_flags_rx & M_CSUM_IPv4) {
@@ -1373,7 +1373,7 @@ vge_rxeof(struct vge_softc *sc)
 		 */
 		bpf_mtap(ifp, m);
 
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 
 		lim++;
 		if (lim == VGE_NRXDESC)

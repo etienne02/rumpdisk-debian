@@ -1,4 +1,4 @@
-/*	$NetBSD: if_jme.c,v 1.27 2015/04/13 16:33:25 riastradh Exp $	*/
+/*	$NetBSD: if_jme.c,v 1.30 2016/06/10 13:27:14 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 2008 Manuel Bouyer.  All rights reserved.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_jme.c,v 1.27 2015/04/13 16:33:25 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_jme.c,v 1.30 2016/06/10 13:27:14 ozaki-r Exp $");
 
 
 #include <sys/param.h>
@@ -949,6 +949,7 @@ jme_init(struct ifnet *ifp, int do_ifinit)
 			error = 0;
 		else if (error != 0) {
 			aprint_error_dev(sc->jme_dev, "could not set media\n");
+			splx(s);
 			return error;
 		}
 	}
@@ -1143,7 +1144,7 @@ jme_intr_rx(jme_softc_t *sc) {
 		}
 
 		/* build mbuf chain: head, then remaining segments */
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = JME_RX_BYTES(buflen) - JME_RX_PAD_BYTES;
 		m->m_len = (nsegs > 1) ? (MCLBYTES - JME_RX_PAD_BYTES) :
 		    m->m_pkthdr.len;
@@ -1212,7 +1213,7 @@ jme_intr_rx(jme_softc_t *sc) {
 			VLAN_INPUT_TAG(ifp, mhead,
 			    (flags & JME_RD_VLAN_MASK), continue);
 		}
-		(*ifp->if_input)(ifp, mhead);
+		if_percpuq_enqueue(ifp->if_percpuq, mhead);
 	}
 	if (ipackets)
 		rnd_add_uint32(&sc->rnd_source, ipackets);

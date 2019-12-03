@@ -1,4 +1,4 @@
-/*	$NetBSD: arm32_machdep.c,v 1.109 2015/04/11 13:37:59 bouyer Exp $	*/
+/*	$NetBSD: arm32_machdep.c,v 1.112 2016/07/16 01:49:42 mrg Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.109 2015/04/11 13:37:59 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.112 2016/07/16 01:49:42 mrg Exp $");
 
 #include "opt_modular.h"
 #include "opt_md.h"
@@ -680,8 +680,11 @@ module_init_md(void)
 int
 mm_md_physacc(paddr_t pa, vm_prot_t prot)
 {
+	if (pa >= physical_start && pa < physical_end)
+		return 0;
 
-	return (pa < ctob(physmem)) ? 0 : EFAULT;
+	return kauth_authorize_machdep(kauth_cred_get(),
+	    KAUTH_MACHDEP_UNMANAGEDMEM, NULL, NULL, NULL, NULL);
 }
 
 #ifdef __HAVE_CPU_UAREA_ALLOC_IDLELWP
@@ -743,3 +746,17 @@ mm_md_direct_mapped_phys(paddr_t pa, vaddr_t *vap)
 	return rv;
 }
 #endif
+
+bool
+mm_md_page_color(paddr_t pa, int *colorp)
+{
+#if (ARM_MMU_V6 + ARM_MMU_V7) != 0
+	*colorp = atop(pa & arm_cache_prefer_mask);
+
+	return arm_cache_prefer_mask ? false : true;
+#else
+	*colorp = 0;
+
+	return true;
+#endif
+}

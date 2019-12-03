@@ -1,4 +1,4 @@
-/*	$NetBSD: arn9003.c,v 1.6 2014/02/23 15:29:12 christos Exp $	*/
+/*	$NetBSD: arn9003.c,v 1.9 2016/06/10 13:27:13 ozaki-r Exp $	*/
 /*	$OpenBSD: ar9003.c,v 1.25 2012/10/20 09:53:32 stsp Exp $	*/
 
 /*-
@@ -24,7 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arn9003.c,v 1.6 2014/02/23 15:29:12 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arn9003.c,v 1.9 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/sockio.h>
@@ -655,8 +655,8 @@ ar9003_tx_alloc(struct athn_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	error = bus_dmamap_load_raw(sc->sc_dmat, sc->sc_txsmap, &sc->sc_txsseg,
-	    1, size, BUS_DMA_NOWAIT | BUS_DMA_READ);
+	error = bus_dmamap_load(sc->sc_dmat, sc->sc_txsmap, sc->sc_txsring,
+	     size, NULL, BUS_DMA_NOWAIT | BUS_DMA_READ);
 	if (error != 0)
 		goto fail;
 
@@ -681,8 +681,8 @@ ar9003_tx_alloc(struct athn_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	error = bus_dmamap_load_raw(sc->sc_dmat, sc->sc_map, &sc->sc_seg, 1, size,
-	    BUS_DMA_NOWAIT | BUS_DMA_WRITE);
+	error = bus_dmamap_load(sc->sc_dmat, sc->sc_map, sc->sc_descs, size,
+	    NULL, BUS_DMA_NOWAIT | BUS_DMA_WRITE);
 	if (error != 0)
 		goto fail;
 
@@ -982,7 +982,7 @@ ar9003_rx_process(struct athn_softc *sc, int qid)
 
 			len = MS(ds->ds_status2, AR_RXS2_DATA_LEN);
 			m = bf->bf_m;
-			m->m_pkthdr.rcvif = ifp;
+			m_set_rcvif(m, ifp);
 			m->m_data = (void *)&ds[1];
 			m->m_pkthdr.len = m->m_len = len;
 			wh = mtod(m, struct ieee80211_frame *);
@@ -1036,7 +1036,7 @@ ar9003_rx_process(struct athn_softc *sc, int qid)
 	bf->bf_m = m1;
 
 	/* Finalize mbuf. */
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 	/* Strip Rx status descriptor from head. */
 	m->m_data = (void *)&ds[1];
 	m->m_pkthdr.len = m->m_len = len;
@@ -2235,7 +2235,7 @@ ar9003_calib_iq(struct athn_softc *sc)
 		if (cal->pwr_meas_q == 0)
 			continue;
 
-		if ((iq_corr_neg = cal->iq_corr_meas < 0))
+		if ((iq_corr_neg = cal->iq_corr_meas) < 0)
 			cal->iq_corr_meas = -cal->iq_corr_meas;
 
 		i_coff_denom =

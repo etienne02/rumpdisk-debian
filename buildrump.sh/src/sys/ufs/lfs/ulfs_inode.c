@@ -1,5 +1,5 @@
-/*	$NetBSD: ulfs_inode.c,v 1.9 2013/07/28 00:37:07 dholland Exp $	*/
-/*  from NetBSD: ufs_inode.c,v 1.89 2013/01/22 09:39:18 dholland Exp  */
+/*	$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp $	*/
+/*  from NetBSD: ufs_inode.c,v 1.95 2015/06/13 14:56:45 hannken Exp  */
 
 /*
  * Copyright (c) 1991, 1993
@@ -38,12 +38,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.9 2013/07/28 00:37:07 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_lfs.h"
 #include "opt_quota.h"
-#include "opt_wapbl.h"
 #endif
 
 #include <sys/param.h>
@@ -54,10 +53,11 @@ __KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.9 2013/07/28 00:37:07 dholland Exp 
 #include <sys/kernel.h>
 #include <sys/namei.h>
 #include <sys/kauth.h>
-#include <sys/wapbl.h>
 #include <sys/fstrans.h>
 #include <sys/kmem.h>
 
+#include <ufs/lfs/lfs.h>
+#include <ufs/lfs/lfs_accessors.h>
 #include <ufs/lfs/lfs_extern.h>
 
 #include <ufs/lfs/ulfs_inode.h>
@@ -150,9 +150,9 @@ ulfs_reclaim(struct vnode *vp)
 	lfs_update(vp, NULL, NULL, UPDATE_CLOSE);
 
 	/*
-	 * Remove the inode from its hash chain.
+	 * Remove the inode from the vnode cache.
 	 */
-	ulfs_ihashrem(ip);
+	vcache_remove(vp->v_mount, &ip->i_number, sizeof(ip->i_number));
 
 	if (ip->i_devvp) {
 		vrele(ip->i_devvp);
@@ -226,6 +226,7 @@ ulfs_balloc_range(struct vnode *vp, off_t off, off_t len, kauth_cred_t cred,
 	    VM_PROT_WRITE, 0, PGO_SYNCIO | PGO_PASTEOF | PGO_NOBLOCKALLOC |
 	    PGO_NOTIMESTAMP | PGO_GLOCKHELD);
 	if (error) {
+		genfs_node_unlock(vp);
 		goto out;
 	}
 

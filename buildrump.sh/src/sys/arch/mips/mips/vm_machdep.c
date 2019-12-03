@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.143 2014/04/23 20:57:15 skrll Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.147 2016/07/14 04:49:55 skrll Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,10 +39,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.143 2014/04/23 20:57:15 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.147 2016/07/14 04:49:55 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_coredump.h"
+#include "opt_cputype.h"
+
+#define __PMAP_PRIVATE
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -112,18 +115,17 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 		tf->tf_regs[_R_SP] = (intptr_t)stack + stacksize;
 
 	l2->l_md.md_utf = tf;
-#if USPACE > PAGE_SIZE
-	bool direct_mapped_p = MIPS_KSEG0_P(ua2);
-#ifdef _LP64
-	direct_mapped_p = direct_mapped_p || MIPS_XKPHYS_P(ua2);
-#endif
-	if (!direct_mapped_p) {
-		pt_entry_t * const pte = kvtopte(ua2);
-		const uint32_t x = (MIPS_HAS_R4K_MMU) ?
-		    (MIPS3_PG_G | MIPS3_PG_RO | MIPS3_PG_WIRED) : MIPS1_PG_G;
+#if (USPACE > PAGE_SIZE) || !defined(_LP64)
+	if (!pmap_md_direct_mapped_vaddr_p(ua2)) {
+		__CTASSERT((PGSHIFT & 1) || UPAGES % 2 == 0);
+		pt_entry_t * const pte = pmap_pte_lookup(pmap_kernel(), ua2);
+		const uint32_t x = MIPS_HAS_R4K_MMU
+		    ? (MIPS3_PG_RO | MIPS3_PG_WIRED)
+		    : 0;
 
 		for (u_int i = 0; i < UPAGES; i++) {
-			l2->l_md.md_upte[i] = pte[i].pt_entry &~ x;
+			KASSERT(pte_valid_p(pte[i]));
+			l2->l_md.md_upte[i] = pte[i] & ~x;
 		}
 	}
 #endif
@@ -144,7 +146,10 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 #ifdef _LP64
 	KASSERT(pcb2->pcb_context.val[_L_SR] & MIPS_SR_KX);
 #endif
-	KASSERT(pcb2->pcb_context.val[_L_SR] & MIPS_SR_INT_IE);
+	KASSERTMSG(pcb2->pcb_context.val[_L_SR] & MIPS_SR_INT_IE,
+	    "%d.%d %#"PRIxREGISTER,
+	    l1->l_proc->p_pid, l1->l_lid,
+	    pcb2->pcb_context.val[_L_SR]);
 }
 
 /*
@@ -162,15 +167,14 @@ cpu_uarea_alloc(bool system)
 {
 	struct pglist pglist;
 #ifdef _LP64
-	const paddr_t high = mips_avail_end;
+	const paddr_t high = pmap_limits.avail_end;
 #else
 	const paddr_t high = MIPS_KSEG1_START - MIPS_KSEG0_START;
 	/*
 	 * Don't allocate a direct mapped uarea if aren't allocating for a
 	 * system lwp and we have memory that can't be mapped via KSEG0.
-	 * If 
 	 */
-	if (!system && high > mips_avail_end)
+	if (!system && high < pmap_limits.avail_end)
 		return NULL;
 #endif
 	int error;
@@ -179,7 +183,7 @@ cpu_uarea_alloc(bool system)
 	 * Allocate a new physically contiguous uarea which can be
 	 * direct-mapped.
 	 */
-	error = uvm_pglistalloc(USPACE, mips_avail_start, high,
+	error = uvm_pglistalloc(USPACE, pmap_limits.avail_start, high,
 	    USPACE_ALIGN, 0, &pglist, 1, 1);
 	if (error) {
 #ifdef _LP64
@@ -195,12 +199,12 @@ cpu_uarea_alloc(bool system)
 	const struct vm_page * const pg = TAILQ_FIRST(&pglist);
 	KASSERT(pg != NULL);
 	const paddr_t pa = VM_PAGE_TO_PHYS(pg);
-	KASSERTMSG(pa >= mips_avail_start,
-	    "pa (%#"PRIxPADDR") < mips_avail_start (%#"PRIxPADDR")",
-	     pa, mips_avail_start);
-	KASSERTMSG(pa < mips_avail_end,
-	    "pa (%#"PRIxPADDR") >= mips_avail_end (%#"PRIxPADDR")",
-	     pa, mips_avail_end);
+	KASSERTMSG(pa >= pmap_limits.avail_start,
+	    "pa (%#"PRIxPADDR") < pmap_limits.avail_start (%#"PRIxPADDR")",
+	     pa, pmap_limits.avail_start);
+	KASSERTMSG(pa < pmap_limits.avail_end,
+	    "pa (%#"PRIxPADDR") >= pmap_limits.avail_end (%#"PRIxPADDR")",
+	     pa, pmap_limits.avail_end);
 
 	/*
 	 * we need to return a direct-mapped VA for the pa.
@@ -331,30 +335,28 @@ vunmapbuf(struct buf *bp, vsize_t len)
 paddr_t
 kvtophys(vaddr_t kva)
 {
-	pt_entry_t *pte;
 	paddr_t phys;
 
-	if (kva >= VM_MIN_KERNEL_ADDRESS) {
-		if (kva >= VM_MAX_KERNEL_ADDRESS)
-			goto overrun;
-
-		pte = kvtopte(kva);
-		if ((size_t) (pte - Sysmap) >= Sysmapsize)  {
-			printf("oops: Sysmap overrun, max %d index %zd\n",
-			       Sysmapsize, pte - Sysmap);
-		}
-		if (!mips_pg_v(pte->pt_entry)) {
-			printf("kvtophys: pte not valid for %#"PRIxVADDR"\n",
-			    kva);
-		}
-		phys = mips_tlbpfn_to_paddr(pte->pt_entry) | (kva & PGOFSET);
-		return phys;
-	}
 	if (MIPS_KSEG1_P(kva))
 		return MIPS_KSEG1_TO_PHYS(kva);
 
 	if (MIPS_KSEG0_P(kva))
 		return MIPS_KSEG0_TO_PHYS(kva);
+
+	if (kva >= VM_MIN_KERNEL_ADDRESS) {
+		if (kva >= VM_MAX_KERNEL_ADDRESS)
+			goto overrun;
+
+		pt_entry_t * const ptep = pmap_pte_lookup(pmap_kernel(), kva);
+		if (ptep == NULL)
+			goto overrun;
+		if (!pte_valid_p(*ptep)) {
+			printf("kvtophys: pte not valid for %#"PRIxVADDR"\n",
+			    kva);
+		}
+		phys = pte_to_paddr(*ptep) | (kva & PGOFSET);
+		return phys;
+	}
 #ifdef _LP64
 	if (MIPS_XKPHYS_P(kva))
 		return MIPS_XKPHYS_TO_PHYS(kva);

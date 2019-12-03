@@ -1,4 +1,4 @@
-/*	$NetBSD: route.c,v 1.144 2015/04/30 09:57:38 ozaki-r Exp $	*/
+/*	$NetBSD: route.c,v 1.172 2016/07/15 09:25:47 martin Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -90,11 +90,13 @@
  *	@(#)route.c	8.3 (Berkeley) 1/9/95
  */
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_route.h"
+#endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: route.c,v 1.144 2015/04/30 09:57:38 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: route.c,v 1.172 2016/07/15 09:25:47 martin Exp $");
 
 #include <sys/param.h>
 #ifdef RTFLUSH_DEBUG
@@ -112,6 +114,7 @@ __KERNEL_RCSID(0, "$NetBSD: route.c,v 1.144 2015/04/30 09:57:38 ozaki-r Exp $");
 #include <sys/ioctl.h>
 #include <sys/pool.h>
 #include <sys/kauth.h>
+#include <sys/workqueue.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -126,14 +129,16 @@ __KERNEL_RCSID(0, "$NetBSD: route.c,v 1.144 2015/04/30 09:57:38 ozaki-r Exp $");
 #define	rtcache_debug() 0
 #endif /* RTFLUSH_DEBUG */
 
-struct	rtstat	rtstat;
+struct rtstat		rtstat;
 
-int	rttrash;		/* routes not in table but not freed */
+static int		rttrash;	/* routes not in table but not freed */
 
-struct pool rtentry_pool;
-struct pool rttimer_pool;
+static struct pool	rtentry_pool;
+static struct pool	rttimer_pool;
 
-struct callout rt_timer_ch; /* callout for rt_timer_timer() */
+static struct callout	rt_timer_ch; /* callout for rt_timer_timer() */
+struct workqueue	*rt_timer_wq;
+struct work		rt_timer_wk;
 
 #ifdef RTFLUSH_DEBUG
 static int _rtcache_debug = 0;
@@ -142,15 +147,20 @@ static int _rtcache_debug = 0;
 static kauth_listener_t route_listener;
 
 static int rtdeletemsg(struct rtentry *);
-static int rtflushclone1(struct rtentry *, void *);
-static void rtflushclone(sa_family_t family, struct rtentry *);
 static void rtflushall(int);
 
 static void rt_maskedcopy(const struct sockaddr *,
     struct sockaddr *, const struct sockaddr *);
 
 static void rtcache_clear(struct route *);
+static void rtcache_clear_rtentry(int, struct rtentry *);
 static void rtcache_invalidate(struct dom_rtlist *);
+
+#ifdef DDB
+static void db_print_sa(const struct sockaddr *);
+static void db_print_ifa(struct ifaddr *);
+static int db_show_rtentry(struct rtentry *, void *);
+#endif
 
 #ifdef RTFLUSH_DEBUG
 static void sysctl_net_rtcache_setup(struct sysctllog **);
@@ -213,6 +223,8 @@ rt_get_ifa(struct rtentry *rt)
 #endif
 	else {
 		ifa = (*ifa->ifa_getifa)(ifa, rt_getkey(rt));
+		if (ifa == NULL)
+			return NULL;
 		rt_replace_ifa(rt, ifa);
 		return ifa;
 	}
@@ -352,58 +364,92 @@ rtcache(struct route *ro)
 	rtcache_invariants(ro);
 }
 
+#ifdef RT_DEBUG
+static void
+dump_rt(const struct rtentry *rt)
+{
+	char buf[512];
+
+	aprint_normal("rt: ");
+	aprint_normal("p=%p ", rt);
+	if (rt->_rt_key == NULL) {
+		aprint_normal("dst=(NULL) ");
+	} else {
+		sockaddr_format(rt->_rt_key, buf, sizeof(buf));
+		aprint_normal("dst=%s ", buf);
+	}
+	if (rt->rt_gateway == NULL) {
+		aprint_normal("gw=(NULL) ");
+	} else {
+		sockaddr_format(rt->_rt_key, buf, sizeof(buf));
+		aprint_normal("gw=%s ", buf);
+	}
+	aprint_normal("flags=%x ", rt->rt_flags);
+	if (rt->rt_ifp == NULL) {
+		aprint_normal("if=(NULL) ");
+	} else {
+		aprint_normal("if=%s ", rt->rt_ifp->if_xname);
+	}
+	aprint_normal("\n");
+}
+#endif /* RT_DEBUG */
+
 /*
- * Packet routing routines.
+ * Packet routing routines. If success, refcnt of a returned rtentry
+ * will be incremented. The caller has to rtfree it by itself.
  */
 struct rtentry *
 rtalloc1(const struct sockaddr *dst, int report)
 {
-	rtbl_t *rtbl = rt_gettable(dst->sa_family);
+	rtbl_t *rtbl;
 	struct rtentry *rt;
-	struct rtentry *newrt = NULL;
-	struct rt_addrinfo info;
-	int  s = splsoftnet(), err = 0, msgtype = RTM_MISS;
+	int s;
 
-	if (rtbl != NULL && (rt = rt_matchaddr(rtbl, dst)) != NULL) {
-		newrt = rt;
-		if (report && (rt->rt_flags & RTF_CLONING)) {
-			err = rtrequest(RTM_RESOLVE, dst, NULL, NULL, 0,
-			    &newrt);
-			if (err) {
-				newrt = rt;
-				rt->rt_refcnt++;
-				goto miss;
-			}
-			KASSERT(newrt != NULL);
-			rt = newrt;
-			if (rt->rt_flags & RTF_XRESOLVE) {
-				msgtype = RTM_RESOLVE;
-				goto miss;
-			}
-			/* Inform listeners of the new route */
-			memset(&info, 0, sizeof(info));
-			info.rti_info[RTAX_DST] = rt_getkey(rt);
-			info.rti_info[RTAX_NETMASK] = rt_mask(rt);
-			info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
-			if (rt->rt_ifp != NULL) {
-				info.rti_info[RTAX_IFP] =
-				    rt->rt_ifp->if_dl->ifa_addr;
-				info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
-			}
-			rt_missmsg(RTM_ADD, &info, rt->rt_flags, 0);
-		} else
-			rt->rt_refcnt++;
-	} else {
-		rtstat.rts_unreach++;
-	miss:	if (report) {
-			memset((void *)&info, 0, sizeof(info));
-			info.rti_info[RTAX_DST] = dst;
-			rt_missmsg(msgtype, &info, 0, err);
-		}
+	s = splsoftnet();
+	rtbl = rt_gettable(dst->sa_family);
+	if (rtbl == NULL)
+		goto miss;
+
+	rt = rt_matchaddr(rtbl, dst);
+	if (rt == NULL)
+		goto miss;
+
+	rt->rt_refcnt++;
+
+	splx(s);
+	return rt;
+miss:
+	rtstat.rts_unreach++;
+	if (report) {
+		struct rt_addrinfo info;
+
+		memset(&info, 0, sizeof(info));
+		info.rti_info[RTAX_DST] = dst;
+		rt_missmsg(RTM_MISS, &info, 0, 0);
 	}
 	splx(s);
-	return newrt;
+	return NULL;
 }
+
+#ifdef DEBUG
+/*
+ * Check the following constraint for each rtcache:
+ *   if a rtcache holds a rtentry, the rtentry's refcnt is more than zero,
+ *   i.e., the rtentry should be referenced at least by the rtcache.
+ */
+static void
+rtcache_check_rtrefcnt(int family)
+{
+	struct domain *dom = pffinddomain(family);
+	struct route *ro;
+
+	if (dom == NULL)
+		return;
+
+	LIST_FOREACH(ro, &dom->dom_rtcache, ro_rtcache_next)
+		KDASSERT(ro->_ro_rt == NULL || ro->_ro_rt->rt_refcnt > 0);
+}
+#endif
 
 void
 rtfree(struct rtentry *rt)
@@ -414,6 +460,10 @@ rtfree(struct rtentry *rt)
 	KASSERT(rt->rt_refcnt > 0);
 
 	rt->rt_refcnt--;
+#ifdef DEBUG
+	if (rt_getkey(rt) != NULL)
+		rtcache_check_rtrefcnt(rt_getkey(rt)->sa_family);
+#endif
 	if (rt->rt_refcnt == 0 && (rt->rt_flags & RTF_UP) == 0) {
 		rt_assert_inactive(rt);
 		rttrash--;
@@ -503,10 +553,12 @@ rtredirect(const struct sockaddr *dst, const struct sockaddr *gateway,
 			 * Smash the current notion of the gateway to
 			 * this destination.  Should check about netmask!!!
 			 */
-			rt->rt_flags |= RTF_MODIFIED;
-			flags |= RTF_MODIFIED;
+			error = rt_setgate(rt, gateway);
+			if (error == 0) {
+				rt->rt_flags |= RTF_MODIFIED;
+				flags |= RTF_MODIFIED;
+			}
 			stat = &rtstat.rts_newgateway;
-			rt_setgate(rt, gateway);
 		}
 	} else
 		error = EHOSTUNREACH;
@@ -531,7 +583,8 @@ out:
 }
 
 /*
- * Delete a route and generate a message
+ * Delete a route and generate a message.
+ * It doesn't free a passed rt.
  */
 static int
 rtdeletemsg(struct rtentry *rt)
@@ -549,38 +602,11 @@ rtdeletemsg(struct rtentry *rt)
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 	info.rti_flags = rt->rt_flags;
-	error = rtrequest1(RTM_DELETE, &info, &rt);
+	error = rtrequest1(RTM_DELETE, &info, NULL);
 
 	rt_missmsg(RTM_DELETE, &info, info.rti_flags, error);
 
-	/* Adjust the refcount */
-	if (error == 0 && rt->rt_refcnt <= 0) {
-		rt->rt_refcnt++;
-		rtfree(rt);
-	}
 	return error;
-}
-
-static int
-rtflushclone1(struct rtentry *rt, void *arg)
-{
-	struct rtentry *parent;
-
-	parent = (struct rtentry *)arg;
-	if ((rt->rt_flags & RTF_CLONED) != 0 && rt->rt_parent == parent)
-		rtdeletemsg(rt);
-	return 0;
-}
-
-static void
-rtflushclone(sa_family_t family, struct rtentry *parent)
-{
-
-#ifdef DIAGNOSTIC
-	if (!parent || (parent->rt_flags & RTF_CLONING) == 0)
-		panic("rtflushclone: called with a non-cloning route");
-#endif
-	rt_walktree(family, rtflushclone1, (void *)parent);
 }
 
 struct ifaddr *
@@ -615,8 +641,9 @@ ifa_ifwithroute(int flags, const struct sockaddr *dst,
 		struct rtentry *rt = rtalloc1(dst, 0);
 		if (rt == NULL)
 			return NULL;
-		rt->rt_refcnt--;
-		if ((ifa = rt->rt_ifa) == NULL)
+		ifa = rt->rt_ifa;
+		rtfree(rt);
+		if (ifa == NULL)
 			return NULL;
 	}
 	if (ifa->ifa_addr->sa_family != dst->sa_family) {
@@ -628,6 +655,10 @@ ifa_ifwithroute(int flags, const struct sockaddr *dst,
 	return ifa;
 }
 
+/*
+ * If it suceeds and ret_nrt isn't NULL, refcnt of ret_nrt is incremented.
+ * The caller has to rtfree it by itself.
+ */
 int
 rtrequest(int req, const struct sockaddr *dst, const struct sockaddr *gateway,
 	const struct sockaddr *netmask, int flags, struct rtentry **ret_nrt)
@@ -640,6 +671,32 @@ rtrequest(int req, const struct sockaddr *dst, const struct sockaddr *gateway,
 	info.rti_info[RTAX_GATEWAY] = gateway;
 	info.rti_info[RTAX_NETMASK] = netmask;
 	return rtrequest1(req, &info, ret_nrt);
+}
+
+/*
+ * It's a utility function to add/remove a route to/from the routing table
+ * and tell user processes the addition/removal on success.
+ */
+int
+rtrequest_newmsg(const int req, const struct sockaddr *dst,
+	const struct sockaddr *gateway, const struct sockaddr *netmask,
+	const int flags)
+{
+	int error;
+	struct rtentry *ret_nrt = NULL;
+
+	KASSERT(req == RTM_ADD || req == RTM_DELETE);
+
+	error = rtrequest(req, dst, gateway, netmask, flags, &ret_nrt);
+	if (error != 0)
+		return error;
+
+	KASSERT(ret_nrt != NULL);
+
+	rt_newmsg(req, ret_nrt); /* tell user process */
+	rtfree(ret_nrt);
+
+	return 0;
 }
 
 int
@@ -676,19 +733,26 @@ rt_getifa(struct rt_addrinfo *info)
 	}
 	if ((ifa = info->rti_ifa) == NULL)
 		return ENETUNREACH;
-	if (ifa->ifa_getifa != NULL)
+	if (ifa->ifa_getifa != NULL) {
 		info->rti_ifa = ifa = (*ifa->ifa_getifa)(ifa, dst);
+		if (ifa == NULL)
+			return ENETUNREACH;
+	}
 	if (info->rti_ifp == NULL)
 		info->rti_ifp = ifa->ifa_ifp;
 	return 0;
 }
 
+/*
+ * If it suceeds and ret_nrt isn't NULL, refcnt of ret_nrt is incremented.
+ * The caller has to rtfree it by itself.
+ */
 int
 rtrequest1(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt)
 {
 	int s = splsoftnet();
 	int error = 0, rc;
-	struct rtentry *rt, *crt;
+	struct rtentry *rt;
 	rtbl_t *rtbl;
 	struct ifaddr *ifa, *ifa2;
 	struct sockaddr_storage maskeddst;
@@ -711,20 +775,8 @@ rtrequest1(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt)
 		}
 		if ((rt = rt_lookup(rtbl, dst, netmask)) == NULL)
 			senderr(ESRCH);
-		if ((rt->rt_flags & RTF_CLONING) != 0) {
-			/* clean up any cloned children */
-			rtflushclone(dst->sa_family, rt);
-		}
 		if ((rt = rt_deladdr(rtbl, dst, netmask)) == NULL)
 			senderr(ESRCH);
-		if (rt->rt_gwroute) {
-			rtfree(rt->rt_gwroute);
-			rt->rt_gwroute = NULL;
-		}
-		if (rt->rt_parent) {
-			rt->rt_parent->rt_refcnt--;
-			rt->rt_parent = NULL;
-		}
 		rt->rt_flags &= ~RTF_UP;
 		if ((ifa = rt->rt_ifa)) {
 			if (ifa->ifa_flags & IFA_ROUTE &&
@@ -738,57 +790,50 @@ rtrequest1(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt)
 				ifa->ifa_rtrequest(RTM_DELETE, rt, info);
 		}
 		rttrash++;
-		if (ret_nrt)
+		if (ret_nrt) {
 			*ret_nrt = rt;
-		else if (rt->rt_refcnt <= 0) {
+			rt->rt_refcnt++;
+		} else if (rt->rt_refcnt <= 0) {
+			/* Adjust the refcount */
 			rt->rt_refcnt++;
 			rtfree(rt);
 		}
+		rtcache_clear_rtentry(dst->sa_family, rt);
 		break;
-
-	case RTM_RESOLVE:
-		if (ret_nrt == NULL || (rt = *ret_nrt) == NULL)
-			senderr(EINVAL);
-		if ((rt->rt_flags & RTF_CLONING) == 0)
-			senderr(EINVAL);
-		ifa = rt->rt_ifa;
-		flags = rt->rt_flags & ~(RTF_CLONING | RTF_STATIC);
-		flags |= RTF_CLONED;
-		gateway = rt->rt_gateway;
-		flags |= RTF_HOST;
-		goto makeroute;
 
 	case RTM_ADD:
 		if (info->rti_ifa == NULL && (error = rt_getifa(info)))
 			senderr(error);
 		ifa = info->rti_ifa;
-	makeroute:
-		/* Already at splsoftnet() so pool_get/pool_put are safe */
 		rt = pool_get(&rtentry_pool, PR_NOWAIT);
 		if (rt == NULL)
 			senderr(ENOBUFS);
 		memset(rt, 0, sizeof(*rt));
 		rt->rt_flags = RTF_UP | flags;
 		LIST_INIT(&rt->rt_timer);
-		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
-		if (rt_setkey(rt, dst, M_NOWAIT) == NULL ||
-		    rt_setgate(rt, gateway) != 0) {
-			pool_put(&rtentry_pool, rt);
-			senderr(ENOBUFS);
-		}
+
 		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		if (netmask) {
 			rt_maskedcopy(dst, (struct sockaddr *)&maskeddst,
 			    netmask);
 			rt_setkey(rt, (struct sockaddr *)&maskeddst, M_NOWAIT);
-			RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		} else {
 			rt_setkey(rt, dst, M_NOWAIT);
-			RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		}
+		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
+		if (rt_getkey(rt) == NULL ||
+		    rt_setgate(rt, gateway) != 0) {
+			pool_put(&rtentry_pool, rt);
+			senderr(ENOBUFS);
+		}
+
 		rt_set_ifa(rt, ifa);
-		if (info->rti_info[RTAX_TAG] != NULL)
-			rt_settag(rt, info->rti_info[RTAX_TAG]);
+		if (info->rti_info[RTAX_TAG] != NULL) {
+			const struct sockaddr *tag;
+			tag = rt_settag(rt, info->rti_info[RTAX_TAG]);
+			if (tag == NULL)
+				senderr(ENOBUFS);
+		}
 		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		if (info->rti_info[RTAX_IFP] != NULL &&
 		    (ifa2 = ifa_ifwithnet(info->rti_info[RTAX_IFP])) != NULL &&
@@ -796,30 +841,11 @@ rtrequest1(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt)
 			rt->rt_ifp = ifa2->ifa_ifp;
 		else
 			rt->rt_ifp = ifa->ifa_ifp;
-		if (req == RTM_RESOLVE) {
-			rt->rt_rmx = (*ret_nrt)->rt_rmx; /* copy metrics */
-			rt->rt_parent = *ret_nrt;
-			rt->rt_parent->rt_refcnt++;
-		}
 		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		rc = rt_addaddr(rtbl, rt, netmask);
 		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
-		if (rc != 0 && (crt = rtalloc1(rt_getkey(rt), 0)) != NULL) {
-			/* overwrite cloned route */
-			if ((crt->rt_flags & RTF_CLONED) != 0) {
-				rtdeletemsg(crt);
-				rc = rt_addaddr(rtbl, rt, netmask);
-			}
-			rtfree(crt);
-			RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
-		}
-		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 		if (rc != 0) {
 			ifafree(ifa);
-			if ((rt->rt_flags & RTF_CLONED) != 0 && rt->rt_parent)
-				rtfree(rt->rt_parent);
-			if (rt->rt_gwroute)
-				rtfree(rt->rt_gwroute);
 			rt_destroy(rt);
 			pool_put(&rtentry_pool, rt);
 			senderr(rc);
@@ -831,10 +857,6 @@ rtrequest1(int req, struct rt_addrinfo *info, struct rtentry **ret_nrt)
 		if (ret_nrt) {
 			*ret_nrt = rt;
 			rt->rt_refcnt++;
-		}
-		if ((rt->rt_flags & RTF_CLONING) != 0) {
-			/* clean up any cloned children */
-			rtflushclone(dst->sa_family, rt);
 		}
 		rtflushall(dst->sa_family);
 		break;
@@ -860,17 +882,10 @@ bad:
 int
 rt_setgate(struct rtentry *rt, const struct sockaddr *gate)
 {
-	KASSERT(rt != rt->rt_gwroute);
 
 	KASSERT(rt->_rt_key != NULL);
 	RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 
-	if (rt->rt_gwroute) {
-		rtfree(rt->rt_gwroute);
-		rt->rt_gwroute = NULL;
-	}
-	KASSERT(rt->_rt_key != NULL);
-	RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 	if (rt->rt_gateway != NULL)
 		sockaddr_free(rt->rt_gateway);
 	KASSERT(rt->_rt_key != NULL);
@@ -881,9 +896,7 @@ rt_setgate(struct rtentry *rt, const struct sockaddr *gate)
 	RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
 
 	if (rt->rt_flags & RTF_GATEWAY) {
-		KASSERT(rt->_rt_key != NULL);
-		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
-		rt->rt_gwroute = rtalloc1(gate, 1);
+		struct rtentry *gwrt = rtalloc1(gate, 1);
 		/*
 		 * If we switched gateways, grab the MTU from the new
 		 * gateway route if the current MTU, if the current MTU is
@@ -891,13 +904,15 @@ rt_setgate(struct rtentry *rt, const struct sockaddr *gate)
 		 * Note that, if the MTU of gateway is 0, we will reset the
 		 * MTU of the route to run PMTUD again from scratch. XXX
 		 */
-		KASSERT(rt->_rt_key != NULL);
-		RT_DPRINTF("rt->_rt_key = %p\n", (void *)rt->_rt_key);
-		if (rt->rt_gwroute
-		    && !(rt->rt_rmx.rmx_locks & RTV_MTU)
-		    && rt->rt_rmx.rmx_mtu
-		    && rt->rt_rmx.rmx_mtu > rt->rt_gwroute->rt_rmx.rmx_mtu) {
-			rt->rt_rmx.rmx_mtu = rt->rt_gwroute->rt_rmx.rmx_mtu;
+		if (gwrt != NULL) {
+			KASSERT(gwrt->_rt_key != NULL);
+			RT_DPRINTF("gwrt->_rt_key = %p\n", gwrt->_rt_key);
+			if ((rt->rt_rmx.rmx_locks & RTV_MTU) == 0 &&
+			    rt->rt_rmx.rmx_mtu &&
+			    rt->rt_rmx.rmx_mtu > gwrt->rt_rmx.rmx_mtu) {
+				rt->rt_rmx.rmx_mtu = gwrt->rt_rmx.rmx_mtu;
+			}
+			rtfree(gwrt);
 		}
 	}
 	KASSERT(rt->_rt_key != NULL);
@@ -928,7 +943,7 @@ rt_maskedcopy(const struct sockaddr *src, struct sockaddr *dst,
  * Inform the routing socket of a route change.
  */
 void
-rt_newmsg(int cmd, struct rtentry *rt)
+rt_newmsg(const int cmd, const struct rtentry *rt)
 {
 	struct rt_addrinfo info;
 
@@ -957,8 +972,6 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 	struct rtentry *nrt = NULL;
 	int error;
 	struct rt_addrinfo info;
-	struct sockaddr_dl *sdl;
-	const struct sockaddr_dl *ifsdl;
 
 	dst = flags & RTF_HOST ? ifa->ifa_dstaddr : ifa->ifa_addr;
 	if (cmd == RTM_DELETE) {
@@ -969,10 +982,12 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 			rt_maskedcopy(odst, dst, ifa->ifa_netmask);
 		}
 		if ((rt = rtalloc1(dst, 0)) != NULL) {
-			rt->rt_refcnt--;
-			if (rt->rt_ifa != ifa)
+			if (rt->rt_ifa != ifa) {
+				rtfree(rt);
 				return (flags & RTF_HOST) ? EHOSTUNREACH
 							: ENETUNREACH;
+			}
+			rtfree(rt);
 		}
 	}
 	memset(&info, 0, sizeof(info));
@@ -980,6 +995,7 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 	info.rti_flags = flags | ifa->ifa_flags;
 	info.rti_info[RTAX_DST] = dst;
 	info.rti_info[RTAX_GATEWAY] = ifa->ifa_addr;
+
 	/*
 	 * XXX here, it seems that we are assuming that ifa_netmask is NULL
 	 * for RTF_HOST.  bsdi4 passes NULL explicitly (via intermediate
@@ -990,38 +1006,20 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 		info.rti_info[RTAX_NETMASK] = ifa->ifa_netmask;
 	error = rtrequest1((cmd == RTM_LLINFO_UPD) ? RTM_GET : cmd, &info,
 	    &nrt);
-	if (error != 0 || (rt = nrt) == NULL)
-		;
-	else switch (cmd) {
+	if (error != 0)
+		return error;
+
+	rt = nrt;
+	switch (cmd) {
 	case RTM_DELETE:
-		rt_newmsg(cmd, nrt);
-		if (rt->rt_refcnt <= 0) {
-			rt->rt_refcnt++;
-			rtfree(rt);
-		}
+		rt_newmsg(cmd, rt);
 		break;
 	case RTM_LLINFO_UPD:
-		rt->rt_refcnt--;
-		RT_DPRINTF("%s: updating%s\n", __func__,
-		    ((rt->rt_flags & RTF_LLINFO) == 0) ? " (no llinfo)" : "");
-
-		ifsdl = ifa->ifa_ifp->if_sadl;
-
-		if ((rt->rt_flags & RTF_LLINFO) != 0 &&
-		    (sdl = satosdl(rt->rt_gateway)) != NULL &&
-		    sdl->sdl_family == AF_LINK &&
-		    sockaddr_dl_setaddr(sdl, sdl->sdl_len, CLLADDR(ifsdl),
-		                        ifa->ifa_ifp->if_addrlen) == NULL) {
-			error = EINVAL;
-			break;
-		}
-
 		if (cmd == RTM_LLINFO_UPD && ifa->ifa_rtrequest != NULL)
 			ifa->ifa_rtrequest(RTM_LLINFO_UPD, rt, &info);
-		rt_newmsg(RTM_CHANGE, nrt);
+		rt_newmsg(RTM_CHANGE, rt);
 		break;
 	case RTM_ADD:
-		rt->rt_refcnt--;
 		if (rt->rt_ifa != ifa) {
 			printf("rtinit: wrong ifa (%p) was (%p)\n", ifa,
 				rt->rt_ifa);
@@ -1034,65 +1032,11 @@ rtinit(struct ifaddr *ifa, int cmd, int flags)
 			if (ifa->ifa_rtrequest != NULL)
 				ifa->ifa_rtrequest(RTM_ADD, rt, &info);
 		}
-		rt_newmsg(cmd, nrt);
+		rt_newmsg(cmd, rt);
 		break;
 	}
+	rtfree(rt);
 	return error;
-}
-
-static const struct in_addr inmask32 = {.s_addr = INADDR_BROADCAST};
-
-/* Subroutine for rt_ifa_addlocal() and rt_ifa_remlocal() */
-static int
-rt_ifa_localrequest(int cmd, struct ifaddr *ifa)
-{
-	struct sockaddr *all1_sa;
-	struct sockaddr_in all1_sin;
-#ifdef INET6
-	struct sockaddr_in6 all1_sin6;
-#endif
-	struct rtentry *nrt = NULL;
-	int flags, e;
-
-	switch(ifa->ifa_addr->sa_family) {
-	case AF_INET:
-		sockaddr_in_init(&all1_sin, &inmask32, 0);
-		all1_sa = (struct sockaddr *)&all1_sin;
-		break;
-#ifdef INET6
-	case AF_INET6:
-		sockaddr_in6_init(&all1_sin6, &in6mask128, 0, 0, 0);
-		all1_sa = (struct sockaddr *)&all1_sin6;
-		break;
-#endif
-	default:
-		return 0;
-	}
-
-	flags = RTF_UP | RTF_HOST | RTF_LOCAL;
-	if (!(ifa->ifa_ifp->if_flags & (IFF_LOOPBACK | IFF_POINTOPOINT)))
-		flags |= RTF_LLINFO;
-	e = rtrequest(cmd, ifa->ifa_addr, ifa->ifa_addr, all1_sa, flags, &nrt);
-
-	/* Make sure rt_ifa be equal to IFA, the second argument of the
-	 * function. */
-	if (cmd == RTM_ADD && nrt && ifa != nrt->rt_ifa)
-		rt_replace_ifa(nrt, ifa);
-
-	rt_newaddrmsg(cmd, ifa, e, nrt);
-	if (nrt) {
-		if (cmd == RTM_DELETE) {
-			if (nrt->rt_refcnt <= 0) {
-				/* XXX: we should free the entry ourselves. */
-				nrt->rt_refcnt++;
-				rtfree(nrt);
-			}
-		} else {
-			/* the cmd must be RTM_ADD here */
-			nrt->rt_refcnt--;
-		}
-	}
-	return e;
 }
 
 /*
@@ -1107,15 +1051,41 @@ rt_ifa_addlocal(struct ifaddr *ifa)
 
 	/* If there is no loopback entry, allocate one. */
 	rt = rtalloc1(ifa->ifa_addr, 0);
+#ifdef RT_DEBUG
+	if (rt != NULL)
+		dump_rt(rt);
+#endif
 	if (rt == NULL || (rt->rt_flags & RTF_HOST) == 0 ||
 	    (rt->rt_ifp->if_flags & IFF_LOOPBACK) == 0)
-		e = rt_ifa_localrequest(RTM_ADD, ifa);
-	else {
+	{
+		struct rt_addrinfo info;
+		struct rtentry *nrt;
+
+		memset(&info, 0, sizeof(info));
+		info.rti_flags = RTF_HOST | RTF_LOCAL;
+		if (!(ifa->ifa_ifp->if_flags & (IFF_LOOPBACK|IFF_POINTOPOINT)))
+			info.rti_flags |= RTF_LLDATA;
+		info.rti_info[RTAX_DST] = ifa->ifa_addr;
+		info.rti_info[RTAX_GATEWAY] =
+		    (const struct sockaddr *)ifa->ifa_ifp->if_sadl;
+		info.rti_ifa = ifa;
+		nrt = NULL;
+		e = rtrequest1(RTM_ADD, &info, &nrt);
+		if (nrt && ifa != nrt->rt_ifa)
+			rt_replace_ifa(nrt, ifa);
+		rt_newaddrmsg(RTM_ADD, ifa, e, nrt);
+		if (nrt != NULL) {
+#ifdef RT_DEBUG
+			dump_rt(nrt);
+#endif
+			rtfree(nrt);
+		}
+	} else {
 		e = 0;
 		rt_newaddrmsg(RTM_NEWADDR, ifa, 0, NULL);
 	}
 	if (rt != NULL)
-		rt->rt_refcnt--;
+		rtfree(rt);
 	return e;
 }
 
@@ -1147,16 +1117,17 @@ rt_ifa_remlocal(struct ifaddr *ifa, struct ifaddr *alt_ifa)
 		 * ifaddr of another interface, I believe it is safest to
 		 * delete the route.
 		 */
-		if (alt_ifa == NULL)
-			e = rt_ifa_localrequest(RTM_DELETE, ifa);
-		else {
+		if (alt_ifa == NULL) {
+			e = rtdeletemsg(rt);
+			rt_newaddrmsg(RTM_DELADDR, ifa, 0, NULL);
+		} else {
 			rt_replace_ifa(rt, alt_ifa);
 			rt_newmsg(RTM_CHANGE, rt);
 		}
 	} else
 		rt_newaddrmsg(RTM_DELADDR, ifa, 0, NULL);
 	if (rt != NULL)
-		rt->rt_refcnt--;
+		rtfree(rt);
 	return e;
 }
 
@@ -1172,16 +1143,6 @@ rt_ifa_remlocal(struct ifaddr *ifa, struct ifaddr *alt_ifa)
 LIST_HEAD(, rttimer_queue) rttimer_queue_head;
 static int rt_init_done = 0;
 
-#define RTTIMER_CALLOUT(r)	do {					\
-		if (r->rtt_func != NULL) {				\
-			(*r->rtt_func)(r->rtt_rt, r);			\
-		} else {						\
-			rtrequest((int) RTM_DELETE,			\
-				  rt_getkey(r->rtt_rt),			\
-				  0, 0, 0, 0);				\
-		}							\
-	} while (/*CONSTCOND*/0)
-
 /*
  * Some subtle order problems with domain initialization mean that
  * we cannot count on this being run from rt_init before various
@@ -1189,13 +1150,21 @@ static int rt_init_done = 0;
  * that this is run when the first queue is added...
  */
 
+static void rt_timer_work(struct work *, void *);
+
 void
 rt_timer_init(void)
 {
+	int error;
+
 	assert(rt_init_done == 0);
 
 	LIST_INIT(&rttimer_queue_head);
-	callout_init(&rt_timer_ch, 0);
+	callout_init(&rt_timer_ch, CALLOUT_MPSAFE);
+	error = workqueue_create(&rt_timer_wq, "rt_timer",
+	    rt_timer_work, NULL, PRI_SOFTNET, IPL_SOFTNET, WQ_MPSAFE);
+	if (error)
+		panic("%s: workqueue_create failed (%d)\n", __func__, error);
 	callout_reset(&rt_timer_ch, hz, rt_timer_timer, NULL);
 	rt_init_done = 1;
 }
@@ -1236,8 +1205,8 @@ rt_timer_queue_remove_all(struct rttimer_queue *rtq, int destroy)
 		LIST_REMOVE(r, rtt_link);
 		TAILQ_REMOVE(&rtq->rtq_head, r, rtt_next);
 		if (destroy)
-			RTTIMER_CALLOUT(r);
-		/* we are already at splsoftnet */
+			(*r->rtt_func)(r->rtt_rt, r);
+		rtfree(r->rtt_rt);
 		pool_put(&rttimer_pool, r);
 		if (rtq->rtq_count > 0)
 			rtq->rtq_count--;
@@ -1275,12 +1244,12 @@ rt_timer_remove_all(struct rtentry *rt, int destroy)
 		LIST_REMOVE(r, rtt_link);
 		TAILQ_REMOVE(&r->rtt_queue->rtq_head, r, rtt_next);
 		if (destroy)
-			RTTIMER_CALLOUT(r);
+			(*r->rtt_func)(r->rtt_rt, r);
 		if (r->rtt_queue->rtq_count > 0)
 			r->rtt_queue->rtq_count--;
 		else
 			printf("rt_timer_remove_all: rtq_count reached 0\n");
-		/* we are already at splsoftnet */
+		rtfree(r->rtt_rt);
 		pool_put(&rttimer_pool, r);
 	}
 }
@@ -1291,8 +1260,8 @@ rt_timer_add(struct rtentry *rt,
 	struct rttimer_queue *queue)
 {
 	struct rttimer *r;
-	int s;
 
+	KASSERT(func != NULL);
 	/*
 	 * If there's already a timer with this action, destroy it before
 	 * we add a new one.
@@ -1308,16 +1277,16 @@ rt_timer_add(struct rtentry *rt,
 			r->rtt_queue->rtq_count--;
 		else
 			printf("rt_timer_add: rtq_count reached 0\n");
+		rtfree(r->rtt_rt);
 	} else {
-		s = splsoftnet();
 		r = pool_get(&rttimer_pool, PR_NOWAIT);
-		splx(s);
 		if (r == NULL)
 			return ENOBUFS;
 	}
 
 	memset(r, 0, sizeof(*r));
 
+	rt->rt_refcnt++;
 	r->rtt_rt = rt;
 	r->rtt_time = time_uptime;
 	r->rtt_func = func;
@@ -1329,9 +1298,8 @@ rt_timer_add(struct rtentry *rt,
 	return 0;
 }
 
-/* ARGSUSED */
-void
-rt_timer_timer(void *arg)
+static void
+rt_timer_work(struct work *wk, void *arg)
 {
 	struct rttimer_queue *rtq;
 	struct rttimer *r;
@@ -1343,7 +1311,8 @@ rt_timer_timer(void *arg)
 		    (r->rtt_time + rtq->rtq_timeout) < time_uptime) {
 			LIST_REMOVE(r, rtt_link);
 			TAILQ_REMOVE(&rtq->rtq_head, r, rtt_next);
-			RTTIMER_CALLOUT(r);
+			(*r->rtt_func)(r->rtt_rt, r);
+			rtfree(r->rtt_rt);
 			pool_put(&rttimer_pool, r);
 			if (rtq->rtq_count > 0)
 				rtq->rtq_count--;
@@ -1354,6 +1323,13 @@ rt_timer_timer(void *arg)
 	splx(s);
 
 	callout_reset(&rt_timer_ch, hz, rt_timer_timer, NULL);
+}
+
+void
+rt_timer_timer(void *arg)
+{
+
+	workqueue_enqueue(rt_timer_wq, &rt_timer_wk, NULL);
 }
 
 static struct rtentry *
@@ -1427,6 +1403,21 @@ rtcache_invalidate(struct dom_rtlist *rtlist)
 		LIST_REMOVE(ro, ro_rtcache_next);
 		LIST_INSERT_HEAD(&invalid_routes, ro, ro_rtcache_next);
 		rtcache_invariants(ro);
+	}
+}
+
+static void
+rtcache_clear_rtentry(int family, struct rtentry *rt)
+{
+	struct domain *dom;
+	struct route *ro, *nro;
+
+	if ((dom = pffinddomain(family)) == NULL)
+		return;
+
+	LIST_FOREACH_SAFE(ro, &dom->dom_rtcache, ro_rtcache_next, nro) {
+		if (ro->_ro_rt == rt)
+			rtcache_clear(ro);
 	}
 }
 
@@ -1527,11 +1518,120 @@ rt_settag(struct rtentry *rt, const struct sockaddr *tag)
 			sockaddr_free(rt->rt_tag);
 		rt->rt_tag = sockaddr_dup(tag, M_ZERO | M_NOWAIT);
 	}
-	return rt->rt_tag; 
+	return rt->rt_tag;
 }
 
 struct sockaddr *
-rt_gettag(struct rtentry *rt)
+rt_gettag(const struct rtentry *rt)
 {
 	return rt->rt_tag;
 }
+
+int
+rt_check_reject_route(const struct rtentry *rt, const struct ifnet *ifp)
+{
+
+	if ((rt->rt_flags & RTF_REJECT) != 0) {
+		/* Mimic looutput */
+		if (ifp->if_flags & IFF_LOOPBACK)
+			return (rt->rt_flags & RTF_HOST) ?
+			    EHOSTUNREACH : ENETUNREACH;
+		else if (rt->rt_rmx.rmx_expire == 0 ||
+		    time_uptime < rt->rt_rmx.rmx_expire)
+			return (rt->rt_flags & RTF_GATEWAY) ?
+			    EHOSTUNREACH : EHOSTDOWN;
+	}
+
+	return 0;
+}
+
+#ifdef DDB
+
+#include <machine/db_machdep.h>
+#include <ddb/db_interface.h>
+#include <ddb/db_output.h>
+
+#define	rt_expire rt_rmx.rmx_expire
+
+static void
+db_print_sa(const struct sockaddr *sa)
+{
+	int len;
+	const u_char *p;
+
+	if (sa == NULL) {
+		db_printf("[NULL]");
+		return;
+	}
+
+	p = (const u_char *)sa;
+	len = sa->sa_len;
+	db_printf("[");
+	while (len > 0) {
+		db_printf("%d", *p);
+		p++; len--;
+		if (len) db_printf(",");
+	}
+	db_printf("]\n");
+}
+
+static void
+db_print_ifa(struct ifaddr *ifa)
+{
+	if (ifa == NULL)
+		return;
+	db_printf("  ifa_addr=");
+	db_print_sa(ifa->ifa_addr);
+	db_printf("  ifa_dsta=");
+	db_print_sa(ifa->ifa_dstaddr);
+	db_printf("  ifa_mask=");
+	db_print_sa(ifa->ifa_netmask);
+	db_printf("  flags=0x%x,refcnt=%d,metric=%d\n",
+			  ifa->ifa_flags,
+			  ifa->ifa_refcnt,
+			  ifa->ifa_metric);
+}
+
+/*
+ * Function to pass to rt_walktree().
+ * Return non-zero error to abort walk.
+ */
+static int
+db_show_rtentry(struct rtentry *rt, void *w)
+{
+	db_printf("rtentry=%p", rt);
+
+	db_printf(" flags=0x%x refcnt=%d use=%"PRId64" expire=%"PRId64"\n",
+			  rt->rt_flags, rt->rt_refcnt,
+			  rt->rt_use, (uint64_t)rt->rt_expire);
+
+	db_printf(" key="); db_print_sa(rt_getkey(rt));
+	db_printf(" mask="); db_print_sa(rt_mask(rt));
+	db_printf(" gw="); db_print_sa(rt->rt_gateway);
+
+	db_printf(" ifp=%p ", rt->rt_ifp);
+	if (rt->rt_ifp)
+		db_printf("(%s)", rt->rt_ifp->if_xname);
+	else
+		db_printf("(NULL)");
+
+	db_printf(" ifa=%p\n", rt->rt_ifa);
+	db_print_ifa(rt->rt_ifa);
+
+	db_printf(" gwroute=%p llinfo=%p\n",
+			  rt->rt_gwroute, rt->rt_llinfo);
+
+	return 0;
+}
+
+/*
+ * Function to print all the route trees.
+ * Use this from ddb:  "show routes"
+ */
+void
+db_show_routes(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+	rt_walktree(AF_INET, db_show_rtentry, NULL);
+}
+#endif

@@ -1,4 +1,4 @@
-/* $NetBSD: if_msk.c,v 1.48 2015/04/13 16:33:25 riastradh Exp $ */
+/* $NetBSD: if_msk.c,v 1.51 2016/06/10 13:27:14 ozaki-r Exp $ */
 /*	$OpenBSD: if_msk.c,v 1.42 2007/01/17 02:43:02 krw Exp $	*/
 
 /*
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_msk.c,v 1.48 2015/04/13 16:33:25 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_msk.c,v 1.51 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1742,7 +1742,7 @@ msk_rxeof(struct sk_if_softc *sc_if, u_int16_t len, u_int32_t rxstat)
 		m_adj(m0, ETHER_ALIGN);
 		m = m0;
 	} else {
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = total_len;
 	}
 
@@ -1751,7 +1751,7 @@ msk_rxeof(struct sk_if_softc *sc_if, u_int16_t len, u_int32_t rxstat)
 	bpf_mtap(ifp, m);
 
 	/* pass it on. */
-	(*ifp->if_input)(ifp, m);
+	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
 void
@@ -2038,6 +2038,11 @@ msk_init_yukon(struct sk_if_softc *sc_if)
 	SK_YU_WRITE_2(sc_if, YUKON_SMR, reg);
 
 	DPRINTFN(6, ("msk_init_yukon: 10\n"));
+	struct ifnet *ifp = &sc_if->sk_ethercom.ec_if;
+	/* msk_attach calls me before ether_ifattach so check null */
+	if (ifp != NULL && ifp->if_sadl != NULL)
+		memcpy(sc_if->sk_enaddr, CLLADDR(ifp->if_sadl),
+		    sizeof(sc_if->sk_enaddr));
 	/* Setup Yukon's address */
 	for (i = 0; i < 3; i++) {
 		/* Write Source Address 1 (unicast filter) */

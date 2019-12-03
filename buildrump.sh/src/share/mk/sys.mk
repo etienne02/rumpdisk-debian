@@ -1,4 +1,4 @@
-#	$NetBSD: sys.mk,v 1.127 2014/08/10 05:57:31 matt Exp $
+#	$NetBSD: sys.mk,v 1.129 2016/03/30 17:35:43 martin Exp $
 #	@(#)sys.mk	8.2 (Berkeley) 3/21/94
 #
 # This file contains the basic rules for make(1) and is read first
@@ -34,8 +34,6 @@ DBG?=	-O2 -fno-reorder-blocks
 DBG?=	-O1
 .elif !empty(MACHINE_ARCH:Maarch64*)
 DBG?=	-O2 ${"${.TARGET:M*.po}" == "":? -fomit-frame-pointer:}
-.elif ${MACHINE_ARCH} == "vax"
-DBG?=	-O1 -fgcse -fstrength-reduce -fgcse-after-reload
 .else
 DBG?=	-O2
 .endif
@@ -46,8 +44,7 @@ LINK.c?=	${CC} ${CFLAGS} ${CPPFLAGS} ${LDFLAGS}
 
 # C Type Format data is required for DTrace
 CTFFLAGS	?=	-g -L VERSION
-# Use only one thread for now.
-CTFMFLAGS	?=	-S 1 -g -t -L VERSION
+CTFMFLAGS	?=	-t -g -L VERSION
 
 CXX?=		c++
 CXXFLAGS?=	${CFLAGS:N-Wno-traditional:N-Wstrict-prototypes:N-Wmissing-prototypes:N-Wno-pointer-sign:N-ffreestanding:N-std=gnu[0-9][0-9]:N-Wold-style-definition:N-Wno-format-zero-length}

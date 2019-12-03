@@ -1,4 +1,4 @@
-/*	$NetBSD: hme.c,v 1.91 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.91 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $");
 
 /* #define HMEDEBUG */
 
@@ -697,7 +697,7 @@ hme_get(struct hme_softc *sc, int ri, uint32_t flags)
 	MGETHDR(m0, M_DONTWAIT, MT_DATA);
 	if (m0 == 0)
 		return (0);
-	m0->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m0, ifp);
 	m0->m_pkthdr.len = totlen;
 	len = MHLEN;
 	m = m0;
@@ -885,7 +885,7 @@ hme_read(struct hme_softc *sc, int ix, uint32_t flags)
 	bpf_mtap(ifp, m);
 
 	/* Pass the packet up. */
-	(*ifp->if_input)(ifp, m);
+	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
 void

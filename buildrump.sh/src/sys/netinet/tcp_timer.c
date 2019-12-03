@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_timer.c,v 1.88 2014/11/10 18:52:51 maxv Exp $	*/
+/*	$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -93,10 +93,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.88 2014/11/10 18:52:51 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_tcp_debug.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -108,7 +110,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.88 2014/11/10 18:52:51 maxv Exp $");
 #include <sys/kernel.h>
 
 #include <net/if.h>
-#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -654,6 +655,6 @@ tcp_timer_2msl(void *arg)
 		tcp_trace(TA_USER, ostate, tp, NULL,
 		    PRU_SLOWTIMO | (TCPT_2MSL << 8));
 #endif
-	mutex_exit(softnet_lock);
 	KERNEL_UNLOCK_ONE(NULL);
+	mutex_exit(softnet_lock);
 }

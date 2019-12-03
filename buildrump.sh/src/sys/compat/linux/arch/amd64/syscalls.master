@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.54 2015/03/07 03:25:19 christos Exp $
+	$NetBSD: syscalls.master,v 1.57 2016/07/24 13:22:01 njoly Exp $
 
 ;	@(#)syscalls.master	8.1 (Berkeley) 7/19/93
 
@@ -66,7 +66,7 @@
 
 0	NOARGS		{ ssize_t|sys||read(int fd, void *buf, size_t nbyte); }
 1	NOARGS		{ ssize_t|sys||write(int fd, const void *buf, \
-			    int nbyte); }
+			    size_t nbyte); }
 2	STD		{ int|linux_sys||open(const char *path, int flags, \
 			    linux_umode_t mode); }
 3	NOARGS		{ int|sys||close(int fd); }
@@ -235,7 +235,7 @@
 86	NOARGS		{ int|sys||link(const char *path, const char *link); }
 87	STD		{ int|linux_sys||unlink(const char *path); }
 88	NOARGS		{ int|sys||symlink(const char *path, const char *link); }
-89	NOARGS		{ int|sys||readlink(const char *path, char *buf, \
+89	NOARGS		{ ssize_t|sys||readlink(const char *path, char *buf, \
 			    int count); }
 90	NOARGS		{ int|sys||chmod(const char *path, linux_umode_t mode); }
 91	NOARGS		{ int|sys||fchmod(int fd, linux_umode_t mode); }
@@ -259,8 +259,8 @@
 102	NOARGS		{ uid_t|sys||getuid(void); }
 103	UNIMPL		syslog
 104	NOARGS		{ gid_t|sys||getgid(void); }
-105	NOARGS		{ void|sys||setuid(uid_t uid); }
-106	NOARGS		{ void|sys||setgid(gid_t gid); }
+105	NOARGS		{ int|sys||setuid(uid_t uid); }
+106	NOARGS		{ int|sys||setgid(gid_t gid); }
 107	NOARGS		{ uid_t|sys||geteuid(void); }
 108	NOARGS		{ gid_t|sys||getegid(void); }
 109	NOARGS		{ int|sys||setpgid(int pid, int pgid); }
@@ -483,7 +483,7 @@
 			    int fd2, const char *name2, int flags); }
 266	NOARGS		{ int|sys||symlinkat(const char *path1, int fd, \
 			    const char *path2); }
-267	NOARGS		{ int|sys||readlinkat(int fd, const char *path, \
+267	NOARGS		{ ssize_t|sys||readlinkat(int fd, const char *path, \
 			    char *buf, size_t bufsize); }
 268	STD		{ int|linux_sys||fchmodat(int fd, const char *path, \
 			    linux_umode_t mode); }

@@ -1,4 +1,4 @@
-/*	$NetBSD: protosw.h,v 1.64 2015/05/02 17:18:04 rtr Exp $	*/
+/*	$NetBSD: protosw.h,v 1.66 2016/01/20 21:43:59 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1993
@@ -77,8 +77,6 @@ struct protosw {
 /* protocol-protocol hooks */
 	void	(*pr_input)		/* input to protocol (from below) */
 			(struct mbuf *, ...);
-	int	(*pr_output)		/* output to protocol (from above) */
-			(struct mbuf *, ...);
 	void	*(*pr_ctlinput)		/* control input (from below) */
 			(int, const struct sockaddr *, void *);
 	int	(*pr_ctloutput)		/* control output (from above) */
@@ -119,6 +117,8 @@ struct protosw {
 #define PR_PURGEIF	0x100		/* might store struct ifnet pointer;
 					   pr_purgeif() must be called on ifnet
 					   deletion */
+#define	PR_ADDR_OPT	0x200		/* Allow address during delivery */
+
 
 /*
  * The arguments to usrreq are:

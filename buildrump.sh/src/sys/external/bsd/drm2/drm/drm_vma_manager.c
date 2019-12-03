@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_vma_manager.c,v 1.2 2015/03/02 17:34:23 riastradh Exp $	*/
+/*	$NetBSD: drm_vma_manager.c,v 1.4 2016/04/19 02:52:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_vma_manager.c,v 1.2 2015/03/02 17:34:23 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_vma_manager.c,v 1.4 2016/04/19 02:52:29 riastradh Exp $");
 
 #include <sys/kmem.h>
 #include <sys/rbtree.h>
@@ -120,6 +120,8 @@ drm_vma_offset_manager_destroy(struct drm_vma_offset_manager *mgr)
 {
 
 	vmem_destroy(mgr->vom_vmem);
+	KASSERTMSG((RB_TREE_MIN(&mgr->vom_nodes) == NULL),
+	    "drm vma offset manager %p not empty", mgr);
 #if 0
 	rb_tree_destroy(&mgr->vom_nodes);
 #endif
@@ -143,6 +145,8 @@ void
 drm_vma_node_destroy(struct drm_vma_offset_node *node)
 {
 
+	KASSERTMSG((RB_TREE_MIN(&node->von_files) == NULL),
+	    "drm vma node %p not empty", node);
 #if 0
 	rb_tree_destroy(&node->von_files);
 #endif
@@ -289,6 +293,8 @@ drm_vma_node_revoke(struct drm_vma_offset_node *node, struct file *file)
 	if (found != NULL)
 		rb_tree_remove_node(&node->von_files, found);
 	rw_exit(&node->von_lock);
+	if (found != NULL)
+		kmem_free(found, sizeof(*found));
 }
 
 bool

@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.56 2014/02/20 18:19:09 dsl Exp $
+#	$NetBSD: genassym.cf,v 1.60 2015/11/20 11:58:00 maxv Exp $
 
 #
 # Copyright (c) 1998, 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -145,6 +145,8 @@ define	L1_SLOT_KERNBASE	pl1_pi(KERNBASE)
 
 define	PDIR_SLOT_PTE		PDIR_SLOT_PTE
 
+define	PDE_SIZE		sizeof(pd_entry_t)
+
 define	VM_MAXUSER_ADDRESS	(unsigned long long)VM_MAXUSER_ADDRESS
 
 define	L_PCB			offsetof(struct lwp, l_addr)
@@ -218,7 +220,7 @@ define	TF_SS			offsetof(struct trapframe, tf_ss)
 
 # Size of stack area needed for saving registers
 define	TF_REGSIZE		offsetof(struct trapframe, tf_trapno)
-# Total size includes regsisters pushed by hardware
+# Total size includes registers pushed by hardware
 define	FRAMESIZE		sizeof(struct trapframe)
 
 define	CPU_INFO_SCRATCH	offsetof(struct cpu_info, ci_scratch)

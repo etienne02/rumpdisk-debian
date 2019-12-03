@@ -1,9 +1,9 @@
-#	$NetBSD: Makefile,v 1.22 2012/10/01 19:27:04 bouyer Exp $
+#	$NetBSD: Makefile,v 1.27 2016/01/26 17:48:31 christos Exp $
 
 .include <bsd.own.mk>
 
 MODULE=		gdb
-GNUHOSTDIST=    ${.CURDIR}/../../external/gpl3/gdb/dist
+GNUHOSTDIST=    ${.CURDIR}/../../external/gpl3/${EXTERNAL_GDB_SUBDIR}/dist
 
 FIND_ARGS=	\! \( -type d -name sim -prune \)
 

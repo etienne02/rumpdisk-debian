@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_sig.c,v 1.319 2013/11/22 21:04:11 christos Exp $	*/
+/*	$NetBSD: kern_sig.c,v 1.327 2016/04/28 00:37:39 christos Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -70,9 +70,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_sig.c,v 1.319 2013/11/22 21:04:11 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_sig.c,v 1.327 2016/04/28 00:37:39 christos Exp $");
 
 #include "opt_ptrace.h"
+#include "opt_dtrace.h"
 #include "opt_compat_sunos.h"
 #include "opt_compat_netbsd.h"
 #include "opt_compat_netbsd32.h"
@@ -131,25 +132,19 @@ int (*coredump_vec)(struct lwp *, const char *) =
 /*
  * DTrace SDT provider definitions
  */
-SDT_PROBE_DEFINE(proc,,,signal_send,signal-send,
-	    "struct lwp *", NULL,	/* target thread */
-	    "struct proc *", NULL,	/* target process */
-	    "int", NULL, 		/* signal */
-	    NULL, NULL, NULL, NULL);
-SDT_PROBE_DEFINE(proc,,,signal_discard,signal-discard,
-	    "struct lwp *", NULL,	/* target thread */
-	    "struct proc *", NULL,	/* target process */
-	    "int", NULL, 		/* signal */
-	    NULL, NULL, NULL, NULL);
-SDT_PROBE_DEFINE(proc,,,signal_clear,signal-clear,
-	    "int", NULL,		/* signal */
-	    NULL, NULL, NULL, NULL,
-	    NULL, NULL, NULL, NULL);
-SDT_PROBE_DEFINE(proc,,,signal_handle,signal-handle,
-	    "int", NULL,		/* signal */
-	    "ksiginfo_t *", NULL,
-	    "void (*)(void)", NULL,	/* handler address */
-	    NULL, NULL, NULL, NULL);
+SDT_PROVIDER_DECLARE(proc);
+SDT_PROBE_DEFINE3(proc, kernel, , signal__send,
+    "struct lwp *", 	/* target thread */
+    "struct proc *", 	/* target process */
+    "int");		/* signal */
+SDT_PROBE_DEFINE3(proc, kernel, , signal__discard,
+    "struct lwp *",	/* target thread */
+    "struct proc *",	/* target process */
+    "int");  		/* signal */
+SDT_PROBE_DEFINE3(proc, kernel, , signal__handle,
+    "int", 		/* signal */
+    "ksiginfo_t *", 	/* signal info */
+    "void (*)(void)");	/* handler address */
 
 
 static struct pool_allocator sigactspool_allocator = {
@@ -901,7 +896,10 @@ trapsignal(struct lwp *l, ksiginfo_t *ksi)
 		l->l_ru.ru_nsignals++;
 		kpsendsig(l, ksi, mask);
 		mutex_exit(p->p_lock);
-		ktrpsig(signo, SIGACTION_PS(ps, signo).sa_handler, mask, ksi);
+		if (ktrpoint(KTR_PSIG)) {
+			ktrpsig(signo, SIGACTION_PS(ps, signo).sa_handler,
+			    mask, ksi);
+		}
 	} else {
 		/* XXX for core dump/debugger */
 		p->p_sigctx.ps_lwp = l->l_lid;
@@ -921,19 +919,19 @@ child_psignal(struct proc *p, int mask)
 {
 	ksiginfo_t ksi;
 	struct proc *q;
-	int xstat;
+	int xsig;
 
 	KASSERT(mutex_owned(proc_lock));
 	KASSERT(mutex_owned(p->p_lock));
 
-	xstat = p->p_xstat;
+	xsig = p->p_xsig;
 
 	KSI_INIT(&ksi);
 	ksi.ksi_signo = SIGCHLD;
-	ksi.ksi_code = (xstat == SIGCONT ? CLD_CONTINUED : CLD_STOPPED);
+	ksi.ksi_code = (xsig == SIGCONT ? CLD_CONTINUED : CLD_STOPPED);
 	ksi.ksi_pid = p->p_pid;
 	ksi.ksi_uid = kauth_cred_geteuid(p->p_cred);
-	ksi.ksi_status = xstat;
+	ksi.ksi_status = xsig;
 	ksi.ksi_utime = p->p_stats->p_ru.ru_utime.tv_sec;
 	ksi.ksi_stime = p->p_stats->p_ru.ru_stime.tv_sec;
 
@@ -1032,7 +1030,7 @@ sigpost(struct lwp *l, sig_t action, int prop, int sig)
 	if (l->l_refcnt == 0)
 		return 0;
 
-	SDT_PROBE(proc,,,signal_send, l, p, sig,  0, 0);
+	SDT_PROBE(proc, kernel, , signal__send, l, p, sig, 0, 0);
 
 	/*
 	 * Have the LWP check for signals.  This ensures that even if no LWP
@@ -1202,7 +1200,7 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 {
 	int prop, signo = ksi->ksi_signo;
 	struct sigacts *sa;
-	struct lwp *l;
+	struct lwp *l = NULL;
 	ksiginfo_t *kp;
 	lwpid_t lid;
 	sig_t action;
@@ -1246,7 +1244,7 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 			 * is being caught, make sure to save any ksiginfo.
 			 */
 			if ((kp = ksiginfo_alloc(p, ksi, PR_NOWAIT)) == NULL)
-				return;
+				goto discard;
 			sigput(&p->p_sigpend, p, kp);
 		}
 	} else {
@@ -1271,7 +1269,7 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 		 * SIG_IGN, action will be SIG_DFL here.
 		 */
 		if (sigismember(&p->p_sigctx.ps_sigignore, signo))
-			return;
+			goto discard;
 
 		else if (sigismember(&p->p_sigctx.ps_sigcatch, signo))
 			action = SIG_CATCH;
@@ -1285,7 +1283,7 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 			 * if sleeping, and don't clear any pending SIGCONT.
 			 */
 			if (prop & SA_TTYSTOP && p->p_pgrp->pg_jobc == 0)
-				return;
+				goto discard;
 
 			if (prop & SA_KILL && p->p_nice > NZERO)
 				p->p_nice = NZERO;
@@ -1315,14 +1313,14 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 	if ((prop & SA_CANTMASK) == 0 && !LIST_EMPTY(&p->p_sigwaiters) &&
 	    p->p_stat == SACTIVE && (p->p_sflag & PS_STOPPING) == 0 &&
 	    sigunwait(p, ksi))
-		return;
+		goto discard;
 
 	/*
 	 * XXXSMP Should be allocated by the caller, we're holding locks
 	 * here.
 	 */
 	if (kp == NULL && (kp = ksiginfo_alloc(p, ksi, PR_NOWAIT)) == NULL)
-		return;
+		goto discard;
 
 	/*
 	 * LWP private signals are easy - just find the LWP and post
@@ -1364,14 +1362,13 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 		}
 		if ((prop & SA_CONT) != 0 || signo == SIGKILL) {
 			/*
-			 * Re-adjust p_nstopchild if the process wasn't
-			 * collected by its parent.
+			 * Re-adjust p_nstopchild if the process was
+			 * stopped but not yet collected by its parent.
 			 */
+			if (p->p_stat == SSTOP && !p->p_waited)
+				p->p_pptr->p_nstopchild--;
 			p->p_stat = SACTIVE;
 			p->p_sflag &= ~PS_STOPPING;
-			if (!p->p_waited) {
-				p->p_pptr->p_nstopchild--;
-			}
 			if (p->p_slflag & PSL_TRACED) {
 				KASSERT(signo == SIGKILL);
 				goto deliver;
@@ -1383,9 +1380,14 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 			 * signal itself (if waiting on event - process runs,
 			 * otherwise continues sleeping).
 			 */
-			if ((prop & SA_CONT) != 0 && action == SIG_DFL) {
-				KASSERT(signo != SIGKILL);
-				goto deliver;
+			if ((prop & SA_CONT) != 0) {
+				p->p_xsig = SIGCONT;
+				p->p_sflag |= PS_CONTINUED;
+				child_psignal(p, 0);
+				if (action == SIG_DFL) {
+					KASSERT(signo != SIGKILL);
+					goto deliver;
+				}
 			}
 		} else if ((prop & SA_STOP) != 0) {
 			/*
@@ -1416,12 +1418,17 @@ deliver:
 		if (sigpost(l, action, prop, kp->ksi_signo) && !toall)
 			break;
 	}
+	signo = -1;
 out:
 	/*
 	 * If the ksiginfo wasn't used, then bin it.  XXXSMP freeing memory
 	 * with locks held.  The caller should take care of this.
 	 */
 	ksiginfo_free(kp);
+	if (signo == -1)
+		return;
+discard:
+	SDT_PROBE(proc, kernel, , signal__discard, l, p, signo, 0, 0);
 }
 
 void
@@ -1567,7 +1574,7 @@ sigchecktrace(void)
 	 * If we are no longer being traced, or the parent didn't
 	 * give us a signal, or we're stopping, look for more signals.
 	 */
-	if ((p->p_slflag & PSL_TRACED) == 0 || p->p_xstat == 0 ||
+	if ((p->p_slflag & PSL_TRACED) == 0 || p->p_xsig == 0 ||
 	    (p->p_sflag & PS_STOPPING) != 0)
 		return 0;
 
@@ -1575,8 +1582,8 @@ sigchecktrace(void)
 	 * If the new signal is being masked, look for other signals.
 	 * `p->p_sigctx.ps_siglist |= mask' is done in setrunnable().
 	 */
-	signo = p->p_xstat;
-	p->p_xstat = 0;
+	signo = p->p_xsig;
+	p->p_xsig = 0;
 	if (sigismember(&l->l_sigmask, signo)) {
 		signo = 0;
 	}
@@ -1686,7 +1693,7 @@ issignal(struct lwp *l)
 			 */
 			if (sp)
 				sigdelset(&sp->sp_set, signo);
-			p->p_xstat = signo;
+			p->p_xsig = signo;
 
 			/* Emulation-specific handling of signal trace */
 			if (p->p_emul->e_tracesig == NULL ||
@@ -1703,10 +1710,6 @@ issignal(struct lwp *l)
 		}
 
 		prop = sigprop[signo];
-
-		/* XXX no siginfo? */
-		SDT_PROBE(proc,,,signal_handle, signo, 0, 
-			SIGACTION(p, signo).sa_handler, 0, 0);
 
 		/*
 		 * Decide whether the signal should be returned.
@@ -1747,9 +1750,10 @@ issignal(struct lwp *l)
 				}
 				/* Take the signal. */
 				(void)sigget(sp, NULL, signo, NULL);
-				p->p_xstat = signo;
+				p->p_xsig = signo;
+				p->p_sflag &= ~PS_CONTINUED;
 				signo = 0;
-				sigswitch(true, PS_NOCLDSTOP, p->p_xstat);
+				sigswitch(true, PS_NOCLDSTOP, p->p_xsig);
 			} else if (prop & SA_IGNORE) {
 				/*
 				 * Except for SIGCONT, shouldn't get here.
@@ -1839,6 +1843,8 @@ postsig(int signo)
 		ktrpsig(signo, action, returnmask, &ksi);
 		mutex_enter(p->p_lock);
 	}
+
+	SDT_PROBE(proc, kernel, , signal__handle, signo, &ksi, action, 0, 0);
 
 	if (action == SIG_DFL) {
 		/*
@@ -2020,8 +2026,7 @@ sigexit(struct lwp *l, int signo)
 
 	if (docore) {
 		mutex_exit(p->p_lock);
-		if ((error = (*coredump_vec)(l, NULL)) == 0)
-			exitsig |= WCOREFLAG;
+		error = (*coredump_vec)(l, NULL);
 
 		if (kern_logsigexit) {
 			int uid = l->l_cred ?
@@ -2040,12 +2045,14 @@ sigexit(struct lwp *l, int signo)
 #endif /* PAX_SEGVGUARD */
 		/* Acquire the sched state mutex.  exit1() will release it. */
 		mutex_enter(p->p_lock);
+		if (error == 0)
+			p->p_sflag |= PS_COREDUMP;
 	}
 
 	/* No longer dumping core. */
 	p->p_sflag &= ~PS_WCORE;
 
-	exit1(l, W_EXITCODE(0, exitsig));
+	exit1(l, 0, exitsig);
 	/* NOTREACHED */
 }
 
@@ -2186,7 +2193,7 @@ proc_unstop(struct proc *p)
 
 	p->p_stat = SACTIVE;
 	p->p_sflag &= ~PS_STOPPING;
-	sig = p->p_xstat;
+	sig = p->p_xsig;
 
 	if (!p->p_waited)
 		p->p_pptr->p_nstopchild--;

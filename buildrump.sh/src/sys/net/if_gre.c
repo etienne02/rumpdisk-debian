@@ -1,4 +1,4 @@
-/*	$NetBSD: if_gre.c,v 1.165 2015/05/02 17:18:03 rtr Exp $ */
+/*	$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $ */
 
 /*
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -45,12 +45,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.165 2015/05/02 17:18:03 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_atalk.h"
 #include "opt_gre.h"
 #include "opt_inet.h"
 #include "opt_mpls.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/file.h>
@@ -114,6 +116,9 @@ __KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.165 2015/05/02 17:18:03 rtr Exp $");
 
 #include <compat/sys/socket.h>
 #include <compat/sys/sockio.h>
+
+#include "ioconf.h"
+
 /*
  * It is not easy to calculate the right value for a GRE MTU.
  * We leave this task to the admin and use the same default that
@@ -147,7 +152,7 @@ static int gre_input(struct gre_softc *, struct mbuf *, int,
     const struct gre_h *);
 static bool gre_is_nullconf(const struct gre_soparm *);
 static int gre_output(struct ifnet *, struct mbuf *,
-			   const struct sockaddr *, struct rtentry *);
+			   const struct sockaddr *, const struct rtentry *);
 static int gre_ioctl(struct ifnet *, u_long, void *);
 static int gre_getsockname(struct socket *, struct sockaddr *);
 static int gre_getpeername(struct socket *, struct sockaddr *);
@@ -844,7 +849,7 @@ gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
 
 	bpf_mtap_af(&sc->sc_if, af, m);
 
-	m->m_pkthdr.rcvif = &sc->sc_if;
+	m_set_rcvif(m, &sc->sc_if);
 
 	if (__predict_true(pktq)) {
 		if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
@@ -873,7 +878,7 @@ gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
  */
 static int
 gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
-	   struct rtentry *rt)
+	   const struct rtentry *rt)
 {
 	int error = 0;
 	struct gre_softc *sc = ifp->if_softc;
@@ -1424,8 +1429,6 @@ out:
 	splx(s);
 	return error;
 }
-
-void	greattach(int);
 
 /* ARGSUSED */
 void

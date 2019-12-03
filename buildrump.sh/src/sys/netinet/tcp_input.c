@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_input.c,v 1.340 2015/05/15 18:03:45 kefren Exp $	*/
+/*	$NetBSD: tcp_input.c,v 1.347 2016/06/10 13:31:44 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -148,12 +148,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_input.c,v 1.340 2015/05/15 18:03:45 kefren Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_input.c,v 1.347 2016/06/10 13:31:44 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_ipsec.h"
 #include "opt_inet_csum.h"
 #include "opt_tcp_debug.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -264,7 +266,7 @@ nd6_hint(struct tcpcb *tp)
 
 	if (tp != NULL && tp->t_in6pcb != NULL && tp->t_family == AF_INET6 &&
 	    (rt = rtcache_validate(&tp->t_in6pcb->in6p_route)) != NULL)
-		nd6_nud_hint(rt, NULL, 0);
+		nd6_nud_hint(rt);
 }
 #else
 static inline void
@@ -892,17 +894,21 @@ int
 tcp_input_checksum(int af, struct mbuf *m, const struct tcphdr *th,
     int toff, int off, int tlen)
 {
+	struct ifnet *rcvif;
+	int s;
 
 	/*
 	 * XXX it's better to record and check if this mbuf is
 	 * already checked.
 	 */
 
+	rcvif = m_get_rcvif(m, &s);
+
 	switch (af) {
 #ifdef INET
 	case AF_INET:
 		switch (m->m_pkthdr.csum_flags &
-			((m->m_pkthdr.rcvif->if_csum_flags_rx & M_CSUM_TCPv4) |
+			((rcvif->if_csum_flags_rx & M_CSUM_TCPv4) |
 			 M_CSUM_TCP_UDP_BAD | M_CSUM_DATA)) {
 		case M_CSUM_TCPv4|M_CSUM_TCP_UDP_BAD:
 			TCP_CSUM_COUNTER_INCR(&tcp_hwcsum_bad);
@@ -935,8 +941,7 @@ tcp_input_checksum(int af, struct mbuf *m, const struct tcphdr *th,
 			 * Must compute it ourselves.  Maybe skip checksum
 			 * on loopback interfaces.
 			 */
-			if (__predict_true(!(m->m_pkthdr.rcvif->if_flags &
-					     IFF_LOOPBACK) ||
+			if (__predict_true(!(rcvif->if_flags & IFF_LOOPBACK) ||
 					   tcp_do_loopback_cksum)) {
 				TCP_CSUM_COUNTER_INCR(&tcp_swcsum);
 				if (in4_cksum(m, IPPROTO_TCP, toff,
@@ -951,7 +956,7 @@ tcp_input_checksum(int af, struct mbuf *m, const struct tcphdr *th,
 #ifdef INET6
 	case AF_INET6:
 		switch (m->m_pkthdr.csum_flags &
-			((m->m_pkthdr.rcvif->if_csum_flags_rx & M_CSUM_TCPv6) |
+			((rcvif->if_csum_flags_rx & M_CSUM_TCPv6) |
 			 M_CSUM_TCP_UDP_BAD | M_CSUM_DATA)) {
 		case M_CSUM_TCPv6|M_CSUM_TCP_UDP_BAD:
 			TCP_CSUM_COUNTER_INCR(&tcp6_hwcsum_bad);
@@ -982,10 +987,12 @@ tcp_input_checksum(int af, struct mbuf *m, const struct tcphdr *th,
 		break;
 #endif /* INET6 */
 	}
+	m_put_rcvif(rcvif, &s);
 
 	return 0;
 
 badcsum:
+	m_put_rcvif(rcvif, &s);
 	TCP_STATINC(TCP_STAT_RCVBADSUM);
 	return -1;
 }
@@ -1422,12 +1429,8 @@ findpcb:
 			struct in6_addr s, d;
 
 			/* mapped addr case */
-			memset(&s, 0, sizeof(s));
-			s.s6_addr16[5] = htons(0xffff);
-			bcopy(&ip->ip_src, &s.s6_addr32[3], sizeof(ip->ip_src));
-			memset(&d, 0, sizeof(d));
-			d.s6_addr16[5] = htons(0xffff);
-			bcopy(&ip->ip_dst, &d.s6_addr32[3], sizeof(ip->ip_dst));
+			in6_in_2_v4mapin6(&ip->ip_src, &s);
+			in6_in_2_v4mapin6(&ip->ip_dst, &d);
 			in6p = in6_pcblookup_connect(&tcbtable, &s,
 						     th->th_sport, &d, th->th_dport,
 						     0, &vestige);
@@ -1550,7 +1553,8 @@ findpcb:
 
 		case AF_INET:
 			mc = (IN_MULTICAST(ip->ip_dst.s_addr)
-			      || in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif));
+			      || in_broadcast(ip->ip_dst,
+			                      m_get_rcvif_NOMPSAFE(m)));
 			break;
 		}
 
@@ -1749,7 +1753,8 @@ findpcb:
 #endif /* INET6 */
 				case AF_INET:
 					if (IN_MULTICAST(ip->ip_dst.s_addr) ||
-					    in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
+					    in_broadcast(ip->ip_dst,
+					                 m_get_rcvif_NOMPSAFE(m)))
 						goto drop;
 				break;
 				}
@@ -1792,12 +1797,18 @@ findpcb:
 				 */
 				if (af == AF_INET6 && !ip6_use_deprecated) {
 					struct in6_ifaddr *ia6;
-					if ((ia6 = in6ifa_ifpwithaddr(m->m_pkthdr.rcvif,
+					int s;
+					struct ifnet *rcvif = m_get_rcvif(m, &s);
+					if (rcvif == NULL)
+						goto dropwithreset; /* XXX */
+					if ((ia6 = in6ifa_ifpwithaddr(rcvif,
 					    &ip6->ip6_dst)) &&
 					    (ia6->ia6_flags & IN6_IFF_DEPRECATED)) {
 						tp = NULL;
+						m_put_rcvif(rcvif, &s);
 						goto dropwithreset;
 					}
+					m_put_rcvif(rcvif, &s);
 				}
 #endif
 
@@ -2713,7 +2724,10 @@ after_listen:
 				tp->t_lastm = NULL;
 			sbdrop(&so->so_snd, acked);
 			tp->t_lastoff -= acked;
-			tp->snd_wnd -= acked;
+			if (tp->snd_wnd > acked)
+				tp->snd_wnd -= acked;
+			else
+				tp->snd_wnd = 0;
 			ourfinisacked = 0;
 		}
 		sowwakeup(so);
@@ -3080,7 +3094,7 @@ dropwithreset:
 #endif /* INET6 */
 	case AF_INET:
 		if (IN_MULTICAST(ip->ip_dst.s_addr) ||
-		    in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
+		    in_broadcast(ip->ip_dst, m_get_rcvif_NOMPSAFE(m)))
 			goto drop;
 	}
 
@@ -3918,7 +3932,6 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst,
 	struct in6pcb *in6p = NULL;
 #endif
 	struct tcpcb *tp = 0;
-	struct mbuf *am;
 	int s;
 	struct socket *oso;
 
@@ -4069,45 +4082,29 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst,
 	}
 #endif
 
-	am = m_get(M_DONTWAIT, MT_SONAME);	/* XXX */
-	if (am == NULL)
-		goto resetandabort;
-	MCLAIM(am, &tcp_mowner);
-	am->m_len = src->sa_len;
-	bcopy(src, mtod(am, void *), src->sa_len);
 	if (inp) {
-		if (in_pcbconnect_m(inp, am, &lwp0)) {
-			(void) m_free(am);
+		struct sockaddr_in sin;
+		memcpy(&sin, src, src->sa_len);
+		if (in_pcbconnect(inp, &sin, &lwp0)) {
 			goto resetandabort;
 		}
 	}
 #ifdef INET6
 	else if (in6p) {
+		struct sockaddr_in6 sin6;
+		memcpy(&sin6, src, src->sa_len);
 		if (src->sa_family == AF_INET) {
 			/* IPv4 packet to AF_INET6 socket */
-			struct sockaddr_in6 *sin6;
-			sin6 = mtod(am, struct sockaddr_in6 *);
-			am->m_len = sizeof(*sin6);
-			memset(sin6, 0, sizeof(*sin6));
-			sin6->sin6_family = AF_INET6;
-			sin6->sin6_len = sizeof(*sin6);
-			sin6->sin6_port = ((struct sockaddr_in *)src)->sin_port;
-			sin6->sin6_addr.s6_addr16[5] = htons(0xffff);
-			bcopy(&((struct sockaddr_in *)src)->sin_addr,
-				&sin6->sin6_addr.s6_addr32[3],
-				sizeof(sin6->sin6_addr.s6_addr32[3]));
+			in6_sin_2_v4mapsin6((struct sockaddr_in *)src, &sin6);
 		}
-		if (in6_pcbconnect_m(in6p, am, NULL)) {
-			(void) m_free(am);
+		if (in6_pcbconnect(in6p, &sin6, NULL)) {
 			goto resetandabort;
 		}
 	}
 #endif
 	else {
-		(void) m_free(am);
 		goto resetandabort;
 	}
-	(void) m_free(am);
 
 	if (inp)
 		tp = intotcpcb(inp);
@@ -4433,7 +4430,7 @@ syn_cache_add(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	}
 	sc->sc_peermaxseg = oi->maxseg;
 	sc->sc_ourmaxseg = tcp_mss_to_advertise(m->m_flags & M_PKTHDR ?
-						m->m_pkthdr.rcvif : NULL,
+						m_get_rcvif_NOMPSAFE(m) : NULL,
 						sc->sc_src.sa.sa_family);
 	sc->sc_win = win;
 	sc->sc_timebase = tcp_now - 1;	/* see tcp_newtcpcb() */
@@ -4593,7 +4590,7 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m)
 			so = NULL;
 	} else
 		so = NULL;
-	m->m_pkthdr.rcvif = NULL;
+	m_reset_rcvif(m);
 	memset(mtod(m, u_char *), 0, tlen);
 
 	switch (sc->sc_src.sa.sa_family) {

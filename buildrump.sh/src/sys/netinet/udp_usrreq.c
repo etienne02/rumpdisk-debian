@@ -1,4 +1,4 @@
-/*	$NetBSD: udp_usrreq.c,v 1.221 2015/05/02 17:18:03 rtr Exp $	*/
+/*	$NetBSD: udp_usrreq.c,v 1.226 2016/06/10 13:31:44 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -66,14 +66,16 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udp_usrreq.c,v 1.221 2015/05/02 17:18:03 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udp_usrreq.c,v 1.226 2016/06/10 13:31:44 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_compat_netbsd.h"
 #include "opt_ipsec.h"
 #include "opt_inet_csum.h"
 #include "opt_ipkdb.h"
 #include "opt_mbuftrace.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
@@ -87,7 +89,6 @@ __KERNEL_RCSID(0, "$NetBSD: udp_usrreq.c,v 1.221 2015/05/02 17:18:03 rtr Exp $")
 #include <sys/sysctl.h>
 
 #include <net/if.h>
-#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -275,7 +276,7 @@ udp4_input_checksum(struct mbuf *m, const struct udphdr *uh,
 		return 0;
 
 	switch (m->m_pkthdr.csum_flags &
-	    ((m->m_pkthdr.rcvif->if_csum_flags_rx & M_CSUM_UDPv4) |
+	    ((m_get_rcvif_NOMPSAFE(m)->if_csum_flags_rx & M_CSUM_UDPv4) |
 	    M_CSUM_TCP_UDP_BAD | M_CSUM_DATA)) {
 	case M_CSUM_UDPv4|M_CSUM_TCP_UDP_BAD:
 		UDP_CSUM_COUNTER_INCR(&udp_hwcsum_bad);
@@ -308,7 +309,7 @@ udp4_input_checksum(struct mbuf *m, const struct udphdr *uh,
 		 * Need to compute it ourselves.  Maybe skip checksum
 		 * on loopback interfaces.
 		 */
-		if (__predict_true(!(m->m_pkthdr.rcvif->if_flags &
+		if (__predict_true(!(m_get_rcvif_NOMPSAFE(m)->if_flags &
 				     IFF_LOOPBACK) ||
 				   udp_do_loopback_cksum)) {
 			UDP_CSUM_COUNTER_INCR(&udp_swcsum);
@@ -403,16 +404,12 @@ udp_input(struct mbuf *m, ...)
 		memset(&src6, 0, sizeof(src6));
 		src6.sin6_family = AF_INET6;
 		src6.sin6_len = sizeof(struct sockaddr_in6);
-		src6.sin6_addr.s6_addr[10] = src6.sin6_addr.s6_addr[11] = 0xff;
-		memcpy(&src6.sin6_addr.s6_addr[12], &ip->ip_src,
-			sizeof(ip->ip_src));
+		in6_in_2_v4mapin6(&ip->ip_src, &src6.sin6_addr);
 		src6.sin6_port = uh->uh_sport;
 		memset(&dst6, 0, sizeof(dst6));
 		dst6.sin6_family = AF_INET6;
 		dst6.sin6_len = sizeof(struct sockaddr_in6);
-		dst6.sin6_addr.s6_addr[10] = dst6.sin6_addr.s6_addr[11] = 0xff;
-		memcpy(&dst6.sin6_addr.s6_addr[12], &ip->ip_dst,
-			sizeof(ip->ip_dst));
+		in6_in_2_v4mapin6(&ip->ip_dst, &dst6.sin6_addr);
 		dst6.sin6_port = uh->uh_dport;
 
 		n += udp6_realinput(AF_INET, &src6, &dst6, m, iphlen);
@@ -532,7 +529,7 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 	dport = &dst->sin_port;
 
 	if (IN_MULTICAST(dst4->s_addr) ||
-	    in_broadcast(*dst4, m->m_pkthdr.rcvif)) {
+	    in_broadcast(*dst4, m_get_rcvif_NOMPSAFE(m))) {
 		/*
 		 * Deliver a multicast or broadcast datagram to *all* sockets
 		 * for which the local and remote addresses and ports match
@@ -773,19 +770,14 @@ end:
 
 
 int
-udp_output(struct mbuf *m, ...)
+udp_output(struct mbuf *m, struct inpcb *inp)
 {
-	struct inpcb *inp;
 	struct udpiphdr *ui;
 	struct route *ro;
 	int len = m->m_pkthdr.len;
 	int error = 0;
-	va_list ap;
 
 	MCLAIM(m, &udp_tx_mowner);
-	va_start(ap, m);
-	inp = va_arg(ap, struct inpcb *);
-	va_end(ap);
 
 	/*
 	 * Calculate data length and get a mbuf

@@ -1,4 +1,4 @@
-/*	$NetBSD: acpi.c,v 1.259 2014/10/25 21:00:20 christos Exp $	*/
+/*	$NetBSD: acpi.c,v 1.262 2016/06/21 11:33:33 nonaka Exp $	*/
 
 /*-
  * Copyright (c) 2003, 2007 The NetBSD Foundation, Inc.
@@ -100,7 +100,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi.c,v 1.259 2014/10/25 21:00:20 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi.c,v 1.262 2016/06/21 11:33:33 nonaka Exp $");
 
 #include "opt_acpi.h"
 #include "opt_pcifixup.h"
@@ -118,6 +118,7 @@ __KERNEL_RCSID(0, "$NetBSD: acpi.c,v 1.259 2014/10/25 21:00:20 christos Exp $");
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
+#include <dev/acpi/acpi_mcfg.h>
 #include <dev/acpi/acpi_osd.h>
 #include <dev/acpi/acpi_pci.h>
 #include <dev/acpi/acpi_power.h>
@@ -451,6 +452,8 @@ acpi_attach(device_t parent, device_t self, void *aux)
 	sc->sc_pc = aa->aa_pc;
 	sc->sc_pciflags = aa->aa_pciflags;
 	sc->sc_ic = aa->aa_ic;
+	sc->sc_dmat = aa->aa_dmat;
+	sc->sc_dmat64 = aa->aa_dmat64;
 
 	SIMPLEQ_INIT(&sc->ad_head);
 
@@ -482,6 +485,11 @@ acpi_attach(device_t parent, device_t self, void *aux)
 	 * Scan the namespace and build our device tree.
 	 */
 	acpi_build_tree(sc);
+
+	/*
+	 * Probe MCFG table
+	 */
+	acpimcfg_probe(sc);
 
 	acpi_md_callback(sc);
 
@@ -857,6 +865,8 @@ acpi_rescan_early(struct acpi_softc *sc)
 		aa.aa_pc = sc->sc_pc;
 		aa.aa_pciflags = sc->sc_pciflags;
 		aa.aa_ic = sc->sc_ic;
+		aa.aa_dmat = sc->sc_dmat;
+		aa.aa_dmat64 = sc->sc_dmat64;
 
 		ad->ad_device = config_found_ia(sc->sc_dev,
 		    "acpinodebus", &aa, acpi_print);
@@ -921,6 +931,8 @@ acpi_rescan_nodes(struct acpi_softc *sc)
 		aa.aa_pc = sc->sc_pc;
 		aa.aa_pciflags = sc->sc_pciflags;
 		aa.aa_ic = sc->sc_ic;
+		aa.aa_dmat = sc->sc_dmat;
+		aa.aa_dmat64 = sc->sc_dmat64;
 
 		ad->ad_device = config_found_ia(sc->sc_dev,
 		    "acpinodebus", &aa, acpi_print);
@@ -1408,7 +1420,7 @@ acpi_enter_sleep_state(int state)
 
 			(void)pmf_system_bus_resume(PMF_Q_NONE);
 			(void)AcpiLeaveSleepState(state);
-			(void)AcpiSetFirmwareWakingVector(0);
+			(void)AcpiSetFirmwareWakingVector(0, 0);
 			(void)pmf_system_resume(PMF_Q_NONE);
 		}
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: locks.c,v 1.69 2014/04/25 18:13:59 pooka Exp $	*/
+/*	$NetBSD: locks.c,v 1.72 2016/01/26 23:12:17 pooka Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -26,16 +26,16 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: locks.c,v 1.69 2014/04/25 18:13:59 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: locks.c,v 1.72 2016/01/26 23:12:17 pooka Exp $");
 
 #include <sys/param.h>
 #include <sys/kmem.h>
 #include <sys/mutex.h>
 #include <sys/rwlock.h>
 
-#include <rump/rumpuser.h>
+#include <rump-sys/kern.h>
 
-#include "rump_private.h"
+#include <rump/rumpuser.h>
 
 #ifdef LOCKDEBUG
 const int rump_lockdebug = 1;
@@ -71,12 +71,15 @@ static lockops_t rw_lockops = {
     lockdebug_locked(lock, NULL, (uintptr_t)__builtin_return_address(0), shar)
 #define UNLOCKED(lock, shar)		\
     lockdebug_unlocked(lock, (uintptr_t)__builtin_return_address(0), shar)
+#define BARRIER(lock, slp)		\
+    lockdebug_barrier(lock, slp)
 #else
 #define ALLOCK(a, b)
 #define FREELOCK(a)
 #define WANTLOCK(a, b)
 #define LOCKED(a, b)
 #define UNLOCKED(a, b)
+#define BARRIER(a, b)
 #endif
 
 /*
@@ -138,6 +141,7 @@ mutex_enter(kmutex_t *mtx)
 {
 
 	WANTLOCK(mtx, 0);
+	BARRIER(mtx, 1);
 	rumpuser_mutex_enter(RUMPMTX(mtx));
 	LOCKED(mtx, false);
 }
@@ -147,6 +151,7 @@ mutex_spin_enter(kmutex_t *mtx)
 {
 
 	WANTLOCK(mtx, 0);
+	BARRIER(mtx, 1);
 	rumpuser_mutex_enter_nowrap(RUMPMTX(mtx));
 	LOCKED(mtx, false);
 }
@@ -229,8 +234,8 @@ void
 rw_enter(krwlock_t *rw, const krw_t op)
 {
 
-
 	WANTLOCK(rw, op == RW_READER);
+	BARRIER(rw, 1);
 	rumpuser_rw_enter(krw2rumprw(op), RUMPRW(rw));
 	LOCKED(rw, op == RW_READER);
 }
@@ -368,7 +373,6 @@ docvwait(kcondvar_t *cv, kmutex_t *mtx, struct timespec *ts)
 	if (__predict_false(l->l_flag & LW_RUMP_QEXIT)) {
 		struct proc *p = l->l_proc;
 
-		UNLOCKED(mtx, false);
 		mutex_exit(mtx); /* drop and retake later */
 
 		mutex_enter(p->p_lock);
@@ -383,7 +387,6 @@ docvwait(kcondvar_t *cv, kmutex_t *mtx, struct timespec *ts)
 		/* ok, we can exit and remove "reference" to l->private */
 
 		mutex_enter(mtx);
-		LOCKED(mtx, false);
 		rv = EINTR;
 	}
 	l->l_private = NULL;

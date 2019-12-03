@@ -1,4 +1,4 @@
-/*	$NetBSD: mount.h,v 1.217 2015/05/06 15:57:08 hannken Exp $	*/
+/*	$NetBSD: mount.h,v 1.219 2016/07/07 06:55:44 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1991, 1993
@@ -459,7 +459,7 @@ extern int	syncer_maxdelay;
 extern kmutex_t	syncer_mutex;
 extern time_t	syncdelay;
 extern time_t	filedelay;
-extern time_t	dirdelay; 
+extern time_t	dirdelay;
 extern time_t	metadelay;
 void	vfs_syncer_add_to_worklist(struct mount *);
 void	vfs_syncer_remove_from_worklist(struct mount *);
@@ -475,7 +475,7 @@ long	makefstype(const char *);
 int	mount_domount(struct lwp *, struct vnode **, struct vfsops *,
 	    const char *, int, void *, size_t *);
 int	dounmount(struct mount *, int, struct lwp *);
-int	do_sys_mount(struct lwp *, struct vfsops *, const char *, const char *,
+int	do_sys_mount(struct lwp *, const char *, enum uio_seg, const char *,
 	    int, void *, enum uio_seg, size_t, register_t *);
 void	vfsinit(void);
 void	vfs_opv_init(const struct vnodeopv_desc * const *);

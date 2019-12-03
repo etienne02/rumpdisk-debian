@@ -76,10 +76,12 @@
 
 #include <sys/cdefs.h>
 
+#ifdef _KERNEL_OPT
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet_csum.h"
 #include "opt_tcp_debug.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -94,7 +96,6 @@
 #include <sys/domain.h>
 #include <sys/kernel.h>
 #include <net/if.h>
-#include <net/route.h>
 #include <net/if_types.h>
 
 #include <netinet/in.h>
@@ -122,7 +123,7 @@
 
 #include <netinet/tcp_vtw.h>
 
-__KERNEL_RCSID(0, "$NetBSD: tcp_vtw.c,v 1.13 2015/03/31 08:47:01 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_vtw.c,v 1.16 2016/07/28 07:54:31 martin Exp $");
 
 #define db_trace(__a, __b)	do { } while (/*CONSTCOND*/0)
 
@@ -1049,7 +1050,7 @@ vtw_next_port_v4(struct tcp_ports_iterator *it)
 			if (!(inuse & (1 << i)))
 				continue;
 
-			inuse &= ~0 << i;
+			inuse &= ~0U << i;
 
 			if (i < it->slot_idx)
 				continue;
@@ -1163,7 +1164,7 @@ vtw_next_port_v6(struct tcp_ports_iterator *it)
 			if (!(inuse & (1 << i)))
 				continue;
 
-			inuse &= ~0 << i;
+			inuse &= ~0U << i;
 
 			if (i < it->slot_idx)
 				continue;

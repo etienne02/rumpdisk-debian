@@ -1,4 +1,4 @@
-/*	$NetBSD: if_gif.h,v 1.19 2008/11/12 12:36:28 ad Exp $	*/
+/*	$NetBSD: if_gif.h,v 1.24 2016/06/24 04:38:12 knakahara Exp $	*/
 /*	$KAME: if_gif.h,v 1.23 2001/07/27 09:21:42 itojun Exp $	*/
 
 /*
@@ -59,7 +59,6 @@ struct gif_softc {
 	const struct encaptab *encap_cookie4;
 	const struct encaptab *encap_cookie6;
 	LIST_ENTRY(gif_softc) gif_list;	/* list of all gifs */
-	void	*gif_si;		/* softintr handle */
 };
 #define GIF_ROUTE_TTL	10
 
@@ -70,15 +69,14 @@ struct gif_softc {
 #define	GIF_MTU_MAX	(8192)	/* Maximum MTU */
 
 /* Prototypes */
-void	gifattach0(struct gif_softc *);
 void	gif_input(struct mbuf *, int, struct ifnet *);
-int	gif_output(struct ifnet *, struct mbuf *,
-		   const struct sockaddr *, struct rtentry *);
-int	gif_ioctl(struct ifnet *, u_long, void *);
-int	gif_set_tunnel(struct ifnet *, struct sockaddr *, struct sockaddr *);
-void	gif_delete_tunnel(struct ifnet *);
+
 #ifdef GIF_ENCAPCHECK
 int	gif_encapcheck(struct mbuf *, int, int, void *);
 #endif
 
+/*
+ * Locking notes:
+ * - All members of struct si_sync are protected by si_lock (an adaptive mutex)
+ */
 #endif /* !_NET_IF_GIF_H_ */

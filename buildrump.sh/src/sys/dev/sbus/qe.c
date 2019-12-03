@@ -1,4 +1,4 @@
-/*	$NetBSD: qe.c,v 1.63 2015/04/13 16:33:25 riastradh Exp $	*/
+/*	$NetBSD: qe.c,v 1.65 2016/06/10 13:27:15 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: qe.c,v 1.63 2015/04/13 16:33:25 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: qe.c,v 1.65 2016/06/10 13:27:15 ozaki-r Exp $");
 
 #define QEDEBUG
 
@@ -334,7 +334,7 @@ qe_get(struct qe_softc *sc, int idx, int totlen)
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL)
 		return (NULL);
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 	m->m_pkthdr.len = totlen;
 	pad = ALIGN(sizeof(struct ether_header)) - sizeof(struct ether_header);
 	m->m_data += pad;
@@ -429,7 +429,7 @@ qe_read(struct qe_softc *sc, int idx, int len)
 	 */
 	bpf_mtap(ifp, m);
 	/* Pass the packet up. */
-	(*ifp->if_input)(ifp, m);
+	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
 /*

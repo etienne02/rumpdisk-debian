@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.c,v 1.115 2015/05/18 13:09:55 msaitoh Exp $	*/
+/*	$NetBSD: cpu.c,v 1.120 2016/07/07 06:55:40 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2000-2012 NetBSD Foundation, Inc.
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.115 2015/05/18 13:09:55 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.120 2016/07/07 06:55:40 msaitoh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_mpbios.h"		/* for MPDEBUG */
@@ -138,7 +138,7 @@ struct cpu_softc {
 };
 
 #ifdef MULTIPROCESSOR
-int mp_cpu_start(struct cpu_info *, paddr_t); 
+int mp_cpu_start(struct cpu_info *, paddr_t);
 void mp_cpu_start_cleanup(struct cpu_info *);
 const struct cpu_functions mp_cpu_funcs = { mp_cpu_start, NULL,
 					    mp_cpu_start_cleanup };
@@ -177,13 +177,15 @@ static void	tss_init(struct i386tss *, void *, void *);
 
 static void	cpu_init_idle_lwp(struct cpu_info *);
 
-uint32_t cpu_feature[5]; /* X86 CPUID feature bits
-			  *	[0] basic features %edx
-			  *	[1] basic features %ecx
-			  *	[2] extended features %edx
-			  *	[3] extended features %ecx
-			  *	[4] VIA padlock features
-			  */
+uint32_t cpu_feature[7]; /* X86 CPUID feature bits */
+			/* [0] basic features cpuid.1:%edx
+			 * [1] basic features cpuid.1:%ecx (CPUID2_xxx bits)
+			 * [2] extended features cpuid:80000001:%edx
+			 * [3] extended features cpuid:80000001:%ecx
+			 * [4] VIA padlock features
+			 * [5] structured extended features cpuid.7:%ebx
+			 * [6] structured extended features cpuid.7:%ecx
+			 */
 
 extern char x86_64_doubleflt_stack[];
 
@@ -579,6 +581,10 @@ cpu_init(struct cpu_info *ci)
 	if (cpu_feature[1] & CPUID2_XSAVE)
 		cr4 |= CR4_OSXSAVE;
 
+	/* If SMEP is supported, enable it */
+	if (cpu_feature[5] & CPUID_SEF_SMEP)
+		cr4 |= CR4_SMEP;
+
 	if (cr4) {
 		cr4 |= rcr4();
 		lcr4(cr4);
@@ -783,7 +789,7 @@ cpu_boot_secondary(struct cpu_info *ci)
 }
 
 /*
- * The CPU ends up here when its ready to run
+ * The CPU ends up here when it's ready to run.
  * This is called from code in mptramp.s; at this point, we are running
  * in the idle pcb/idle stack of the new CPU.  When this function returns,
  * this processor will enter the idle loop and start looking for work.
@@ -1277,6 +1283,7 @@ cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
 {
 #ifdef PAE
 	struct cpu_info *ci = curcpu();
+	bool interrupts_enabled;
 	pd_entry_t *l3_pd = ci->ci_pae_l3_pdir;
 	int i;
 
@@ -1285,11 +1292,16 @@ cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
 	 * while this doesn't block NMIs, it's probably ok as NMIs unlikely
 	 * reload cr3.
 	 */
-	x86_disable_intr();
+	interrupts_enabled = (x86_read_flags() & PSL_I) != 0;
+	if (interrupts_enabled)
+		x86_disable_intr();
+
 	for (i = 0 ; i < PDP_SIZE; i++) {
 		l3_pd[i] = pmap->pm_pdirpa[i] | PG_V;
 	}
-	x86_enable_intr();
+	
+	if (interrupts_enabled)
+		x86_enable_intr();
 	tlbflush();
 #else /* PAE */
 	lcr3(pmap_pdirpa(pmap, 0));

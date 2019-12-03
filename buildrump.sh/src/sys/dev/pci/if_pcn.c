@@ -1,4 +1,4 @@
-/*	$NetBSD: if_pcn.c,v 1.60 2015/04/27 17:40:13 christos Exp $	*/
+/*	$NetBSD: if_pcn.c,v 1.62 2016/06/10 13:27:14 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.60 2015/04/27 17:40:13 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.62 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1544,14 +1544,14 @@ pcn_rxintr(struct pcn_softc *sc)
 			}
 		}
 
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
 
 		/* Pass this up to any BPF listeners. */
 		bpf_mtap(ifp, m);
 
 		/* Pass it on. */
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 		ifp->if_ipackets++;
 	}
 

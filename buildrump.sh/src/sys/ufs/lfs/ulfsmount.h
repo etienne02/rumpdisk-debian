@@ -1,5 +1,5 @@
-/*	$NetBSD: ulfsmount.h,v 1.12 2013/07/28 01:10:49 dholland Exp $	*/
-/*  from NetBSD: ufsmount.h,v 1.39 2012/10/19 17:09:08 drochner Exp  */
+/*	$NetBSD: ulfsmount.h,v 1.18 2016/06/20 03:36:09 dholland Exp $	*/
+/*  from NetBSD: ufsmount.h,v 1.43 2015/03/27 17:27:56 riastradh Exp  */
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -59,10 +59,6 @@ struct vnode;
 struct ulfsmount {
 	/* Abstract vfs-level filesystem structure. */
 	struct mount *um_mountp;
-
-	/* The block device we're mounted on. */
-	dev_t um_dev;
-	struct vnode *um_devvp;
 
 	/* type of fs; currently always ULFS1, theoretically also ULFS2 */
 	u_long um_fstype;

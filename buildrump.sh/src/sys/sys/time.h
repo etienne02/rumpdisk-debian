@@ -1,4 +1,4 @@
-/*	$NetBSD: time.h,v 1.69 2015/05/19 23:35:11 riastradh Exp $	*/
+/*	$NetBSD: time.h,v 1.73 2016/07/07 06:55:44 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -46,13 +46,7 @@ struct timeval {
 	suseconds_t	tv_usec;	/* and microseconds */
 };
 
-/*
- * Structure defined by POSIX.1b to be like a timeval.
- */
-struct timespec {
-	time_t	tv_sec;		/* seconds */
-	long	tv_nsec;	/* and nanoseconds */
-};
+#include <sys/timespec.h>
 
 #if defined(_NETBSD_SOURCE)
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) do {				\
@@ -179,7 +173,7 @@ timespec2bintime(const struct timespec *ts, struct bintime *bt)
 
 	bt->sec = ts->tv_sec;
 	/* 18446744073 = int(2^64 / 1000000000) */
-	bt->frac = (uint64_t)ts->tv_nsec * (uint64_t)18446744073ULL; 
+	bt->frac = (uint64_t)ts->tv_nsec * (uint64_t)18446744073ULL;
 }
 
 static __inline void
@@ -205,7 +199,7 @@ ms2bintime(uint64_t ms)
 {
 	struct bintime bt;
 
-	bt.sec = ms / 1000U;
+	bt.sec = (time_t)(ms / 1000U);
 	bt.frac = (((ms % 1000U) >> 32)/1000U) >> 32;
 
 	return bt;
@@ -216,7 +210,7 @@ us2bintime(uint64_t us)
 {
 	struct bintime bt;
 
-	bt.sec = us / 1000000U;
+	bt.sec = (time_t)(us / 1000000U);
 	bt.frac = (((us % 1000000U) >> 32)/1000000U) >> 32;
 
 	return bt;
@@ -227,7 +221,7 @@ ns2bintime(uint64_t ns)
 {
 	struct bintime bt;
 
-	bt.sec = ns / 1000000000U;
+	bt.sec = (time_t)(ns / 1000000000U);
 	bt.frac = (((ns % 1000000000U) >> 32)/1000000000U) >> 32;
 
 	return bt;
@@ -290,6 +284,8 @@ struct	itimerspec {
 #define	CLOCK_VIRTUAL	1
 #define	CLOCK_PROF	2
 #define	CLOCK_MONOTONIC	3
+#define CLOCK_THREAD_CPUTIME_ID		0x80000000
+#define CLOCK_PROCESS_CPUTIME_ID	0x40000000
 
 #if defined(_NETBSD_SOURCE)
 #define	TIMER_RELTIME	0x0	/* relative timer */

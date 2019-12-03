@@ -1,4 +1,4 @@
-/*	$NetBSD: if_se.c,v 1.87 2014/07/25 08:10:38 dholland Exp $	*/
+/*	$NetBSD: if_se.c,v 1.90 2016/06/10 13:27:15 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 1997 Ian W. Dall <ian.dall@dsto.defence.gov.au>
@@ -59,10 +59,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_se.c,v 1.87 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_se.c,v 1.90 2016/06/10 13:27:15 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_atalk.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -357,8 +359,9 @@ seattach(device_t parent, device_t self, void *aux)
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Attach the interface. */
-	if_attach(ifp);
+	if_initialize(ifp);
 	ether_ifattach(ifp, myaddr);
+	if_register(ifp);
 }
 
 
@@ -574,7 +577,7 @@ se_get(struct se_softc *sc, char *data, int totlen)
 	MGETHDR(m0, M_DONTWAIT, MT_DATA);
 	if (m0 == 0)
 		return (0);
-	m0->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m0, ifp);
 	m0->m_pkthdr.len = totlen;
 	len = MHLEN;
 	m = m0;
@@ -672,7 +675,7 @@ se_read(struct se_softc *sc, char *data, int datalen)
 		bpf_mtap(ifp, m);
 
 		/* Pass the packet up. */
-		(*ifp->if_input)(ifp, m);
+		if_input(ifp, m);
 
 	next_packet:
 		data += len;

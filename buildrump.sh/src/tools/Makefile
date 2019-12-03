@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.180 2015/01/07 20:42:02 joerg Exp $
+#	$NetBSD: Makefile,v 1.186 2016/01/24 22:49:08 christos Exp $
 
 .include <bsd.own.mk>
 .include <bsd.endian.mk>
@@ -112,7 +112,8 @@ SUBDIR += .WAIT texinfo \
 	${DTRACE_BITS} \
 		asn1_compile cksum compile_et db \
 		file lint1 slc \
-		makefs .WAIT menuc mkcsmapper mkesdb mklocale mknod msgc \
+		makefs sortinfo \
+		.WAIT menuc mkcsmapper mkesdb mklocale mknod msgc \
 		.WAIT disklabel gpt \
 		.WAIT paxctl \
 		.WAIT fdisk \
@@ -211,9 +212,12 @@ SUBDIR+=	elftosb
 SUBDIR+=	mkubootimage
 .endif
 
-.if ${MKX11} != "no" && ${X11FLAVOUR} == "Xorg"
-SUBDIR+=	../external/mit/xorg/tools/makestrs
+.if ${MKX11} != "no"
+SUBDIR+=	makestrs
+SUBDIR+=	makekeys
 .endif
+
+SUBDIR+= cvslatest
 
 .endif # TOOLCHAIN_BUILDRUMP
 

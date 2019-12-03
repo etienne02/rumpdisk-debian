@@ -1,4 +1,4 @@
-/*	$NetBSD: if_de.c,v 1.145 2015/04/13 16:33:25 riastradh Exp $	*/
+/*	$NetBSD: if_de.c,v 1.147 2016/06/10 13:27:14 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1994-1997 Matt Thomas (matt@3am-software.com)
@@ -37,7 +37,7 @@
  *   board which support 21040, 21041, or 21140 (mostly).
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_de.c,v 1.145 2015/04/13 16:33:25 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_de.c,v 1.147 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #define	TULIP_HDR_DATA
 
@@ -3748,9 +3748,9 @@ tulip_rx_intr(
 #endif
 #if !defined(TULIP_COPY_RXDATA)
 		ms->m_pkthdr.len = total_len;
-		ms->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(ms, ifp);
 #if defined(__NetBSD__)
-		(*ifp->if_input)(ifp, ms);
+		if_percpuq_enqueue(ifp->if_percpuq, ms);
 #else
 		m_adj(ms, sizeof(struct ether_header));
 		ether_input(ifp, &eh, ms);
@@ -3762,9 +3762,9 @@ tulip_rx_intr(
 		m0->m_data += 2;	/* align data after header */
 		m_copydata(ms, 0, total_len, mtod(m0, void *));
 		m0->m_len = m0->m_pkthdr.len = total_len;
-		m0->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m0, ifp);
 #if defined(__NetBSD__)
-		(*ifp->if_input)(ifp, m0);
+		if_percpuq_enqueue(ifp->if_percpuq, m0);
 #else
 		m_adj(m0, sizeof(struct ether_header));
 		ether_input(ifp, &eh, m0);

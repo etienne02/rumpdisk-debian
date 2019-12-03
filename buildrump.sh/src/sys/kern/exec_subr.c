@@ -1,4 +1,4 @@
-/*	$NetBSD: exec_subr.c,v 1.71 2014/03/29 09:31:11 maxv Exp $	*/
+/*	$NetBSD: exec_subr.c,v 1.76 2016/05/22 14:26:09 christos Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994, 1996 Christopher G. Demetriou
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: exec_subr.c,v 1.71 2014/03/29 09:31:11 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: exec_subr.c,v 1.76 2016/05/22 14:26:09 christos Exp $");
 
 #include "opt_pax.h"
 
@@ -45,10 +45,7 @@ __KERNEL_RCSID(0, "$NetBSD: exec_subr.c,v 1.71 2014/03/29 09:31:11 maxv Exp $");
 #include <sys/mman.h>
 #include <sys/resourcevar.h>
 #include <sys/device.h>
-
-#if defined(PAX_ASLR) || defined(PAX_MPROTECT)
 #include <sys/pax.h>
-#endif /* PAX_ASLR || PAX_MPROTECT */
 
 #include <uvm/uvm_extern.h>
 
@@ -184,9 +181,7 @@ vmcmd_map_pagedvn(struct lwp *l, struct exec_vmcmd *cmd)
 
 	prot = cmd->ev_prot;
 	maxprot = UVM_PROT_ALL;
-#ifdef PAX_MPROTECT
-	pax_mprotect(l, &prot, &maxprot);
-#endif /* PAX_MPROTECT */
+	PAX_MPROTECT_ADJUST(l, &prot, &maxprot);
 
 	/*
 	 * check the file system's opinion about mmapping the file
@@ -266,9 +261,7 @@ vmcmd_readvn(struct lwp *l, struct exec_vmcmd *cmd)
 
 	prot = cmd->ev_prot;
 	maxprot = VM_PROT_ALL;
-#ifdef PAX_MPROTECT
-	pax_mprotect(l, &prot, &maxprot);
-#endif /* PAX_MPROTECT */
+	PAX_MPROTECT_ADJUST(l, &prot, &maxprot);
 
 #ifdef PMAP_NEED_PROCWR
 	/*
@@ -326,9 +319,7 @@ vmcmd_map_zero(struct lwp *l, struct exec_vmcmd *cmd)
 
 	prot = cmd->ev_prot;
 	maxprot = UVM_PROT_ALL;
-#ifdef PAX_MPROTECT
-	pax_mprotect(l, &prot, &maxprot);
-#endif /* PAX_MPROTECT */
+	PAX_MPROTECT_ADJUST(l, &prot, &maxprot);
 
 	error = uvm_map(&p->p_vmspace->vm_map, &cmd->ev_addr,
 			round_page(cmd->ev_len), NULL, UVM_UNKNOWN_OFFSET, 0,
@@ -400,25 +391,25 @@ exec_setup_stack(struct lwp *l, struct exec_package *epp)
 		max_stack_size = MAXSSIZ;
 	}
 
-	DPRINTF(("ep_minsaddr=%llx max_stack_size=%llx\n",
-	    (unsigned long long)epp->ep_minsaddr,
-	    (unsigned long long)max_stack_size));
+	DPRINTF(("ep_minsaddr=%#jx max_stack_size=%#jx\n",
+	    (uintmax_t)epp->ep_minsaddr, (uintmax_t)max_stack_size));
 
+	pax_aslr_stack(epp, &max_stack_size);
+
+	DPRINTF(("[RLIMIT_STACK].lim_cur=%#jx max_stack_size=%#jx\n",
+	    (uintmax_t)l->l_proc->p_rlimit[RLIMIT_STACK].rlim_cur,
+	    (uintmax_t)max_stack_size));
 	epp->ep_ssize = MIN(l->l_proc->p_rlimit[RLIMIT_STACK].rlim_cur,
 	    max_stack_size);
-
-#ifdef PAX_ASLR
-	pax_aslr_stack(l, epp, &max_stack_size);
-#endif /* PAX_ASLR */
 
 	l->l_proc->p_stackbase = epp->ep_minsaddr;
 	
 	epp->ep_maxsaddr = (vaddr_t)STACK_GROW(epp->ep_minsaddr,
-		max_stack_size);
+	    max_stack_size);
 
-	DPRINTF(("ep_ssize=%llx ep_maxsaddr=%llx\n",
-	    (unsigned long long)epp->ep_ssize,
-	    (unsigned long long)epp->ep_maxsaddr));
+	DPRINTF(("ep_ssize=%#jx ep_minsaddr=%#jx ep_maxsaddr=%#jx\n",
+	    (uintmax_t)epp->ep_ssize, (uintmax_t)epp->ep_minsaddr,
+	    (uintmax_t)epp->ep_maxsaddr));
 
 	/*
 	 * set up commands for stack.  note that this takes *two*, one to
@@ -434,12 +425,10 @@ exec_setup_stack(struct lwp *l, struct exec_package *epp)
 	noaccess_linear_min = (vaddr_t)STACK_ALLOC(STACK_GROW(epp->ep_minsaddr,
 	    access_size), noaccess_size);
 
-	DPRINTF(("access_size=%llx, access_linear_min=%llx, "
-	    "noaccess_size=%llx, noaccess_linear_min=%llx\n",
-	    (unsigned long long)access_size,
-	    (unsigned long long)access_linear_min,
-	    (unsigned long long)noaccess_size,
-	    (unsigned long long)noaccess_linear_min));
+	DPRINTF(("access_size=%#jx, access_linear_min=%#jx, "
+	    "noaccess_size=%#jx, noaccess_linear_min=%#jx\n",
+	    (uintmax_t)access_size, (uintmax_t)access_linear_min,
+	    (uintmax_t)noaccess_size, (uintmax_t)noaccess_linear_min));
 
 	if (noaccess_size > 0 && noaccess_size <= MAXSSIZ) {
 		NEW_VMCMD2(&epp->ep_vmcmds, vmcmd_map_zero, noaccess_size,

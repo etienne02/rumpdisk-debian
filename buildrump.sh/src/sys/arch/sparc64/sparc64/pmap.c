@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.294 2015/04/16 08:58:44 mrg Exp $	*/
+/*	$NetBSD: pmap.c,v 1.303 2016/07/07 06:55:38 msaitoh Exp $	*/
 /*
  *
  * Copyright (C) 1996-1999 Eduardo Horvath.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.294 2015/04/16 08:58:44 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.303 2016/07/07 06:55:38 msaitoh Exp $");
 
 #undef	NO_VCACHE /* Don't forget the locked TLB in dostart */
 #define	HWREF
@@ -49,6 +49,7 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.294 2015/04/16 08:58:44 mrg Exp $");
 #include <sys/cpu.h>
 
 #include <sys/exec_aout.h>	/* for MID_* */
+#include <sys/reboot.h>
 
 #include <uvm/uvm.h>
 
@@ -58,11 +59,12 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.294 2015/04/16 08:58:44 mrg Exp $");
 #include <machine/promlib.h>
 #include <machine/kcore.h>
 #include <machine/bootinfo.h>
+#ifdef SUN4V
+#include <machine/hypervisor.h>
+#endif
+#include <machine/mdesc.h>
 
 #include <sparc64/sparc64/cache.h>
-#ifdef SUN4V
-#include <sparc64/hypervisor.h>
-#endif
 
 #ifdef DDB
 #include <machine/db_machdep.h>
@@ -157,6 +159,25 @@ static bool pmap_is_referenced_locked(struct vm_page *);
 
 static void ctx_free(struct pmap *, struct cpu_info *);
 
+/* set dmmu secondary context */
+static __inline void
+dmmu_set_secondary_context(uint ctx)
+{
+	if (!CPU_ISSUN4V)
+		__asm volatile(
+			"stxa %0,[%1]%2;	"
+			"membar #Sync		"
+			: : "r" (ctx), "r" (CTX_SECONDARY), "n" (ASI_DMMU)
+			: "memory");
+	else
+		__asm volatile(
+			"stxa %0,[%1]%2;	"
+			"membar #Sync		"
+			: : "r" (ctx), "r" (CTX_SECONDARY), "n" (ASI_MMU_CONTEXTID)
+			: "memory");
+		
+}
+
 /*
  * Check if any MMU has a non-zero context
  */
@@ -170,7 +191,7 @@ pmap_has_ctx(struct pmap *p)
 		if (p->pm_ctx[i] > 0)
 			return true;
 
-	return false;	
+	return false;
 }
 
 #ifdef MULTIPROCESSOR
@@ -209,7 +230,7 @@ paddr_t ekdatap;
  * Kernel 4MB pages.
  */
 extern struct tlb_entry *kernel_tlbs;
-extern int kernel_tlb_slots;
+extern int kernel_dtlb_slots, kernel_itlb_slots;
 
 static int npgs;
 
@@ -478,16 +499,15 @@ static int pmap_calculate_colors(void)
 			continue;
 
 		/* Found a CPU, get the E$ info. */
-		size = prom_getpropint(node, "ecache-size", -1);
-		if (size == -1) {
-			/* XXX sun4v support missing */
+		size = cpu_ecache_size(node);
+		if (size == 0) {
 			prom_printf("pmap_calculate_colors: node %x has "
 				"no ecache-size\n", node);
 			/* If we can't get the E$ size, skip the node */
 			continue;
 		}
 
-		assoc = prom_getpropint(node, "ecache-associativity", 1);
+		assoc = cpu_ecache_associativity(node);
 		color = size/assoc/PAGE_SIZE;
 		if (color > maxcolor)
 			maxcolor = color;
@@ -525,11 +545,12 @@ pmap_mp_init(void)
 	}
 
 	memcpy(v, mp_tramp_code, mp_tramp_code_len);
-	*(u_long *)(v + mp_tramp_tlb_slots) = kernel_tlb_slots;
+	*(u_long *)(v + mp_tramp_dtlb_slots) = kernel_dtlb_slots;
+	*(u_long *)(v + mp_tramp_itlb_slots) = kernel_itlb_slots;
 	*(u_long *)(v + mp_tramp_func) = (u_long)cpu_mp_startup;
 	*(u_long *)(v + mp_tramp_ci) = (u_long)cpu_args;
 	tp = (pte_t *)(v + mp_tramp_code_len);
-	for (i = 0; i < kernel_tlb_slots; i++) {
+	for (i = 0; i < kernel_dtlb_slots; i++) {
 		tp[i].tag  = kernel_tlbs[i].te_va;
 		tp[i].data = TSB_DATA(0,		/* g */
 				PGSZ_4M,		/* sz */
@@ -542,18 +563,12 @@ pmap_mp_init(void)
 				0 /* ie */);
 		tp[i].data |= TLB_L | TLB_CV;
 
-		/*
-		 * Assuming that the last tlb slot entry is the only data slot.
-		 *
-		 * If more than one data slot is required on day, perhaps
-		 * the bootinfo structure shared between ofwboot and the kernel
-		 * should be expanded to include the number of data slots.
-		 */
-		if (i == kernel_tlb_slots-1)
+		if (i >= kernel_itlb_slots) {
 			tp[i].data |= TLB_W;
-		else
+		} else {
 			if (CPU_ISSUN4V)
 				tp[i].data |= SUN4V_TLB_X;
+		}
 			
 		DPRINTF(PDB_BOOT1, ("xtlb[%d]: Tag: %" PRIx64 " Data: %"
 				PRIx64 "\n", i, tp[i].tag, tp[i].data));
@@ -576,7 +591,7 @@ pmap_kextract(vaddr_t va)
 	int i;
 	paddr_t paddr = (paddr_t)-1;
 
-	for (i = 0; i < kernel_tlb_slots; i++) {
+	for (i = 0; i < kernel_dtlb_slots; i++) {
 		if ((va & ~PAGE_MASK_4M) == kernel_tlbs[i].te_va) {
 			paddr = kernel_tlbs[i].te_pa +
 				(paddr_t)(va & PAGE_MASK_4M);
@@ -584,7 +599,7 @@ pmap_kextract(vaddr_t va)
 		}
 	}
 
-	if (i == kernel_tlb_slots) {
+	if (i == kernel_dtlb_slots) {
 		panic("pmap_kextract: Address %p is not from kernel space.\n"
 				"Data segment is too small?\n", (void*)va);
 	}
@@ -714,6 +729,10 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 
 	BDPRINTF(PDB_BOOT, ("Entered pmap_bootstrap.\n"));
 
+	/* XXX - incomplete spinup code for SUN4V */
+	if (CPU_ISSUN4V)
+		boothowto |= RB_MD1;
+
 	cache_setup_funcs();
 
 	/*
@@ -736,6 +755,18 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 
 	/* Initialize bootstrap allocator. */
 	kdata_alloc_init(kernelend + 1 * 1024 * 1024, ekdata);
+
+	/* make sure we have access to the mdesc data on SUN4V machines */
+	if (CPU_ISSUN4V) {
+		vaddr_t m_va;
+		psize_t m_len;
+		paddr_t m_pa;
+
+		m_len = mdesc_get_len();
+		m_va = kdata_alloc(m_len, 16);
+		m_pa = kdatap + (m_va - kdata);
+		mdesc_init(m_va, m_pa, m_len);
+	}
 
 	pmap_bootdebug();
 	pmap_alloc_bootargs();
@@ -1288,7 +1319,7 @@ cpu_pmap_init(struct cpu_info *ci)
 	 */
 	ci->ci_pmap_next_ctx = 1;
 	/* all SUN4U use 13 bit contexts - SUN4V use at least 13 bit contexts */
-	ci->ci_numctx = 0x2000; 
+	ci->ci_numctx = 0x2000;
 	ctxsize = sizeof(paddr_t)*ci->ci_numctx;
 	ci->ci_ctxbusy = (paddr_t *)kdata_alloc(ctxsize, sizeof(uint64_t));
 	memset(ci->ci_ctxbusy, 0, ctxsize);
@@ -1411,7 +1442,7 @@ pmap_growkernel(vaddr_t maxkvaddr)
 	}
 	DPRINTF(PDB_GROW, ("pmap_growkernel(%lx...%lx)\n", kbreak, maxkvaddr));
 	/* Align with the start of a page table */
-	for (kbreak &= (-1 << PDSHIFT); kbreak < maxkvaddr;
+	for (kbreak &= ((~0ULL) << PDSHIFT); kbreak < maxkvaddr;
 	     kbreak += (1 << PDSHIFT)) {
 		if (pseg_get(pm, kbreak) & TLB_V)
 			continue;
@@ -2352,7 +2383,7 @@ pmap_dumpsize(void)
 	int	sz;
 
 	sz = ALIGN(sizeof(kcore_seg_t)) + ALIGN(sizeof(cpu_kcore_hdr_t));
-	sz += kernel_tlb_slots * sizeof(struct cpu_kcore_4mbseg);
+	sz += kernel_dtlb_slots * sizeof(struct cpu_kcore_4mbseg);
 	sz += phys_installed_size * sizeof(phys_ram_seg_t);
 
 	return btodb(sz + DEV_BSIZE - 1);
@@ -2428,7 +2459,7 @@ pmap_dumpmmu(int (*dump)(dev_t, daddr_t, void *, size_t), daddr_t blkno)
 
 	/* new version of locked segments description */
 	kcpu->newmagic = SPARC64_KCORE_NEWMAGIC;
-	kcpu->num4mbsegs = kernel_tlb_slots;
+	kcpu->num4mbsegs = kernel_dtlb_slots;
 	kcpu->off4mbsegs = ALIGN(sizeof(cpu_kcore_hdr_t));
 
 	/* description of per-cpu mappings */
@@ -2440,7 +2471,7 @@ pmap_dumpmmu(int (*dump)(dev_t, daddr_t, void *, size_t), daddr_t blkno)
 	/* Now the memsegs */
 	kcpu->nmemseg = phys_installed_size;
 	kcpu->memsegoffset = kcpu->off4mbsegs
-		+ kernel_tlb_slots * sizeof(struct cpu_kcore_4mbseg);
+		+ kernel_dtlb_slots * sizeof(struct cpu_kcore_4mbseg);
 
 	/* Now we need to point this at our kernel pmap. */
 	kcpu->nsegmap = STSZ;
@@ -2450,7 +2481,7 @@ pmap_dumpmmu(int (*dump)(dev_t, daddr_t, void *, size_t), daddr_t blkno)
 	bp = (int *)((long)kcpu + ALIGN(sizeof(cpu_kcore_hdr_t)));
 
 	/* write locked kernel 4MB TLBs */
-	for (i = 0; i < kernel_tlb_slots; i++) {
+	for (i = 0; i < kernel_dtlb_slots; i++) {
 		ktlb.va = kernel_tlbs[i].te_va;
 		ktlb.pa = kernel_tlbs[i].te_pa;
 		EXPEDITE(&ktlb, sizeof(ktlb));

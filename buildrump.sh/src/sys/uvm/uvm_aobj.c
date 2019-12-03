@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_aobj.c,v 1.122 2014/05/25 18:55:11 riastradh Exp $	*/
+/*	$NetBSD: uvm_aobj.c,v 1.124 2016/07/28 07:52:06 martin Exp $	*/
 
 /*
  * Copyright (c) 1998 Chuck Silvers, Charles D. Cranor and
@@ -38,9 +38,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_aobj.c,v 1.122 2014/05/25 18:55:11 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_aobj.c,v 1.124 2016/07/28 07:52:06 martin Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_uvmhist.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -927,7 +929,7 @@ uao_get(struct uvm_object *uobj, voff_t offset, struct vm_page **pps,
 				    (flags & PGO_ALLPAGES) != 0)
 					/* need to do a wait or I/O! */
 					done = false;
-					continue;
+				continue;
 			}
 
 			/*

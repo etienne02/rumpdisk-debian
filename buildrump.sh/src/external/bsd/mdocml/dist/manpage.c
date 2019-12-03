@@ -1,4 +1,4 @@
-/*	Id: manpage.c,v 1.6 2013/12/31 03:41:14 schwarze Exp  */
+/*	Id: manpage.c,v 1.14 2016/07/09 15:24:19 schwarze Exp  */
 /*
  * Copyright (c) 2012 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2013 Ingo Schwarze <schwarze@openbsd.org>
@@ -15,12 +15,11 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
+
+#include <sys/types.h>
 
 #include <assert.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,7 +27,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "manpath.h"
+#include "manconf.h"
 #include "mansearch.h"
 
 static	void	 show(const char *, const char *);
@@ -37,13 +36,14 @@ int
 main(int argc, char *argv[])
 {
 	int		 ch, term;
-	size_t		 i, sz, len;
+	size_t		 i, sz, linesz;
+	ssize_t		 len;
 	struct mansearch search;
 	struct manpage	*res;
-	char		*conf_file, *defpaths, *auxpaths, *cp;
+	char		*conf_file, *defpaths, *auxpaths, *line;
 	char		 buf[PATH_MAX];
 	const char	*cmd;
-	struct manpaths	 paths;
+	struct manconf	 conf;
 	char		*progname;
 	extern char	*optarg;
 	extern int	 optind;
@@ -57,7 +57,7 @@ main(int argc, char *argv[])
 		++progname;
 
 	auxpaths = defpaths = conf_file = NULL;
-	memset(&paths, 0, sizeof(struct manpaths));
+	memset(&conf, 0, sizeof(conf));
 	memset(&search, 0, sizeof(struct mansearch));
 
 	while (-1 != (ch = getopt(argc, argv, "C:M:m:S:s:")))
@@ -87,29 +87,29 @@ main(int argc, char *argv[])
 	if (0 == argc)
 		goto usage;
 
-	search.deftype = TYPE_Nm | TYPE_Nd;
+	search.outkey = "Nd";
+	search.argmode = ARG_EXPR;
 
-	manpath_parse(&paths, conf_file, defpaths, auxpaths);
-	ch = mansearch(&search, &paths, argc, argv, NULL, &res, &sz);
-	manpath_free(&paths);
+	manconf_parse(&conf, conf_file, defpaths, auxpaths);
+	ch = mansearch(&search, &conf.manpath, argc, argv, &res, &sz);
+	manconf_free(&conf);
 
 	if (0 == ch)
 		goto usage;
 
 	if (0 == sz) {
 		free(res);
-		return(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	} else if (1 == sz && term) {
 		i = 1;
 		goto show;
 	} else if (NULL == res)
-		return(EXIT_FAILURE);
+		return EXIT_FAILURE;
 
 	for (i = 0; i < sz; i++) {
-		printf("%6zu  %s: %s\n", 
-			i + 1, res[i].names, res[i].desc);
+		printf("%6zu  %s: %s\n",
+			i + 1, res[i].names, res[i].output);
 		free(res[i].names);
-		free(res[i].desc);
 		free(res[i].output);
 	}
 
@@ -117,25 +117,29 @@ main(int argc, char *argv[])
 		for (i = 0; i < sz; i++)
 			free(res[i].file);
 		free(res);
-		return(EXIT_SUCCESS);
+		return EXIT_SUCCESS;
 	}
 
 	i = 1;
 	printf("Enter a choice [1]: ");
 	fflush(stdout);
 
-	if (NULL != (cp = fgetln(stdin, &len)))
-		if ('\n' == cp[--len] && len > 0) {
-			cp[len] = '\0';
-			if ((i = atoi(cp)) < 1 || i > sz)
+	line = NULL;
+	linesz = 0;
+	if ((len = getline(&line, &linesz, stdin)) != -1) {
+		if ('\n' == line[--len] && len > 0) {
+			line[len] = '\0';
+			if ((i = atoi(line)) < 1 || i > sz)
 				i = 0;
 		}
+	}
+	free(line);
 
 	if (0 == i) {
 		for (i = 0; i < sz; i++)
 			free(res[i].file);
 		free(res);
-		return(EXIT_SUCCESS);
+		return EXIT_SUCCESS;
 	}
 show:
 	cmd = res[i - 1].form ? "mandoc" : "cat";
@@ -148,13 +152,13 @@ show:
 	/* NOTREACHED */
 usage:
 	fprintf(stderr, "usage: %s [-C conf] "
-			 	  "[-M paths] "
+				  "[-M paths] "
 				  "[-m paths] "
 				  "[-S arch] "
 				  "[-s section] "
-			          "expr ...\n", 
+			          "expr ...\n",
 				  progname);
-	return(EXIT_FAILURE);
+	return EXIT_FAILURE;
 }
 
 static void
@@ -174,9 +178,9 @@ show(const char *cmd, const char *file)
 	} else if (pid > 0) {
 		dup2(fds[0], STDIN_FILENO);
 		close(fds[1]);
-		cmd = NULL != getenv("MANPAGER") ? 
+		cmd = NULL != getenv("MANPAGER") ?
 			getenv("MANPAGER") :
-			(NULL != getenv("PAGER") ? 
+			(NULL != getenv("PAGER") ?
 			 getenv("PAGER") : "more");
 		execlp(cmd, cmd, (char *)NULL);
 		perror(cmd);

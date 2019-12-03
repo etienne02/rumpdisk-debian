@@ -1,4 +1,4 @@
-/*	$NetBSD: malo.c,v 1.3 2012/08/05 09:16:54 degroote Exp $ */
+/*	$NetBSD: malo.c,v 1.8 2016/06/10 13:27:13 ozaki-r Exp $ */
 /*	$OpenBSD: malo.c,v 1.92 2010/08/27 17:08:00 jsg Exp $ */
 
 /*
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: malo.c,v 1.3 2012/08/05 09:16:54 degroote Exp $");
+__KERNEL_RCSID(0, "$NetBSD: malo.c,v 1.8 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -622,7 +622,7 @@ malo_alloc_rx_ring(struct malo_softc *sc, struct malo_rx_ring *ring, int count)
 			goto fail;
 		}
 
-		desc->status = htole16(1);
+		desc->status = 1;
 		desc->physdata = htole32(data->map->dm_segs->ds_addr);
 		desc->physnext = htole32(ring->physaddr +
 		    (i + 1) % count * sizeof(struct malo_rx_desc));
@@ -997,8 +997,8 @@ malo_start(struct ifnet *ifp)
 			}
 			IF_DEQUEUE(&ic->ic_mgtq, m0);
 
-			ni = (struct ieee80211_node *)m0->m_pkthdr.rcvif;
-			m0->m_pkthdr.rcvif = NULL;
+			ni = M_GETCTX(m0, struct ieee80211_node *);
+			M_CLEARCTX(m0);
 
 			bpf_mtap3(ic->ic_rawbpf, m0);
 
@@ -1564,7 +1564,7 @@ malo_rx_intr(struct malo_softc *sc)
 		desc->physdata = htole32(data->map->dm_segs->ds_addr);
 
 		/* finalize mbuf */
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = le16toh(desc->len);
 
 		/*
@@ -1623,7 +1623,7 @@ malo_get_firmware(struct malo_softc *sc, const char *name,
 
 
 	/* load firmware image from disk */
-	if ((error = firmware_open("malo", name, &fw) != 0)) {
+	if ((error = firmware_open("malo", name, &fw)) != 0) {
 		aprint_error_dev(sc->sc_dev, "could not read firmware file\n");
 		return error;
 	}

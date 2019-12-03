@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.66 2014/11/22 13:18:45 njoly Exp $  
+	$NetBSD: syscalls.master,v 1.69 2016/07/24 13:22:01 njoly Exp $  
 
 ;	@(#)syscalls.master	8.1 (Berkeley) 7/19/93
 
@@ -100,8 +100,8 @@
 14	STD		{ int|linux_sys||mknod(const char *path, linux_umode_t mode, \
 			    unsigned dev); }
 15	NOARGS		{ int|sys||chmod(const char *path, int mode); }
-16	NOARGS		{ int|sys||__posix_lchown(const char *path, int uid, \
-			    int gid); }
+16	NOARGS		{ int|sys||__posix_lchown(const char *path, uid_t uid, \
+			    gid_t gid); }
 17	OBSOL		break
 18	OBSOL		ostat
 19	NOARGS		{ long|compat_43_sys||lseek(int fd, long offset, \
@@ -189,7 +189,7 @@
 83	NOARGS		{ int|sys||symlink(const char *path, const char *to); }
 84	NOARGS		{ int|compat_43_sys||lstat(const char *path, \
 			    struct stat43 *up); } oolstat
-85	NOARGS		{ int|sys||readlink(const char *name, char *buf, \
+85	NOARGS		{ ssize_t|sys||readlink(const char *path, char *buf, \
 			    int count); }
 #ifdef EXEC_AOUT
 86	STD		{ int|linux_sys||uselib(const char *path); }
@@ -208,7 +208,8 @@
 			    long length); }
 93	NOARGS		{ int|compat_43_sys||ftruncate(int fd, long length); }
 94	NOARGS		{ int|sys||fchmod(int fd, linux_umode_t mode); }
-95	NOARGS		{ int|sys||__posix_fchown(int fd, int uid, int gid); }
+95	NOARGS		{ int|sys||__posix_fchown(int fd, uid_t uid, \
+			    gid_t gid); }
 96	STD		{ int|linux_sys||getpriority(int which, int who); }
 97	NOARGS		{ int|sys||setpriority(int which, int who, int prio); }
 98	NOARGS		{ int|sys||profil(void *samples, u_int size, \
@@ -342,8 +343,8 @@
 			    size_t nbyte, off_t offset); }
 180	STD		{ int|linux_sys||pwrite(int fd, char *buf, \
 			    size_t nbyte, off_t offset); }
-181	NOARGS		{ int|sys||__posix_chown(const char *path, \
-			    int uid, int gid); }
+181	NOARGS		{ int|sys||__posix_chown(const char *path, uid_t uid, \
+			    gid_t gid); }
 182	NOARGS		{ int|sys||__getcwd(char *bufp, size_t length); }
 183	UNIMPL		capget
 184	UNIMPL		capset
@@ -504,7 +505,7 @@
 			    int fd2, const char *name2, int flags); }
 295	NOARGS		{ int|sys||symlinkat(const char *path1, int fd, \
 			    const char *path2); }
-296	NOARGS		{ int|sys||readlinkat(int fd, const char *path, \
+296	NOARGS		{ ssize_t|sys||readlinkat(int fd, const char *path, \
 			    char *buf, size_t bufsize); }
 297	STD		{ int|linux_sys||fchmodat(int fd, const char *path, \
 			    linux_umode_t mode); }

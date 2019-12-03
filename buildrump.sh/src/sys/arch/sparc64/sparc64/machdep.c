@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.281 2015/03/15 10:38:58 nakayama Exp $ */
+/*	$NetBSD: machdep.c,v 1.285 2016/07/07 06:55:38 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.281 2015/03/15 10:38:58 nakayama Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.285 2016/07/07 06:55:38 msaitoh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -280,7 +280,7 @@ setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 	tf->tf_tstate = tstate;
 	tf->tf_global[1] = l->l_proc->p_psstrp;
 	/* %g4 needs to point to the start of the data segment */
-	tf->tf_global[4] = 0; 
+	tf->tf_global[4] = 0;
 	tf->tf_pc = pack->ep_entry & ~3;
 	tf->tf_npc = tf->tf_pc + 4;
 	stack -= sizeof(struct rwindow);
@@ -447,6 +447,7 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	sig_t catcher = SIGACTION(p, sig).sa_handler;
 	struct trapframe64 *tf = l->l_md.md_tf;
 	struct rwindow *newsp;
+	register_t sp;
 	/* Allocate an aligned sigframe */
 	fp = (void *)((u_long)(fp - 1) & ~0x0f);
 
@@ -458,7 +459,7 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	memset(&uc.uc_stack, 0, sizeof(uc.uc_stack));
 
 	sendsig_reset(l, sig);
-	mutex_exit(p->p_lock);	
+	mutex_exit(p->p_lock);
 	cpu_getmcontext(l, &uc.uc_mcontext, &uc.uc_flags);
 	ucsz = (char *)&uc.__uc_pad - (char *)&uc;
 
@@ -472,9 +473,11 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	 * C stack frame.
 	 */
 	newsp = (struct rwindow *)((u_long)fp - CCFSZ);
-	error = (copyout(&ksi->ksi_info, &fp->sf_si, sizeof(ksi->ksi_info)) != 0 ||
+	sp = (register_t)(uintptr_t)tf->tf_out[6];
+	error = (copyout(&ksi->ksi_info, &fp->sf_si,
+			sizeof(ksi->ksi_info)) != 0 ||
 	    copyout(&uc, &fp->sf_uc, ucsz) != 0 ||
-	    suword(&newsp->rw_in[6], (uintptr_t)tf->tf_out[6]) != 0);
+	    copyout(&sp, &newsp->rw_in[6], sizeof(sp)) != 0);
 	mutex_enter(p->p_lock);
 
 	if (error) {
@@ -2273,15 +2276,17 @@ sparc_bus_map(bus_space_tag_t t, bus_addr_t addr, bus_size_t size,
 	}
 
 #ifdef _LP64
-	/* If it's not LINEAR don't bother to map it.  Use phys accesses. */
-	if ((flags & BUS_SPACE_MAP_LINEAR) == 0) {
-		hp->_ptr = addr;
-		if (map_little)
-			hp->_asi = ASI_PHYS_NON_CACHED_LITTLE;
-		else
-			hp->_asi = ASI_PHYS_NON_CACHED;
-		hp->_sasi = ASI_PHYS_NON_CACHED;
-		return (0);
+	if (!CPU_ISSUN4V) {
+		/* If it's not LINEAR don't bother to map it.  Use phys accesses. */
+		if ((flags & BUS_SPACE_MAP_LINEAR) == 0) {
+			hp->_ptr = addr;
+			if (map_little)
+				hp->_asi = ASI_PHYS_NON_CACHED_LITTLE;
+			else
+				hp->_asi = ASI_PHYS_NON_CACHED;
+			hp->_sasi = ASI_PHYS_NON_CACHED;
+			return (0);
+		}
 	}
 #endif
 
@@ -2363,11 +2368,7 @@ sparc_mainbus_intr_establish(bus_space_tag_t t, int pil, int level,
 {
 	struct intrhand *ih;
 
-	ih = (struct intrhand *)
-		malloc(sizeof(struct intrhand), M_DEVBUF, M_NOWAIT);
-	if (ih == NULL)
-		return (NULL);
-
+	ih = intrhand_alloc();
 	ih->ih_fun = handler;
 	ih->ih_arg = arg;
 	intr_establish(pil, level != IPL_VM, ih);

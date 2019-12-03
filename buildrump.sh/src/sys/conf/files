@@ -1,7 +1,7 @@
-#	$NetBSD: files,v 1.1129 2015/03/28 14:09:58 jmcneill Exp $
+#	$NetBSD: files,v 1.1160 2016/06/23 07:32:12 skrll Exp $
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
 
-version 	20141030
+version 	20150846
 
 #
 # device classes
@@ -17,6 +17,7 @@ devclass bus
 # options understood by the machine-independent part of the kernel
 # (note, these are case-sensitive)
 #
+defparam opt_param.h		MAXUSERS
 defflag				INSECURE
 defflag				KMEMSTATS
 defflag				KTRACE
@@ -26,6 +27,10 @@ defflag				COREDUMP
 defflag	opt_modular.h		MODULAR
 defflag	opt_modular.h		MODULAR_DEFAULT_AUTOLOAD
 defflag				KEYLOCK
+defparam opt_syslimits.h	CHILD_MAX OPEN_MAX
+defflag opt_diagnostic.h	_DIAGNOSTIC
+
+defparam opt_copy_symtab.h	makeoptions_COPY_SYMTAB
 
 defparam			DEFCORENAME
 defparam			HZ
@@ -101,6 +106,7 @@ defflag opt_syscall_stats.h	SYSCALL_TIMES_HASCOUNTER: SYSCALL_TIMES
 file kern/subr_syscall_stats.c	syscall_stats
 
 defparam opt_pax.h		PAX_MPROTECT
+				PAX_MPROTECT_DEBUG
 				PAX_SEGVGUARD
  				PAX_ASLR
  				PAX_ASLR_DELTA_MMAP_LSB
@@ -186,6 +192,14 @@ include "crypto/cprng_fast/files.cprng_fast"
 defflag opt_kernhist.h			KERNHIST KERNHIST_PRINT
 defparam opt_kernhist.h			KERNHIST_DELAY
 file	kern/kern_history.c		kernhist
+
+#
+# These are here for the benefit of kern_history.c so that
+# UVMHIST can be built in kernels without usb.
+#
+# top level usb debug defines
+defflag	opt_usb.h			USB_DEBUG: KERNHIST
+defparam opt_usb.h			USBHIST_SIZE
 
 #
 # System monitoring framework
@@ -286,6 +300,7 @@ defflag	opt_md.h		MEMORY_DISK_HOOKS MEMORY_DISK_IS_ROOT
 				MEMORY_DISK_DYNAMIC
 defparam opt_md.h		MEMORY_DISK_SERVER=1 MEMORY_DISK_ROOT_SIZE
 				MEMORY_DISK_RBFLAGS
+defparam opt_memory_disk_image.h	makeoptions_MEMORY_DISK_IMAGE
 
 defflag opt_tftproot.h		TFTPROOT TFTPROOT_DEBUG
 
@@ -333,6 +348,10 @@ attach	video at videobus
 # DTV subsystem
 #
 include "dev/dtv/files.dtv"
+
+# HDMI CEC
+#
+include "dev/hdmicec/files.hdmicec"
 
 # National Semiconductor LM7[89]
 #
@@ -650,10 +669,11 @@ file	dev/ic/rtw.c			rtw
 file	dev/ic/rtwphy.c			rtw
 file	dev/ic/rtwphyio.c		rtw
 
-# Ralink RT2500/RT2600 802.11
+# Ralink RT2500/RT2600/RT2860 802.11
 device	ral: arp, ether, ifnet, wlan, firmload
 file	dev/ic/rt2560.c			ral
 file	dev/ic/rt2661.c			ral
+file	dev/ic/rt2860.c			ral
 
 # Marvell Libertas Open
 device  malo: arp, ether, ifnet, wlan, firmload
@@ -858,7 +878,7 @@ defflag	opt_com.h		COM_DEBUG
 # XXX In a perfect world, this would be done with attributes
 defflag	opt_com.h		COM_16650 COM_16750
 				COM_HAYESP COM_PXA2X0 COM_AU1X00
-				COM_REGMAP COM_FUNCMAP
+				COM_REGMAP COM_FUNCMAP COM_AWIN
 defparam opt_com.h		COM_TOLERANCE
 device	com { } : tty
 file	dev/ic/com.c			com			needs-flag
@@ -1136,6 +1156,9 @@ define drm {}
 include "external/bsd/drm/conf/files.drm"
 include "dev/drm/files.drm"
 
+# Linux API support
+include "external/bsd/common/conf/files.linux"
+
 # DRM/KMS - Newer direct rendering manager with kernel mode-switching
 include "external/bsd/drm2/drm/files.drmkms"
 
@@ -1216,10 +1239,8 @@ define	sdmmcbus { }			# SD/MMC attachment
 # use them in an 'attach-with'.
 #
 
-defparam USB_MEM_RESERVE
-
 define	usbroothub
-file	dev/usb/usbroothub_subr.c	usbroothub
+file	dev/usb/usbroothub.c	usbroothub
 
 define	usb_dma
 
@@ -1245,11 +1266,11 @@ file	dev/usb/xhci.c			xhci			needs-flag
 
 # Mentor graphics OTG IP
 defflag	opt_motg.h	MOTG_ALLWINNER
-device	motg: usbus, usbroothub, usb_dma
+device	motg: usbus, usbroothub
 file	dev/usb/motg.c			motg			needs-flag
 
 # SL811HS/T USB controller
-defflag	opt_slhci.h	SLHCI_DEBUG SLHCI_TRY_LSVH SLHCI_PROFILE_TRANSFER
+defflag	opt_slhci.h	SLHCI_TRY_LSVH SLHCI_PROFILE_TRANSFER
 device	slhci: usbus, usbroothub
 file	dev/ic/sl811hs.c		slhci			needs-flag
 
@@ -1361,6 +1382,14 @@ file	dev/ic/bwi.c			bwi
 device	dme: arp, ether, ifnet
 file	dev/ic/dm9000.c			dme
 
+# NVM Express Controller
+#
+device	nvme {nsid = -1}
+file	dev/ic/nvme.c			nvme
+
+attach	ld at nvme with ld_nvme
+file	dev/ic/ld_nvme.c		ld_nvme
+
 # legitimate pseudo-devices
 #
 defpseudodev vnd:	disk
@@ -1426,10 +1455,7 @@ file	dev/kttcp.c			kttcp		needs-flag
 # Veriexec
 defpseudo veriexec
 file	kern/kern_veriexec.c	veriexec
-file	dev/verified_exec.c		veriexec	needs-flag
-
-# isochronous pseudo device for IEEE 1394, i.LINK or FireWire
-defpseudo fwiso:	ieee1394
+file	dev/veriexec.c		veriexec	needs-flag
 
 # driver attach / detach user interface
 defpseudo drvctl
@@ -1491,6 +1517,8 @@ include "uvm/files.uvm"
 include "secmodel/files.secmodel"
 
 include "kern/files.kern"
+
+include "dev/files.dev"
 
 include "net/files.net"
 
@@ -1556,3 +1584,8 @@ include "dev/iscsi/files.iscsi"
 # athn
 #
 include "dev/ic/files.athn"
+
+#
+# MI clk api
+#
+include "dev/clk/files.clk"

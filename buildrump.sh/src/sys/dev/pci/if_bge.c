@@ -1,4 +1,4 @@
-/*	$NetBSD: if_bge.c,v 1.290 2015/05/18 01:06:35 msaitoh Exp $	*/
+/*	$NetBSD: if_bge.c,v 1.298 2016/07/11 06:14:51 knakahara Exp $	*/
 
 /*
  * Copyright (c) 2001 Wind River Systems
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_bge.c,v 1.290 2015/05/18 01:06:35 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_bge.c,v 1.298 2016/07/11 06:14:51 knakahara Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -183,9 +183,7 @@ static int bge_rxthresh_nodenum;
 typedef int (*bge_eaddr_fcn_t)(struct bge_softc *, uint8_t[]);
 
 static uint32_t bge_chipid(const struct pci_attach_args *);
-#ifdef __HAVE_PCI_MSI_MSIX
 static int bge_can_use_msi(struct bge_softc *);
-#endif
 static int bge_probe(device_t, cfdata_t, void *);
 static void bge_attach(device_t, device_t, void *);
 static int bge_detach(device_t, int);
@@ -1518,6 +1516,7 @@ bge_update_all_threshes(int lvl)
 	struct ifnet *ifp;
 	const char * const namebuf = "bge";
 	int namelen;
+	int s;
 
 	if (lvl < 0)
 		lvl = 0;
@@ -1528,13 +1527,15 @@ bge_update_all_threshes(int lvl)
 	/*
 	 * Now search all the interfaces for this name/number
 	 */
-	IFNET_FOREACH(ifp) {
+	s = pserialize_read_enter();
+	IFNET_READER_FOREACH(ifp) {
 		if (strncmp(ifp->if_xname, namebuf, namelen) != 0)
 		      continue;
 		/* We got a match: update if doing auto-threshold-tuning */
 		if (bge_auto_thresh)
 			bge_set_thresh(ifp, lvl);
 	}
+	pserialize_read_exit(s);
 }
 
 /*
@@ -3281,7 +3282,6 @@ bge_chipid(const struct pci_attach_args *pa)
 	return id;
 }
 
-#ifdef __HAVE_PCI_MSI_MSIX
 /*
  * Return true if MSI can be used with this device.
  */
@@ -3309,7 +3309,6 @@ bge_can_use_msi(struct bge_softc *sc)
 	}
 	return (can_use_msi);
 }
-#endif
 
 /*
  * Probe for a Broadcom chip. Check the PCI vendor and device IDs
@@ -3339,9 +3338,8 @@ bge_attach(device_t parent, device_t self, void *aux)
 	const struct bge_product *bp;
 	const struct bge_revision *br;
 	pci_chipset_tag_t	pc;
-#ifndef __HAVE_PCI_MSI_MSIX
-	pci_intr_handle_t	ih;
-#endif
+	int counts[PCI_INTR_TYPE_SIZE];
+	pci_intr_type_t intr_type, max_type;
 	const char		*intrstr = NULL;
 	uint32_t 		hwcfg, hwcfg2, hwcfg3, hwcfg4, hwcfg5;
 	uint32_t		command;
@@ -3356,9 +3354,6 @@ bge_attach(device_t parent, device_t self, void *aux)
 	int			capmask;
 	int			mii_flags;
 	int			map_flags;
-#ifdef __HAVE_PCI_MSI_MSIX
-	int			rv;
-#endif
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	bp = bge_lookup(pa);
@@ -3726,51 +3721,46 @@ bge_attach(device_t parent, device_t self, void *aux)
 		}
 	}
 
-#ifdef __HAVE_PCI_MSI_MSIX
-	DPRINTFN(5, ("pci_get_capability\n"));
+	/* MSI-X will be used in future */
+	counts[PCI_INTR_TYPE_MSI] = 1;
+	counts[PCI_INTR_TYPE_INTX] = 1;
 	/* Check MSI capability */
-	if (pci_get_capability(pa->pa_pc, pa->pa_tag, PCI_CAP_MSI,
-		&sc->bge_msicap, NULL) != 0) {
-		if (bge_can_use_msi(sc) != 0)
-			sc->bge_flags |= BGEF_MSI;
-	}
-	rv = -1;
-	if (((sc->bge_flags & BGEF_MSI) != 0) && (pci_msi_count(pa) > 0)) {
-		DPRINTFN(5, ("pci_msi_alloc\n"));
-		rv = pci_msi_alloc_exact(pa, &sc->bge_pihp, 1);
-		if (rv != 0)
-			sc->bge_flags &= ~BGEF_MSI;
-	}
-	if (rv != 0) {
-		DPRINTFN(5, ("pci_intx_alloc\n"));
-		if (pci_intx_alloc(pa, &sc->bge_pihp)) {
-			aprint_error_dev(self, "can't map interrupt\n");
-			return;
-		}
-		sc->bge_flags &= ~BGEF_MSI;
-	}
-#else	/* !__HAVE_PCI_MSI_MSIX */
-	DPRINTFN(5, ("pci_intr_map\n"));
-	if (pci_intr_map(pa, &ih)) {
-		aprint_error_dev(sc->bge_dev, "couldn't map interrupt\n");
+	if (bge_can_use_msi(sc) != 0) {
+		max_type = PCI_INTR_TYPE_MSI;
+		sc->bge_flags |= BGEF_MSI;
+	} else
+		max_type = PCI_INTR_TYPE_INTX;
+
+alloc_retry:
+	if (pci_intr_alloc(pa, &sc->bge_pihp, counts, max_type) != 0) {
+		aprint_error_dev(sc->bge_dev, "couldn't alloc interrupt\n");
 		return;
 	}
-#endif
 
-#ifdef __HAVE_PCI_MSI_MSIX
 	DPRINTFN(5, ("pci_intr_string\n"));
 	intrstr = pci_intr_string(pc, sc->bge_pihp[0], intrbuf,
 	    sizeof(intrbuf));
 	DPRINTFN(5, ("pci_intr_establish\n"));
 	sc->bge_intrhand = pci_intr_establish(pc, sc->bge_pihp[0], IPL_NET,
 	    bge_intr, sc);
-#else	/* !__HAVE_PCI_MSI_MSIX */
-	DPRINTFN(5, ("pci_intr_string\n"));
-	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-
-	DPRINTFN(5, ("pci_intr_establish\n"));
-	sc->bge_intrhand = pci_intr_establish(pc, ih, IPL_NET, bge_intr, sc);
-#endif
+	if (sc->bge_intrhand == NULL) {
+		intr_type = pci_intr_type(pc, sc->bge_pihp[0]);
+		aprint_error_dev(sc->bge_dev,"unable to establish %s\n",
+		    (intr_type == PCI_INTR_TYPE_MSI) ? "MSI" : "INTx");
+		pci_intr_release(pc, sc->bge_pihp, 1);
+		switch (intr_type) {
+		case PCI_INTR_TYPE_MSI:
+			/* The next try is for INTx: Disable MSI */
+			max_type = PCI_INTR_TYPE_INTX;
+			counts[PCI_INTR_TYPE_INTX] = 1;
+			sc->bge_flags &= ~BGEF_MSI;
+			goto alloc_retry;
+		case PCI_INTR_TYPE_INTX:
+		default:
+			/* See below */
+			break;
+		}
+	}
 
 	if (sc->bge_intrhand == NULL) {
 		aprint_error_dev(sc->bge_dev,
@@ -4146,9 +4136,7 @@ bge_release_resources(struct bge_softc *sc)
 	/* Disestablish the interrupt handler */
 	if (sc->bge_intrhand != NULL) {
 		pci_intr_disestablish(sc->sc_pc, sc->bge_intrhand);
-#ifdef __HAVE_PCI_MSI_MSIX
 		pci_intr_release(sc->sc_pc, sc->bge_pihp, 1);
-#endif
 		sc->bge_intrhand = NULL;
 	}
 
@@ -4157,7 +4145,8 @@ bge_release_resources(struct bge_softc *sc)
 		bus_dmamap_destroy(sc->bge_dmatag, sc->bge_ring_map);
 		bus_dmamem_unmap(sc->bge_dmatag, (void *)sc->bge_rdata,
 		    sizeof(struct bge_ring_data));
-		bus_dmamem_free(sc->bge_dmatag, &sc->bge_ring_seg, sc->bge_ring_rseg);
+		bus_dmamem_free(sc->bge_dmatag, &sc->bge_ring_seg,
+		    sc->bge_ring_rseg);
 	}
 
 	/* Unmap the device registers */
@@ -4571,7 +4560,7 @@ bge_rxeof(struct bge_softc *sc)
 #endif
 
 		m->m_pkthdr.len = m->m_len = cur_rx->bge_len - ETHER_CRC_LEN;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 
 		/*
 		 * Handle BPF listeners. Let the BPF user see the packet.
@@ -4588,7 +4577,7 @@ bge_rxeof(struct bge_softc *sc)
 			VLAN_INPUT_TAG(ifp, m, cur_rx->bge_vlan_tag, continue);
 		}
 
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 
 	sc->bge_rx_saved_considx = rx_cons;
@@ -4745,7 +4734,6 @@ bge_intr(void *xsc)
 	if (sc->bge_flags & BGEF_TAGGED_STATUS) {
 		if (sc->bge_lasttag == statustag &&
 		    (~pcistate & intrmask)) {
-			printf("[SP]");
 			return (0);
 		}
 		sc->bge_lasttag = statustag;
@@ -4864,7 +4852,8 @@ bge_tick(void *xsc)
 
 	bge_asf_driver_up(sc);
 
-	callout_reset(&sc->bge_timeout, hz, bge_tick, sc);
+	if (!sc->bge_detaching)
+		callout_reset(&sc->bge_timeout, hz, bge_tick, sc);
 
 	splx(s);
 }
@@ -5891,9 +5880,10 @@ bge_stop(struct ifnet *ifp, int disable)
 {
 	struct bge_softc *sc = ifp->if_softc;
 
-	if (disable)
+	if (disable) {
+		sc->bge_detaching = 1;
 		callout_halt(&sc->bge_timeout, NULL);
-	else
+	} else
 		callout_stop(&sc->bge_timeout);
 
 	/* Disable host interrupts. */

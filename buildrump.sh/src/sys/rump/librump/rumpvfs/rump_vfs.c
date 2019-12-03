@@ -1,4 +1,4 @@
-/*	$NetBSD: rump_vfs.c,v 1.82 2015/05/06 15:57:08 hannken Exp $	*/
+/*	$NetBSD: rump_vfs.c,v 1.84 2016/01/26 23:12:18 pooka Exp $	*/
 
 /*
  * Copyright (c) 2008 Antti Kantee.  All Rights Reserved.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.82 2015/05/06 15:57:08 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.84 2016/01/26 23:12:18 pooka Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -50,11 +50,11 @@ __KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.82 2015/05/06 15:57:08 hannken Exp $"
 
 #include <miscfs/specfs/specdev.h>
 
+#include <rump-sys/kern.h>
+#include <rump-sys/vfs.h>
+
 #include <rump/rump.h>
 #include <rump/rumpuser.h>
-
-#include "rump_private.h"
-#include "rump_vfs_private.h"
 
 extern struct cwdinfo cwdi0;
 const char *rootfstype = ROOT_FSTYPE_ANY;
@@ -468,12 +468,21 @@ rump_vfs_syncwait(struct mount *mp)
 /*
  * Dump info about mount point.  No locking.
  */
+static bool
+rump_print_selector(void *cl, struct vnode *vp)
+{
+	int *full = cl;
+
+	vfs_vnode_print(vp, *full, (void *)rumpuser_dprintf);
+	return false;
+}
+
 void
 rump_vfs_mount_print(const char *path, int full)
 {
 #ifdef DEBUGPRINT
 	struct vnode *mvp;
-	struct vnode *vp;
+	struct vnode_iterator *marker;
 	int error;
 
 	rumpuser_dprintf("\n==== dumping mountpoint at ``%s'' ====\n\n", path);
@@ -484,9 +493,9 @@ rump_vfs_mount_print(const char *path, int full)
 	vfs_mount_print(mvp->v_mount, full, (void *)rumpuser_dprintf);
 	if (full) {
 		rumpuser_dprintf("\n== dumping vnodes ==\n\n");
-		TAILQ_FOREACH(vp, &mvp->v_mount->mnt_vnodelist, v_mntvnodes) {
-			vfs_vnode_print(vp, full, (void *)rumpuser_dprintf);
-		}
+		vfs_vnode_iterator_init(mvp->v_mount, &marker);
+		vfs_vnode_iterator_next(marker, rump_print_selector, &full);
+		vfs_vnode_iterator_destroy(marker);
 	}
 	vrele(mvp);
 	rumpuser_dprintf("\n==== done ====\n\n");

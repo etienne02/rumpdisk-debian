@@ -1,4 +1,4 @@
-/*	$NetBSD: openfirm.h,v 1.8 2015/03/27 06:10:25 nakayama Exp $	*/
+/*	$NetBSD: openfirm.h,v 1.10 2016/04/01 20:21:45 palle Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -39,7 +39,7 @@
 
 #include <dev/ofw/openfirm.h>
 
-#ifdef SUN4U
+#ifdef __sparc_v9__
 /* All cells are 8 byte slots */
 typedef uint64_t cell_t;
 #ifdef __arch64__
@@ -52,15 +52,16 @@ typedef uint64_t cell_t;
 #define HDQ2CELL_HI(x)	(cell_t)(0)
 #define HDQ2CELL_LO(x)	(cell_t)(x)
 #define CELL2HDQ(hi,lo)	(lo)
-#else /* SUN4U */
+#else /* __sparc_v9__ */
 /* All cells are 4 byte slots */
 typedef uint32_t cell_t;
 #define HDL2CELL(x)	(cell_t)(x)
 #define ADR2CELL(x)	(cell_t)(x)
 #define HDQ2CELL_HI(x)	(cell_t)((x) >> 32)
 #define HDQ2CELL_LO(x)	(cell_t)(x)
-#endif /* SUN4U */
+#endif /* __sparc_v9__ */
 
+void	OF_init(void);
 int	OF_test(const char *);
 int	OF_test_method(int, const char *);
 void	OF_set_symbol_lookup(void (*)(void *), void (*)(void *));
