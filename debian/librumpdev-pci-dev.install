@@ -1,2 +1,3 @@
 usr/lib/librumpdev_pci.a
+usr/lib/librumpdev_pci_pic.a
 usr/lib/librumpdev_pci.so
