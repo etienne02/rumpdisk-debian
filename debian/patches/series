@@ -4,3 +4,4 @@ buildrump.diff
 piixide-rump.diff
 ahcisata-rump.diff
 busspaceunmap-rump.diff
+memory-range.diff
