@@ -1,0 +1,17 @@
+---
+ buildrump.sh/buildrump.sh |    4 ++++
+ 1 file changed, 4 insertions(+)
+
+--- a/buildrump.sh/buildrump.sh
++++ b/buildrump.sh/buildrump.sh
+@@ -1067,6 +1067,10 @@ evaltoolchain ()
+ 		;;
+ 	esac
+ 
++	appendvar EXTRA_CWARNFLAGS -Wno-error
++	appendvar EXTRA_CWARNFLAGS -Wno-error=format-security
++	appendvar EXTRA_CWARNFLAGS -Wno-error=stringop-truncation
++
+ 	if ! cppdefines __ELF__; then
+ 		${TITANMODE} || die ELF required as target object format
+ 	fi

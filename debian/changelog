@@ -8,6 +8,7 @@ rumpkernel (0~20191130-1) UNRELEASED; urgency=medium
 
   [ Samuel Thibault ]
   * Add missing zlib1g-dev build-dep.
+  * Add -Wno-error on linux too.
 
  -- Damien Zammit <damien@zamaudio.com>  Sat, 30 Nov 2019 15:45:00 +1100
 

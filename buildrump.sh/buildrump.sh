@@ -1067,6 +1067,10 @@ evaltoolchain ()
 		;;
 	esac
 
+	appendvar EXTRA_CWARNFLAGS -Wno-error
+	appendvar EXTRA_CWARNFLAGS -Wno-error=format-security
+	appendvar EXTRA_CWARNFLAGS -Wno-error=stringop-truncation
+
 	if ! cppdefines __ELF__; then
 		${TITANMODE} || die ELF required as target object format
 	fi
