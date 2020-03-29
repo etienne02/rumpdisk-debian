@@ -4,6 +4,7 @@ Maintainer: Robert Millan <rmh@debian.org>
 Build-Depends:
  debhelper (>= 8.0.0),
  autotools-dev,
+ zlib1g-dev,
  libpciaccess-dev [hurd-any],
  gnumach-dev (>= 2:1.5+git20150827-1~) [hurd-any],
  mig [hurd-any],

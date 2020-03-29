@@ -1,9 +1,13 @@
-rumpkernel (0~20191130-1) unreleased; urgency=medium
+rumpkernel (0~20191130-1) UNRELEASED; urgency=medium
 
+  [ Damien Zammit ]
   * Update rump sources to latest
   * Remove obsolete patches
   * Add AHCI and PIIXIDE drivers to rump (not upstreamed yet)
   * Add drivers to librumpdev-disk subpackage
+
+  [ Samuel Thibault ]
+  * Add missing zlib1g-dev build-dep.
 
  -- Damien Zammit <damien@zamaudio.com>  Sat, 30 Nov 2019 15:45:00 +1100
 
