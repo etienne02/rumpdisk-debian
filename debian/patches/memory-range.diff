@@ -1,8 +1,10 @@
-diff --git a/pci-userspace/src-gnu/pci_user-gnu.c b/pci-userspace/src-gnu/pci_user-gnu.c
-index ef48ab2a..86d8c2af 100644
+---
+ pci-userspace/src-gnu/pci_user-gnu.c |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
 --- a/pci-userspace/src-gnu/pci_user-gnu.c
 +++ b/pci-userspace/src-gnu/pci_user-gnu.c
-@@ -170,7 +170,8 @@ rumpcomp_pci_map(unsigned long addr, unsigned long len)
+@@ -170,7 +170,8 @@ rumpcomp_pci_map(unsigned long addr, uns
  found:
  
  	pci_device_map_range(pci_devices[i], addr, len, 1, &ret);
@@ -11,4 +13,4 @@ index ef48ab2a..86d8c2af 100644
 +	return ret;
  }
  
- int
+ void

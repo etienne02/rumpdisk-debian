@@ -1,43 +1,6 @@
 
 Status: Equivalent patch merged in NetBSD CVS
 
-Index: rumpkernel/buildrump.sh/src/usr.bin/make/make.h
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/usr.bin/make/make.h
-+++ rumpkernel/buildrump.sh/src/usr.bin/make/make.h
-@@ -503,4 +503,10 @@ int str2Lst_Append(Lst, char *, const ch
- #define MAX(a, b) ((a > b) ? a : b)
- #endif
- 
-+/* GNU/Hurd systems lack MAXPATHLEN */
-+#include <limits.h>
-+#ifndef MAXPATHLEN
-+#define MAXPATHLEN	4096
-+#endif
-+
- #endif /* _MAKE_H_ */
-Index: rumpkernel/buildrump.sh/src/tools/compat/compat_defs.h
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/tools/compat/compat_defs.h
-+++ rumpkernel/buildrump.sh/src/tools/compat/compat_defs.h
-@@ -1201,6 +1201,17 @@ __GEN_ENDIAN_DEC(64, le)
- #define LINE_MAX 2048
- #endif
- 
-+/* GNU/Hurd systems lack MAXPATHLEN (aka PATH_MAX) and MAXHOSTNAMELEN */
-+#ifndef MAXPATHLEN
-+#define MAXPATHLEN	4096
-+#endif
-+#ifndef PATH_MAX
-+#define PATH_MAX	MAXPATHLEN
-+#endif
-+#ifndef MAXHOSTNAMELEN
-+#define MAXHOSTNAMELEN	256
-+#endif
-+
- /* <sys/time.h> */
- 
- #ifndef timercmp
 Index: rumpkernel/buildrump.sh/src/sys/rump/include/rump/rumpuser.h
 ===================================================================
 --- rumpkernel.orig/buildrump.sh/src/sys/rump/include/rump/rumpuser.h
