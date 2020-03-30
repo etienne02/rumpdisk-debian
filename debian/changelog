@@ -9,6 +9,7 @@ rumpkernel (0~20191130-1) unreleased; urgency=medium
   [ Samuel Thibault ]
   * Add missing zlib1g-dev build-dep.
   * Add -Wno-error on linux too.
+  * Update to cleaned GNU Mach interrupt notification interface.
 
  -- Samuel Thibault <sthibault@debian.org>  Mon, 30 Mar 2020 00:24:11 +0000
 
