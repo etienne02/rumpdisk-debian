@@ -10,6 +10,8 @@ rumpkernel (0~20191130-1) unreleased; urgency=medium
   * Add missing zlib1g-dev build-dep.
   * Add -Wno-error on linux too.
   * Update to cleaned GNU Mach interrupt notification interface.
+  * Create files as non-empty, it seems dpkg-source does not create them
+    otherwise.
 
  -- Samuel Thibault <sthibault@debian.org>  Mon, 30 Mar 2020 00:24:11 +0000
 

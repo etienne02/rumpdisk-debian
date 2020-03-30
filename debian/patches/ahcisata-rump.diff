@@ -112,9 +112,17 @@ index 00000000..0cc9f481
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
 new file mode 100644
 index 00000000..ad9cf43a
@@ -127,6 +135,14 @@ index 00000000..ad9cf43a
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
+@@ -0,0 +1 @@
++

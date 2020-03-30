@@ -64,6 +64,10 @@ index 00000000..110fc0ce
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_ata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_ata.h
 new file mode 100644
 index 00000000..74ab5ee2
@@ -125,6 +129,14 @@ index 00000000..fde63636
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata_pmp.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata_pmp.h
 new file mode 100644
 index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/sata_pmp.h
+@@ -0,0 +1 @@
++
