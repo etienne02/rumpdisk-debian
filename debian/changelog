@@ -1,4 +1,4 @@
-rumpkernel (0~20191130-1) UNRELEASED; urgency=medium
+rumpkernel (0~20191130-1) unreleased; urgency=medium
 
   [ Damien Zammit ]
   * Update rump sources to latest
@@ -10,7 +10,7 @@ rumpkernel (0~20191130-1) UNRELEASED; urgency=medium
   * Add missing zlib1g-dev build-dep.
   * Add -Wno-error on linux too.
 
- -- Damien Zammit <damien@zamaudio.com>  Sat, 30 Nov 2019 15:45:00 +1100
+ -- Samuel Thibault <sthibault@debian.org>  Mon, 30 Mar 2020 00:24:11 +0000
 
 rumpkernel (0~20150715.1-1) unstable; urgency=medium
 
