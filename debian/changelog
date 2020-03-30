@@ -13,7 +13,7 @@ rumpkernel (0~20191130-1) unreleased; urgency=medium
   * Create files as non-empty, it seems dpkg-source does not create them
     otherwise.
 
- -- Samuel Thibault <sthibault@debian.org>  Mon, 30 Mar 2020 00:24:11 +0000
+ -- Samuel Thibault <sthibault@debian.org>  Mon, 30 Mar 2020 12:50:41 +0000
 
 rumpkernel (0~20150715.1-1) unstable; urgency=medium
 
