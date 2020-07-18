@@ -6,3 +6,4 @@ ahcisata-rump.diff
 busspaceunmap-rump.diff
 memory-range.diff
 gnumach-update
+rumpuser-rng-debug.diff
