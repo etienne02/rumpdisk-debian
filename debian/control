@@ -5,8 +5,9 @@ Build-Depends:
  debhelper (>= 8.0.0),
  autotools-dev,
  zlib1g-dev,
- libpciaccess-dev [hurd-any],
- gnumach-dev (>= 2:1.5+git20150827-1~) [hurd-any],
+ libc0.3 (>= 2.31-2) [hurd-any],
+ libpciaccess-dev (>= 0.16-1+hurd.4~) [hurd-any],
+ gnumach-dev (>= 2:1.8+git20200710-3~) [hurd-any],
  mig [hurd-any],
 Standards-Version: 3.9.6
 Section: libs
