@@ -6,8 +6,9 @@ export SHELL = bash
 #export DH_VERBOSE=1
 
 DEB_HOST_ARCH_OS ?= $(dpkg-architecture -qDEB_HOST_ARCH_OS)
+HOST_CFLAGS = -fcommon
 LDFLAGS ?= $(shell dpkg-buildflags --get LDFLAGS)
-CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS)
+CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS) $(HOST_CFLAGS)
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -38,7 +39,7 @@ override_dh_auto_clean:
 
 override_dh_auto_build-arch:
 	dh_testdir -a
-	cd buildrump.sh && TARBALLMODE='Run from tarball' ./buildrump.sh -H -F CFLAGS="$(CFLAGS)" -F LDFLAGS="$(LDFLAGS)" -j$(NUMJOBS) fullbuild
+	cd buildrump.sh && HOST_CFLAGS="$(HOST_CFLAGS)" TARBALLMODE='Run from tarball' ./buildrump.sh -H -F CFLAGS="$(CFLAGS)" -F LDFLAGS="$(LDFLAGS)" -j$(NUMJOBS) fullbuild
 ifeq ($(DEB_HOST_ARCH_OS), linux)
 #	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
 endif
