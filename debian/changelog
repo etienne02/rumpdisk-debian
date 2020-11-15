@@ -1,4 +1,4 @@
-rumpkernel (0~20191130-2) UNRELEASED; urgency=medium
+rumpkernel (0~20191130-2) unreleased; urgency=medium
 
   [ Damien Zammit ]
   * patches/rumpuser-rng-debug.diff: WIP: Remove hardfail on missing
@@ -9,7 +9,7 @@ rumpkernel (0~20191130-2) UNRELEASED; urgency=medium
   * pci-userspace: Use new mach IRQ device RPC interfaces
   * control: Add correct build-deps.
 
- -- Samuel Thibault <sthibault@debian.org>  Sat, 18 Jul 2020 17:40:08 +0200
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 15 Nov 2020 15:58:07 +0000
 
 rumpkernel (0~20191130-1) unreleased; urgency=medium
 
