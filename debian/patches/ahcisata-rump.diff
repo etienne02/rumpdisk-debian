@@ -109,17 +109,17 @@ index 00000000..0cc9f481
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd0", 'a',
 +	    cmaj, 0, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd1", 'a',
-+	    bmaj, 1, 8));
++	    bmaj, 8, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd1", 'a',
-+	    cmaj, 1, 8));
++	    cmaj, 8, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd2", 'a',
-+	    bmaj, 2, 8));
++	    bmaj, 16, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd2", 'a',
-+	    cmaj, 2, 8));
++	    cmaj, 16, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd3", 'a',
-+	    bmaj, 3, 8));
++	    bmaj, 24, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
-+	    cmaj, 3, 8));
++	    cmaj, 24, 8));
 +}
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
 new file mode 100644
