@@ -1,8 +1,8 @@
-rumpkernel (0~20191130-3) UNRELEASED; urgency=medium
+rumpkernel (0~20191130-3) unreleased; urgency=medium
 
   * patches/{ahcisata,piixide}-rump.diff: Extend to 4 devices.
 
- -- Samuel Thibault <sthibault@debian.org>  Mon, 16 Nov 2020 00:19:55 +0000
+ -- Samuel Thibault <sthibault@debian.org>  Mon, 16 Nov 2020 00:20:50 +0000
 
 rumpkernel (0~20191130-2) unreleased; urgency=medium
 
