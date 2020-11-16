@@ -80,7 +80,7 @@ new file mode 100644
 index 00000000..0cc9f481
 --- /dev/null
 +++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,40 @@
 +#include <sys/param.h>
 +#include <sys/conf.h>
 +#include <sys/device.h>
@@ -108,6 +108,18 @@ index 00000000..0cc9f481
 +	    bmaj, 0, 8));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd0", 'a',
 +	    cmaj, 0, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd1", 'a',
++	    bmaj, 1, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd1", 'a',
++	    cmaj, 1, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd2", 'a',
++	    bmaj, 2, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd2", 'a',
++	    cmaj, 2, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd3", 'a',
++	    bmaj, 3, 8));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
++	    cmaj, 3, 8));
 +}
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
 new file mode 100644

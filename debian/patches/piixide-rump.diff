@@ -88,7 +88,7 @@ new file mode 100644
 index 00000000..fde63636
 --- /dev/null
 +++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/piixide_component.c
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,49 @@
 +#include <sys/param.h>
 +#include <sys/conf.h>
 +#include <sys/device.h>
@@ -116,6 +116,18 @@ index 00000000..fde63636
 +	    bmaj, 0, 4));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd0", 'a',
 +	    cmaj, 0, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd1", 'a',
++	    bmaj, 1, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd1", 'a',
++	    cmaj, 1, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd2", 'a',
++	    bmaj, 2, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd2", 'a',
++	    cmaj, 2, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd3", 'a',
++	    bmaj, 3, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
++	    cmaj, 3, 4));
 +/* Borked
 +	bmaj = cmaj = -1;
 +	FLAWLESSCALL(devsw_attach("cd", &cd_bdevsw, &bmaj, &cd_cdevsw, &cmaj));
