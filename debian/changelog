@@ -1,3 +1,9 @@
+rumpkernel (0~20191130-5) UNRELEASED; urgency=medium
+
+  * patches/ahcisata-atapi.diff: Add ATAPI support on top of AHCI.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sat, 21 Nov 2020 10:43:07 +0000
+
 rumpkernel (0~20191130-4) unreleased; urgency=medium
 
   * patches/{ahcisata,piixide}-rump.diff: Fix device minor numbers.

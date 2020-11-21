@@ -1,0 +1,24 @@
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
+@@ -16,4 +16,5 @@ ata_hl*		at atabus? drive ?
+ wd*     	at ata_hl?
+ 
+ # ATAPI support
+-atapi*		at ahcisata?
++atapibus*	at ahcisata?
++cd*		at atapibus? drive ? flags 0x0000
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
+@@ -11,7 +11,7 @@ IOCONF=	AHCISATA.ioconf
+ SRCS+=	ahcisata_pci.c
+ SRCS+=	sata_subr.c satafis_subr.c
+ SRCS+=	ahcisata_core.c
+-SRCS+=	atapi_wdc.c atapi_base.c
++SRCS+=	atapi_wdc.c atapi_base.c cd.c
+ SRCS+=	wd.c ata.c ata_wdc.c
+ SRCS+=	wdc.c
+ 
