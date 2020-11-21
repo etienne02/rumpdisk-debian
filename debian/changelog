@@ -1,6 +1,7 @@
 rumpkernel (0~20191130-5) UNRELEASED; urgency=medium
 
   * patches/ahcisata-atapi.diff: Add ATAPI support on top of AHCI.
+  * patches/print-error.diff: Print error numbers in FLAWLESSCALL calls.
 
  -- Samuel Thibault <sthibault@debian.org>  Sat, 21 Nov 2020 10:43:07 +0000
 

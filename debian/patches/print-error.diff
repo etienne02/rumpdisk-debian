@@ -1,0 +1,13 @@
+Index: rumpkernel/buildrump.sh/src/sys/rump/include/rump-sys/kern.h
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/include/rump-sys/kern.h
++++ rumpkernel/buildrump.sh/src/sys/rump/include/rump-sys/kern.h
+@@ -116,7 +116,7 @@ static void rumpcompinit##type(void)
+ do {									\
+ 	int att_error;							\
+ 	if ((att_error = call) != 0)					\
+-		panic("\"%s\" failed", #call);				\
++		panic("\"%s\" failed: %d", #call, att_error);		\
+ } while (/*CONSTCOND*/0)
+ 
+ #define RUMPMEM_UNLIMITED ((unsigned long)-1)
