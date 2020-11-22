@@ -1,0 +1,53 @@
+TODO: submit upstream: intr handlers such as rumpns_scsipi_done seem to assume
+that klock is to be locked before entering the interrupt handler.
+
+Index: rumpkernel/pci-userspace/src-gnu/pci_user-gnu.c
+===================================================================
+--- rumpkernel.orig/pci-userspace/src-gnu/pci_user-gnu.c
++++ rumpkernel/pci-userspace/src-gnu/pci_user-gnu.c
+@@ -344,9 +344,9 @@ intrthread(void *arg)
+ 		}
+ 
+ 		MACH_PRINT("k_handle...");
+-		rumpuser_component_schedule(NULL);
++		rumpuser_component_klock(1);
+ 		irq->handler(irq->data);
+-		rumpuser_component_unschedule();
++		rumpuser_component_kunlock(1);
+ 		MACH_PRINT("k_done\n");
+ 
+ 		device_intr_ack (irq_dev, irq->irqport, MACH_MSG_TYPE_MAKE_SEND);
+Index: rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_component.c
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/lib/librumpuser/rumpuser_component.c
++++ rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_component.c
+@@ -62,6 +62,17 @@ rumpuser_component_schedule(void *cookie
+ }
+ 
+ void
++rumpuser_component_klock(int nlock)
++{
++	rump_user_schedule(nlock, NULL);
++}
++void
++rumpuser_component_kunlock(int nlock)
++{
++	rump_user_unschedule(nlock, NULL, NULL);
++}
++
++void
+ rumpuser_component_kthread(void)
+ {
+ 
+Index: rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_component.h
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/lib/librumpuser/rumpuser_component.h
++++ rumpkernel/buildrump.sh/src/lib/librumpuser/rumpuser_component.h
+@@ -37,4 +37,7 @@ struct lwp *rumpuser_component_curlwp(vo
+ void	rumpuser_component_switchlwp(struct lwp *);
+ void	rumpuser_component_kthread_release(void);
+ 
++void	rumpuser_component_klock(int nlock);
++void	rumpuser_component_kunlock(int nlock);
++
+ #endif /* _RUMP_RUMPUSER_COMPONENT_H_ */

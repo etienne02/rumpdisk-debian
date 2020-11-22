@@ -1,3 +1,9 @@
+rumpkernel (0~20191130-6) unreleased; urgency=medium
+
+  * patches/intr_lock.diff: Lock the kernel on interrupt.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 22 Nov 2020 18:46:53 +0000
+
 rumpkernel (0~20191130-5) unreleased; urgency=medium
 
   * patches/ahcisata-atapi.diff: Add ATAPI support on top of AHCI.

@@ -1,3 +1,5 @@
+TODO: merge with ahcisata-rump.diff?
+
 Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
 ===================================================================
 --- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
