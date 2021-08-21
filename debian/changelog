@@ -1,3 +1,9 @@
+rumpkernel (0~20191130-7) UNRELEASED; urgency=medium
+
+  * patches/dealloc.diff: Add missing port deallocation.
+
+ -- Samuel Thibault <sthibault@debian.org>  Fri, 20 Aug 2021 23:15:16 +0000
+
 rumpkernel (0~20191130-6) unreleased; urgency=medium
 
   * patches/intr_lock.diff: Lock the kernel on interrupt.
