@@ -1,4 +1,4 @@
-/*	$NetBSD: mvpex.c,v 1.16 2015/11/27 00:08:43 nonaka Exp $	*/
+/*	$NetBSD: mvpex.c,v 1.22 2021/08/07 16:19:13 thorpej Exp $	*/
 /*
  * Copyright (c) 2008 KIYOHARA Takashi
  * All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mvpex.c,v 1.16 2015/11/27 00:08:43 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mvpex.c,v 1.22 2021/08/07 16:19:13 thorpej Exp $");
 
 #include "opt_pci.h"
 #include "pci.h"
@@ -35,7 +35,6 @@ __KERNEL_RCSID(0, "$NetBSD: mvpex.c,v 1.16 2015/11/27 00:08:43 nonaka Exp $");
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/errno.h>
-#include <sys/extent.h>
 #include <sys/evcnt.h>
 #include <sys/malloc.h>
 #include <sys/systm.h>
@@ -409,28 +408,22 @@ mvpex_pci_config(struct mvpex_softc *sc, bus_space_tag_t iot,
 		 int cacheline_size)
 {
 	struct pcibus_attach_args pba;
-#ifdef PCI_NETBSD_CONFIGURE
-	struct extent *ioext = NULL, *memext = NULL;
-#endif
 	uint32_t stat;
 
 	stat = bus_space_read_4(sc->sc_iot, sc->sc_ioh, MVPEX_STAT);
 
 #ifdef PCI_NETBSD_CONFIGURE
-	ioext = extent_create("pexio", iostart, ioend, NULL, 0, EX_NOWAIT);
-	memext = extent_create("pexmem", memstart, memend, NULL, 0, EX_NOWAIT);
-	if (ioext != NULL && memext != NULL)
-		pci_configure_bus(pc, ioext, memext, NULL,
-		    MVPEX_STAT_PEXBUSNUM(stat), cacheline_size);
-        else
-		aprint_error_dev(sc->sc_dev, "can't create extent %s%s%s\n",
-		    ioext == NULL ? "io" : "",
-		    ioext == NULL && memext == NULL ? " and " : "",
-		    memext == NULL ? "mem" : "");
-	if (ioext != NULL)
-		extent_destroy(ioext);
-	if (memext != NULL)
-		extent_destroy(memext);
+	struct pciconf_resources *pcires = pciconf_resource_init();
+
+	pciconf_resource_add(pcires, PCICONF_RESOURCE_IO,
+	    iostart, (ioend - iostart) + 1);
+	pciconf_resource_add(pcires, PCICONF_RESOURCE_MEM,
+	    memstart, (memend - memstart) + 1);
+
+	pci_configure_bus(pc, pcires,
+	    MVPEX_STAT_PEXBUSNUM(stat), cacheline_size);
+
+	pciconf_resource_fini(pcires);
 #endif
 
 	pba.pba_iot = iot;
@@ -441,7 +434,7 @@ mvpex_pci_config(struct mvpex_softc *sc, bus_space_tag_t iot,
 	pba.pba_flags = PCI_FLAGS_IO_OKAY | PCI_FLAGS_MEM_OKAY;
 	pba.pba_bus = MVPEX_STAT_PEXBUSNUM(stat);
 	pba.pba_bridgetag = NULL;
-	config_found_ia(sc->sc_dev, "pcibus", &pba, NULL);
+	config_found(sc->sc_dev, &pba, NULL, CFARGS_NONE);
 }
 
 
@@ -659,7 +652,7 @@ mvpex_intr_evcnt(void *v, pci_intr_handle_t pin)
 /* ARGSUSED */
 void *
 mvpex_intr_establish(void *v, pci_intr_handle_t pin, int ipl,
-		     int (*intrhand)(void *), void *intrarg)
+		     int (*intrhand)(void *), void *intrarg, const char *xname)
 {
 	struct mvpex_softc *sc = (struct mvpex_softc *)v;
 	struct mvpex_intrtab *intrtab;
@@ -671,10 +664,7 @@ mvpex_intr_establish(void *v, pci_intr_handle_t pin, int ipl,
 
 	KASSERT(pin == intrtab->intr_pin);
 
-	pexih = malloc(sizeof(*pexih), M_DEVBUF, M_NOWAIT);
-	if (pexih == NULL)
-		return NULL;
-
+	pexih = malloc(sizeof(*pexih), M_DEVBUF, M_WAITOK);
 	pexih->ih_func = intrhand;
 	pexih->ih_arg = intrarg;
 	pexih->ih_type = ipl;

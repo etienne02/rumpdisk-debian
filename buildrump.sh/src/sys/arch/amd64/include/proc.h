@@ -1,4 +1,4 @@
-/*	$NetBSD: proc.h,v 1.19 2014/02/20 18:19:10 dsl Exp $	*/
+/*	$NetBSD: proc.h,v 1.25 2020/06/13 23:58:51 ad Exp $	*/
 
 /*
  * Copyright (c) 1991 Regents of the University of California.
@@ -46,15 +46,15 @@ struct pmap;
 struct vm_page;
 
 struct mdlwp {
+	volatile uint64_t md_tsc;	/* last TSC reading */
 	struct	trapframe *md_regs;	/* registers on current frame */
-	struct pmap *md_gc_pmap;	/* pmap being garbage collected */
-	struct vm_page *md_gc_ptp;	/* pages from pmap g/c */
 	int	md_flags;		/* machine-dependent flags */
 	volatile int md_astpending;
 };
 
-#define	MDL_COMPAT32	0x0008	/* i386, always return via iret */
-#define	MDL_IRET	0x0010	/* force return via iret, not sysret */
+#define	MDL_COMPAT32		0x0008	/* i386, always return via iret */
+#define	MDL_IRET		0x0010	/* force return via iret, not sysret */
+#define	MDL_FPU_IN_CPU		0x0020	/* the FPU state is in the CPU */
 
 struct mdproc {
 	int	md_flags;

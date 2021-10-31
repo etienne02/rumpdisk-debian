@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $ */
+/*	$NetBSD: autoconf.c,v 1.235 2021/08/21 11:55:25 andvar Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.235 2021/08/21 11:55:25 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -92,7 +92,9 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $");
 #include <machine/pmap.h>
 #include <machine/bootinfo.h>
 #include <sparc64/sparc64/cache.h>
+#include <sparc64/sparc64/ofw_patch.h>
 #include <sparc64/sparc64/timerreg.h>
+#include <sparc64/dev/cbusvar.h>
 
 #include <dev/ata/atavar.h>
 #include <dev/pci/pcivar.h>
@@ -113,6 +115,8 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $");
 #include <dev/wsfb/genfbvar.h>
 
 #include "ksyms.h"
+
+int autoconf_debug = 0x0;
 
 struct evcnt intr_evcnts[] = {
 	EVCNT_INITIALIZER(EVCNT_TYPE_INTR, NULL, "intr", "spur"),
@@ -140,7 +144,6 @@ int kgdb_break_at_attach;
 #endif
 
 #define	OFPATHLEN	128
-#define	OFNODEKEY	"OFpnode"
 
 char	machine_banner[100];
 char	machine_model[100];
@@ -178,14 +181,19 @@ struct intrmap intrmap[] = {
 	{ NULL,		0 }
 };
 
-#ifdef DEBUG
-#define ACDB_BOOTDEV	0x1
-#define	ACDB_PROBE	0x2
-#define ACDB_BOOTARGS	0x4
-int autoconf_debug = 0x0;
-#define DPRINTF(l, s)   do { if (autoconf_debug & l) printf s; } while (0)
-#else
-#define DPRINTF(l, s)
+#ifdef SUN4V
+void	sun4v_soft_state_init(void);
+void	sun4v_set_soft_state(int, const char *);
+
+#define __align32 __attribute__((__aligned__(32)))
+char sun4v_soft_state_booting[] __align32 = "NetBSD booting";
+char sun4v_soft_state_running[] __align32 = "NetBSD running";
+
+void	sun4v_interrupt_init(void);
+#if 0
+XXX notyet		
+void	sun4v_sdio_init(void);
+#endif
 #endif
 
 int console_node, console_instance;
@@ -281,7 +289,7 @@ bootstrap(void *o0, void *bootargs, void *bootsize, void *o3, void *ofw)
 	extern void OF_sym2val32(void *);
 	extern struct consdev consdev_prom;
 
-	/* Save OpenFrimware entry point */
+	/* Save OpenFirmware entry point */
 	romp   = ofw;
 	romtba = get_romtba();
 
@@ -365,6 +373,18 @@ die_old_boot_loader:
 
 	get_ncpus();
 	pmap_bootstrap(KERNBASE, bi_kend->addr);
+
+#ifdef SUN4V
+	if (CPU_ISSUN4V) {
+		sun4v_soft_state_init();
+		sun4v_set_soft_state(SIS_TRANSITION, sun4v_soft_state_booting);
+		sun4v_interrupt_init();
+#if 0
+XXX notyet		
+		sun4v_sdio_init();
+#endif 
+	}
+#endif
 }
 
 /*
@@ -506,7 +526,76 @@ cpu_configure(void)
         setpstate(getpstate()|PSTATE_IE);
 
 	(void)spl0();
+
+#ifdef SUN4V
+	if (CPU_ISSUN4V)
+		sun4v_set_soft_state(SIS_NORMAL, sun4v_soft_state_running);
+#endif
 }
+
+#ifdef SUN4V
+
+#define HSVC_GROUP_INTERRUPT	0x002
+#define HSVC_GROUP_SOFT_STATE	0x003
+#define HSVC_GROUP_SDIO		0x108
+
+int sun4v_soft_state_initialized = 0;
+
+void
+sun4v_soft_state_init(void)
+{
+	uint64_t minor;
+
+	if (prom_set_sun4v_api_version(HSVC_GROUP_SOFT_STATE, 1, 0, &minor))
+		return;
+
+	prom_sun4v_soft_state_supported();
+	sun4v_soft_state_initialized = 1;
+}
+
+void
+sun4v_set_soft_state(int state, const char *desc)
+{
+	paddr_t pa;
+	int err;
+
+	if (!sun4v_soft_state_initialized)
+		return;
+
+	if (!pmap_extract(pmap_kernel(), (vaddr_t)desc, &pa))
+		panic("sun4v_set_soft_state: pmap_extract failed");
+
+	err = hv_soft_state_set(state, pa);
+	if (err != H_EOK)
+		printf("soft_state_set: %d\n", err);
+}
+
+void
+sun4v_interrupt_init(void)
+{
+	uint64_t minor;
+
+	if (prom_set_sun4v_api_version(HSVC_GROUP_INTERRUPT, 3, 0, &minor))
+		return;
+
+	sun4v_group_interrupt_major = 3;
+}
+
+#if 0
+XXX notyet		
+void
+sun4v_sdio_init(void)
+{
+	uint64_t minor;
+
+	if (prom_set_sun4v_api_version(HSVC_GROUP_SDIO, 1, 0, &minor))
+		return;
+
+	sun4v_group_sdio_major = 1;
+}
+#endif
+
+#endif
 
 void
 cpu_rootconf(void)
@@ -520,16 +609,16 @@ cpu_rootconf(void)
 }
 
 char *
-clockfreq(long freq)
+clockfreq(uint64_t freq)
 {
 	static char buf[10];
 	size_t len;
 
 	freq /= 1000;
-	len = snprintf(buf, sizeof(buf), "%ld", freq / 1000);
+	len = snprintf(buf, sizeof(buf), "%" PRIu64, freq / 1000);
 	freq %= 1000;
 	if (freq)
-		snprintf(buf + len, sizeof(buf) - len, ".%03ld", freq);
+		snprintf(buf + len, sizeof(buf) - len, ".%03" PRIu64, freq);
 	return buf;
 }
 
@@ -640,7 +729,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		ma.ma_dmatag = &mainbus_dma_tag;
 		ma.ma_node = node;
 		ma.ma_name = "cpu";
-		config_found(dev, &ma, mbprint);
+		config_found(dev, &ma, mbprint,
+		    CFARGS(.devhandle = devhandle_from_of(ma.ma_node)));
 	}
 
 	node = findroot();	/* re-init root node */
@@ -723,7 +813,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 				printf(" no address\n");
 		}
 #endif
-		(void) config_found(dev, (void *)&ma, mbprint);
+		(void) config_found(dev, (void *)&ma, mbprint,
+		    CFARGS(.devhandle = prom_node_to_devhandle(ma.ma_node)));
 		free(ma.ma_reg, M_DEVBUF);
 		if (ma.ma_ninterrupts)
 			free(ma.ma_interrupts, M_DEVBUF);
@@ -733,7 +824,7 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 	/* Try to attach PROM console */
 	memset(&ma, 0, sizeof ma);
 	ma.ma_name = "pcons";
-	(void) config_found(dev, (void *)&ma, mbprint);
+	(void) config_found(dev, (void *)&ma, mbprint, CFARGS_NONE);
 }
 
 CFATTACH_DECL_NEW(mainbus, 0,
@@ -833,7 +924,7 @@ dev_path_drive_match(device_t dev, int ctrlnode, int target,
 		/*
 		 * Note: "child" here is == ofbootpackage (s.a.), which
 		 * may be completely wrong for the device we are checking,
-		 * what we realy do here is to match "target" and "lun".
+		 * what we really do here is to match "target" and "lun".
 		 */
 		if (wwn)
 			snprintf(buf, sizeof(buf), "%s@w%016" PRIx64 ",%d",
@@ -854,52 +945,148 @@ dev_path_drive_match(device_t dev, int ctrlnode, int target,
 		}
 	}
 }
-
-/*
- * Get the firmware package handle from a device_t.
- * Assuming we have previously stored it in the device properties
- * dictionary.
+ 
+ /*
+ * Recursively check for a child node.
  */
-static int
-device_ofnode(device_t dev)
+static bool
+has_child_node(int parent, int search)
 {
-	prop_dictionary_t props;
-	prop_object_t obj;
+	int child;
 
-	if (dev == NULL)
-		return 0;
-	props = device_properties(dev);
-	if (props == NULL)
-		return 0;
-	obj = prop_dictionary_get(props, OFNODEKEY);
-	if (obj == NULL)
-		return 0;
+	for (child = prom_firstchild(parent); child != 0;
+	    child = prom_nextsibling(child)) {
+		if (child == search)
+			return true;
+		if (has_child_node(child, search))
+			return true;
+	}
 
-	return prop_number_integer_value(obj);
+	return false;
 }
 
 /*
- * Save the firmware package handle inside the properties dictionary
- * of a device_t.
+ * The interposed pseudo-parent node in OpenBIOS has a
+ * device_type = "ide" and no "compatible" property.
+ * It is the secondary bus if the name is "ide1" or "ide"
+ * with newer OpenBIOS versions. In the latter case, read
+ * the first reg value to discriminate the two channels.
+ */
+static bool
+openbios_secondary_ata_heuristic(int parent)
+{
+	char tmp[OFPATHLEN];
+	int regs[4];
+
+	if (OF_getprop(parent, "device_type", tmp, sizeof(tmp)) <= 0)
+		return false;
+	if (strcmp(tmp, "ide") != 0)
+		return false;
+	DPRINTF(ACDB_BOOTDEV, ("parent device_type is ide\n"));
+
+	if (OF_getprop(parent, "compatible", tmp, sizeof(tmp)) > 0)
+		return false;
+	DPRINTF(ACDB_BOOTDEV, ("parent has no compatible property\n"));
+
+	if (OF_getprop(parent, "name", tmp, sizeof(tmp)) <= 0)
+		return false;
+	if (strcmp(tmp, "ide1") == 0) {
+		DPRINTF(ACDB_BOOTDEV, ("parent seems to be an (old) OpenBIOS"
+		   " secondary ATA bus, applying workaround target+2\n"));
+		return true;
+	} else if (strcmp(tmp, "ide") == 0) {
+		if (OF_getprop(parent, "reg", &regs, sizeof(regs))
+		    >= sizeof(regs[0])) {
+			DPRINTF(ACDB_BOOTDEV, ("parent seems to be an OpenBIOS"
+			   " ATA bus #%u\n", regs[0]));
+
+			return regs[0] == 1;
+		}
+
+	}
+
+	return false;
+}
+
+/*
+ * Match a device_t against the controller/target/lun/wwn
+ * info passed in from the bootloader (if available),
+ * otherwise fall back to old style string matching
+ * heuristics.
  */
 static void
-device_setofnode(device_t dev, int node)
+dev_bi_unit_drive_match(device_t dev, int ctrlnode, int target,
+    uint64_t wwn, int lun)
 {
-	prop_dictionary_t props;
-	prop_object_t obj;
+	static struct btinfo_bootdev_unit *bi_unit = NULL;
+	uint32_t off = 0;
+	static bool passed = false;
+#ifdef DEBUG
+	char ctrl_path[OFPATHLEN], parent_path[OFPATHLEN], dev_path[OFPATHLEN];
+#endif
 
-	if (dev == NULL)
+	if (!passed) {
+		bi_unit = lookup_bootinfo(BTINFO_BOOTDEV_UNIT);
+		passed = true;
+	}
+
+	if (bi_unit == NULL) {
+		dev_path_drive_match(dev, ctrlnode, target, wwn, lun);
 		return;
-	props = device_properties(dev);
-	if (props == NULL)
+	}
+
+#ifdef DEBUG
+	DPRINTF(ACDB_BOOTDEV, ("dev_bi_unit_drive_match: %s, controller %x, "
+	    "target %d wwn %016" PRIx64 " lun %d\n", device_xname(dev),
+	    ctrlnode, target, wwn, lun));
+
+	OF_package_to_path(ctrlnode, ctrl_path, sizeof(ctrl_path));
+	OF_package_to_path(bi_unit->phandle, dev_path, sizeof(dev_path));
+	OF_package_to_path(bi_unit->parent, parent_path, sizeof(parent_path));
+	DPRINTF(ACDB_BOOTDEV, ("controller %x : %s\n", ctrlnode, ctrl_path));
+	DPRINTF(ACDB_BOOTDEV, ("phandle %x : %s\n", bi_unit->phandle, dev_path));
+	DPRINTF(ACDB_BOOTDEV, ("parent %x : %s\n", bi_unit->parent, parent_path));
+#endif
+	if (ctrlnode != bi_unit->parent
+	    && !has_child_node(ctrlnode, bi_unit->phandle)) {
+		DPRINTF(ACDB_BOOTDEV, ("controller %x : %s does not match "
+		    "bootinfo: %x : %s\n",
+		    ctrlnode, ctrl_path, bi_unit->parent, parent_path));
 		return;
-	obj = prop_number_create_integer(node);
-	if (obj == NULL)
+	}
+	if (ctrlnode == bi_unit->parent) {
+		DPRINTF(ACDB_BOOTDEV, ("controller %x : %s is bootinfo"
+		    " parent\n", ctrlnode, ctrl_path));
+	} else {
+		DPRINTF(ACDB_BOOTDEV, ("controller %x : %s is parent of"
+		    " %x : %s\n", ctrlnode, ctrl_path, bi_unit->parent,
+		    parent_path));
+
+		/*
+		 * Our kernel and "real" OpenFirmware use a 0 .. 3 numbering
+		 * scheme for IDE devices, but OpenBIOS splits it into
+		 * two "buses" and numbers each 0..1.
+		 * Check if we are on the secondary "bus" and adjust
+		 * if needed...
+		 */
+		if (openbios_secondary_ata_heuristic(bi_unit->parent))
+			off = 2;
+	}
+
+	if (bi_unit->wwn != wwn || (bi_unit->target+off) != target
+	    || bi_unit->lun != lun) {
+		DPRINTF(ACDB_BOOTDEV, ("mismatch: wwn %016" PRIx64 " - %016" PRIx64
+		    ", target %d - %d, lun %d - %d\n",
+		    bi_unit->wwn, wwn, bi_unit->target, target, bi_unit->lun, lun));
 		return;
-	prop_dictionary_set(props, OFNODEKEY, obj);
-	prop_object_release(obj);
-	DPRINTF(ACDB_BOOTDEV, (" [device %s has node %x] ",
-	    device_xname(dev), node));
+	}
+
+	booted_device = dev;
+	if (ofbootpartition)
+		booted_partition = *ofbootpartition - 'a';
+	DPRINTF(ACDB_BOOTDEV, ("found boot device: %s"
+	    ", partition %d\n", device_xname(dev),
+	    booted_partition));
 }
 
 /*
@@ -909,7 +1096,17 @@ void
 device_register(device_t dev, void *aux)
 {
 	device_t busdev = device_parent(dev);
+	devhandle_t devhandle;
 	int ofnode = 0;
+
+	/*
+	 * If the device has a valid OpenFirmware node association,
+	 * grab it now.
+	 */
+	devhandle = device_handle(dev);
+	if (devhandle_type(devhandle) == DEVHANDLE_TYPE_OF) {
+		ofnode = devhandle_to_of(devhandle);
+	}
 
 	/*
 	 * We don't know the type of 'aux' - it depends on the
@@ -922,23 +1119,6 @@ device_register(device_t dev, void *aux)
 		 * Ignore mainbus0 itself, it certainly is not a boot
 		 * device.
 		 */
-	} else if (device_is_a(busdev, "mainbus")) {
-		struct mainbus_attach_args *ma = aux;
-
-		ofnode = ma->ma_node;
-	} else if (device_is_a(busdev, "pci")) {
-		struct pci_attach_args *pa = aux;
-
-		ofnode = PCITAG_NODE(pa->pa_tag);
-	} else if (device_is_a(busdev, "sbus") || device_is_a(busdev, "dma")
-	    || device_is_a(busdev, "ledma")) {
-		struct sbus_attach_args *sa = aux;
-
-		ofnode = sa->sa_node;
-	} else if (device_is_a(busdev, "ebus")) {
-		struct ebus_attach_args *ea = aux;
-
-		ofnode = ea->ea_node;
 	} else if (device_is_a(busdev, "iic")) {
 		struct i2c_attach_args *ia = aux;
 
@@ -946,6 +1126,18 @@ device_register(device_t dev, void *aux)
 			return;
 
 		ofnode = (int)ia->ia_cookie;
+		if (device_is_a(dev, "pcagpio")) {
+			if (!strcmp(machine_model, "SUNW,Sun-Fire-V240") ||
+			    !strcmp(machine_model, "SUNW,Sun-Fire-V210")) {
+				add_gpio_props_v210(dev, aux);
+			}
+		} 
+		if (device_is_a(dev, "pcf8574io")) {
+			if (!strcmp(machine_model, "SUNW,Ultra-250")) {
+				add_gpio_props_e250(dev, aux);
+			}
+		} 
+		return;
 	} else if (device_is_a(dev, "sd") || device_is_a(dev, "cd")) {
 		struct scsipibus_attach_args *sa = aux;
 		struct scsipi_periph *periph = sa->sa_periph;
@@ -969,17 +1161,62 @@ device_register(device_t dev, void *aux)
 			if (periph->periph_channel->chan_channel == 1)
 				off = 2;
 		}
-		ofnode = device_ofnode(device_parent(busdev));
-		dev_path_drive_match(dev, ofnode, periph->periph_target + off,
-		    0, periph->periph_lun);
+
+		/*
+		 * busdev now points to the direct descendent of the
+		 * controller ("atabus" or "scsibus").  Get the
+		 * controller's devhandle.  Hoist it up one more so
+		 * that busdev points at the the controller.
+		 */
+		busdev = device_parent(busdev);
+		devhandle = device_handle(busdev);
+		KASSERT(devhandle_type(devhandle) == DEVHANDLE_TYPE_OF);
+		ofnode = devhandle_to_of(devhandle);
+
+		/*
+		 * Special sun4v handling in case the kernel is running in a 
+		 * secondary logical domain
+		 *
+		 * The bootpath looks something like this:
+		 *   /virtual-devices@100/channel-devices@200/disk@1:a
+		 *
+		 * The device hierarchy constructed during autoconfiguration
+		 * is:
+		 *   /mainbus/vbus/cbus/vdsk/scsibus/sd
+		 */
+		if (CPU_ISSUN4V && device_is_a(dev, "sd") &&
+		    device_is_a(busdev, "vdsk")) {
+			dev_path_exact_match(dev, ofnode);
+		} else {
+			dev_bi_unit_drive_match(dev, ofnode,
+			    periph->periph_target + off, 0, periph->periph_lun);
+		}
+
+		if (device_is_a(busdev, "scsibus")) {
+			/* see if we're in a known SCA drivebay */
+			add_drivebay_props(dev, ofnode, aux);
+		}
 		return;
 	} else if (device_is_a(dev, "wd")) {
 		struct ata_device *adev = aux;
 
-		ofnode = device_ofnode(device_parent(busdev));
-		dev_path_drive_match(dev, ofnode, adev->adev_channel*2+
+		/*
+		 * busdev points to the direct descendent of the controller,
+		 * e.g. "atabus".  Get the controller's devhandle.
+		 */
+		devhandle = device_handle(device_parent(busdev));
+		KASSERT(devhandle_type(devhandle) == DEVHANDLE_TYPE_OF);
+		ofnode = devhandle_to_of(devhandle);
+
+		dev_bi_unit_drive_match(dev, ofnode, adev->adev_channel*2+
 		    adev->adev_drv_data->drive, 0, 0);
 		return;
+	} else if (device_is_a(dev, "ld")) {
+		/*
+		 * Get the devhandle of the RAID (or whatever) controller.
+		 */
+		devhandle = device_handle(busdev);
+		ofnode = devhandle_to_of(devhandle);
 	}
 
 	if (busdev == NULL)
@@ -997,7 +1234,6 @@ device_register(device_t dev, void *aux)
 		prop_number_t pwwnd = NULL, nwwnd = NULL;
 		prop_number_t idd = NULL;
 
-		device_setofnode(dev, ofnode);
 		dev_path_exact_match(dev, ofnode);
 
 		if (OF_getprop(ofnode, "name", tmpstr, sizeof(tmpstr)) <= 0)
@@ -1032,7 +1268,7 @@ device_register(device_t dev, void *aux)
 				if (!prom_get_node_ether(ofnode, eaddr))
 					goto noether;
 			}
-			blob = prop_data_create_data(eaddr, ETHER_ADDR_LEN);
+			blob = prop_data_create_copy(eaddr, ETHER_ADDR_LEN);
 			prop_dictionary_set(dict, "mac-address", blob);
 			prop_object_release(blob);
 			of_to_dataprop(dict, ofnode, "shared-pins",
@@ -1048,7 +1284,7 @@ noether:
 			if (OF_getprop(ofnode, "port-wwn", &pwwn, sizeof(pwwn))
 			    == sizeof(pwwn)) {
 				pwwnd = 
-				    prop_number_create_unsigned_integer(pwwn);
+				    prop_number_create_unsigned(pwwn);
 				prop_dictionary_set(dict, "port-wwn", pwwnd);
 				prop_object_release(pwwnd);
 			}
@@ -1056,7 +1292,7 @@ noether:
 			if (OF_getprop(ofnode, "node-wwn", &nwwn, sizeof(nwwn))
 			    == sizeof(nwwn)) {
 				nwwnd = 
-				    prop_number_create_unsigned_integer(nwwn);
+				    prop_number_create_unsigned(nwwn);
 				prop_dictionary_set(dict, "node-wwn", nwwnd);
 				prop_object_release(nwwnd);
 			}
@@ -1073,7 +1309,7 @@ noether:
 				    sizeof(id)) <= 0)
 					continue;
 
-				idd = prop_number_create_unsigned_integer(id);
+				idd = prop_number_create_unsigned(id);
 				prop_dictionary_set(dict,
 						    "scsi-initiator-id", idd);
 				prop_object_release(idd);
@@ -1086,7 +1322,10 @@ noether:
 	 * Check for I2C busses and add data for their direct configuration.
 	 */
 	if (device_is_a(dev, "iic")) {
-		int busnode = device_ofnode(busdev);
+		devhandle_t bushandle = device_handle(busdev);
+		int busnode =
+		    devhandle_type(bushandle) == DEVHANDLE_TYPE_OF ?
+		    devhandle_to_of(bushandle) : 0;
 
 		if (busnode) {
 			prop_dictionary_t props = device_properties(busdev);
@@ -1118,82 +1357,23 @@ noether:
 			}
 		}
 
-		/*
-		 * Add SPARCle spdmem devices (0x50 and 0x51) that the
-		 * firmware does not know about.
-		 */
-		if (!strcmp(machine_model, "TAD,SPARCLE")) {
-			prop_dictionary_t props = device_properties(busdev);
-			prop_array_t cfg = prop_array_create();
-			int i;
+		if (!strcmp(machine_model, "TAD,SPARCLE"))
+			add_spdmem_props_sparcle(busdev);
 
-			DPRINTF(ACDB_PROBE, ("\nAdding spdmem for SPARCle "));
-			for (i = 0x50; i <= 0x51; i++) {
-				prop_dictionary_t spd =
-				    prop_dictionary_create();
-				prop_dictionary_set_cstring(spd, "name",
-				    "dimm-spd");
-				prop_dictionary_set_uint32(spd, "addr", i);
-				prop_dictionary_set_uint64(spd, "cookie", 0);
-				prop_array_add(cfg, spd);
-				prop_object_release(spd);
-			}
-			prop_dictionary_set(props, "i2c-child-devices", cfg);
-			prop_object_release(cfg);
-			
-		}
-
-		/*
-		 * Add V210/V240 environmental sensors that are not in
-		 * the OFW tree.
-		 */
 		if (device_is_a(busdev, "pcfiic") &&
 		    (!strcmp(machine_model, "SUNW,Sun-Fire-V240") ||
-		    !strcmp(machine_model, "SUNW,Sun-Fire-V210"))) {
-			prop_dictionary_t props = device_properties(busdev);
-			prop_array_t cfg = NULL;
-			prop_dictionary_t sens;
-			prop_data_t data;
-			const char name_lm[] = "i2c-lm75";
-			const char name_adm[] = "i2c-adm1026";
+		    !strcmp(machine_model, "SUNW,Sun-Fire-V210")))
+			add_env_sensors_v210(busdev);
 
-			DPRINTF(ACDB_PROBE, ("\nAdding sensors for %s ",
-			    machine_model));
-			cfg = prop_dictionary_get(props, "i2c-child-devices");
- 			if (!cfg) {
-				cfg = prop_array_create();
-				prop_dictionary_set(props, "i2c-child-devices",
-				    cfg);
-				prop_dictionary_set_bool(props,
-				    "i2c-indirect-config", false);
-			}
+		/* E450 SUNW,envctrl */
+		if (device_is_a(busdev, "pcfiic") &&
+		    (!strcmp(machine_model, "SUNW,Ultra-4")))
+			add_i2c_props_e450(busdev, busnode);
 
-			/* ADM1026 at 0x2e */
-			sens = prop_dictionary_create();
-			prop_dictionary_set_uint32(sens, "addr", 0x2e);
-			prop_dictionary_set_uint64(sens, "cookie", 0);
-			prop_dictionary_set_cstring(sens, "name",
-			    "hardware-monitor");
-			data = prop_data_create_data(&name_adm[0],
-			    sizeof(name_adm));
-			prop_dictionary_set(sens, "compatible", data);
-			prop_object_release(data);
-			prop_array_add(cfg, sens);
-			prop_object_release(sens);
-
-			/* LM75 at 0x4e */
-			sens = prop_dictionary_create();
-			prop_dictionary_set_uint32(sens, "addr", 0x4e);
-			prop_dictionary_set_uint64(sens, "cookie", 0);
-			prop_dictionary_set_cstring(sens, "name",
-			    "temperature-sensor");
-			data = prop_data_create_data(&name_lm[0],
-			    sizeof(name_lm));
-			prop_dictionary_set(sens, "compatible", data);
-			prop_object_release(data);
-			prop_array_add(cfg, sens);
-			prop_object_release(sens);
-		}
+		/* E250 SUNW,envctrltwo */
+		if (device_is_a(busdev, "pcfiic") &&
+		    (!strcmp(machine_model, "SUNW,Ultra-250")))
+			add_i2c_props_e250(busdev, busnode);
 	}
 
 	/* set properties for PCI framebuffers */
@@ -1255,29 +1435,13 @@ noether:
 			if (OF_getprop(node, "width", &width, sizeof(width))
 			    != 4) {
 				instance = OF_open(name);
+			}
+		}
 #endif
+		set_static_edid(dict);
 	}
 
-	/* Hardware specific device properties */
-	if ((!strcmp(machine_model, "SUNW,Sun-Fire-V240") ||
-	    !strcmp(machine_model, "SUNW,Sun-Fire-V210"))) {
-		device_t busparent = device_parent(busdev);
-		prop_dictionary_t props = device_properties(dev);
-
-		if (busparent != NULL && device_is_a(busparent, "pcfiic") &&
-		    device_is_a(dev, "adm1026hm") && props != NULL) {
-			prop_dictionary_set_uint8(props, "fan_div2", 0x55);
-			prop_dictionary_set_bool(props, "multi_read", true);
-		}
-	}
-	if (!strcmp(machine_model, "SUNW,Sun-Fire-V440")) {
-		device_t busparent = device_parent(busdev);
-		prop_dictionary_t props = device_properties(dev);
-		if (busparent != NULL && device_is_a(busparent, "pcfiic") &&
-		    device_is_a(dev, "adm1026hm") && props != NULL) {
-			prop_dictionary_set_bool(props, "multi_read", true);
-		}
-	}
+	set_hw_props(dev);
 }
 
 /*
@@ -1290,7 +1454,6 @@ device_register_post_config(device_t dev, void *aux)
 		struct scsipibus_attach_args *sa = aux;
 		struct scsipi_periph *periph = sa->sa_periph;
 		uint64_t wwn = 0;
-		int ofnode;
 
 		/*
 		 * If this is a FC-AL drive it will have
@@ -1306,12 +1469,16 @@ device_register_post_config(device_t dev, void *aux)
 			 * E.g.: /pci/SUNW,qlc@4/fp@0,0/disk
 			 * and we need the parent of "disk" here.
 			 */
-			ofnode = device_ofnode(
+			devhandle_t ctlr_devhandle = device_handle(
 			    device_parent(device_parent(dev)));
+			KASSERT(devhandle_type(ctlr_devhandle) ==
+			    DEVHANDLE_TYPE_OF);
+			int ofnode = devhandle_to_of(ctlr_devhandle);
+
 			for (ofnode = OF_child(ofnode);
-			    ofnode != 0 && booted_device == NULL;
-			    ofnode = OF_peer(ofnode)) {
-				dev_path_drive_match(dev, ofnode,
+			     ofnode != 0 && booted_device == NULL;
+			     ofnode = OF_peer(ofnode)) {
+				dev_bi_unit_drive_match(dev, ofnode,
 				    periph->periph_target,
 				    wwn, periph->periph_lun);
 			}
@@ -1328,7 +1495,7 @@ copyprops(device_t busdev, int node, prop_dictionary_t dict, int is_console)
 	uint32_t temp, fboffset;
 	uint32_t fbaddr = 0;
 	int options;
-	char output_device[256];
+	char output_device[OFPATHLEN];
 	char *pos;
 
 	cntrlr = device_parent(busdev);
@@ -1394,13 +1561,13 @@ copyprops(device_t busdev, int node, prop_dictionary_t dict, int is_console)
 	options = OF_finddevice("/options");
 	if ((options == 0) || (options == -1))
 		return;
-	if (OF_getprop(options, "output-device", output_device, 256) == 0)
+	if (OF_getprop(options, "output-device", output_device, OFPATHLEN) == 0)
 		return;
 	/* find the mode string if there is one */
 	pos = strstr(output_device, ":r");
 	if (pos == NULL)
 		return;
-	prop_dictionary_set_cstring(dict, "videomode", pos + 2);
+	prop_dictionary_set_string(dict, "videomode", pos + 2);
 }
 
 static void

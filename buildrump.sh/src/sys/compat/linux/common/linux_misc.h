@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_misc.h,v 1.24 2013/11/18 01:32:52 chs Exp $	*/
+/*	$NetBSD: linux_misc.h,v 1.26 2020/05/03 01:06:56 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -35,14 +35,16 @@
 /*
  * Options passed to the Linux wait4() system call.
  */
-#define LINUX_WAIT4_WNOHANG   0x00000001
-#define LINUX_WAIT4_WUNTRACED 0x00000002
-#define LINUX_WAIT4_WNOTHREAD 0x20000000
-#define LINUX_WAIT4_WALL      0x40000000
-#define LINUX_WAIT4_WCLONE    0x80000000
+#define LINUX_WAIT4_WNOHANG	0x00000001
+#define LINUX_WAIT4_WUNTRACED	0x00000002
+#define LINUX_WAIT4_WCONTINUED	0x00000008
+#define LINUX_WAIT4_WNOTHREAD	0x20000000
+#define LINUX_WAIT4_WALL	0x40000000
+#define LINUX_WAIT4_WCLONE	0x80000000
 
 #define LINUX_WAIT4_KNOWNFLAGS (LINUX_WAIT4_WNOHANG | \
                                 LINUX_WAIT4_WUNTRACED | \
+                                LINUX_WAIT4_WCONTINUED | \
                                 LINUX_WAIT4_WNOTHREAD | \
                                 LINUX_WAIT4_WALL | \
                                 LINUX_WAIT4_WCLONE)
@@ -146,6 +148,8 @@ int linux_select1(struct lwp *, register_t *, int, fd_set *, fd_set *,
 		       fd_set *, struct linux_timeval *);
 int linux_do_sys_utimensat(struct lwp *, int, const char *,
     struct timespec *, int, register_t *);
+int linux_do_futex(int *, int, int, struct timespec *, int *, int, int,
+    register_t *);
 __END_DECLS
 #endif /* !_KERNEL */
 

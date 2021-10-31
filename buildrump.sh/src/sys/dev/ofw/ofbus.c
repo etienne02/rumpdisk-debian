@@ -1,4 +1,4 @@
-/*	$NetBSD: ofbus.c,v 1.25 2011/06/03 07:39:30 matt Exp $	*/
+/*	$NetBSD: ofbus.c,v 1.30 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofbus.c,v 1.25 2011/06/03 07:39:30 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofbus.c,v 1.30 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -71,15 +71,79 @@ ofbus_match(device_t parent, cfdata_t cf, void *aux)
 	return (1);
 }
 
+#if defined(__arm32__)		/* XXX temporary */
+#define	_OFBUS_ROOT_MACHDEP_SKIPNAMES					\
+	"udp",								\
+	"cpus",								\
+	"mmu",								\
+	"memory"
+#endif /* __arm32__ */
+
+/*
+ * Skip some well-known nodes in the root that contain no useful
+ * child devices.
+ */
+static bool
+ofbus_skip_node_in_root(int phandle, char *name, size_t namesize)
+{
+	static const char * const skip_names[] = {
+		"aliases",
+		"options",
+		"openprom",
+		"chosen",
+		"packages",
+#ifdef _OFBUS_ROOT_MACHDEP_SKIPNAMES
+		_OFBUS_ROOT_MACHDEP_SKIPNAMES
+#endif
+	};
+	u_int i;
+
+	name[0] = '\0';
+	if (OF_getprop(phandle, "name", name, namesize) <= 0) {
+		return false;
+	}
+
+	for (i = 0; i < __arraycount(skip_names); i++) {
+		if (strcmp(name, skip_names[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void
 ofbus_attach(device_t parent, device_t dev, void *aux)
 {
 	struct ofbus_attach_args *oba = aux;
 	struct ofbus_attach_args oba2;
-	char name[64];
+	char name[64], type[64];
 	int child, units;
+	bool rootbus;
 
-	printf("\n");
+	rootbus = oba->oba_phandle == OF_finddevice("/");
+
+	/*
+	 * If we are the OFW root, get the banner-name and model
+	 * properties and display them for informational purposes.
+	 */
+	if (rootbus) {
+		int model_len, banner_len;
+
+		model_len = OF_getprop(oba->oba_phandle, "model",
+		    name, sizeof(name));
+		banner_len = OF_getprop(oba->oba_phandle, "banner-name",
+		    type, sizeof(type));
+
+		if (banner_len > 0 && model_len > 0) {
+			printf(": %s (%s)\n", type, name);
+		} else if (model_len > 0) {
+			printf(": %s\n", name);
+		} else {
+			printf("\n");
+		}
+	} else {
+		printf("\n");
+	}
 
 	/*
 	 * This is a hack to make the probe work on the scsi (and ide) bus.
@@ -95,9 +159,15 @@ ofbus_attach(device_t parent, device_t dev, void *aux)
 			units = 2;
 	}
 
+	/* attach displays first */
 	for (child = OF_child(oba->oba_phandle); child != 0;
 	     child = OF_peer(child)) {
 		oba2.oba_busname = "ofw";
+		type[0] = 0;
+		if (OF_getprop(child, "device_type", type, sizeof(type)) <= 0)
+			continue;
+		if (strncmp(type, "display", sizeof(type)) != 0)
+			continue;
 		of_packagename(child, name, sizeof name);
 		oba2.oba_phandle = child;
 		for (oba2.oba_unit = 0; oba2.oba_unit < units;
@@ -110,7 +180,38 @@ ofbus_attach(device_t parent, device_t dev, void *aux)
 				strlcpy(oba2.oba_ofname, name,
 				    sizeof(oba2.oba_ofname));
 			}
-			config_found(dev, &oba2, ofbus_print);
+			config_found(dev, &oba2, ofbus_print,
+			    CFARGS(.devhandle = devhandle_from_of(child)));
+		}
+	}
+
+	/* now the rest */
+	for (child = OF_child(oba->oba_phandle); child != 0;
+	     child = OF_peer(child)) {
+		oba2.oba_busname = "ofw";
+		type[0] = 0;
+		if (OF_getprop(child, "device_type", type, sizeof(type)) > 0) {
+			if (strncmp(type, "display", sizeof(type)) == 0)
+				continue;
+		}
+		if (rootbus &&
+		    ofbus_skip_node_in_root(child, name, sizeof(name))) {
+			continue;
+		}
+		of_packagename(child, name, sizeof name);
+		oba2.oba_phandle = child;
+		for (oba2.oba_unit = 0; oba2.oba_unit < units;
+		     oba2.oba_unit++) {
+			if (units > 1) {
+				snprintf(oba2.oba_ofname,
+				    sizeof(oba2.oba_ofname), "%s@%d", name,
+				    oba2.oba_unit);
+			} else {
+				strlcpy(oba2.oba_ofname, name,
+				    sizeof(oba2.oba_ofname));
+			}
+			config_found(dev, &oba2, ofbus_print,
+			    CFARGS(.devhandle = devhandle_from_of(child)));
 		}
 	}
 }

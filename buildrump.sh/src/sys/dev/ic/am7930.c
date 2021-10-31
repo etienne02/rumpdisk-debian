@@ -1,4 +1,4 @@
-/*	$NetBSD: am7930.c,v 1.52 2014/12/20 23:36:21 jklos Exp $	*/
+/*	$NetBSD: am7930.c,v 1.60 2020/09/12 05:19:16 isaki Exp $	*/
 
 /*
  * Copyright (c) 1995 Rolf Grossmann
@@ -36,13 +36,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: am7930.c,v 1.52 2014/12/20 23:36:21 jklos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: am7930.c,v 1.60 2020/09/12 05:19:16 isaki Exp $");
 
 #include "audio.h"
 #if NAUDIO > 0
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/atomic.h>
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/device.h>
@@ -52,7 +53,8 @@ __KERNEL_RCSID(0, "$NetBSD: am7930.c,v 1.52 2014/12/20 23:36:21 jklos Exp $");
 #include <sys/cpu.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
+#include <dev/audio/mulaw.h>
 
 #include <dev/ic/am7930reg.h>
 #include <dev/ic/am7930var.h>
@@ -136,6 +138,61 @@ static const uint16_t ger_coeff[] = {
 #define NGER (sizeof(ger_coeff) / sizeof(ger_coeff[0]))
 };
 
+static const struct audio_format am7930_format = {
+	.mode		= AUMODE_PLAY | AUMODE_RECORD,
+	.encoding	= AUDIO_ENCODING_ULAW,
+	.validbits	= 8,
+	.precision	= 8,
+	.channels	= 1,
+	.channel_mask	= AUFMT_MONAURAL,
+	.frequency_type	= 1,
+	.frequency	= { 8000 },
+};
+
+/*
+ * Indirect access functions.
+ */
+
+static void
+am7930_iwrite(struct am7930_softc *sc, int reg, uint8_t val)
+{
+
+	AM7930_DWRITE(sc, AM7930_DREG_CR, reg);
+	AM7930_DWRITE(sc, AM7930_DREG_DR, val);
+}
+
+static uint8_t
+am7930_iread(struct am7930_softc *sc, int reg)
+{
+
+	AM7930_DWRITE(sc, AM7930_DREG_CR, reg);
+	return AM7930_DREAD(sc, AM7930_DREG_DR);
+}
+
+static void
+am7930_iwrite16(struct am7930_softc *sc, int reg, uint16_t val)
+{
+
+	AM7930_DWRITE(sc, AM7930_DREG_CR, reg);
+	AM7930_DWRITE(sc, AM7930_DREG_DR, val);
+	AM7930_DWRITE(sc, AM7930_DREG_DR, val >> 8);
+}
+
+static uint16_t __unused
+am7930_iread16(struct am7930_softc *sc, int reg)
+{
+	uint lo, hi;
+
+	AM7930_DWRITE(sc, AM7930_DREG_CR, reg);
+	lo = AM7930_DREAD(sc, AM7930_DREG_DR);
+	hi = AM7930_DREAD(sc, AM7930_DREG_DR);
+	return (hi << 8) | lo;
+}
+
+#define AM7930_IWRITE(sc,r,v)	am7930_iwrite(sc,r,v)
+#define AM7930_IREAD(sc,r)	am7930_iread(sc,r)
+#define AM7930_IWRITE16(sc,r,v)	am7930_iwrite16(sc,r,v)
+#define AM7930_IREAD16(sc,r)	am7930_iread16(sc,r)
 
 /*
  * Reset chip and set boot-time softc defaults.
@@ -144,7 +201,7 @@ void
 am7930_init(struct am7930_softc *sc, int flag)
 {
 
-	DPRINTF(("am7930_init()\n"));
+	DPRINTF(("%s\n", __func__));
 
 	/* set boot defaults */
 	sc->sc_rlevel = 128;
@@ -152,6 +209,9 @@ am7930_init(struct am7930_softc *sc, int flag)
 	sc->sc_mlevel = 0;
 	sc->sc_out_port = AUDIOAMD_SPEAKER_VOL;
 	sc->sc_mic_mute = 0;
+
+	memset(&sc->sc_p, 0, sizeof(sc->sc_p));
+	memset(&sc->sc_r, 0, sizeof(sc->sc_r));
 
 	/* disable sample interrupts */
 	AM7930_IWRITE(sc, AM7930_IREG_MUX_MCR4, 0);
@@ -173,6 +233,7 @@ am7930_init(struct am7930_softc *sc, int flag)
 		AM7930_IWRITE(sc, AM7930_IREG_MUX_MCR2, AM7930_MCRCHAN_NC);
 		AM7930_IWRITE(sc, AM7930_IREG_MUX_MCR3, AM7930_MCRCHAN_NC);
 
+		mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);
 	} else {
 
 		/*
@@ -187,100 +248,41 @@ am7930_init(struct am7930_softc *sc, int flag)
 			(AM7930_MCRCHAN_BB << 4) | AM7930_MCRCHAN_BA);
 		AM7930_IWRITE(sc, AM7930_IREG_MUX_MCR4,
 			AM7930_MCR4_INT_ENABLE);
+
+		mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SOFTSERIAL);
 	}
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
-	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);
-}
 
-int
-am7930_open(void *addr, int flags)
-{
-	struct am7930_softc *sc;
-
-	sc = addr;
-	DPRINTF(("sa_open: unit %p\n", sc));
-	sc->sc_glue->onopen(sc);
-	DPRINTF(("saopen: ok -> sc=%p\n",sc));
-	return 0;
-}
-
-void
-am7930_close(void *addr)
-{
-	struct am7930_softc *sc;
-
-	sc = addr;
-	DPRINTF(("sa_close: sc=%p\n", sc));
-	sc->sc_glue->onclose(sc);
-	DPRINTF(("sa_close: closed.\n"));
-}
-
-/*
- * XXX should be extended to handle a few of the more common formats.
- */
-int
-am7930_set_params(void *addr, int setmode, int usemode, audio_params_t *p,
-    audio_params_t *r, stream_filter_list_t *pfil, stream_filter_list_t *rfil)
-{
-	audio_params_t hw;
-	struct am7930_softc *sc;
-
-	sc = addr;
-	if ((usemode & AUMODE_PLAY) == AUMODE_PLAY) {
-		if (p->sample_rate < 7500 || p->sample_rate > 8500 ||
-			p->encoding != AUDIO_ENCODING_ULAW ||
-			p->precision != 8 ||
-			p->channels != 1)
-				return EINVAL;
-		p->sample_rate = 8000;
-		if (sc->sc_glue->output_conv != NULL) {
-			hw = *p;
-			hw.encoding = AUDIO_ENCODING_NONE;
-			hw.precision *= sc->sc_glue->factor;
-			pfil->append(pfil, sc->sc_glue->output_conv, &hw);
-		}
+	sc->sc_sicookie = softint_establish(SOFTINT_SERIAL, &am7930_swintr, sc);
+	if (sc->sc_sicookie == NULL) {
+		aprint_error_dev(sc->sc_dev,
+		    "cannot establish software interrupt\n");
+		return;
 	}
-	if ((usemode & AUMODE_RECORD) == AUMODE_RECORD) {
-		if (r->sample_rate < 7500 || r->sample_rate > 8500 ||
-			r->encoding != AUDIO_ENCODING_ULAW ||
-			r->precision != 8 ||
-			r->channels != 1)
-				return EINVAL;
-		r->sample_rate = 8000;
-		if (sc->sc_glue->input_conv != NULL) {
-			hw = *r;
-			hw.encoding = AUDIO_ENCODING_NONE;
-			hw.precision *= sc->sc_glue->factor;
-			pfil->append(rfil, sc->sc_glue->input_conv, &hw);
-		}
+}
+
+int
+am7930_query_format(void *addr, audio_format_query_t *afp)
+{
+
+	return audio_query_format(&am7930_format, 1, afp);
+}
+
+int
+am7930_set_format(void *addr, int setmode,
+	const audio_params_t *play, const audio_params_t *rec,
+	audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
+{
+
+	if ((setmode & AUMODE_PLAY) != 0) {
+		pfil->codec = audio_internal_to_mulaw;
+	}
+	if ((setmode & AUMODE_RECORD) != 0) {
+		rfil->codec = audio_mulaw_to_internal;
 	}
 
 	return 0;
-}
-
-int
-am7930_query_encoding(void *addr, struct audio_encoding *fp)
-{
-	switch (fp->index) {
-	case 0:
-		strcpy(fp->name, AudioEmulaw);
-		fp->encoding = AUDIO_ENCODING_ULAW;
-		fp->precision = 8;
-		fp->flags = 0;
-		break;
-	default:
-		return EINVAL;
-		    /*NOTREACHED*/
-	}
-	return 0;
-}
-
-int
-am7930_round_blocksize(void *addr, int blk,
-    int mode, const audio_params_t *param)
-{
-	return blk;
 }
 
 int
@@ -291,7 +293,7 @@ am7930_commit_settings(void *addr)
 	uint8_t mmr2, mmr3;
 	int level;
 
-	DPRINTF(("sa_commit.\n"));
+	DPRINTF(("%s\n", __func__));
 	sc = addr;
 	gx = gx_coeff[sc->sc_rlevel];
 	stgr = gx_coeff[sc->sc_mlevel];
@@ -336,14 +338,65 @@ am7930_commit_settings(void *addr)
 }
 
 int
+am7930_trigger_output(void *addr, void *start, void *end, int blksize,
+    void (*intr)(void *), void *arg, const audio_params_t *params)
+{
+	struct am7930_softc *sc;
+
+	DPRINTF(("%s: blksize=%d %p(%p)\n", __func__, blksize, intr, arg));
+	sc = addr;
+	sc->sc_p.intr = intr;
+	sc->sc_p.arg = arg;
+	sc->sc_p.start = start;
+	sc->sc_p.end = end;
+	sc->sc_p.blksize = blksize;
+	sc->sc_p.data = sc->sc_p.start;
+	sc->sc_p.blkend = sc->sc_p.start + sc->sc_p.blksize;
+
+	/* Start if either play or rec start. */
+	if (sc->sc_r.intr == NULL) {
+		AM7930_IWRITE(sc, AM7930_IREG_INIT, AM7930_INIT_PMS_ACTIVE);
+		DPRINTF(("%s: started intrs.\n", __func__));
+	}
+	return 0;
+}
+
+int
+am7930_trigger_input(void *addr, void *start, void *end, int blksize,
+    void (*intr)(void *), void *arg, const audio_params_t *params)
+{
+	struct am7930_softc *sc;
+
+	DPRINTF(("%s: blksize=%d %p(%p)\n", __func__, blksize, intr, arg));
+	sc = addr;
+	sc->sc_r.intr = intr;
+	sc->sc_r.arg = arg;
+	sc->sc_r.start = start;
+	sc->sc_r.end = end;
+	sc->sc_r.blksize = blksize;
+	sc->sc_r.data = sc->sc_r.start;
+	sc->sc_r.blkend = sc->sc_r.start + sc->sc_r.blksize;
+
+	/* Start if either play or rec start. */
+	if (sc->sc_p.intr == NULL) {
+		AM7930_IWRITE(sc, AM7930_IREG_INIT, AM7930_INIT_PMS_ACTIVE);
+		DPRINTF(("%s: started intrs.\n", __func__));
+	}
+	return 0;
+}
+
+int
 am7930_halt_output(void *addr)
 {
 	struct am7930_softc *sc;
 
 	sc = addr;
-	/* XXX only halt, if input is also halted ?? */
-	AM7930_IWRITE(sc, AM7930_IREG_INIT,
-	    AM7930_INIT_PMS_ACTIVE | AM7930_INIT_INT_DISABLE);
+	sc->sc_p.intr = NULL;
+	/* Halt if both of play and rec halt. */
+	if (sc->sc_r.intr == NULL) {
+		AM7930_IWRITE(sc, AM7930_IREG_INIT,
+		    AM7930_INIT_PMS_ACTIVE | AM7930_INIT_INT_DISABLE);
+	}
 	return 0;
 }
 
@@ -353,11 +406,84 @@ am7930_halt_input(void *addr)
 	struct am7930_softc *sc;
 
 	sc = addr;
-	/* XXX only halt, if output is also halted ?? */
-	AM7930_IWRITE(sc, AM7930_IREG_INIT,
-	    AM7930_INIT_PMS_ACTIVE | AM7930_INIT_INT_DISABLE);
+	sc->sc_r.intr = NULL;
+	/* Halt if both of play and rec halt. */
+	if (sc->sc_p.intr == NULL) {
+		AM7930_IWRITE(sc, AM7930_IREG_INIT,
+		    AM7930_INIT_PMS_ACTIVE | AM7930_INIT_INT_DISABLE);
+	}
 	return 0;
 }
+
+int
+am7930_hwintr(void *arg)
+{
+	struct am7930_softc *sc;
+	int k __unused;
+
+	sc = arg;
+
+	/*
+	 * This hwintr is called as pseudo-DMA.  So don't acquire intr_lock.
+	 */
+
+	/* clear interrupt */
+	k = AM7930_DREAD(sc, AM7930_DREG_IR);
+#if !defined(__vax__)
+	/* On vax, interrupt is not shared, this shouldn't happen */
+	if ((k & (AM7930_IR_DTTHRSH | AM7930_IR_DRTHRSH | AM7930_IR_DSRI |
+	    AM7930_IR_DERI | AM7930_IR_BBUFF)) == 0) {
+		return 0;
+	}
+#endif
+
+	/* receive incoming data */
+	if (sc->sc_r.intr) {
+		*sc->sc_r.data++ = AM7930_DREAD(sc, AM7930_DREG_BBRB);
+		if (sc->sc_r.data == sc->sc_r.blkend) {
+			if (sc->sc_r.blkend == sc->sc_r.end) {
+				sc->sc_r.data = sc->sc_r.start;
+				sc->sc_r.blkend = sc->sc_r.start;
+			}
+			sc->sc_r.blkend += sc->sc_r.blksize;
+			atomic_store_relaxed(&sc->sc_r.intr_pending, 1);
+			softint_schedule(sc->sc_sicookie);
+		}
+	}
+
+	/* send outgoing data */
+	if (sc->sc_p.intr) {
+		AM7930_DWRITE(sc, AM7930_DREG_BBTB, *sc->sc_p.data++);
+		if (sc->sc_p.data == sc->sc_p.blkend) {
+			if (sc->sc_p.blkend == sc->sc_p.end) {
+				sc->sc_p.data = sc->sc_p.start;
+				sc->sc_p.blkend = sc->sc_p.start;
+			}
+			sc->sc_p.blkend += sc->sc_p.blksize;
+			atomic_store_relaxed(&sc->sc_p.intr_pending, 1);
+			softint_schedule(sc->sc_sicookie);
+		}
+	}
+
+	sc->sc_intrcnt.ev_count++;
+	return 1;
+}
+
+void
+am7930_swintr(void *cookie)
+{
+	struct am7930_softc *sc = cookie;
+
+	mutex_enter(&sc->sc_intr_lock);
+	if (atomic_cas_uint(&sc->sc_r.intr_pending, 1, 0) == 1) {
+		(*sc->sc_r.intr)(sc->sc_r.arg);
+	}
+	if (atomic_cas_uint(&sc->sc_p.intr_pending, 1, 0) == 1) {
+		(*sc->sc_p.intr)(sc->sc_p.arg);
+	}
+	mutex_exit(&sc->sc_intr_lock);
+}
+
 
 /*
  * XXX chip is full-duplex, but really attach-dependent.
@@ -366,7 +492,9 @@ am7930_halt_input(void *addr)
 int
 am7930_get_props(void *addr)
 {
-	return AUDIO_PROP_FULLDUPLEX;
+
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE |
+	    AUDIO_PROP_FULLDUPLEX;
 }
 
 /*
@@ -377,7 +505,7 @@ am7930_set_port(void *addr, mixer_ctrl_t *cp)
 {
 	struct am7930_softc *sc;
 
-	DPRINTF(("am7930_set_port: port=%d", cp->dev));
+	DPRINTF(("%s: port=%d\n", __func__, cp->dev));
 	sc = addr;
 	if (cp->dev == AUDIOAMD_RECORD_SOURCE ||
 		cp->dev == AUDIOAMD_MONITOR_OUTPUT ||
@@ -425,7 +553,7 @@ am7930_get_port(void *addr, mixer_ctrl_t *cp)
 {
 	struct am7930_softc *sc;
 
-	DPRINTF(("am7930_get_port: port=%d\n", cp->dev));
+	DPRINTF(("%s: port=%d\n", __func__, cp->dev));
 	sc = addr;
 	if (cp->dev == AUDIOAMD_RECORD_SOURCE ||
 		cp->dev == AUDIOAMD_MONITOR_OUTPUT ||
@@ -472,7 +600,7 @@ int
 am7930_query_devinfo(void *addr, mixer_devinfo_t *dip)
 {
 
-	DPRINTF(("am7930_query_devinfo()\n"));
+	DPRINTF(("%s\n", __func__));
 
 	switch(dip->index) {
 	case AUDIOAMD_MIC_VOL:
@@ -572,6 +700,16 @@ am7930_query_devinfo(void *addr, mixer_devinfo_t *dip)
 	DPRINTF(("AUDIO_MIXER_DEVINFO: name=%s\n", dip->label.name));
 
 	return 0;
+}
+
+void
+am7930_get_locks(void *addr, kmutex_t **intr, kmutex_t **thread)
+{
+	struct am7930_softc *sc;
+
+	sc = addr;
+	*intr = &sc->sc_intr_lock;
+	*thread = &sc->sc_lock;
 }
 
 #endif	/* NAUDIO */

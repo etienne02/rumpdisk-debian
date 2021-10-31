@@ -1,4 +1,4 @@
-/*	$NetBSD: v7fs_vfsops.c,v 1.12 2014/12/29 15:29:38 hannken Exp $	*/
+/*	$NetBSD: v7fs_vfsops.c,v 1.17 2020/01/17 20:08:09 ad Exp $	*/
 
 /*-
  * Copyright (c) 2004, 2011 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: v7fs_vfsops.c,v 1.12 2014/12/29 15:29:38 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: v7fs_vfsops.c,v 1.17 2020/01/17 20:08:09 ad Exp $");
 #if defined _KERNEL_OPT
 #include "opt_v7fs.h"
 #endif
@@ -254,9 +254,6 @@ v7fs_mountfs(struct vnode *devvp, struct mount *mp, int endian)
 	DPRINTF("%d\n",endian);
 
 	v7fsmount = kmem_zalloc(sizeof(*v7fsmount), KM_SLEEP);
-	if (v7fsmount == NULL) {
-		return ENOMEM;
-	}
 	v7fsmount->devvp = devvp;
 	v7fsmount->mountp = mp;
 
@@ -324,13 +321,13 @@ v7fs_unmount(struct mount *mp, int mntflags)
 }
 
 int
-v7fs_root(struct mount *mp, struct vnode **vpp)
+v7fs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *vp;
 	int error;
 
 	DPRINTF("\n");
-	if ((error = VFS_VGET(mp, V7FS_ROOT_INODE, &vp)) != 0) {
+	if ((error = VFS_VGET(mp, V7FS_ROOT_INODE, lktype, &vp)) != 0) {
 		DPRINTF("error=%d\n", error);
 		return error;
 	}
@@ -369,8 +366,11 @@ v7fs_statvfs(struct mount *mp, struct statvfs *f)
 static bool
 v7fs_sync_selector(void *cl, struct vnode *vp)
 {
-	struct v7fs_node *v7fs_node = vp->v_data;
+	struct v7fs_node *v7fs_node;
 
+	KASSERT(mutex_owned(vp->v_interlock));
+
+	v7fs_node = vp->v_data;
 	if (v7fs_node == NULL)
 		return false;
 	if (!v7fs_inode_allocated(&v7fs_node->inode))
@@ -482,7 +482,7 @@ v7fs_loadvnode(struct mount *mp, struct vnode *vp,
 
 
 int
-v7fs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+v7fs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 	int error;
 	v7fs_ino_t number;
@@ -494,7 +494,7 @@ v7fs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 	error = vcache_get(mp, &number, sizeof(number), &vp);
 	if (error)
 		return error;
-	error = vn_lock(vp, LK_EXCLUSIVE);
+	error = vn_lock(vp, lktype);
 	if (error) {
 		vrele(vp);
 		return error;
@@ -506,7 +506,7 @@ v7fs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 }
 
 int
-v7fs_fhtovp(struct mount *mp, struct fid *fid, struct vnode **vpp)
+v7fs_fhtovp(struct mount *mp, struct fid *fid, int lktype, struct vnode **vpp)
 {
 
 	DPRINTF("\n");
@@ -576,14 +576,14 @@ v7fs_mountroot(void)
 
 	if ((error = v7fs_mountfs(rootvp, mp, _BYTE_ORDER))) {
 		DPRINTF("mountfs error=%d\n", error);
-		vfs_unbusy(mp, false, NULL);
-		vfs_destroy(mp);
+		vfs_unbusy(mp);
+		vfs_rele(mp);
 		return error;
 	}
 
 	mountlist_append(mp);
 
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 
 	return 0;
 }

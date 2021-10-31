@@ -1,4 +1,4 @@
-/*	$NetBSD: pcmcia_cis.c,v 1.55 2009/05/12 14:42:19 cegger Exp $	*/
+/*	$NetBSD: pcmcia_cis.c,v 1.57 2019/11/10 21:16:36 chs Exp $	*/
 
 /*
  * Copyright (c) 1997 Marc Horowitz.  All rights reserved.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcmcia_cis.c,v 1.55 2009/05/12 14:42:19 cegger Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcmcia_cis.c,v 1.57 2019/11/10 21:16:36 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,7 +76,7 @@ static void decode_cftable_entry(struct pcmcia_tuple *, struct cis_state *);
 static void
 create_pf(struct cis_state *state)
 {
-	state->pf = malloc(sizeof(*state->pf), M_DEVBUF, M_NOWAIT|M_ZERO);
+	state->pf = malloc(sizeof(*state->pf), M_DEVBUF, M_WAITOK|M_ZERO);
 	state->pf->number = state->count++;
 	state->pf->last_config_index = -1;
 	SIMPLEQ_INIT(&state->pf->cfe_head);
@@ -408,6 +408,7 @@ pcmcia_scan_cis(device_t dev,
 				 * function.  This tuple has structural and
 				 * semantic content.
 				 */
+				/* FALLTHROUGH */
 			default:
 				{
 					if ((*fct) (&tuple, arg)) {
@@ -1084,12 +1085,7 @@ decode_cftable_entry(struct pcmcia_tuple *tuple, struct cis_state *state)
 		return;
 	}
 	if (num != state->default_cfe->number) {
-		cfe = malloc(sizeof(*cfe), M_DEVBUF, M_NOWAIT);
-		if (cfe == NULL) {
-			printf("Cannot allocate cfe entry\n");
-			return;
-		}
-
+		cfe = malloc(sizeof(*cfe), M_DEVBUF, M_WAITOK);
 		*cfe = *state->default_cfe;
 
 		SIMPLEQ_INSERT_TAIL(&state->pf->cfe_head, cfe, cfe_list);

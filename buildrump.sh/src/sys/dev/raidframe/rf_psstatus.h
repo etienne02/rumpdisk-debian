@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_psstatus.h,v 1.14 2011/05/03 08:18:43 mrg Exp $	*/
+/*	$NetBSD: rf_psstatus.h,v 1.16 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -87,12 +87,12 @@ struct RF_ReconParityStripeStatus_s {
 				 * this parity stripe */
 	char   issued[RF_MAXCOL];	/* issued[i]==1 <=> column i has already
 				 * issued a read request for the indicated RU */
-	RF_CallbackDesc_t *procWaitList;	/* list of user procs waiting
+	RF_CallbackFuncDesc_t *procWaitList;	/* list of user procs waiting
 						 * for recon to be done */
-	RF_CallbackDesc_t *blockWaitList;	/* list of disks blocked
+	RF_CallbackValueDesc_t *blockWaitList;	/* list of disks blocked
 						 * waiting for user write to
 						 * complete */
-	RF_CallbackDesc_t *bufWaitList;	/* list of disks blocked waiting to
+	RF_CallbackValueDesc_t *bufWaitList;	/* list of disks blocked waiting to
 					 * acquire a buffer for this RU */
 	RF_ReconParityStripeStatus_t *next;
 };
@@ -122,7 +122,7 @@ struct RF_PSStatusHeader_s {
 #define RF_PSS_BUFFERWAIT      0x00000020	/* someone is waiting for a
 						 * buffer for this RU */
 
-int rf_ConfigurePSStatus(RF_ShutdownList_t **);
+int rf_ConfigurePSStatus(RF_ShutdownList_t **, RF_Raid_t *, RF_Config_t *);
 void rf_InitPSStatus(RF_Raid_t *);
 RF_PSStatusHeader_t *rf_MakeParityStripeStatusTable(RF_Raid_t *);
 void rf_FreeParityStripeStatusTable(RF_Raid_t *, RF_PSStatusHeader_t *);

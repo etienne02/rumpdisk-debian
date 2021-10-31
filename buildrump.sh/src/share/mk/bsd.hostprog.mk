@@ -1,74 +1,77 @@
-#	$NetBSD: bsd.hostprog.mk,v 1.76 2016/01/01 17:06:21 christos Exp $
+#	$NetBSD: bsd.hostprog.mk,v 1.84 2021/03/27 02:46:45 simonb Exp $
 #	@(#)bsd.prog.mk	8.2 (Berkeley) 4/2/94
 
-.include <bsd.init.mk>
+.include <bsd.hostinit.mk>
 .include <bsd.sys.mk>
 
 ##### Basic targets
 
 ##### Default values
-LIBATF_C?=	/usr/lib/libatf-c.a
-LIBATF_CXX?=	/usr/lib/libatf-c++.a
-LIBBLUETOOTH?=	/usr/lib/libbluetooth.a
-LIBBZ2?=	/usr/lib/libbz2.a
-LIBC?=		/usr/lib/libc.a
-LIBCOMPAT?=	/usr/lib/libcompat.a
-LIBCRYPT?=	/usr/lib/libcrypt.a
-LIBCURSES?=	/usr/lib/libcurses.a
-LIBC_PIC?=	/usr/lib/libc_pic.a
-LIBC_SO?=	/usr/lib/libc.so
-LIBDBM?=	/usr/lib/libdbm.a
-LIBDES?=	/usr/lib/libdes.a
-LIBEDIT?=	/usr/lib/libedit.a
-LIBEVENT?=	/usr/lib/libevent.a
+LIBATF_C?=		/usr/lib/libatf-c.a
+LIBATF_CXX?=		/usr/lib/libatf-c++.a
+LIBBLUETOOTH?=		/usr/lib/libbluetooth.a
+LIBBZ2?=		/usr/lib/libbz2.a
+LIBC?=			/usr/lib/libc.a
+LIBCOMPAT?=		/usr/lib/libcompat.a
+LIBCRYPT?=		/usr/lib/libcrypt.a
+LIBCURSES?=		/usr/lib/libcurses.a
+LIBC_PIC?=		/usr/lib/libc_pic.a
+LIBC_SO?=		/usr/lib/libc.so
+LIBDBM?=		/usr/lib/libdbm.a
+LIBDES?=		/usr/lib/libdes.a
+LIBEDIT?=		/usr/lib/libedit.a
+LIBEVENT?=		/usr/lib/libevent.a
 LIBEVENT_OPENSSL?=	/usr/lib/libevent_openssl.a
 LIBEVENT_PTHREADS?=	/usr/lib/libevent_pthreads.a
-LIBEXPAT?=	/usr/lib/libexpat.a
-LIBFETCH?=	/usr/lib/libfetch.a
-LIBFORM?=	/usr/lib/libform.a
-LIBGCC?=	/usr/lib/libgcc.a
-LIBGNUMALLOC?=	/usr/lib/libgnumalloc.a
-LIBINTL?=	/usr/lib/libintl.a
-LIBIPSEC?=	/usr/lib/libipsec.a
-LIBKVM?=	/usr/lib/libkvm.a
-LIBL?=		/usr/lib/libl.a
-LIBLUTOK?=	/usr/lib/liblutok.a
-LIBLZMA?=	/usr/lib/liblzma.a
-LIBM?=		/usr/lib/libm.a
-LIBMAGIC?=	/usr/lib/libmagic.a
-LIBMENU?=	/usr/lib/libmenu.a
-LIBMP?=		/usr/lib/libmp.a
-LIBNTP?=	/usr/lib/libntp.a
-LIBOBJC?=	/usr/lib/libobjc.a
-LIBP2K?=	/usr/lib/libp2k.a
-LIBPANEL?=	/usr/lib/libpanel.a
-LIBPC?=		/usr/lib/libpc.a
-LIBPCAP?=	/usr/lib/libpcap.a
-LIBPCI?=	/usr/lib/libpci.a
-LIBPLOT?=	/usr/lib/libplot.a
-LIBPOSIX?=	/usr/lib/libposix.a
-LIBPTHREAD?=    /usr/lib/libpthread.a
-LIBPTHREAD_DBG?=/usr/lib/libpthread_dbg.a
-LIBPUFFS?=	/usr/lib/libpuffs.a
-LIBQUOTA?=	/usr/lib/libquota.a
-LIBRESOLV?=	/usr/lib/libresolv.a
-LIBRPCSVC?=	/usr/lib/librpcsvc.a
-LIBRUMP?=	/usr/lib/librump.a
-LIBRUMPCLIENT?=	/usr/lib/librumpclient.a
-LIBRUMPNET?=	/usr/lib/librumpnet.a
-LIBRUMPUSER?=	/usr/lib/librumpuser.a
-LIBRUMPVFS?=	/usr/lib/librumpvfs.a
-LIBSKEY?=	/usr/lib/libskey.a
-LIBSQLITE3?=	/usr/lib/libsqlite3.a
-LIBSSP?=	/usr/lib/libssp.a
-LIBSTDCXX?=	/usr/lib/libstdc++.a
-LIBSUPCXX?=	/usr/lib/libsupc++.a
-LIBTERMINFO?=	/usr/lib/libterminfo.a
-LIBUKFS?=	/usr/lib/libukfs.a
-LIBUTIL?=	/usr/lib/libutil.a
-LIBWRAP?=	/usr/lib/libwrap.a
-LIBY?=		/usr/lib/liby.a
-LIBZ?=		/usr/lib/libz.a
+LIBEXPAT?=		/usr/lib/libexpat.a
+LIBFETCH?=		/usr/lib/libfetch.a
+LIBFORM?=		/usr/lib/libform.a
+LIBGCC?=		/usr/lib/libgcc.a
+LIBGNUCTF?=		/usr/lib/libgnuctf.a
+LIBGNUMALLOC?=		/usr/lib/libgnumalloc.a
+LIBINTL?=		/usr/lib/libintl.a
+LIBIPSEC?=		/usr/lib/libipsec.a
+LIBKVM?=		/usr/lib/libkvm.a
+LIBL?=			/usr/lib/libl.a
+LIBLUTOK?=		/usr/lib/liblutok.a
+LIBLZMA?=		/usr/lib/liblzma.a
+LIBM?=			/usr/lib/libm.a
+LIBMAGIC?=		/usr/lib/libmagic.a
+LIBMENU?=		/usr/lib/libmenu.a
+LIBMP?=			/usr/lib/libmp.a
+LIBNTP?=		/usr/lib/libntp.a
+LIBNVMM?=		/usr/lib/libnvmm.a
+LIBOBJC?=		/usr/lib/libobjc.a
+LIBP2K?=		/usr/lib/libp2k.a
+LIBPANEL?=		/usr/lib/libpanel.a
+LIBPC?=			/usr/lib/libpc.a
+LIBPCAP?=		/usr/lib/libpcap.a
+LIBPCI?=		/usr/lib/libpci.a
+LIBPLOT?=		/usr/lib/libplot.a
+LIBPOSIX?=		/usr/lib/libposix.a
+LIBPTHREAD?=		/usr/lib/libpthread.a
+LIBPUFFS?=		/usr/lib/libpuffs.a
+LIBQUOTA?=		/usr/lib/libquota.a
+LIBREFUSE?=		/usr/lib/librefuse.a
+LIBRESOLV?=		/usr/lib/libresolv.a
+LIBRPCSVC?=		/usr/lib/librpcsvc.a
+LIBRUMP?=		/usr/lib/librump.a
+LIBRUMPCLIENT?=		/usr/lib/librumpclient.a
+LIBRUMPNET?=		/usr/lib/librumpnet.a
+LIBRUMPRES?=		/usr/lib/librumpres.a
+LIBRUMPUSER?=		/usr/lib/librumpuser.a
+LIBRUMPVFS?=		/usr/lib/librumpvfs.a
+LIBSKEY?=		/usr/lib/libskey.a
+LIBSQLITE3?=		/usr/lib/libsqlite3.a
+LIBSSP?=		/usr/lib/libssp.a
+LIBSTDCXX?=		/usr/lib/libstdc++.a
+LIBSUPCXX?=		/usr/lib/libsupc++.a
+LIBTERMINFO?=		/usr/lib/libterminfo.a
+LIBUKFS?=		/usr/lib/libukfs.a
+LIBUTIL?=		/usr/lib/libutil.a
+LIBWRAP?=		/usr/lib/libwrap.a
+LIBY?=			/usr/lib/liby.a
+LIBZ?=			/usr/lib/libz.a
 
 ##### rump file system modules
 LIBRUMPFS_CD9660FS?=	/usr/lib/librumpfs_cd9660fs.a
@@ -164,7 +167,7 @@ ${TARGETS}:	# ensure existence
 	echo '#include "nbtool_config.h"' >> ${.TARGET}.1
 	echo '#endif' >> ${.TARGET}.1
 	cat ${.TARGET} >> ${.TARGET}.1
-	mv ${.TARGET}.1 ${.TARGET}
+	${MV} ${.TARGET}.1 ${.TARGET}
 .y.c:
 	${_MKTARGET_YACC}
 	${YACC.y} -o ${.TARGET} ${.IMPSRC}
@@ -172,4 +175,4 @@ ${TARGETS}:	# ensure existence
 	echo '#include "nbtool_config.h"' >> ${.TARGET}.1
 	echo '#endif' >> ${.TARGET}.1
 	cat ${.TARGET} >> ${.TARGET}.1
-	mv ${.TARGET}.1 ${.TARGET}
+	${MV} ${.TARGET}.1 ${.TARGET}

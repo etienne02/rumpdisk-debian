@@ -1,4 +1,4 @@
-/*	$NetBSD: disklabel_gpt.h,v 1.12 2013/11/24 08:17:50 jnemeth Exp $	*/
+/*	$NetBSD: disklabel_gpt.h,v 1.14 2020/05/18 05:47:54 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2002 Marcel Moolenaar
@@ -43,7 +43,7 @@
  */
 struct gpt_hdr {
 	int8_t		hdr_sig[8];	/* identifies GUID Partition Table */
-	uint32_t	hdr_revision;	/* GPT specification revsion */
+	uint32_t	hdr_revision;	/* GPT specification revision */
 	uint32_t	hdr_size;	/* size of GPT Header */
 	uint32_t	hdr_crc_self;	/* CRC32 of GPT Header */
 	uint32_t	hdr__rsvd0;	/* must be zero */
@@ -175,5 +175,15 @@ struct gpt_ent {
  */
 #define	GPT_ENT_TYPE_BIOS		\
 	{0x21686148,0x6449,0x6e6f,0x74,0x4e,{0x65,0x65,0x64,0x45,0x46,0x49}}
+
+/*
+ * VMware types.
+ */
+#define	GPT_ENT_TYPE_VMWARE_VMKCORE	\
+	{0x9D275380,0x40AD,0x11DB,0xBF,0x97,{0x00,0x0C,0x29,0x11,0xD1,0xB8}}
+#define	GPT_ENT_TYPE_VMWARE_VMFS	\
+	{0xAA31E02A,0x400F,0x11DB,0x95,0x90,{0x00,0x0C,0x29,0x11,0xD1,0xB8}}
+#define	GPT_ENT_TYPE_VMWARE_RESERVED	\
+	{0x9198EFFC,0x31C0,0x11DB,0x8F,0x78,{0x00,0x0C,0x29,0x11,0xD1,0xB8}}
 
 #endif /* _SYS_DISKLABEL_GPT_H_ */

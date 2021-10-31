@@ -1,4 +1,4 @@
-/*	$NetBSD: kbd.c,v 1.68 2014/07/25 08:10:39 dholland Exp $	*/
+/*	$NetBSD: kbd.c,v 1.73 2021/08/07 16:19:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -47,7 +47,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kbd.c,v 1.68 2014/07/25 08:10:39 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kbd.c,v 1.73 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -202,7 +202,7 @@ kbdopen(dev_t dev, int flags, int mode, struct lwp *l)
 	k->k_events.ev_io = l->l_proc;
 
 	/* stop pending autorepeat of console input */
-	if (k->k_repeating) {
+	if (k->k_cc != NULL && k->k_repeating) {
 		k->k_repeating = 0;
 		callout_stop(&k->k_repeat_ch);
 	}
@@ -492,9 +492,11 @@ kbd_input(struct kbd_softc *k, int code)
 
 	/*
 	 * If /dev/kbd is not connected in event mode, or wskbd mode,
-	 * translate and send upstream (to console).
+	 * and is attached as console, translate and send upstream
+	 * (to console).
 	 */
-	kbd_input_console(k, code);
+	if (k->k_cc != NULL)
+		kbd_input_console(k, code);
 }
 
 
@@ -509,8 +511,7 @@ kbd_cc_alloc(struct kbd_softc *k)
 {
 	struct cons_channel *cc;
 
-	if ((cc = malloc(sizeof *cc, M_DEVBUF, M_NOWAIT)) == NULL)
-		return NULL;
+	cc = malloc(sizeof *cc, M_DEVBUF, M_WAITOK);
 
 	/* our callbacks for the console driver */
 	cc->cc_private = k;
@@ -948,12 +949,13 @@ kbd_input_wskbd(struct kbd_softc *k, int code)
 #endif
 			case 0x30:
 #if NSYSMON_ENVSYS
-				if (k->k_isconsole)
+				if (k->k_isconsole) {
 					k->k_ev = KEY_UP(code) ?
 					    PSWITCH_EVENT_RELEASED :
 					    PSWITCH_EVENT_PRESSED;
 					sysmon_task_queue_sched(0,
 					    kbd_powerbutton, k);
+				}
 #endif
 				return;
 		}
@@ -1081,7 +1083,7 @@ kbd_enable(device_t dev)
 	k->k_wsenabled = 0;
 
 	/* Attach the wskbd */
-	k->k_wskbd = config_found(k->k_dev, &a, wskbddevprint);
+	k->k_wskbd = config_found(k->k_dev, &a, wskbddevprint, CFARGS_NONE);
 
 	callout_init(&k->k_wsbell, 0);
 

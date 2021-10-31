@@ -1,4 +1,4 @@
-/* $NetBSD: gpiosim.c,v 1.19 2016/07/14 04:00:45 msaitoh Exp $ */
+/* $NetBSD: gpiosim.c,v 1.23 2021/08/07 16:19:10 thorpej Exp $ */
 /*      $OpenBSD: gpiosim.c,v 1.1 2008/11/23 18:46:49 mbalmer Exp $	*/
 
 /*
@@ -56,8 +56,6 @@ static void	gpiosim_pin_ctl(void *, int, int);
 
 CFATTACH_DECL_NEW(gpiosim, sizeof(struct gpiosim_softc), gpiosim_match,
     gpiosim_attach, gpiosim_detach, NULL);
-
-extern struct cfdriver gpiosim_cd;
 
 static int
 gpiosim_match(device_t parent, cfdata_t match, void *aux)
@@ -121,7 +119,8 @@ gpiosim_attach(device_t parent, device_t self, void *aux)
 	gba.gba_pins = sc->sc_gpio_pins;
 	gba.gba_npins = GPIOSIM_NPINS;
 
-	pmf_device_register(self, NULL, NULL);
+	if (!pmf_device_register(self, NULL, NULL))
+		aprint_error_dev(self, "couldn't establish power handler\n");
 
         sysctl_createv(&sc->sc_log, 0, NULL, &node,
             0,
@@ -143,7 +142,7 @@ gpiosim_attach(device_t parent, device_t self, void *aux)
 	    CTL_CREATE, CTL_EOL);
 
 	aprint_normal(": simulating %d pins\n", GPIOSIM_NPINS);
-	sc->sc_gdev = config_found_ia(self, "gpiobus", &gba, gpiobus_print);
+	sc->sc_gdev = config_found(self, &gba, gpiobus_print, CFARGS_NONE);
 }
 
 static int

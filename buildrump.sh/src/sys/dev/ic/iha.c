@@ -1,4 +1,4 @@
-/*	$NetBSD: iha.c,v 1.42 2011/05/24 16:38:25 joerg Exp $ */
+/*	$NetBSD: iha.c,v 1.45 2021/08/07 16:19:12 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2001, 2002 Izumi Tsutsui
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: iha.c,v 1.42 2011/05/24 16:38:25 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: iha.c,v 1.45 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -524,12 +524,7 @@ iha_attach(struct iha_softc *sc)
 	}
 
 	sc->sc_scb = malloc(sizeof(struct iha_scb) * IHA_MAX_SCB,
-	    M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (sc->sc_scb == NULL) {
-		aprint_error_dev(sc->sc_dev, "cannot allocate SCB\n");
-		return;
-	}
-
+	    M_DEVBUF, M_WAITOK|M_ZERO);
 	for (i = 0, scb = sc->sc_scb; i < IHA_MAX_SCB; i++, scb++) {
 		scb->scb_tagid = i;
 		scb->sgoffset = IHA_SG_SIZE * i;
@@ -620,7 +615,7 @@ iha_attach(struct iha_softc *sc)
 	/*
 	 * Now try to attach all the sub devices.
 	 */
-	config_found(sc->sc_dev, &sc->sc_channel, scsiprint);
+	config_found(sc->sc_dev, &sc->sc_channel, scsiprint, CFARGS_NONE);
 }
 
 /*

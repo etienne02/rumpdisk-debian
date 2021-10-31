@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.kern.inc,v 1.250 2016/04/09 18:51:44 riastradh Exp $
+#	$NetBSD: Makefile.kern.inc,v 1.281 2021/06/02 15:45:28 nia Exp $
 #
 # This file contains common `MI' targets and definitions and it is included
 # at the bottom of each `MD' ${MACHINE}/conf/Makefile.${MACHINE}.
@@ -63,7 +63,12 @@ S!=	cd ../../../.. && pwd
 INCLUDES?=	-I. ${EXTRA_INCLUDES} -I${S}/../common/include -I$S/arch \
 		-I$S -nostdinc
 CPPFLAGS+=	${INCLUDES} ${IDENT} -D_KERNEL -D_KERNEL_OPT
+.if !defined(COVERITY_TOP_CONFIG)
 CPPFLAGS+=	-std=gnu99
+.endif
+.if ${KERNEL_DIR:Uno} == "yes"
+CPPFLAGS+=	-DKERNEL_DIR
+.endif
 DEFCOPTS?=	-O2
 COPTS?=		${DEFCOPTS}
 DBG=		# might contain unwanted -Ofoo
@@ -87,7 +92,9 @@ CWARNFLAGS+=	-Wold-style-definition
 CWARNFLAGS+=	-Wno-sign-compare
 
 CWARNFLAGS.clang+=	-Wno-unknown-pragmas -Wno-conversion \
-			-Wno-self-assign
+			-Wno-self-assign -Wno-error=address-of-packed-member \
+			-Wno-error=constant-conversion
+CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
 
 CWARNFLAGS.ah_regdomain.c= ${${ACTIVE_CC} == "clang":? \
     -Wno-shift-count-negative -Wno-shift-count-overflow:}
@@ -95,8 +102,17 @@ CWARNFLAGS.ah_regdomain.c= ${${ACTIVE_CC} == "clang":? \
 CWARNFLAGS.ioconf.c= ${${ACTIVE_CC} == "clang":? -Wno-unused-const-variable :}
 
 CFLAGS+=	-ffreestanding -fno-zero-initialized-in-bss
+CFLAGS+=	${${ACTIVE_CC} == "gcc":? -fno-delete-null-pointer-checks :}
 CFLAGS+=	${DEBUG} ${COPTS}
 AFLAGS+=	-D_LOCORE -Wa,--fatal-warnings
+
+# example usage to find largest stack users in kernel compile directory:
+#    find . -name \*.su | xargs awk '{ printf "%6d %s\n", $2, $1 }' | sort -n
+.if ${MACHINE} != "vax"
+# GCC/vax 8.4 does not support -fstack-usage.
+CFLAGS+=	${${ACTIVE_CC} == "gcc":? -fstack-usage -Wstack-usage=3584 :}
+.endif
+CWARNFLAGS+=	-Walloca
 
 # XXX
 .if defined(HAVE_GCC) || defined(HAVE_LLVM)
@@ -151,10 +167,10 @@ LINK_O?=	@${_MKSHMSG} "   link  ${.CURDIR:T}/${.TARGET}" && \
 		${KLINK.o}
 
 ##
-## (3) libkern and compat
+## (3) libkern
 ##
-## Set KERN_AS in the port Makefile to "obj" or "library".  The
-## default is "library", as documented in $S/lib/libkern/Makefile.inc.
+## Set OPT_MODULAR in the port Makefile if module(7) is enabled,
+## as documented in $S/lib/libkern/Makefile.inc.
 ##
 
 ### find out what to use for libkern
@@ -166,16 +182,6 @@ LIBKERN?=	${KERNLIB_PROF}
 .endif
 
 LIBKERNLN?=	${KERNLIBLN}
-
-### find out what to use for libcompat
-.include "$S/compat/common/Makefile.inc"
-.ifndef PROF
-SYSLIBCOMPAT?=	${COMPATLIB}
-.else
-SYSLIBCOMPAT?=	${COMPATLIB_PROF}
-.endif
-
-SYSLIBCOMPATLN?=	${COMPATLIBLN}
 
 ##
 ## (4) local objects, compile rules, and dependencies
@@ -201,7 +207,7 @@ _MD_OBJS=	${MD_OBJS}
 # load lines for config "xxx" will be emitted as:
 # xxx: ${SYSTEM_DEP} swapxxxx.o vers.o build_kernel
 
-SYSTEM_LIB=	${MD_LIBS} ${SYSLIBCOMPAT} ${LIBKERN}
+SYSTEM_LIB=	${MD_LIBS} ${LIBKERN}
 SYSTEM_OBJ?=	${_MD_OBJS} ${OBJS} ${SYSTEM_LIB}
 SYSTEM_DEP+=	Makefile ${SYSTEM_OBJ:O}
 .if defined(CTFMERGE)
@@ -209,14 +215,20 @@ SYSTEM_CTFMERGE= ${CTFMERGE} ${CTFMFLAGS} -o ${.TARGET} ${SYSTEM_OBJ} ${EXTRA_OB
 .else
 SYSTEM_CTFMERGE= ${_MKSHECHO}
 .endif
+
+REMOVE_SWAP=   [@]
+.for k in ${KERNELS}
+REMOVE_SWAP:=  ${REMOVE_SWAP}:Nswap${k}.o
+.endfor
+
 SYSTEM_LD_HEAD?=@rm -f $@
 SYSTEM_LD?=	${_MKSHMSG} "   link  ${.CURDIR:T}/${.TARGET}"; \
 		${_MKSHECHO}\
 		${LD} -Map ${.TARGET}.map --cref ${LINKFLAGS} -o ${.TARGET} \
-		'$${SYSTEM_OBJ:N*swap*netbsd*}' '$${EXTRA_OBJ}' vers.o \
+		'$${SYSTEM_OBJ:${REMOVE_SWAP}}' '$${EXTRA_OBJ}' vers.o \
 		${OBJS:M*swap${.TARGET}.o}; \
 		${LD} -Map ${.TARGET}.map --cref ${LINKFLAGS} -o ${.TARGET} \
-		${SYSTEM_OBJ:N*swap*netbsd*} ${EXTRA_OBJ} vers.o \
+		${SYSTEM_OBJ:${REMOVE_SWAP}} ${EXTRA_OBJ} vers.o \
 		${OBJS:M*swap${.TARGET}.o}
 
 TEXTADDR?=	${LOADADDRESS}			# backwards compatibility
@@ -230,12 +242,12 @@ LINKFLAGS?=	${LINKFORMAT} ${LINKSCRIPT} ${LINKTEXT} ${LINKDATA} ${LINKENTRY} \
 LINKFLAGS_DEBUG?=	-X
 
 SYSTEM_LD_TAIL?=@${TOOL_SED} '/const char sccs/!d;s/.*@(.)//;s/" "//;s/\\.*//' vers.c && \
-		${SIZE} $@ && chmod 755 $@ && \
-		${SYSTEM_CTFMERGE}
+		${SIZE} $@ && ${SYSTEM_CTFMERGE} && chmod 755 $@
 SYSTEM_LD_TAIL_DEBUG?=&& \
 		echo mv -f $@ $@.gdb && mv -f $@ $@.gdb && \
 		echo ${STRIP} ${STRIPFLAGS} -o $@ $@.gdb && \
-		${STRIP} ${STRIPFLAGS} -o $@ $@.gdb
+		${STRIP} ${STRIPFLAGS} -o $@ $@.gdb && \
+		chmod 755 $@ $@.gdb
 LINKFLAGS_NORMAL?=	-S
 STRIPFLAGS?=	-g
 
@@ -270,7 +282,7 @@ SYSTEM_LD_TAIL_STAGE2+=	${SYSTEM_LD_TAIL_EXTRA}
 # Generate list of *.o files to pass to ${LD}, preserving order.
 #	x/y/z/a.[csS] -> a.[csS]
 #	a.[csS] -> a.o
-OBJS=	${ALLFILES:C|^.*/([^/]*\.[csS])$$|\1|:C|^(.*)\.[csS]$$|\1.o|}
+OBJS=	${ALLFILES:C|^.*/([^/]*\.[csS])$|\1|:C|^(.*)\.[csS]$|\1.o|}
 
 CFILES=	${ALLFILES:M*.c}
 SFILES=	${ALLFILES:M*.[sS]}
@@ -285,7 +297,7 @@ SSRCS=	${_MD_SFILES} ${_SFILES}
 SRCS=	${CSRCS} ${SSRCS}
 
 .else # ___USE_SUFFIX_RULES___
-OBJS=	${ALLFILES:C|\.[csS]$$|.o|}
+OBJS=	${ALLFILES:C|\.[csS]$|.o|}
 SRCS=	${ALLFILES:M*.[csS]}
 .endif # ___USE_SUFFIX_RULES___
 
@@ -314,6 +326,10 @@ ${_s:T:R}.o: ${_s}
 .include "${S}/conf/cscope.mk"
 .include "${S}/conf/gdbinit.mk"
 .include "${S}/conf/ssp.mk"
+.if "${_SKIP_DTS}" != "yes"
+.include "${S}/conf/dts.mk"
+.endif
+.include "${S}/conf/copts.mk"
 
 ##
 ## (7) misc targets: install, clean(dir), depend(all), lint, links, tags,
@@ -331,8 +347,8 @@ ${_s:T:R}.o: ${_s}
 .if !target(__CLEANKERNEL)
 __CLEANKERNEL: .USE
 	${_MKMSG} "${.TARGET}ing the kernel objects"
-	rm -f ${KERNELS} *.map eddep tags *.[io] *.ko *.ln [a-z]*.s vers.c \
-	    [Ee]rrs linterrs makelinks assym.h.tmp assym.h \
+	rm -f ${KERNELS} *.map *.[io] *.ko *.ln [a-z]*.s *.su vers.c \
+	    eddep tags [Ee]rrs linterrs makelinks assym.h.tmp assym.h \
 	    ${EXTRA_KERNELS} ${EXTRA_CLEAN}
 .endif
 
@@ -409,10 +425,17 @@ install: install-kernel-${MACHINE_NAME}
 .if !target(install-kernel-${MACHINE_NAME})
 install-kernel-${MACHINE_NAME}:
 .for _K in ${KERNIMAGES}
+.if ${KERNEL_DIR:Uno} == "yes"
+	rm -fr ${DESTDIR}/o${_K}
+	mv ${DESTDIR}/${_K} ${DESTDIR}/o${_K}
+	mkdir -p ${DESTDIR}/${_K}
+	cp ${_K} ${DESTDIR}/${_K}/kernel
+.else
 	rm -f ${DESTDIR}/o${_K}
 	ln ${DESTDIR}/${_K} ${DESTDIR}/o${_K}
 	cp ${_K} ${DESTDIR}/n${_K}
 	mv ${DESTDIR}/n${_K} ${DESTDIR}/${_K}
+.endif
 .endfor
 .endif
 .endif
@@ -425,6 +448,12 @@ AFLAGS+=	${AOPTS.${.IMPSRC:T}}
 CFLAGS+=	${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}}
 CPPFLAGS+=	${CPPFLAGS.${.IMPSRC:T}}
 CWARNFLAGS+=	${CWARNFLAGS.${.IMPSRC:T}}
+
+.for _v in COPTS CPPFLAGS CWARNFLAGS
+.for _c in ${CSRCS}
+${_v}.${_c:T}+=${OPT.${_c:T}:@.o.@${${_v}.${.o.}}@}
+.endfor
+.endfor
 
 .MAIN: all
 all: .gdbinit

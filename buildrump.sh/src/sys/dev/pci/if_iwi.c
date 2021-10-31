@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwi.c,v 1.99 2016/06/10 13:27:14 ozaki-r Exp $  */
+/*	$NetBSD: if_iwi.c,v 1.116 2021/06/16 00:21:18 riastradh Exp $  */
 /*	$OpenBSD: if_iwi.c,v 1.111 2010/11/15 19:11:57 damien Exp $	*/
 
 /*-
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_iwi.c,v 1.99 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_iwi.c,v 1.116 2021/06/16 00:21:18 riastradh Exp $");
 
 /*-
  * Intel(R) PRO/Wireless 2200BG/2225BG/2915ABG driver
@@ -117,6 +117,7 @@ static void	iwi_cmd_intr(struct iwi_softc *);
 static void	iwi_rx_intr(struct iwi_softc *);
 static void	iwi_tx_intr(struct iwi_softc *, struct iwi_tx_ring *);
 static int	iwi_intr(void *);
+static void	iwi_softintr(void *);
 static int	iwi_cmd(struct iwi_softc *, uint8_t, void *, uint8_t, int);
 static void	iwi_write_ibssnode(struct iwi_softc *, const struct iwi_node *);
 static int	iwi_tx_start(struct ifnet *, struct mbuf *, struct ieee80211_node *,
@@ -146,18 +147,6 @@ static int	iwi_getrfkill(struct iwi_softc *);
 static void	iwi_led_set(struct iwi_softc *, uint32_t, int);
 static void	iwi_sysctlattach(struct iwi_softc *);
 
-/*
- * Supported rates for 802.11a/b/g modes (in 500Kbps unit).
- */
-static const struct ieee80211_rateset iwi_rateset_11a =
-	{ 8, { 12, 18, 24, 36, 48, 72, 96, 108 } };
-
-static const struct ieee80211_rateset iwi_rateset_11b =
-	{ 4, { 2, 4, 11, 22 } };
-
-static const struct ieee80211_rateset iwi_rateset_11g =
-	{ 12, { 2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108 } };
-
 static inline uint8_t
 MEM_READ_1(struct iwi_softc *sc, uint32_t addr)
 {
@@ -175,21 +164,29 @@ MEM_READ_4(struct iwi_softc *sc, uint32_t addr)
 CFATTACH_DECL_NEW(iwi, sizeof (struct iwi_softc), iwi_match, iwi_attach,
     iwi_detach, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .id = PCI_ID_CODE(PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_PRO_WL_2200BG), },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_PRO_WL_2225BG), },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_PRO_WL_2915ABG_1), },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_PRO_WL_2915ABG_2), },
+
+
+	PCI_COMPAT_EOL
+};
+
 static int
 iwi_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pci_attach_args *pa = aux;
 
-	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_INTEL)
-		return 0;
-
-	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2200BG ||
-	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2225BG ||
-	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2915ABG_1 ||
-	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2915ABG_2)
-		return 1;
-
-	return 0;
+	return pci_compatible_match(pa, compat_data);
 }
 
 /* Base Address Register */
@@ -253,14 +250,25 @@ iwi_attach(device_t parent, device_t self, void *aux)
 	/* disable interrupts */
 	CSR_WRITE_4(sc, IWI_CSR_INTR_MASK, 0);
 
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, iwi_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(self, "could not establish softint\n");
+		return;
+	}
+
 	if (pci_intr_map(pa, &ih) != 0) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
 		aprint_error_dev(self, "could not map interrupt\n");
 		return;
 	}
 
 	intrstr = pci_intr_string(sc->sc_pct, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(sc->sc_pct, ih, IPL_NET, iwi_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(sc->sc_pct, ih, IPL_NET, iwi_intr,
+	    sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
 		aprint_error_dev(self, "could not establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
@@ -271,6 +279,8 @@ iwi_attach(device_t parent, device_t self, void *aux)
 
 	if (iwi_reset(sc) != 0) {
 		pci_intr_disestablish(sc->sc_pct, sc->sc_ih);
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
 		aprint_error_dev(self, "could not reset adapter\n");
 		return;
 	}
@@ -316,7 +326,7 @@ iwi_attach(device_t parent, device_t self, void *aux)
 	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2915ABG_1 ||
 	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_INTEL_PRO_WL_2915ABG_2) {
 		/* set supported .11a rates (2915ABG only) */
-		ic->ic_sup_rates[IEEE80211_MODE_11A] = iwi_rateset_11a;
+		ic->ic_sup_rates[IEEE80211_MODE_11A] = ieee80211_std_rateset_11a;
 
 		/* set supported .11a channels */
 		for (i = 36; i <= 64; i += 4) {
@@ -332,8 +342,8 @@ iwi_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* set supported .11b and .11g rates */
-	ic->ic_sup_rates[IEEE80211_MODE_11B] = iwi_rateset_11b;
-	ic->ic_sup_rates[IEEE80211_MODE_11G] = iwi_rateset_11g;
+	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
+	ic->ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
 
 	/* set supported .11b and .11g channels (1 through 14) */
 	for (i = 1; i <= 14; i++) {
@@ -354,8 +364,12 @@ iwi_attach(device_t parent, device_t self, void *aux)
 	IFQ_SET_READY(&ifp->if_snd);
 	memcpy(ifp->if_xname, device_xname(self), IFNAMSIZ);
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
+
 	/* override default methods */
 	ic->ic_node_alloc = iwi_node_alloc;
 	sc->sc_node_free = ic->ic_node_free;
@@ -363,7 +377,11 @@ iwi_attach(device_t parent, device_t self, void *aux)
 	/* override state transition machine */
 	sc->sc_newstate = ic->ic_newstate;
 	ic->ic_newstate = iwi_newstate;
-	ieee80211_media_init(ic, iwi_media_change, iwi_media_status);
+
+	/* XXX media locking needs revisiting */
+	mutex_init(&sc->sc_media_mtx, MUTEX_DEFAULT, IPL_SOFTNET);
+	ieee80211_media_init_with_lock(ic,
+	    iwi_media_change, iwi_media_status, &sc->sc_media_mtx);
 
 	/*
 	 * Allocate rings.
@@ -437,16 +455,13 @@ iwi_detach(device_t self, int flags)
 	struct iwi_softc *sc = device_private(self);
 	struct ifnet *ifp = &sc->sc_if;
 
-	pmf_device_deregister(self);
-
-	if (ifp != NULL)
+	if (ifp->if_softc != NULL) {
+		pmf_device_deregister(self);
 		iwi_stop(ifp, 1);
-
-	iwi_free_firmware(sc);
-
-	ieee80211_ifdetach(&sc->sc_ic);
-	if (ifp != NULL)
+		iwi_free_firmware(sc);
+		ieee80211_ifdetach(&sc->sc_ic);
 		if_detach(ifp);
+	}
 
 	iwi_free_cmd_ring(sc, &sc->cmdq);
 	iwi_free_tx_ring(sc, &sc->txq[0]);
@@ -458,6 +473,11 @@ iwi_detach(device_t self, int flags)
 	if (sc->sc_ih != NULL) {
 		pci_intr_disestablish(sc->sc_pct, sc->sc_ih);
 		sc->sc_ih = NULL;
+	}
+
+	if (sc->sc_soft_ih != NULL) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
 	}
 
 	bus_space_unmap(sc->sc_st, sc->sc_sh, sc->sc_sz);
@@ -612,12 +632,7 @@ iwi_alloc_tx_ring(struct iwi_softc *sc, struct iwi_tx_ring *ring,
 	memset(ring->desc, 0, IWI_TX_DESC_SIZE * count);
 
 	ring->data = malloc(count * sizeof (struct iwi_tx_data), M_DEVBUF,
-	    M_NOWAIT | M_ZERO);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
+	    M_WAITOK | M_ZERO);
 	ring->count = count;
 
 	/*
@@ -707,13 +722,7 @@ iwi_alloc_rx_ring(struct iwi_softc *sc, struct iwi_rx_ring *ring, int count)
 	ring->cur = 0;
 
 	ring->data = malloc(count * sizeof (struct iwi_rx_data), M_DEVBUF,
-	    M_NOWAIT | M_ZERO);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
-
+	    M_WAITOK | M_ZERO);
 	ring->count = count;
 
 	/*
@@ -1101,12 +1110,13 @@ iwi_fix_channel(struct ieee80211com *ic, struct mbuf *m)
 	efrm = mtod(m, uint8_t *) + m->m_len;
 
 	frm += 12;	/* skip tstamp, bintval and capinfo fields */
-	while (frm < efrm) {
-		if (*frm == IEEE80211_ELEMID_DSPARMS)
+	while (frm + 2 < efrm) {
+		if (*frm == IEEE80211_ELEMID_DSPARMS) {
 #if IEEE80211_CHAN_MAX < 255
-		if (frm[2] <= IEEE80211_CHAN_MAX)
+			if (frm[2] <= IEEE80211_CHAN_MAX)
 #endif
-			ic->ic_curchan = &ic->ic_channels[frm[2]];
+				ic->ic_curchan = &ic->ic_channels[frm[2]];
+		}
 
 		frm += frm[1] + 2;
 	}
@@ -1144,7 +1154,7 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 	struct mbuf *m, *m_new;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
-	int error;
+	int error, s;
 
 	DPRINTFN(5, ("received frame len=%u chan=%u rssi=%u\n",
 	    le16toh(frame->len), frame->chan, frame->rssi_dbm));
@@ -1152,7 +1162,7 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 	if (le16toh(frame->len) < sizeof (struct ieee80211_frame) ||
 	    le16toh(frame->len) > MCLBYTES) {
 		DPRINTF(("%s: bad frame length\n", device_xname(sc->sc_dev)));
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1167,7 +1177,7 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 	 * end of the ring to the front instead of dropping.
 	 */
 	if ((m_new = iwi_alloc_rx_buf(sc)) == NULL) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1179,7 +1189,7 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 		aprint_error_dev(sc->sc_dev,
 		    "could not load rx buf DMA map\n");
 		m_freem(m_new);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		error = bus_dmamap_load_mbuf(sc->sc_dmat, data->map,
 		    data->m, BUS_DMA_READ | BUS_DMA_NOWAIT);
 		if (error)
@@ -1203,6 +1213,8 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 
 	m_adj(m, sizeof (struct iwi_hdr) + sizeof (struct iwi_frame));
 
+	s = splnet();
+
 	if (ic->ic_state == IEEE80211_S_SCAN)
 		iwi_fix_channel(ic, m);
 
@@ -1218,7 +1230,7 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 		tap->wr_antsignal = frame->signal;
 		tap->wr_antenna = frame->antenna;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m, BPF_D_IN);
 	}
 	wh = mtod(m, struct ieee80211_frame *);
 	ni = ieee80211_find_rxnode(ic, (struct ieee80211_frame_min *)wh);
@@ -1228,6 +1240,8 @@ iwi_frame_intr(struct iwi_softc *sc, struct iwi_rx_data *data, int i,
 
 	/* node is no longer needed */
 	ieee80211_free_node(ni);
+
+	splx(s);
 }
 
 static void
@@ -1237,6 +1251,7 @@ iwi_notification_intr(struct iwi_softc *sc, struct iwi_notif *notif)
 	struct iwi_notif_authentication *auth;
 	struct iwi_notif_association *assoc;
 	struct iwi_notif_beacon_state *beacon;
+	int s;
 
 	switch (notif->type) {
 	case IWI_NOTIF_TYPE_SCAN_CHANNEL:
@@ -1263,11 +1278,13 @@ iwi_notification_intr(struct iwi_softc *sc, struct iwi_notif *notif)
 #endif
 
 		/* monitor mode uses scan to set the channel ... */
+		s = splnet();
 		if (ic->ic_opmode != IEEE80211_M_MONITOR) {
 			sc->flags &= ~IWI_FLAG_SCANNING;
 			ieee80211_end_scan(ic);
 		} else
 			iwi_set_chan(sc, ic->ic_ibss_chan);
+		splx(s);
 		break;
 
 	case IWI_NOTIF_TYPE_AUTHENTICATION:
@@ -1277,11 +1294,21 @@ iwi_notification_intr(struct iwi_softc *sc, struct iwi_notif *notif)
 
 		switch (auth->state) {
 		case IWI_AUTH_SUCCESS:
+			s = splnet();
 			ieee80211_node_authorize(ic->ic_bss);
 			ieee80211_new_state(ic, IEEE80211_S_ASSOC, -1);
+			splx(s);
 			break;
 
 		case IWI_AUTH_FAIL:
+			break;
+
+		case IWI_AUTH_SENT_1:
+		case IWI_AUTH_RECV_2:
+		case IWI_AUTH_SEQ1_PASS:
+			break;
+
+		case IWI_AUTH_SEQ1_FAIL:
 			break;
 
 		default:
@@ -1302,11 +1329,15 @@ iwi_notification_intr(struct iwi_softc *sc, struct iwi_notif *notif)
 			break;
 
 		case IWI_ASSOC_SUCCESS:
+			s = splnet();
 			ieee80211_new_state(ic, IEEE80211_S_RUN, -1);
+			splx(s);
 			break;
 
 		case IWI_ASSOC_FAIL:
+			s = splnet();
 			ieee80211_begin_scan(ic, 1);
+			splx(s);
 			break;
 
 		default:
@@ -1354,7 +1385,8 @@ iwi_cmd_intr(struct iwi_softc *sc)
 	sc->cmdq.next = (sc->cmdq.next + 1) % sc->cmdq.count;
 
 	if (--sc->cmdq.queued > 0) {
-		CSR_WRITE_4(sc, IWI_CSR_CMD_WIDX, (sc->cmdq.next + 1) % sc->cmdq.count);
+		CSR_WRITE_4(sc, IWI_CSR_CMD_WIDX,
+		    (sc->cmdq.next + 1) % sc->cmdq.count);
 	}
 }
 
@@ -1410,6 +1442,9 @@ iwi_tx_intr(struct iwi_softc *sc, struct iwi_tx_ring *txq)
 	struct ifnet *ifp = &sc->sc_if;
 	struct iwi_tx_data *data;
 	uint32_t hw;
+	int s;
+
+	s = splnet();
 
 	hw = CSR_READ_4(sc, txq->csr_ridx);
 
@@ -1426,17 +1461,22 @@ iwi_tx_intr(struct iwi_softc *sc, struct iwi_tx_ring *txq)
 
 		DPRINTFN(15, ("tx done idx=%u\n", txq->next));
 
-		ifp->if_opackets++;
+		if_statinc(ifp, if_opackets);
 
 		txq->queued--;
 		txq->next = (txq->next + 1) % txq->count;
 	}
 
 	sc->sc_tx_timer = 0;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
-	/* Call start() since some buffer descriptors have been released */
-	(*ifp->if_start)(ifp);
+	if (txq->queued < txq->count - 8 - 8 && (ifp->if_flags & IFF_OACTIVE)) {
+		ifp->if_flags &= ~IFF_OACTIVE;
+
+		/* Call start() since some buffer descriptors have been released */
+		iwi_start(ifp); /* in softint */
+	}
+
+	splx(s);
 }
 
 static int
@@ -1448,14 +1488,33 @@ iwi_intr(void *arg)
 	if ((r = CSR_READ_4(sc, IWI_CSR_INTR)) == 0 || r == 0xffffffff)
 		return 0;
 
+	/* Disable interrupts */
+	CSR_WRITE_4(sc, IWI_CSR_INTR_MASK, 0);
+
+	softint_schedule(sc->sc_soft_ih);
+	return 1;
+}
+
+static void
+iwi_softintr(void *arg)
+{
+	struct iwi_softc *sc = arg;
+	uint32_t r;
+	int s;
+
+	if ((r = CSR_READ_4(sc, IWI_CSR_INTR)) == 0 || r == 0xffffffff)
+		goto out;
+
 	/* Acknowledge interrupts */
 	CSR_WRITE_4(sc, IWI_CSR_INTR, r);
 
 	if (r & IWI_INTR_FATAL_ERROR) {
 		aprint_error_dev(sc->sc_dev, "fatal error\n");
+		s = splnet();
 		sc->sc_ic.ic_ifp->if_flags &= ~IFF_UP;
 		iwi_stop(&sc->sc_if, 1);
-		return (1);
+		splx(s);
+		return;
 	}
 
 	if (r & IWI_INTR_FW_INITED) {
@@ -1465,9 +1524,11 @@ iwi_intr(void *arg)
 
 	if (r & IWI_INTR_RADIO_OFF) {
 		DPRINTF(("radio transmitter off\n"));
+		s = splnet();
 		sc->sc_ic.ic_ifp->if_flags &= ~IFF_UP;
 		iwi_stop(&sc->sc_if, 1);
-		return (1);
+		splx(s);
+		return;
 	}
 
 	if (r & IWI_INTR_CMD_DONE)
@@ -1491,7 +1552,9 @@ iwi_intr(void *arg)
 	if (r & IWI_INTR_PARITY_ERROR)
 		aprint_error_dev(sc->sc_dev, "parity error\n");
 
-	return 1;
+ out:
+	/* Re-enable interrupts */
+	CSR_WRITE_4(sc, IWI_CSR_INTR_MASK, IWI_INTR_MASK);
 }
 
 static int
@@ -1572,7 +1635,7 @@ iwi_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni,
 		if (in->in_station == -1) {	/* h/w table is full */
 			m_freem(m0);
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			return 0;
 		}
 		iwi_write_ibssnode(sc, in);
@@ -1596,7 +1659,7 @@ iwi_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni,
 		tap->wt_chan_freq = htole16(ic->ic_ibss_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ic->ic_ibss_chan->ic_flags);
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0, BPF_D_OUT);
 	}
 
 	data = &txq->data[txq->cur];
@@ -1623,7 +1686,7 @@ iwi_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni,
 			return ENOMEM;
 		}
 
-		M_COPY_PKTHDR(mnew, m0);
+		m_copy_pkthdr(mnew, m0);
 
 		/* If the data won't fit in the header, get a cluster */
 		if (m0->m_pkthdr.len > MHLEN) {
@@ -1719,13 +1782,13 @@ iwi_start(struct ifnet *ifp)
 		return;
 
 	for (;;) {
-		IF_DEQUEUE(&ifp->if_snd, m0);
+		IFQ_DEQUEUE(&ifp->if_snd, m0);
 		if (m0 == NULL)
 			break;
 
 		if (m0->m_len < sizeof (struct ether_header) &&
 		    (m0 = m_pullup(m0, sizeof (struct ether_header))) == NULL) {
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
@@ -1733,7 +1796,7 @@ iwi_start(struct ifnet *ifp)
 		ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 		if (ni == NULL) {
 			m_freem(m0);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
@@ -1741,7 +1804,7 @@ iwi_start(struct ifnet *ifp)
 		if (ieee80211_classify(ic, m0, ni) != 0) {
 			m_freem(m0);
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
@@ -1751,25 +1814,27 @@ iwi_start(struct ifnet *ifp)
 
 		if (sc->txq[ac].queued > sc->txq[ac].count - 8) {
 			/* there is no place left in this ring */
+			IFQ_LOCK(&ifp->if_snd);
 			IF_PREPEND(&ifp->if_snd, m0);
+			IFQ_UNLOCK(&ifp->if_snd);
 			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
 
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		m0 = ieee80211_encap(ic, m0, ni);
 		if (m0 == NULL) {
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
-		bpf_mtap3(ic->ic_rawbpf, m0);
+		bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 
 		if (iwi_tx_start(ifp, m0, ni, ac) != 0) {
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 		}
 
@@ -1789,7 +1854,7 @@ iwi_watchdog(struct ifnet *ifp)
 	if (sc->sc_tx_timer > 0) {
 		if (--sc->sc_tx_timer == 0) {
 			aprint_error_dev(sc->sc_dev, "device timeout\n");
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			ifp->if_flags &= ~IFF_UP;
 			iwi_stop(ifp, 1);
 			return;
@@ -1810,7 +1875,7 @@ iwi_get_table0(struct iwi_softc *sc, uint32_t *tbl)
 		return copyout(buf, tbl, sizeof buf);
 	}
 
-	size = min(CSR_READ_4(sc, IWI_CSR_TABLE0_SIZE), 128 - 1);
+	size = uimin(CSR_READ_4(sc, IWI_CSR_TABLE0_SIZE), 128 - 1);
 	CSR_READ_REGION_4(sc, IWI_CSR_TABLE0_BASE, &buf[1], size);
 
 	return copyout(buf, tbl, sizeof buf);
@@ -1872,8 +1937,8 @@ iwi_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		error = iwi_cache_firmware(sc);
 		if (error)
  			break;
- 		/* FALLTRHOUGH */
 
+		/* FALLTHROUGH */
 	default:
 		error = ieee80211_ioctl(&sc->sc_ic, cmd, data);
 
@@ -2077,14 +2142,14 @@ iwi_load_firmware(struct iwi_softc *sc, void *fw, int size)
 			cl = GETLE32(p); p += 4; cs += 4; sl -= 4;
 		}
 		while (sl > 0 && cl > 0) {
-			int len = min(cl, sl);
+			int len = uimin(cl, sl);
 
 			sl -= len;
 			cl -= len;
 			p += len;
 
 			while (len > 0) {
-				int mlen = min(len, IWI_CB_MAXDATALEN);
+				int mlen = uimin(len, IWI_CB_MAXDATALEN);
 
 				ctl = IWI_CB_DEFAULT_CTL | mlen;
 				sum = ctl ^ cs ^ cd;

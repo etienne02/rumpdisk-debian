@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_compat_09.c,v 1.18 2008/05/29 14:51:26 mrg Exp $	*/
+/*	$NetBSD: netbsd32_compat_09.c,v 1.20 2021/01/19 03:20:13 simonb Exp $	*/
 
 /*
  * Copyright (c) 1998 Matthew R. Green
@@ -27,18 +27,23 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_09.c,v 1.18 2008/05/29 14:51:26 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_09.c,v 1.20 2021/01/19 03:20:13 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/module.h>
 #include <sys/mount.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 
 #include <sys/time.h>
 #include <uvm/uvm_extern.h>
 #include <sys/sysctl.h>
 
+#include <compat/sys/siginfo.h>
+
 #include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_syscall.h>
 #include <compat/netbsd32/netbsd32_syscallargs.h>
 
 int
@@ -54,8 +59,8 @@ compat_09_netbsd32_ogetdomainname(struct lwp *l, const struct compat_09_netbsd32
 	name[0] = CTL_KERN;
 	name[1] = KERN_DOMAINNAME;
 	sz = SCARG(uap, len);
-	return (old_sysctl(&name[0], 2,
-	    (char *)SCARG_P32(uap, domainname), &sz, 0, 0, l));
+	return old_sysctl(&name[0], 2,
+	    (char *)SCARG_P32(uap, domainname), &sz, 0, 0, l);
 }
 
 int
@@ -69,8 +74,8 @@ compat_09_netbsd32_osetdomainname(struct lwp *l, const struct compat_09_netbsd32
 
 	name[0] = CTL_KERN;
 	name[1] = KERN_DOMAINNAME;
-	return (old_sysctl(&name[0], 2, 0, 0,
-	    (char *)SCARG_P32(uap, domainname), SCARG(uap, len), l));
+	return old_sysctl(&name[0], 2, 0, 0,
+	    (char *)SCARG_P32(uap, domainname), SCARG(uap, len), l);
 }
 
 int
@@ -82,5 +87,35 @@ compat_09_netbsd32_uname(struct lwp *l, const struct compat_09_netbsd32_uname_ar
 	struct compat_09_sys_uname_args ua;
 
 	NETBSD32TOP_UAP(name, struct outsname);
-	return (compat_09_sys_uname(l, &ua, retval));
+	return compat_09_sys_uname(l, &ua, retval);
+}
+
+static struct syscall_package compat_netbsd32_09_syscalls[] = {
+        { NETBSD32_SYS_compat_09_netbsd32_ogetdomainname, 0,
+            (sy_call_t *)compat_09_netbsd32_ogetdomainname },
+        { NETBSD32_SYS_compat_09_netbsd32_osetdomainname, 0,
+            (sy_call_t *)compat_09_netbsd32_osetdomainname },
+        { NETBSD32_SYS_compat_09_netbsd32_uname, 0,
+	    (sy_call_t *)compat_09_netbsd32_uname },
+        { 0, 0, NULL }
+};
+
+MODULE(MODULE_CLASS_EXEC, compat_netbsd32_09, "compat_netbsd32_12,compat_09");
+
+static int
+compat_netbsd32_09_modcmd(modcmd_t cmd, void *arg)
+{
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		return syscall_establish(&emul_netbsd32,
+		    compat_netbsd32_09_syscalls);
+
+	case MODULE_CMD_FINI:
+		return syscall_disestablish(&emul_netbsd32,
+		    compat_netbsd32_09_syscalls);
+
+	default:
+		return ENOTTY;
+	}
 }

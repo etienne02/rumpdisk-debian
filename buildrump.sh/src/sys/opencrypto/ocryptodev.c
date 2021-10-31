@@ -1,4 +1,4 @@
-/*	$NetBSD: ocryptodev.c,v 1.6 2014/09/05 09:23:40 matt Exp $ */
+/*	$NetBSD: ocryptodev.c,v 1.16 2020/01/27 17:09:17 pgoyette Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptodev.c,v 1.4.2.4 2003/06/03 00:09:02 sam Exp $	*/
 /*	$OpenBSD: cryptodev.c,v 1.53 2002/07/10 22:21:30 mickey Exp $	*/
 
@@ -69,7 +69,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ocryptodev.c,v 1.6 2014/09/05 09:23:40 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ocryptodev.c,v 1.16 2020/01/27 17:09:17 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -89,6 +89,8 @@ __KERNEL_RCSID(0, "$NetBSD: ocryptodev.c,v 1.6 2014/09/05 09:23:40 matt Exp $");
 #include <sys/select.h>
 #include <sys/poll.h>
 #include <sys/atomic.h>
+#include <sys/compat_stub.h> 
+#include <sys/module.h>
 
 #ifdef _KERNEL_OPT
 #include "opt_ocf.h"
@@ -104,7 +106,8 @@ static int	ocryptodev_op(struct csession *, struct ocrypt_op *,
 static int	ocryptodev_mop(struct fcrypt *, struct ocrypt_n_op *, int,
 		    struct lwp *);
 static int	ocryptodev_session(struct fcrypt *, struct osession_op *);
-static int	ocryptodev_msession(struct fcrypt *, struct osession_n_op *, int);
+static int	ocryptodev_msession(struct fcrypt *, struct osession_n_op *,
+		    int);
 
 int
 ocryptof_ioctl(struct file *fp, u_long cmd, void *data)
@@ -127,6 +130,11 @@ ocryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		break;
 	case CIOCNGSESSION:
 		osgop = (struct ocrypt_sgop *)data;
+		if ((osgop->count <= 0) ||
+		    (SIZE_MAX/sizeof(struct osession_n_op) < osgop->count)) {
+			error = EINVAL;
+			break;
+		}
 		osnop = kmem_alloc((osgop->count *
 				  sizeof(struct osession_n_op)), KM_SLEEP);
 		error = copyin(osgop->sessions, osnop, osgop->count *
@@ -146,25 +154,31 @@ mbail:
 		kmem_free(osnop, osgop->count * sizeof(struct osession_n_op));
 		break;
 	case OCIOCCRYPT:
-		mutex_enter(&crypto_mtx);
+		mutex_enter(&cryptodev_mtx);
 		ocop = (struct ocrypt_op *)data;
 		cse = cryptodev_csefind(fcr, ocop->ses);
-		mutex_exit(&crypto_mtx);
+		mutex_exit(&cryptodev_mtx);
 		if (cse == NULL) {
-			DPRINTF(("csefind failed\n"));
+			DPRINTF("csefind failed\n");
 			return EINVAL;
 		}
 		error = ocryptodev_op(cse, ocop, curlwp);
-		DPRINTF(("ocryptodev_op error = %d\n", error));
+		DPRINTF("ocryptodev_op error = %d\n", error);
 		break;
 	case OCIOCNCRYPTM:
 		omop = (struct ocrypt_mop *)data;
+		if ((omop->count <= 0) ||
+		    (SIZE_MAX/sizeof(struct ocrypt_n_op) <= omop->count)) {
+			error = EINVAL;
+			break;
+		}
 		ocnop = kmem_alloc((omop->count * sizeof(struct ocrypt_n_op)),
 		    KM_SLEEP);
 		error = copyin(omop->reqs, ocnop,
 		    (omop->count * sizeof(struct ocrypt_n_op)));
 		if(!error) {
-			error = ocryptodev_mop(fcr, ocnop, omop->count, curlwp);
+			error = ocryptodev_mop(fcr, ocnop, omop->count,
+			    curlwp);
 			if (!error) {
 				error = copyout(ocnop, omop->reqs, 
 				    (omop->count * sizeof(struct ocrypt_n_op)));
@@ -173,7 +187,7 @@ mbail:
 		kmem_free(ocnop, (omop->count * sizeof(struct ocrypt_n_op)));
 		break;	
 	default:
-		DPRINTF(("invalid ioctl cmd 0x%lx\n", cmd));
+		DPRINTF("invalid ioctl cmd 0x%lx\n", cmd);
 		return EINVAL;
 	}
 	return error;
@@ -199,9 +213,8 @@ ocryptodev_op(struct csession *cse, struct ocrypt_op *ocop, struct lwp *l)
 };
 
 static int 
-ocryptodev_mop(struct fcrypt *fcr, 
-              struct ocrypt_n_op *ocnop,
-              int count, struct lwp *l)
+ocryptodev_mop(struct fcrypt *fcr, struct ocrypt_n_op *ocnop, int count,
+    struct lwp *l)
 {
 	int res;
 
@@ -232,7 +245,7 @@ ocryptodev_mop(struct fcrypt *fcr,
 
 
 static int
-ocryptodev_session(struct fcrypt *fcr, struct osession_op *osop) 
+ocryptodev_session(struct fcrypt *fcr, struct osession_op *osop)
 {
 	struct session_op sop;
 	int res;
@@ -245,8 +258,10 @@ ocryptodev_session(struct fcrypt *fcr, struct osession_op *osop)
 	sop.mackeylen = osop->mackeylen;
 	sop.mackey = osop->mackey;
 	res = cryptodev_session(fcr, &sop);
+	if (res)
+		return res;
 	osop->ses = sop.ses;
-	return res;
+	return 0;
 
 }
 
@@ -264,6 +279,7 @@ ocryptodev_msession(struct fcrypt *fcr, struct osession_n_op *osn_ops,
 		os_op.key =		osn_ops->key;
 		os_op.mackeylen =	osn_ops->mackeylen;
 		os_op.mackey =		osn_ops->mackey;
+		os_op.ses =		~0;
 
 		osn_ops->status = ocryptodev_session(fcr, &os_op);
 		osn_ops->ses =		os_op.ses;

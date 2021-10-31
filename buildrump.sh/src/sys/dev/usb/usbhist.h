@@ -1,4 +1,4 @@
-/*	$NetBSD: usbhist.h,v 1.4 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: usbhist.h,v 1.7 2021/04/17 01:53:58 mrg Exp $	*/
 
 /*
  * Copyright (c) 2012 Matthew R. Green
@@ -51,7 +51,6 @@ extern int usbdebug;
 #define USBHIST_DECL(NAME)		KERNHIST_DECL(NAME)
 #define USBHIST_DEFINE(NAME)		KERNHIST_DEFINE(NAME)
 #define USBHIST_INIT(NAME,N)		KERNHIST_INIT(NAME,N)
-#define USBHIST_INIT_STATIC(NAME,BUF)	KERNHIST_INIT_STATIC(NAME,BUF)
 #define USBHIST_LINK_STATIC(NAME)	KERNHIST_LINK_STATIC(NAME)
 #define USBHIST_LOGN(NAME,N,FMT,A,B,C,D)	do {		\
 	if ((NAME) >= (N)) {					\
@@ -69,6 +68,16 @@ extern int usbdebug;
 		KERNHIST_CALLED(usbhist);			\
 	}							\
 } while (0)
+#define USBHIST_CALLARGS(NAME,FMT,A,B,C,D) do {			\
+	if ((NAME) != 0) {					\
+		KERNHIST_CALLARGS(usbhist,FMT,A,B,C,D);		\
+	}							\
+} while (0)
+#define USBHIST_CALLARGSN(NAME,N,FMT,A,B,C,D) do {		\
+	if ((NAME) >= (N)) {					\
+		KERNHIST_CALLARGS(usbhist,FMT,A,B,C,D);		\
+	}							\
+} while (0)
 #define USBHIST_FUNC()			KERNHIST_FUNC(__func__)
 
 USBHIST_DECL(usbhist);
@@ -78,11 +87,12 @@ USBHIST_DECL(usbhist);
 #define USBHIST_DECL(NAME)
 #define USBHIST_DEFINE(NAME)
 #define USBHIST_INIT(NAME,N)
-#define USBHIST_INIT_STATIC(NAME,BUF)
 #define USBHIST_LINK_STATIC(NAME)
 #define USBHIST_LOGN(N,NAME,FMT,A,B,C,D)	do { } while(0)
 #define USBHIST_LOGM(N,NAME,FMT,A,B,C,D)	do { } while(0)
 #define USBHIST_LOG(NAME,FMT,A,B,C,D)		do { } while(0)
+#define USBHIST_CALLARGS(NAME,FMT,A,B,C,D)
+#define USBHIST_CALLARGSN(NAME,N,FMT,A,B,C,D)
 #define USBHIST_CALLED(NAME)
 #define USBHIST_FUNC()
 

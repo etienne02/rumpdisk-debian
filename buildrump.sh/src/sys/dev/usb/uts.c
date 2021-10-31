@@ -1,4 +1,4 @@
-/*	$NetBSD: uts.c,v 1.5 2016/04/27 19:35:17 jakllsch Exp $	*/
+/*	$NetBSD: uts.c,v 1.14 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uts.c,v 1.5 2016/04/27 19:35:17 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uts.c,v 1.14 2021/08/07 16:19:17 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -55,7 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: uts.c,v 1.5 2016/04/27 19:35:17 jakllsch Exp $");
 #include <dev/usb/usbdevs.h>
 #include <dev/usb/usb_quirks.h>
 #include <dev/usb/uhidev.h>
-#include <dev/usb/hid.h>
+#include <dev/hid/hid.h>
 
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wsmousevar.h>
@@ -110,7 +110,7 @@ Static void	uts_childdet(device_t, device_t);
 Static int	uts_detach(device_t, int);
 Static int	uts_activate(device_t, enum devact);
 
-extern struct cfdriver uts_cd;
+
 
 CFATTACH_DECL2_NEW(uts, sizeof(struct uts_softc), uts_match, uts_attach,
     uts_detach, uts_activate, NULL, uts_childdet);
@@ -144,7 +144,7 @@ uts_attach(device_t parent, device_t self, void *aux)
 	struct hid_data * d;
 	struct hid_item item;
 
-	aprint_naive("\n");
+	aprint_normal("\n");
 
 	sc->sc_hdev.sc_dev = self;
 	sc->sc_hdev.sc_intr = uts_intr;
@@ -205,9 +205,19 @@ uts_attach(device_t parent, device_t self, void *aux)
 	/* requires HID usage Digitizer:In_Range */
 	if (!hid_locate(desc, size, HID_USAGE2(HUP_DIGITIZERS, HUD_IN_RANGE),
 		uha->reportid, hid_input, &sc->sc_loc_z, &flags)) {
-		aprint_error_dev(sc->sc_hdev.sc_dev,
-		    "touchscreen has no range report\n");
-		return;
+		if (uha->uiaa->uiaa_vendor == USB_VENDOR_ELAN) {
+			/*
+			 * XXX
+			 * ELAN touchscreens error out here but still return
+			 * valid data
+			 */
+			aprint_debug_dev(sc->sc_hdev.sc_dev,
+			    "ELAN touchscreen found, working around bug.\n");
+		} else {
+			aprint_error_dev(sc->sc_hdev.sc_dev,
+			    "touchscreen has no range report\n");
+			return;
+		}
 	}
 
 	/* multi-touch support would need HUD_CONTACTID and HUD_CONTACTMAX */
@@ -225,7 +235,7 @@ uts_attach(device_t parent, device_t self, void *aux)
 	a.accessops = &uts_accessops;
 	a.accesscookie = sc;
 
-	sc->sc_wsmousedev = config_found(self, &a, wsmousedevprint);
+	sc->sc_wsmousedev = config_found(self, &a, wsmousedevprint, CFARGS_NONE);
 
 	/* calibrate the touchscreen */
 	memset(&sc->sc_calibcoords, 0, sizeof(sc->sc_calibcoords));
@@ -233,22 +243,23 @@ uts_attach(device_t parent, device_t self, void *aux)
 	sc->sc_calibcoords.maxy = 4095;
 	sc->sc_calibcoords.samplelen = WSMOUSE_CALIBCOORDS_RESET;
 	d = hid_start_parse(desc, size, hid_input);
-	while (hid_get_item(d, &item)) {
-		if (item.kind != hid_input
-		    || HID_GET_USAGE_PAGE(item.usage) != HUP_GENERIC_DESKTOP
-		    || item.report_ID != sc->sc_hdev.sc_report_id)
-			continue;
-		if (HID_GET_USAGE(item.usage) == HUG_X) {
-			sc->sc_calibcoords.minx = item.logical_minimum;
-			sc->sc_calibcoords.maxx = item.logical_maximum;
+	if (d != NULL) {
+		while (hid_get_item(d, &item)) {
+			if (item.kind != hid_input
+			    || HID_GET_USAGE_PAGE(item.usage) != HUP_GENERIC_DESKTOP
+			    || item.report_ID != sc->sc_hdev.sc_report_id)
+				continue;
+			if (HID_GET_USAGE(item.usage) == HUG_X) {
+				sc->sc_calibcoords.minx = item.logical_minimum;
+				sc->sc_calibcoords.maxx = item.logical_maximum;
+			}
+			if (HID_GET_USAGE(item.usage) == HUG_Y) {
+				sc->sc_calibcoords.miny = item.logical_minimum;
+				sc->sc_calibcoords.maxy = item.logical_maximum;
+			}
 		}
-		if (HID_GET_USAGE(item.usage) == HUG_Y) {
-			sc->sc_calibcoords.miny = item.logical_minimum;
-			sc->sc_calibcoords.maxy = item.logical_maximum;
-		}
+		hid_end_parse(d);
 	}
-	hid_end_parse(d);
-
 	tpcalib_init(&sc->sc_tpcalib);
 	tpcalib_ioctl(&sc->sc_tpcalib, WSMOUSEIO_SCALIBCOORDS,
 	    (void *)&sc->sc_calibcoords, 0, 0);
@@ -377,7 +388,7 @@ uts_intr(struct uhidev *addr, void *ibuf, u_int len)
 		buttons |= 1;
 
 	if (dx != 0 || dy != 0 || dz != 0 || buttons != sc->sc_buttons) {
-		DPRINTFN(10,("uts_intr: x:%d y:%d z:%d buttons:0x%x\n",
+		DPRINTFN(10,("uts_intr: x:%d y:%d z:%d buttons:%#x\n",
 		    dx, dy, dz, buttons));
 		sc->sc_buttons = buttons;
 		if (sc->sc_wsmousedev != NULL) {

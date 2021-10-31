@@ -1,4 +1,4 @@
-/*	$NetBSD: if_eg.c,v 1.91 2016/07/11 07:11:08 msaitoh Exp $	*/
+/*	$NetBSD: if_eg.c,v 1.97 2020/01/29 06:21:40 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1993 Dean Huxley <dean@fsa.ca>
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_eg.c,v 1.91 2016/07/11 07:11:08 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_eg.c,v 1.97 2020/01/29 06:21:40 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -58,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_eg.c,v 1.91 2016/07/11 07:11:08 msaitoh Exp $");
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
+#include <net/bpf.h>
 
 #include <net/if_ether.h>
 
@@ -68,10 +69,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_eg.c,v 1.91 2016/07/11 07:11:08 msaitoh Exp $");
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/cpu.h>
 #include <sys/intr.h>
@@ -455,7 +452,7 @@ egattach(device_t parent, device_t self, void *aux)
 	ifp->if_start = egstart;
 	ifp->if_ioctl = egioctl;
 	ifp->if_watchdog = egwatchdog;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX;
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Now we can attach the interface. */
@@ -577,9 +574,9 @@ loop:
 		aprint_error_dev(sc->sc_dev, "no header mbuf\n");
 		panic("egstart");
 	}
-	len = max(m0->m_pkthdr.len, ETHER_MIN_LEN - ETHER_CRC_LEN);
+	len = uimax(m0->m_pkthdr.len, ETHER_MIN_LEN - ETHER_CRC_LEN);
 
-	bpf_mtap(ifp, m0);
+	bpf_mtap(ifp, m0, BPF_D_OUT);
 
 	sc->eg_pcb[0] = EG_CMD_SENDPACKET;
 	sc->eg_pcb[1] = 0x06;
@@ -592,7 +589,7 @@ loop:
 	if (egwritePCB(iot, ioh, sc->eg_pcb) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "can't send Send Packet command\n");
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 		ifp->if_flags &= ~IFF_OACTIVE;
 		m_freem(m0);
 		goto loop;
@@ -623,6 +620,7 @@ int
 egintr(void *arg)
 {
 	struct eg_softc *sc = arg;
+	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	bus_space_tag_t iot = sc->sc_iot;
 	bus_space_handle_t ioh = sc->sc_ioh;
 	int i, len, serviced;
@@ -660,11 +658,12 @@ egintr(void *arg)
 			if (sc->eg_pcb[6] || sc->eg_pcb[7]) {
 				DPRINTF(("%s: packet dropped\n",
 				    device_xname(sc->sc_dev)));
-				sc->sc_ethercom.ec_if.if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 			} else
-				sc->sc_ethercom.ec_if.if_opackets++;
-			sc->sc_ethercom.ec_if.if_collisions +=
-			    sc->eg_pcb[8] & 0xf;
+				if_statinc(ifp, if_opackets);
+			if (sc->eg_pcb[8] & 0xf)
+				if_statadd(ifp, if_collisions,
+				    sc->eg_pcb[8] & 0xf);
 			sc->sc_ethercom.ec_if.if_flags &= ~IFF_OACTIVE;
 			egstart(&sc->sc_ethercom.ec_if);
 			serviced = 1;
@@ -715,24 +714,16 @@ egread(struct eg_softc *sc, void *buf, int len)
 	    len > ETHER_MAX_LEN) {
 		aprint_error_dev(sc->sc_dev,
 		    "invalid packet size %d; dropping\n", len);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
 	/* Pull packet off interface. */
 	m = egget(sc, buf, len);
 	if (m == 0) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
-
-	ifp->if_ipackets++;
-
-	/*
-	 * Check if there's a BPF listener on this interface.
-	 * If so, hand off the raw packet to BPF.
-	 */
-	bpf_mtap(ifp, m);
 
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
@@ -763,7 +754,7 @@ egget(struct eg_softc *sc, void *buf, int totlen)
 			len = MCLBYTES;
 		}
 
-		m->m_len = len = min(totlen, len);
+		m->m_len = len = uimin(totlen, len);
 		memcpy(mtod(m, void *), buf, len);
 		buf = (char *)buf + len;
 
@@ -872,7 +863,7 @@ egwatchdog(struct ifnet *ifp)
 	struct eg_softc *sc = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	sc->sc_ethercom.ec_if.if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	egreset(sc);
 }

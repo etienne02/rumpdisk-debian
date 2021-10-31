@@ -1,4 +1,4 @@
-/* $NetBSD: spdmemvar.h,v 1.11 2016/01/05 11:49:32 msaitoh Exp $ */
+/* $NetBSD: spdmemvar.h,v 1.16 2020/03/24 04:12:13 msaitoh Exp $ */
 
 /*
  * Copyright (c) 2007 Paul Goyette
@@ -353,7 +353,7 @@ struct spdmem_fbdimm {				/* Fully-buffered DIMM */
 	);
 	SPD_BITFIELD(				\
 		uint8_t	fbdimm_ftb_divisor:4,	\
-		uint8_t	fbdimm_ftp_dividend:4, ,\
+		uint8_t	fbdimm_ftb_dividend:4, ,\
 	);
 	uint8_t	fbdimm_mtb_dividend;
 	uint8_t	fbdimm_mtb_divisor;
@@ -418,8 +418,12 @@ struct spdmem_rambus {				/* Direct Rambus DRAM */
 } __packed;
 
 struct spdmem_ddr3 {				/* Dual Data Rate 3 SDRAM */
-	uint8_t	ddr3_len;
-	uint8_t ddr3_size;
+	SPD_BITFIELD(				\
+		uint8_t	ddr3_ROM_used:4,	\
+		uint8_t	ddr3_ROM_size:3,	\
+		uint8_t	ddr3_crccover:1,	\
+	);
+	uint8_t	ddr3_romrev;
 	uint8_t ddr3_type;
 	uint8_t	ddr3_mod_type;
 	SPD_BITFIELD(				\
@@ -459,20 +463,20 @@ struct spdmem_ddr3 {				/* Dual Data Rate 3 SDRAM */
 	);
 	uint8_t ddr3_mtb_dividend;	/* 0x0108 = 0.1250ns */
 	uint8_t	ddr3_mtb_divisor;	/* 0x010f = 0.0625ns */
-	uint8_t	ddr3_tCKmin;		/* in terms of mtb */
+	uint8_t	ddr3_tCKmin_mtb;
 	uint8_t	ddr3_unused3;
 	uint16_t ddr3_CAS_sup;		/* Bit 0 ==> CAS 4 cycles */
-	uint8_t	ddr3_tAAmin;		/* in terms of mtb */
+	uint8_t	ddr3_tAAmin_mtb;
 	uint8_t	ddr3_tWRmin;
-	uint8_t	ddr3_tRCDmin;
+	uint8_t	ddr3_tRCDmin_mtb;
 	uint8_t	ddr3_tRRDmin;
-	uint8_t	ddr3_tRPmin;
+	uint8_t	ddr3_tRPmin_mtb;
 	SPD_BITFIELD(				\
 		uint8_t	ddr3_tRAS_msb:4,	\
-		uint8_t	ddr3_tRC_msb:4, ,	\
+		uint8_t	ddr3_tRCmin_mtb_msb:4, , \
 	);
 	uint8_t	ddr3_tRAS_lsb;
-	uint8_t	ddr3_tRC_lsb;
+	uint8_t	ddr3_tRCmin_mtb_lsb;
 	uint8_t	ddr3_tRFCmin_lsb;
 	uint8_t	ddr3_tRFCmin_msb;
 	uint8_t	ddr3_tWTRmin;
@@ -498,7 +502,14 @@ struct spdmem_ddr3 {				/* Dual Data Rate 3 SDRAM */
 		uint8_t ddr3_non_std_devtype:7,	\
 		uint8_t ddr3_std_device:1, ,	\
 	);
-	uint8_t	ddr3_unused4[26];
+	uint8_t ddr3_tCKmin_ftb;
+	uint8_t ddr3_tAAmin_ftb;
+	uint8_t ddr3_tRCDmin_ftb;
+	uint8_t ddr3_tRPmin_ftb;
+	uint8_t ddr3_tRCmin_ftb;
+	uint8_t	ddr3_unused4[2];
+	uint8_t	ddr3_MAC;
+	uint8_t	ddr3_unused4a[18];
 	uint8_t	ddr3_mod_height;
 	uint8_t	ddr3_mod_thickness;
 	uint8_t	ddr3_ref_card;
@@ -764,7 +775,8 @@ struct spdmem_ddr4 {				/* Dual Data Rate 4 SDRAM */
 		uint8_t	ddr4_device_width:3,	\
 		/* number of package ranks is field value plus 1 */ \
 		uint8_t	ddr4_package_ranks:3,	\
-		uint8_t	ddr4_unused9:2,		\
+		uint8_t	ddr4_rank_mix:1,	\
+		uint8_t	ddr4_unused9:1		\
 	);
 	SPD_BITFIELD(					\
 		/* primary width is offset by 3, extension is offset by 2 */ \

@@ -1,4 +1,4 @@
-/* $NetBSD: mfi.c,v 1.57 2015/04/04 15:10:47 christos Exp $ */
+/* $NetBSD: mfi.c,v 1.65 2021/08/07 16:19:12 thorpej Exp $ */
 /* $OpenBSD: mfi.c,v 1.66 2006/11/28 23:59:45 dlg Exp $ */
 
 /*
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mfi.c,v 1.57 2015/04/04 15:10:47 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mfi.c,v 1.65 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "bio.h"
 
@@ -107,6 +107,8 @@ __KERNEL_RCSID(0, "$NetBSD: mfi.c,v 1.57 2015/04/04 15:10:47 christos Exp $");
 #if NBIO > 0
 #include <dev/biovar.h>
 #endif /* NBIO > 0 */
+
+#include "ioconf.h"
 
 #ifdef MFI_DEBUG
 uint32_t	mfi_debug = 0
@@ -197,8 +199,6 @@ const struct cdevsw mfi_cdevsw = {
 	.d_discard = nodiscard,
 	.d_flag = D_OTHER
 };
-
-extern struct cfdriver mfi_cd;
 
 static uint32_t 	mfi_xscale_fw_state(struct mfi_softc *sc);
 static void 		mfi_xscale_intr_ena(struct mfi_softc *sc);
@@ -495,10 +495,7 @@ mfi_allocmem(struct mfi_softc *sc, size_t size)
 	DNPRINTF(MFI_D_MEM, "%s: mfi_allocmem: %ld\n", DEVNAME(sc),
 	    (long)size);
 
-	mm = malloc(sizeof(struct mfi_mem), M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (mm == NULL)
-		return NULL;
-
+	mm = malloc(sizeof(struct mfi_mem), M_DEVBUF, M_WAITOK|M_ZERO);
 	mm->am_size = size;
 
 	if (bus_dmamap_create(sc->sc_dmat, size, 1, size, 0,
@@ -869,6 +866,7 @@ mfi_get_bbu(struct mfi_softc *sc, struct mfi_bbu_status *stat)
 		    stat->detail.bbu.remaining_capacity ,
 		    stat->detail.bbu.full_charge_capacity ,
 		    stat->detail.bbu.is_SOH_good);
+		break;
 	default:
 		printf("\n");
 	}
@@ -911,8 +909,7 @@ mfi_rescan(device_t self, const char *ifattr, const int *locators)
 	if (sc->sc_child != NULL)
 		return 0;
 
-	sc->sc_child = config_found_sm_loc(self, ifattr, locators, &sc->sc_chan,
-	    scsiprint, NULL);
+	sc->sc_child = config_found(self, &sc->sc_chan, scsiprint, CFARGS_NONE);
 
 	return 0;
 }
@@ -1053,10 +1050,10 @@ mfi_attach(struct mfi_softc *sc, enum mfi_iop iop)
 	sc->sc_max_cmds = status & MFI_STATE_MAXCMD_MASK;
 	max_sgl = (status & MFI_STATE_MAXSGL_MASK) >> 16;
 	if (sc->sc_ioptype == MFI_IOP_TBOLT) {
-		sc->sc_max_sgl = min(max_sgl, (128 * 1024) / PAGE_SIZE + 1);
+		sc->sc_max_sgl = uimin(max_sgl, (128 * 1024) / PAGE_SIZE + 1);
 		sc->sc_sgl_size = sizeof(struct mfi_sg_ieee);
 	} else if (sc->sc_64bit_dma) {
-		sc->sc_max_sgl = min(max_sgl, (128 * 1024) / PAGE_SIZE + 1);
+		sc->sc_max_sgl = uimin(max_sgl, (128 * 1024) / PAGE_SIZE + 1);
 		sc->sc_sgl_size = sizeof(struct mfi_sg64);
 	} else {
 		sc->sc_max_sgl = max_sgl;
@@ -1248,7 +1245,7 @@ mfi_attach(struct mfi_softc *sc, enum mfi_iop iop)
 	chan->chan_ntargets = MFI_MAX_LD;
 	chan->chan_id = MFI_MAX_LD;
 
-	mfi_rescan(sc->sc_dev, "scsi", NULL);
+	mfi_rescan(sc->sc_dev, NULL, NULL);
 
 	/* enable interrupts */
 	mfi_intr_enable(sc);
@@ -1879,7 +1876,7 @@ mfi_mgmt(struct mfi_ccb *ccb, struct scsipi_xfer *xs,
 	DNPRINTF(MFI_D_MISC, "%s: mfi_mgmt %#x\n", DEVNAME(ccb->ccb_sc), opc);
 
 	dcmd = &ccb->ccb_frame->mfr_dcmd;
-	memset(dcmd->mdf_mbox, 0, MFI_MBOX_SIZE);
+	memset(dcmd->mdf_mbox.b, 0, MFI_MBOX_SIZE);
 	dcmd->mdf_header.mfh_cmd = MFI_CMD_DCMD;
 	dcmd->mdf_header.mfh_timeout = 0;
 
@@ -1893,7 +1890,7 @@ mfi_mgmt(struct mfi_ccb *ccb, struct scsipi_xfer *xs,
 
 	/* handle special opcodes */
 	if (mbox)
-		memcpy(dcmd->mdf_mbox, mbox, MFI_MBOX_SIZE);
+		memcpy(dcmd->mdf_mbox.b, mbox, MFI_MBOX_SIZE);
 
 	if (dir != MFI_DATA_NONE) {
 		dcmd->mdf_header.mfh_data_len = len;
@@ -2017,7 +2014,7 @@ mfi_ioctl_inq(struct mfi_softc *sc, struct bioc_inq *bi)
 
 	/* get figures */
 	cfg = malloc(sizeof *cfg, M_DEVBUF, M_WAITOK);
-	if (mfi_mgmt_internal(sc, MD_DCMD_CONF_GET, MFI_DATA_IN,
+	if (mfi_mgmt_internal(sc, MR_DCMD_CONF_GET, MFI_DATA_IN,
 	    sizeof *cfg, cfg, NULL, false))
 		goto freeme;
 
@@ -2141,7 +2138,7 @@ mfi_ioctl_disk(struct mfi_softc *sc, struct bioc_disk *bd)
 
 	/* send single element command to retrieve size for full structure */
 	cfg = malloc(sizeof *cfg, M_DEVBUF, M_WAITOK);
-	if (mfi_mgmt_internal(sc, MD_DCMD_CONF_GET, MFI_DATA_IN,
+	if (mfi_mgmt_internal(sc, MR_DCMD_CONF_GET, MFI_DATA_IN,
 	    sizeof *cfg, cfg, NULL, false))
 		goto freeme;
 
@@ -2150,7 +2147,7 @@ mfi_ioctl_disk(struct mfi_softc *sc, struct bioc_disk *bd)
 
 	/* memory for read config */
 	cfg = malloc(size, M_DEVBUF, M_WAITOK|M_ZERO);
-	if (mfi_mgmt_internal(sc, MD_DCMD_CONF_GET, MFI_DATA_IN,
+	if (mfi_mgmt_internal(sc, MR_DCMD_CONF_GET, MFI_DATA_IN,
 	    size, cfg, NULL, false))
 		goto freeme;
 
@@ -2400,7 +2397,7 @@ mfi_ioctl_setstate(struct mfi_softc *sc, struct bioc_setstate *bs)
 	}
 
 
-	if (mfi_mgmt_internal(sc, MD_DCMD_PD_SET_STATE, MFI_DATA_NONE,
+	if (mfi_mgmt_internal(sc, MR_DCMD_PD_SET_STATE, MFI_DATA_NONE,
 	    0, NULL, mbox, false))
 		goto done;
 
@@ -2433,7 +2430,7 @@ mfi_bio_hs(struct mfi_softc *sc, int volid, int type, void *bio_hs)
 
 	/* send single element command to retrieve size for full structure */
 	cfg = malloc(sizeof *cfg, M_DEVBUF, M_WAITOK);
-	if (mfi_mgmt_internal(sc, MD_DCMD_CONF_GET, MFI_DATA_IN,
+	if (mfi_mgmt_internal(sc, MR_DCMD_CONF_GET, MFI_DATA_IN,
 	    sizeof *cfg, cfg, NULL, false))
 		goto freeme;
 
@@ -2442,7 +2439,7 @@ mfi_bio_hs(struct mfi_softc *sc, int volid, int type, void *bio_hs)
 
 	/* memory for read config */
 	cfg = malloc(size, M_DEVBUF, M_WAITOK|M_ZERO);
-	if (mfi_mgmt_internal(sc, MD_DCMD_CONF_GET, MFI_DATA_IN,
+	if (mfi_mgmt_internal(sc, MR_DCMD_CONF_GET, MFI_DATA_IN,
 	    size, cfg, NULL, false))
 		goto freeme;
 
@@ -2529,11 +2526,7 @@ mfi_create_sensors(struct mfi_softc *sc)
 
 	sc->sc_sme = sysmon_envsys_create();
 	sc->sc_sensor = malloc(sizeof(envsys_data_t) * nsensors,
-	    M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (sc->sc_sensor == NULL) {
-		aprint_error_dev(sc->sc_dev, "can't allocate envsys_data_t\n");
-		return ENOMEM;
-	}
+	    M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/* BBU */
 	sc->sc_sensor[0].units = ENVSYS_INDICATOR;
@@ -3384,12 +3377,13 @@ mfi_tbolt_sync_map_info(struct work *w, void *v)
 	int i;
 	struct mfi_ccb *ccb = NULL;
 	uint8_t mbox[MFI_MBOX_SIZE];
-	struct mfi_ld *ld_sync = NULL;
+	struct mfi_ld *ld_sync;
 	size_t ld_size;
 	int s;
 
 	DNPRINTF(MFI_D_SYNC, "%s: mfi_tbolt_sync_map_info\n", DEVNAME(sc));
 again:
+	ld_sync = NULL;
 	s = splbio();
 	if (sc->sc_ldsync_ccb != NULL) {
 		splx(s);

@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.500 2016/07/11 16:10:10 matt Exp $	*/
+/*	$NetBSD: param.h,v 1.701 2021/08/07 19:44:39 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -67,7 +67,7 @@
  *	2.99.9		(299000900)
  */
 
-#define	__NetBSD_Version__	799003400	/* NetBSD 7.99.34 */
+#define	__NetBSD_Version__	999008800	/* NetBSD 9.99.88 */
 
 #define __NetBSD_Prereq__(M,m,p) (((((M) * 100000000) + \
     (m) * 1000000) + (p) * 100) <= __NetBSD_Version__)
@@ -87,7 +87,7 @@
 #define	NetBSD	199905		/* NetBSD version (year & month). */
 
 /*
- * There macros determine if we are running in protected mode or not.
+ * These macros determine if we are running in protected mode or not.
  *   _HARDKERNEL: code uses kernel namespace and runs in hw priviledged mode
  *   _SOFTKERNEL: code uses kernel namespace but runs without hw priviledges
  */
@@ -138,6 +138,22 @@
 #define	MIN(a,b)	((/*CONSTCOND*/(a)<(b))?(a):(b))
 #define	MAX(a,b)	((/*CONSTCOND*/(a)>(b))?(a):(b))
 
+/* Machine type dependent parameters. */
+#include <machine/param.h>
+#include <machine/limits.h>
+
+/*
+ * Coherency unit: assumed cache line size.  See also MIN_LWP_ALIGNMENT.
+ * The MD code depends on the current values of these constants. Don't
+ * change them without coordinating.
+ */
+#ifndef COHERENCY_UNIT
+#define	COHERENCY_UNIT		64
+#endif
+#ifndef CACHE_LINE_SIZE
+#define	CACHE_LINE_SIZE		64
+#endif
+
 /* More types and definitions used throughout the kernel. */
 #ifdef _KERNEL
 #include <sys/cdefs.h>
@@ -148,13 +164,17 @@
 #include <sys/uio.h>
 #include <uvm/uvm_param.h>
 #ifndef NPROC
-#define	NPROC	(20 + 16 * MAXUSERS)
+#define	NPROC			(20 + 16 * MAXUSERS)
+#endif
+#ifndef MAXFILES
+#define	MAXFILES		(3 * (NPROC + MAXUSERS) + 80)
+#define	MAXFILES_IMPLICIT
 #endif
 #ifndef NTEXT
-#define	NTEXT	(80 + NPROC / 8)		/* actually the object cache */
+#define	NTEXT			(80 + NPROC / 8) /* actually the object cache */
 #endif
 #ifndef NVNODE
-#define	NVNODE	(NPROC + NTEXT + 100)
+#define	NVNODE			(NPROC + NTEXT + 100)
 #define	NVNODE_IMPLICIT
 #endif
 #ifndef VNODE_KMEM_MAXPCT
@@ -163,15 +183,22 @@
 #ifndef BUFCACHE_VA_MAXPCT
 #define	BUFCACHE_VA_MAXPCT	20
 #endif
-#define	VNODE_COST	2048			/* assumed space in bytes */
+#define	VNODE_COST		2048		/* assumed space in bytes */
 #endif /* _KERNEL */
 
 /* Signals. */
 #include <sys/signal.h>
 
-/* Machine type dependent parameters. */
-#include <machine/param.h>
-#include <machine/limits.h>
+#define	DEV_BSHIFT	9			/* log2(DEV_BSIZE) */
+#define	DEV_BSIZE	(1 << DEV_BSHIFT)	/* 512 */
+
+#ifndef BLKDEV_IOSIZE
+#define	BLKDEV_IOSIZE	2048
+#endif
+
+#ifndef MAXPHYS
+#define	MAXPHYS		(64 * 1024)		/* max raw I/O transfer size */
+#endif
 
 /* pages ("clicks") to disk blocks */
 #define	ctod(x)		((x) << (PGSHIFT - DEV_BSHIFT))
@@ -185,12 +212,6 @@
 #define	dbtob(x)	((x) << DEV_BSHIFT)
 #define	btodb(x)	((x) >> DEV_BSHIFT)
 
-#ifndef COHERENCY_UNIT
-#define	COHERENCY_UNIT		64
-#endif
-#ifndef CACHE_LINE_SIZE
-#define	CACHE_LINE_SIZE		64
-#endif
 #ifndef MAXCPUS
 #define	MAXCPUS			32
 #endif
@@ -242,9 +263,22 @@
  * any desired pointer type.
  *
  * ALIGNED_POINTER is a boolean macro that checks whether an address
- * is valid to fetch data elements of type t from on this architecture.
- * This does not reflect the optimal alignment, just the possibility
- * (within reasonable limits).
+ * is valid to fetch data elements of type t from on this architecture
+ * using ALIGNED_POINTER_LOAD.  This does not reflect the optimal
+ * alignment, just the possibility (within reasonable limits).
+ *
+ *	uint32_t x;
+ *	unsigned char *p = ...;
+ *
+ *	if (ALIGNED_POINTER(p, uint32_t)) {
+ *		uint32_t t;
+ *		ALIGNED_POINTER_LOAD(&t, p, uint32_t);
+ *		x = t;
+ *	} else {
+ *		uint32_t t;
+ *		memcpy(&t, p, sizeof(t));
+ *		x = t;
+ *	}
  *
  */
 #define ALIGNBYTES	__ALIGNBYTES
@@ -252,7 +286,24 @@
 #define	ALIGN(p)		(((uintptr_t)(p) + ALIGNBYTES) & ~ALIGNBYTES)
 #endif
 #ifndef ALIGNED_POINTER
-#define	ALIGNED_POINTER(p,t)	((((uintptr_t)(p)) & (sizeof(t) - 1)) == 0)
+#define	ALIGNED_POINTER(p,t)	((((uintptr_t)(p)) & (__alignof(t) - 1)) == 0)
+#endif
+#ifndef ALIGNED_POINTER_LOAD
+#define	ALIGNED_POINTER_LOAD(q,p,t)	(*(q) = *((const t *)(p)))
+#endif
+
+/*
+ * Return if pointer p is accessible for type t. For primitive types
+ * this means that the pointer itself can be dereferenced; for structures
+ * and unions this means that any field can be dereferenced. On CPUs
+ * that allow unaligned pointer access, we always return that the pointer
+ * is accessible to prevent unnecessary copies, although this might not be
+ * necessarily faster.
+ */
+#ifdef __NO_STRICT_ALIGNMENT
+#define	ACCESSIBLE_POINTER(p, t)	1
+#else
+#define	ACCESSIBLE_POINTER(p, t)	ALIGNED_POINTER(p, t)
 #endif
 
 /*
@@ -361,7 +412,7 @@
  * This is the maximum individual filename component length enforced by
  * namei. Filesystems cannot exceed this limit. The upper bound for that
  * limit is NAME_MAX. We don't bump it for now, for compatibility with
- * old binaries during the time where MAXPATHLEN was 511 and NAME_MAX was
+ * old binaries during the time where MAXNAMLEN was 511 and NAME_MAX was
  * 255
  */
 #define	KERNEL_NAME_MAX	255
@@ -459,24 +510,39 @@
 #endif
 
 #ifdef _KERNEL
+extern int hz;
 /*
  * macro to convert from milliseconds to hz without integer overflow
- * Default version using only 32bits arithmetics.
- * 64bit port can define 64bit version in their <machine/param.h>
- * 0x20000 is safe for hz < 20000
+ * The 32 bit version uses only 32bit arithmetic; 0x20000 is safe for hz < 20000
+ * the 64 bit version does the computation directly.
  */
 #ifndef mstohz
-#define mstohz(ms) \
-	(__predict_false((ms) >= 0x20000) ? \
-	    ((ms +0u) / 1000u) * hz : \
-	    ((ms +0u) * hz) / 1000u)
+# ifdef _LP64
+#  define mstohz(ms) ((unsigned int)((ms + 0ul) * hz / 1000ul))
+# else
+static __inline unsigned int
+mstohz(unsigned int ms)
+{
+	return __predict_false(ms >= 0x20000u) ?
+	    (ms / 1000u) * hz : (ms * hz) / 1000u;
+}
+# endif
 #endif
+
 #ifndef hztoms
-#define hztoms(t) \
-	(__predict_false((t) >= 0x20000) ? \
-	    ((t +0u) / hz) * 1000u : \
-	    ((t +0u) * 1000u) / hz)
+# ifdef _LP64
+#  define hztoms(t) ((unsigned int)(((t) + 0ul) * 1000ul / hz))
+# else
+static __inline unsigned int
+hztoms(unsigned int t)
+{
+	return __predict_false(t >= 0x20000u) ?
+	    (t / hz) * 1000u : (t * 1000u) / hz;
+}
+# endif
 #endif
+
+#define	hz2bintime(t)	(ms2bintime(hztoms(t)))
 
 extern const int schedppq;
 extern size_t coherency_unit;
@@ -484,12 +550,16 @@ extern size_t coherency_unit;
 #endif /* _KERNEL */
 
 /*
- * Minimum alignment of "struct lwp" needed by the architecture.
- * This counts when packing a lock byte into a word alongside a
- * pointer to an LWP.
+ * Minimum alignment of "struct lwp" needed by the architecture.  This
+ * counts when packing a lock byte into a word alongside a pointer to an
+ * LWP.  We need a minimum of 32, but go with the cache line size.
  */
 #ifndef MIN_LWP_ALIGNMENT
-#define	MIN_LWP_ALIGNMENT	32
+# if COHERENCY_UNIT > 32
+#  define MIN_LWP_ALIGNMENT	COHERENCY_UNIT
+# else
+#  define MIN_LWP_ALIGNMENT	32
+# endif
 #endif
 #endif /* !__ASSEMBLER__ */
 

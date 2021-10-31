@@ -1,4 +1,4 @@
-/*	$NetBSD: getfstypename.c,v 1.8 2012/04/07 16:28:59 christos Exp $	*/
+/*	$NetBSD: getfstypename.c,v 1.11 2021/07/22 13:54:38 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -39,13 +39,15 @@
 # include <sys/cdefs.h>
 # ifndef _KERNEL
 #  if !defined(lint)
-__RCSID("$NetBSD: getfstypename.c,v 1.8 2012/04/07 16:28:59 christos Exp $");
+__RCSID("$NetBSD: getfstypename.c,v 1.11 2021/07/22 13:54:38 skrll Exp $");
 #  endif
 # else
-__KERNEL_RCSID(0, "$NetBSD: getfstypename.c,v 1.8 2012/04/07 16:28:59 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: getfstypename.c,v 1.11 2021/07/22 13:54:38 skrll Exp $");
 # endif /* _KERNEL */
 
 # define FSTYPE_ENUMNAME fstype_enum
+
+# include <sys/param.h>
 # include <sys/types.h>
 # include <sys/disk.h>
 # include <sys/disklabel.h>
@@ -123,6 +125,14 @@ getfstypename(int fstype)
 		return DKW_PTYPE_UNKNOWN;
 	case FS_MINIXFS3:
 		return DKW_PTYPE_MINIXFS3;
+	case FS_VMKCORE:
+		return DKW_PTYPE_VMKCORE;
+	case FS_VMFS:
+		return DKW_PTYPE_VMFS;
+	case FS_VMWRESV:
+		return DKW_PTYPE_VMWRESV;
+	case FS_ZFS:
+		return DKW_PTYPE_ZFS;
 	}
 	/* Stupid gcc, should know it is impossible to get here */
 	/*NOTREACHED*/

@@ -1,4 +1,4 @@
-/*	$NetBSD: hpcapm.c,v 1.20 2013/11/09 21:31:56 christos Exp $	*/
+/*	$NetBSD: hpcapm.c,v 1.24 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2000 Takemura Shin
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hpcapm.c,v 1.20 2013/11/09 21:31:56 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hpcapm.c,v 1.24 2021/08/07 16:19:11 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_hpcapm.h"
@@ -47,6 +47,8 @@ __KERNEL_RCSID(0, "$NetBSD: hpcapm.c,v 1.20 2013/11/09 21:31:56 christos Exp $")
 #include <machine/config_hook.h>
 #include <machine/platid.h>
 #include <machine/platid_mask.h>
+
+#include "ioconf.h"
 
 #ifdef HPCAPMDEBUG
 #ifndef HPCAPMDEBUG_CONF
@@ -102,8 +104,6 @@ struct apm_accessops hpcapm_accessops = {
 	hpcapm_get_capabilities,
 };
 
-extern struct cfdriver hpcapm_cd;
-
 static int
 hpcapm_match(device_t parent, cfdata_t cf, void *aux)
 {
@@ -149,7 +149,7 @@ hpcapm_attach(device_t parent, device_t self, void *aux)
 	aaa.accesscookie = sc;
 	aaa.apm_detail = 0x0102;
 
-	sc->sc_apmdev = config_found_ia(self, "apmdevif", &aaa, apmprint);
+	sc->sc_apmdev = config_found(self, &aaa, apmprint, CFARGS_NONE);
 
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "unable to establish power handler\n");
@@ -415,6 +415,8 @@ hpcapm_get_event(void *scx, u_int *event_type, u_int *event_info)
 				sc->power_state = APM_SYS_READY;
 			} else
 				*event_info = 0;
+			splx(s);
+
 			return (0);
 		}
 	}

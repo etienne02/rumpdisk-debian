@@ -1,4 +1,4 @@
-/*	$NetBSD: rumpuser.h,v 1.114 2015/01/03 17:24:20 pooka Exp $	*/
+/*	$NetBSD: rumpuser.h,v 1.116 2020/03/22 13:30:10 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 2007-2013 Antti Kantee.  All Rights Reserved.
@@ -194,6 +194,7 @@ int  rumpuser_mutex_tryenter(struct rumpuser_mtx *);
 void rumpuser_mutex_exit(struct rumpuser_mtx *);
 void rumpuser_mutex_destroy(struct rumpuser_mtx *);
 void rumpuser_mutex_owner(struct rumpuser_mtx *, struct lwp **);
+int  rumpuser_mutex_spin_p(struct rumpuser_mtx *);
 
 struct rumpuser_rw;
 enum rumprwlock { RUMPUSER_RW_READER, RUMPUSER_RW_WRITER };
@@ -223,10 +224,13 @@ void rumpuser_cv_has_waiters(struct rumpuser_cv *, int *);
 
 struct modinfo;
 struct rump_component;
+struct evcnt;
 typedef void (*rump_modinit_fn)(const struct modinfo *const *, size_t);
 typedef int (*rump_symload_fn)(void *, uint64_t, char *, uint64_t);
 typedef void (*rump_compload_fn)(const struct rump_component *);
-void rumpuser_dl_bootstrap(rump_modinit_fn, rump_symload_fn, rump_compload_fn);
+typedef void (*rump_evcntattach_fn)(struct evcnt *);
+void rumpuser_dl_bootstrap(rump_modinit_fn, rump_symload_fn, rump_compload_fn,
+    rump_evcntattach_fn);
 
 /*
  * misc management

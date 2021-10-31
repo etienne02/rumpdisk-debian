@@ -1,4 +1,4 @@
-/*	$NetBSD: undefined.c,v 1.56 2015/04/15 13:22:50 matt Exp $	*/
+/*	$NetBSD: undefined.c,v 1.67 2020/09/21 10:35:12 skrll Exp $	*/
 
 /*
  * Copyright (c) 2001 Ben Harris.
@@ -47,15 +47,15 @@
 #define FAST_FPE
 
 #include "opt_ddb.h"
-#include "opt_kgdb.h"
 #include "opt_dtrace.h"
+#include "opt_kgdb.h"
 
 #include <sys/param.h>
 #ifdef KGDB
 #include <sys/kgdb.h>
 #endif
 
-__KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.56 2015/04/15 13:22:50 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.67 2020/09/21 10:35:12 skrll Exp $");
 
 #include <sys/kmem.h>
 #include <sys/queue.h>
@@ -85,10 +85,6 @@ __KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.56 2015/04/15 13:22:50 matt Exp $");
 #include <machine/db_machdep.h>
 #endif
 
-#ifdef acorn26
-#include <machine/machdep.h>
-#endif
-
 static int gdb_trapper(u_int, u_int, struct trapframe *, int);
 
 LIST_HEAD(, undefined_handler) undefined_handlers[NUM_UNKNOWN_HANDLERS];
@@ -102,8 +98,7 @@ install_coproc_handler(int coproc, undef_handler_t handler)
 	KASSERT(coproc >= 0 && coproc < NUM_UNKNOWN_HANDLERS);
 	KASSERT(handler != NULL); /* Used to be legal. */
 
-	uh = kmem_alloc(sizeof(*uh), KM_NOSLEEP);
-	KASSERT(uh != NULL);
+	uh = kmem_alloc(sizeof(*uh), KM_SLEEP);
 	uh->uh_handler = handler;
 	install_coproc_handler_static(coproc, uh);
 	return uh;
@@ -141,7 +136,7 @@ cp15_trapper(u_int addr, u_int insn, struct trapframe *tf, int code)
 	 * Don't overwrite sp, pc, etc.
 	 */
 	const u_int regno = (insn >> 12) & 15;
-	if (regno > 12)
+	if (regno == 13 || regno == 15)
 		return 1;
 
 	/*
@@ -225,34 +220,26 @@ static struct undefined_handler gdb_uh_thumb;
 dtrace_doubletrap_func_t	dtrace_doubletrap_func = NULL;
 dtrace_trap_func_t		dtrace_trap_func = NULL;
 
-int (* dtrace_invop_jump_addr)(uintptr_t, uintptr_t *, uintptr_t);
-void (* dtrace_emulation_jump_addr)(int, struct trapframe *);
+int (* dtrace_invop_jump_addr)(struct trapframe *);
 
 static int
 dtrace_trapper(u_int addr, struct trapframe *frame)
 {
-	int op;
-	struct trapframe back;
 	u_int insn = read_insn(addr, false);
 
-	if (dtrace_invop_jump_addr == NULL || dtrace_emulation_jump_addr == NULL)
+	if (dtrace_invop_jump_addr == NULL)
 		return 1;
 
 	if (!DTRACE_IS_BREAKPOINT(insn))
 		return 1;
 
-	/* cond value is encoded in the first byte */
+	/* cond value is encoded in the low nibble */
 	if (!arm_cond_ok_p(__SHIFTIN(insn, INSN_COND_MASK), frame->tf_spsr)) {
 		frame->tf_pc += INSN_SIZE;
 		return 0;
 	}
 
-	back = *frame;
-	op = dtrace_invop_jump_addr(addr, (uintptr_t *) frame->tf_svc_sp, frame->tf_r0);
-	*frame = back;
-
-	dtrace_emulation_jump_addr(op, frame);
-
+	dtrace_invop_jump_addr(frame);
 	return 0;
 }
 #endif
@@ -305,14 +292,8 @@ undefinedinstruction(trapframe_t *tf)
 #endif
 
 	/* Enable interrupts if they were enabled before the exception. */
-#ifdef acorn26
-	if ((tf->tf_r15 & R15_IRQ_DISABLE) == 0)
-		int_on();
-#else
 	restore_interrupts(tf->tf_spsr & IF32_bits);
-#endif
 
-#ifndef acorn26
 #ifdef THUMB_CODE
 	if (tf->tf_spsr & PSR_T_bit)
 		tf->tf_pc -= THUMB_INSN_SIZE;
@@ -321,22 +302,13 @@ undefinedinstruction(trapframe_t *tf)
 	{
 		tf->tf_pc -= INSN_SIZE;
 	}
-#endif
 
-#ifdef __PROG26
-	fault_pc = tf->tf_r15 & R15_PC;
-#else
 	fault_pc = tf->tf_pc;
-#endif
 
 	/* Get the current lwp/proc structure or lwp0/proc0 if there is none. */
 	l = curlwp;
 
-#ifdef __PROG26
-	if ((tf->tf_r15 & R15_MODE) == R15_MODE_USR) {
-#else
 	if ((tf->tf_spsr & PSR_MODE) == PSR_USR32_MODE) {
-#endif
 		user = 1;
 		LWP_CACHE_CREDS(l, l->l_proc);
 	} else
@@ -370,12 +342,12 @@ undefinedinstruction(trapframe_t *tf)
 			return;
 		}
 	 	/*
-		 * Should use fuword() here .. but in the interests of
-		 * squeezing every  bit of speed we will just use
-		 * ReadWord(). We know the instruction can be read
+		 * Should use ufetch_32() here .. but in the interests of
+		 * squeezing every bit of speed we will just use
+		 * read_insn(). We know the instruction can be read
 		 * as was just executed so this will never fail unless
 		 * the kernel is screwed up in which case it does
-		 * not really matter does it ?
+		 * not really matter does it?
 		 */
 		fault_instruction = read_insn(fault_pc, user);
 	}
@@ -420,20 +392,24 @@ undefinedinstruction(trapframe_t *tf)
 		 * time of fault.
 		 */
 		fault_code = FAULT_USER;
-		lwp_settrapframe(l, tf);
+		KASSERTMSG(tf == lwp_trapframe(l), "tf %p vs %p", tf,
+		    lwp_trapframe(l));
 	} else
 		fault_code = 0;
 
 	/* OK this is were we do something about the instruction. */
-	LIST_FOREACH(uh, &undefined_handlers[coprocessor], uh_link)
-	    if (uh->uh_handler(fault_pc, fault_instruction, tf,
-			       fault_code) == 0)
-		    break;
+	LIST_FOREACH(uh, &undefined_handlers[coprocessor], uh_link) {
+		int ret = uh->uh_handler(fault_pc, fault_instruction, tf,
+		    fault_code);
+
+		if (ret == 0)
+			break;
+	}
 
 	if (uh == NULL) {
 		/* Fault has not been handled */
-		ksiginfo_t ksi; 
-		
+		ksiginfo_t ksi;
+
 #ifdef VERBOSE_ARM32
 		s = spltty();
 
@@ -454,7 +430,7 @@ undefinedinstruction(trapframe_t *tf)
 
 		splx(s);
 #endif
-        
+
 		if ((fault_code & FAULT_USER) == 0) {
 #ifdef DDB
 			db_printf("Undefined instruction %#x in kernel at %#lx (LR %#x SP %#x)\n",

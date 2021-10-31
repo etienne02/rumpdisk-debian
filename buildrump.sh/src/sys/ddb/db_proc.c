@@ -1,7 +1,7 @@
-/*	$NetBSD: db_proc.c,v 1.6 2011/10/23 13:30:20 jym Exp $	*/
+/*	$NetBSD: db_proc.c,v 1.14 2021/01/11 07:49:04 simonb Exp $	*/
 
 /*-
- * Copyright (c) 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2009, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_proc.c,v 1.6 2011/10/23 13:30:20 jym Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_proc.c,v 1.14 2021/01/11 07:49:04 simonb Exp $");
 
 #ifndef _KERNEL
 #include <stdbool.h>
@@ -107,6 +107,18 @@ db_proc_find(pid_t pid)
 	return NULL;
 }
 
+static void
+db_read_string(const char *src, size_t len, char *dst)
+{
+	size_t i;
+
+	for (i = 0; i < len; i++) {
+		db_read_bytes((db_addr_t)&src[i], 1, &dst[i]);
+		if (dst[i] == '\0')
+			break;
+	}
+}
+
 void
 db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 		  const char *modif)
@@ -137,7 +149,7 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 
 	switch (*mode) {
 	case 'a':
-		db_printf("PID  %10s %18s %18s %18s\n",
+		db_printf("PID   %-16s %18s %18s %18s\n",
 		    "COMMAND", "STRUCT PROC *", "UAREA *", "VMSPACE/VM_MAP");
 		break;
 	case 'l':
@@ -168,7 +180,7 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 
 		switch (*mode) {
 		case 'a':
-			db_printf("%10.10s %18lx %18lx %18lx\n",
+			db_printf(" %-16.16s %18lx %18lx %18lx\n",
 			    p.p_comm, (long)pp,
 			    (long)(lp != NULL ? l.l_addr : 0),
 			    (long)p.p_vmspace);
@@ -176,8 +188,9 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 		case 'l':
 			 while (lp != NULL) {
 			 	if (l.l_name != NULL) {
-					db_read_bytes((db_addr_t)l.l_name,
+					db_read_string(l.l_name,
 					    MAXCOMLEN, db_nbuf);
+					db_nbuf[MAXCOMLEN] = '\0';
 				} else {
 					strlcpy(db_nbuf, p.p_comm,
 					    sizeof(db_nbuf));
@@ -191,8 +204,9 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 				} else
 					cpuno = -1;
 				if (l.l_wchan && l.l_wmesg) {
-					db_read_bytes((db_addr_t)l.l_wmesg,
-					    sizeof(wbuf), (char *)wbuf);
+					db_read_string(l.l_wmesg,
+					    sizeof(wbuf), wbuf);
+					wbuf[MAXCOMLEN] = '\0';
 				} else {
 					wbuf[0] = '\0';
 				}
@@ -212,18 +226,19 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 			db_read_bytes((db_addr_t)p.p_pgrp, sizeof(pgrp),
 			    (char *)&pgrp);
 			if (lp != NULL && l.l_wchan && l.l_wmesg) {
-				db_read_bytes((db_addr_t)l.l_wmesg,
-				    sizeof(wbuf), (char *)wbuf);
+				db_read_string(l.l_wmesg,
+				    sizeof(wbuf), wbuf);
+				wbuf[MAXCOMLEN] = '\0';
 			} else {
 				wbuf[0] = '\0';
 			}
 			db_printf("%8d %8d %10d %d %#7x %4d %16s %7.7s\n",
-			    p.p_pptr != NULL ? p.p_pid : -1, pgrp.pg_id,
+			    p.p_pptr != NULL ? p.p_pptr->p_pid : -1, pgrp.pg_id,
 #ifdef _KERNEL
 			    kauth_cred_getuid(p.p_cred),
 #else
 			    /* XXX CRASH(8) */ 666,
-#endif			    
+#endif
 			    p.p_stat, p.p_flag,
 			    p.p_nlwps, p.p_comm,
 			    (p.p_nlwps != 1) ? "*" : wbuf);
@@ -232,8 +247,9 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 		case 'w':
 			 while (lp != NULL) {
 				if (l.l_wchan && l.l_wmesg) {
-					db_read_bytes((db_addr_t)l.l_wmesg,
-					    sizeof(wbuf), (char *)wbuf);
+					db_read_string(l.l_wmesg,
+					    sizeof(wbuf), wbuf);
+					wbuf[MAXCOMLEN] = '\0';
 				} else {
 					wbuf[0] = '\0';
 				}
@@ -241,8 +257,10 @@ db_show_all_procs(db_expr_t addr, bool haddr, db_expr_t count,
 				    (l.l_pflag & LP_RUNNING) != 0);
 				db_read_bytes((db_addr_t)&p.p_emul->e_name,
 				    sizeof(ename), (char *)&ename);
-				db_read_bytes((db_addr_t)ename,
-				    sizeof(db_nbuf), db_nbuf);
+
+				db_read_string(ename, sizeof(db_nbuf), db_nbuf);
+				db_nbuf[MAXCOMLEN] = '\0';
+
 				db_printf(
 				    "%c%4d %16s %8s %4d %-12s %-18lx\n",
 				    (run ? '>' : ' '), l.l_lid,
@@ -318,8 +336,8 @@ db_show_proc(db_expr_t addr, bool haddr, db_expr_t count, const char *modif)
 
 		db_printf("%slwp %d", (run ? "> " : "  "), l.l_lid);
 		if (l.l_name != NULL) {
-			db_read_bytes((db_addr_t)l.l_name,
-			    MAXCOMLEN, db_nbuf);
+			db_read_string(l.l_name, MAXCOMLEN, db_nbuf);
+			db_nbuf[MAXCOMLEN] = '\0';
 			db_printf(" [%s]", db_nbuf);
 		}
 		db_printf(" %lx pcb %lx\n", (long)lp, (long)l.l_addr);
@@ -330,12 +348,12 @@ db_show_proc(db_expr_t addr, bool haddr, db_expr_t count, const char *modif)
 			    sizeof(cpuno), (char *)&cpuno);
 		} else
 			cpuno = -1;
-		db_printf("    stat %d flags %x cpu %d pri %d \n",
-		    l.l_stat, l.l_flag, cpuno, l.l_priority);
+		db_printf("    stat %d flags %x cpu %d pri %d ref %d\n",
+		    l.l_stat, l.l_flag, cpuno, l.l_priority, l.l_refcnt);
 
 		if (l.l_wchan && l.l_wmesg) {
-			db_read_bytes((db_addr_t)l.l_wmesg,
-			    sizeof(wbuf), (char *)wbuf);
+			db_read_string(l.l_wmesg, MAXCOMLEN, wbuf);
+			wbuf[MAXCOMLEN] = '\0';
 			db_printf("    wmesg %s wchan %lx\n",
 			    wbuf, (long)l.l_wchan);
 		}

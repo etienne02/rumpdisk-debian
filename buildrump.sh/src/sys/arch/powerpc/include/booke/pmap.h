@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.16 2016/07/11 16:06:52 matt Exp $	*/
+/*	$NetBSD: pmap.h,v 1.24 2020/12/20 16:38:25 skrll Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -33,6 +33,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
 #ifndef _POWERPC_BOOKE_PMAP_H_
 #define _POWERPC_BOOKE_PMAP_H_
 
@@ -45,12 +46,14 @@
 #endif
 
 #ifdef _KERNEL_OPT
+#include "opt_multiprocessor.h"
 #include "opt_pmap.h"
 #endif
 
 #include <sys/cpu.h>
 #include <sys/kcore.h>
 #include <uvm/uvm_page.h>
+#include <uvm/uvm_physseg.h>
 #ifdef __PMAP_PRIVATE
 #include <powerpc/booke/cpuvar.h>
 #endif
@@ -93,9 +96,7 @@ void	pmap_md_init(void);
 bool	pmap_md_tlb_check_entry(void *, vaddr_t, tlb_asid_t, pt_entry_t);
 
 #ifdef MULTIPROCESSOR
-#define	PMAP_MD_NEED_TLB_MISS_LOCK
-void	pmap_md_tlb_miss_lock_enter(void);
-void	pmap_md_tlb_miss_lock_exit(void);
+#define	PMAP_NEED_TLB_MISS_LOCK
 #endif	/* MULTIPROCESSOR */
 
 #ifdef PMAP_MINIMALTLB
@@ -103,13 +104,13 @@ vaddr_t	pmap_kvptefill(vaddr_t, vaddr_t, pt_entry_t);
 #endif
 #endif
 
-void	pmap_md_page_syncicache(struct vm_page *, const kcpuset_t *);
+void	pmap_md_page_syncicache(struct vm_page_md *, const kcpuset_t *);
 vaddr_t	pmap_bootstrap(vaddr_t, vaddr_t, phys_ram_seg_t *, size_t);
 bool	pmap_extract(struct pmap *, vaddr_t, paddr_t *);
 
-static inline paddr_t vtophys(vaddr_t);
+static __inline paddr_t vtophys(vaddr_t);
 
-static inline paddr_t
+static __inline paddr_t
 vtophys(vaddr_t va)
 {
 	paddr_t pa;
@@ -124,37 +125,50 @@ vtophys(vaddr_t va)
 /*
  * Virtual Cache Alias helper routines.  Not a problem for Booke CPUs.
  */
-static inline bool
-pmap_md_vca_add(struct vm_page *pg, vaddr_t va, pt_entry_t *nptep)
+static __inline bool
+pmap_md_vca_add(struct vm_page_md *mdpg, vaddr_t va, pt_entry_t *nptep)
 {
 	return false;
 }
 
-static inline void
-pmap_md_vca_remove(struct vm_page *pg, vaddr_t va, bool dirty)
+static __inline void
+pmap_md_vca_remove(struct vm_page_md *mdpg, vaddr_t va, bool dirty)
 {
 
 }
 
-static inline void
-pmap_md_vca_clean(struct vm_page *pg, vaddr_t va, int op)
+static __inline void
+pmap_md_vca_clean(struct vm_page_md *mdpg, vaddr_t va, int op)
 {
 }
-#endif
 
-#ifdef __PMAP_PRIVATE
-static inline size_t
+static __inline size_t
 pmap_md_tlb_asid_max(void)
 {
 	return PMAP_TLB_NUM_PIDS - 1;
 }
 
 struct vm_physseg;
-static inline bool
-pmap_md_ok_to_steal_p(const struct vm_physseg *seg, size_t npgs)
+static __inline bool
+pmap_md_ok_to_steal_p(const uvm_physseg_t bank, size_t npgs)
 {
 	return true;
 }
+
+static __inline void
+pmap_md_xtab_activate(struct pmap *pm, struct lwp *l)
+{
+
+	/* nothing */
+}
+
+static __inline void
+pmap_md_xtab_deactivate(struct pmap *pm)
+{
+
+	/* nothing */
+}
+
 #endif
 
 #define	POOL_VTOPHYS(va)	((paddr_t)(vaddr_t)(va))

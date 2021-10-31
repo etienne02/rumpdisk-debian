@@ -1,4 +1,4 @@
-/*	$NetBSD: ld_ataraid.c,v 1.41 2016/05/02 19:18:29 christos Exp $	*/
+/*	$NetBSD: ld_ataraid.c,v 1.50 2020/01/17 19:31:31 ad Exp $ */
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -42,15 +42,16 @@
  * controllers we're dealing with (Promise, etc.) only support
  * configuration data on the component disks, with the BIOS supporting
  * booting from the RAID volumes.
- *            
+ *	      
  * bio(4) support was written by Juan Romero Pardines <xtraeme@gmail.com>.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ld_ataraid.c,v 1.41 2016/05/02 19:18:29 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ld_ataraid.c,v 1.50 2020/01/17 19:31:31 ad Exp $");
 
+#if defined(_KERNEL_OPT)
 #include "bio.h"
-
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -63,9 +64,9 @@ __KERNEL_RCSID(0, "$NetBSD: ld_ataraid.c,v 1.41 2016/05/02 19:18:29 christos Exp
 #include <sys/disk.h>
 #include <sys/disklabel.h>
 #include <sys/fcntl.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/kauth.h>
+#include <sys/module.h>
 #if NBIO > 0
 #include <dev/ata/atavar.h>
 #include <dev/ata/atareg.h>
@@ -80,6 +81,8 @@ __KERNEL_RCSID(0, "$NetBSD: ld_ataraid.c,v 1.41 2016/05/02 19:18:29 christos Exp
 
 #include <dev/ata/ata_raidvar.h>
 
+#include "ioconf.h"
+
 struct ld_ataraid_softc {
 	struct ld_softc sc_ld;
 
@@ -88,17 +91,19 @@ struct ld_ataraid_softc {
 
 	void	(*sc_iodone)(struct buf *);
 
-       pool_cache_t sc_cbufpool;
+	pool_cache_t sc_cbufpool;
 
-       SIMPLEQ_HEAD(, cbuf) sc_cbufq;
+	SIMPLEQ_HEAD(, cbuf) sc_cbufq;
 
-       void    *sc_sih_cookie;
+	void	*sc_sih_cookie;
 };
 
 static int	ld_ataraid_match(device_t, cfdata_t, void *);
 static void	ld_ataraid_attach(device_t, device_t, void *);
 
 static int	ld_ataraid_dump(struct ld_softc *, void *, int, int);
+static int	ld_ataraid_ioctl(struct ld_softc *, u_long, void *, int32_t,
+    bool);
 
 static int     cbufpool_ctor(void *, void *, int);
 static void    cbufpool_dtor(void *, void *);
@@ -121,14 +126,14 @@ CFATTACH_DECL_NEW(ld_ataraid, sizeof(struct ld_ataraid_softc),
     ld_ataraid_match, ld_ataraid_attach, NULL, NULL);
 
 struct cbuf {
-	struct buf	cb_buf;		/* new I/O buf */
+	struct buf	cb_buf; 	/* new I/O buf */
 	struct buf	*cb_obp;	/* ptr. to original I/O buf */
-	struct ld_ataraid_softc *cb_sc;	/* pointer to ld softc */
+	struct ld_ataraid_softc *cb_sc; /* pointer to ld softc */
 	u_int		cb_comp;	/* target component */
 	SIMPLEQ_ENTRY(cbuf) cb_q;	/* fifo of component buffers */
 	struct cbuf	*cb_other;	/* other cbuf in case of mirror */
 	int		cb_flags;
-#define	CBUF_IODONE	0x00000001	/* I/O is already successfully done */
+#define CBUF_IODONE	0x00000001	/* I/O is already successfully done */
 };
 
 #define        CBUF_GET()      pool_cache_get(sc->sc_cbufpool, PR_NOWAIT);
@@ -155,10 +160,10 @@ ld_ataraid_attach(device_t parent, device_t self, void *aux)
 
 	ld->sc_dv = self;
 
-       sc->sc_cbufpool = pool_cache_init(sizeof(struct cbuf), 0,
-           0, 0, "ldcbuf", NULL, IPL_BIO, cbufpool_ctor, cbufpool_dtor, sc);
-       sc->sc_sih_cookie = softint_establish(SOFTINT_BIO,
-           ld_ataraid_start_vstrategy, sc);
+	sc->sc_cbufpool = pool_cache_init(sizeof(struct cbuf), 0,
+	    0, 0, "ldcbuf", NULL, IPL_BIO, cbufpool_ctor, cbufpool_dtor, sc);
+	sc->sc_sih_cookie = softint_establish(SOFTINT_BIO,
+	    ld_ataraid_start_vstrategy, sc);
 
 	sc->sc_aai = aai;	/* this data persists */
 
@@ -167,6 +172,7 @@ ld_ataraid_attach(device_t parent, device_t self, void *aux)
 	ld->sc_secsize = 512;				/* XXX */
 	ld->sc_maxqueuecnt = 128;			/* XXX */
 	ld->sc_dump = ld_ataraid_dump;
+	ld->sc_ioctl = ld_ataraid_ioctl;
 
 	switch (aai->aai_level) {
 	case AAI_L_SPAN:
@@ -249,31 +255,31 @@ ld_ataraid_attach(device_t parent, device_t self, void *aux)
 		panic("%s: bioctl registration failed\n",
 		    device_xname(ld->sc_dv));
 #endif
-       SIMPLEQ_INIT(&sc->sc_cbufq);
-	ldattach(ld);
+	SIMPLEQ_INIT(&sc->sc_cbufq);
+	ldattach(ld, BUFQ_DISK_DEFAULT_STRAT);
 }
 
 static int
 cbufpool_ctor(void *arg, void *obj, int flags)
 {
-       struct ld_ataraid_softc *sc = arg;
-       struct ld_softc *ld = &sc->sc_ld;
-       struct cbuf *cbp = obj;
+	struct ld_ataraid_softc *sc = arg;
+	struct ld_softc *ld = &sc->sc_ld;
+	struct cbuf *cbp = obj;
 
-       /* We release/reacquire the spinlock before calling buf_init() */
-       mutex_exit(&ld->sc_mutex);
-       buf_init(&cbp->cb_buf);
-       mutex_enter(&ld->sc_mutex);
+	/* We release/reacquire the spinlock before calling buf_init() */
+	mutex_exit(&ld->sc_mutex);
+	buf_init(&cbp->cb_buf);
+	mutex_enter(&ld->sc_mutex);
 
-       return 0;
+	return 0;
 }
 
 static void
 cbufpool_dtor(void *arg, void *obj)
 {
-       struct cbuf *cbp = obj;
+	struct cbuf *cbp = obj;
 
-       buf_destroy(&cbp->cb_buf);
+	buf_destroy(&cbp->cb_buf);
 }
 
 static struct cbuf *
@@ -284,7 +290,7 @@ ld_ataraid_make_cbuf(struct ld_ataraid_softc *sc, struct buf *bp,
 
 	cbp = CBUF_GET();
 	if (cbp == NULL)
-               return NULL;
+		return NULL;
 	cbp->cb_buf.b_flags = bp->b_flags;
 	cbp->cb_buf.b_oflags = bp->b_oflags;
 	cbp->cb_buf.b_cflags = bp->b_cflags;
@@ -303,24 +309,24 @@ ld_ataraid_make_cbuf(struct ld_ataraid_softc *sc, struct buf *bp,
 	cbp->cb_other = NULL;
 	cbp->cb_flags = 0;
 
-       return cbp;
+	return cbp;
 }
 
 static void
 ld_ataraid_start_vstrategy(void *arg)
 {
-       struct ld_ataraid_softc *sc = arg;
-       struct cbuf *cbp;
+	struct ld_ataraid_softc *sc = arg;
+	struct cbuf *cbp;
 
-       while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
-               SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
-               if ((cbp->cb_buf.b_flags & B_READ) == 0) {
-                       mutex_enter(cbp->cb_buf.b_vp->v_interlock);
-                       cbp->cb_buf.b_vp->v_numoutput++;
-                       mutex_exit(cbp->cb_buf.b_vp->v_interlock);
-               }
-               VOP_STRATEGY(cbp->cb_buf.b_vp, &cbp->cb_buf);
-       }
+	while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
+	    SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
+		if ((cbp->cb_buf.b_flags & B_READ) == 0) {
+			mutex_enter(cbp->cb_buf.b_vp->v_interlock);
+			cbp->cb_buf.b_vp->v_numoutput++;
+			mutex_exit(cbp->cb_buf.b_vp->v_interlock);
+		}
+		VOP_STRATEGY(cbp->cb_buf.b_vp, &cbp->cb_buf);
+	}
 }
 
 static int
@@ -357,11 +363,11 @@ ld_ataraid_start_span(struct ld_softc *ld, struct buf *bp)
 		cbp = ld_ataraid_make_cbuf(sc, bp, comp, bn, addr, rcount);
 		if (cbp == NULL) {
 			/* Free the already allocated component buffers. */
-                       while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
-                               SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
+		       while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
+			       SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
 				CBUF_PUT(cbp);
 			}
-                       return EAGAIN;
+		       return EAGAIN;
 		}
 
 		/*
@@ -371,20 +377,20 @@ ld_ataraid_start_span(struct ld_softc *ld, struct buf *bp)
 		adi = &aai->aai_disks[++comp];
 		bn = 0;
 
-               SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq, cbp, cb_q);
+	       SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq, cbp, cb_q);
 		addr += rcount;
 	}
 
 	/* Now fire off the requests. */
-       softint_schedule(sc->sc_sih_cookie);
+	softint_schedule(sc->sc_sih_cookie);
 
-       return 0;
+	return 0;
 }
 
 static int
 ld_ataraid_start_raid0(struct ld_softc *ld, struct buf *bp)
 {
-       struct ld_ataraid_softc *sc = (void *)ld;
+	struct ld_ataraid_softc *sc = (void *)ld;
 	struct ataraid_array_info *aai = sc->sc_aai;
 	struct ataraid_disk_info *adi;
 	struct cbuf *cbp, *other_cbp;
@@ -394,7 +400,7 @@ ld_ataraid_start_raid0(struct ld_softc *ld, struct buf *bp)
 	u_int comp;
 	const int read = bp->b_flags & B_READ;
 	const int mirror = aai->aai_level & AAI_L_RAID1;
-       int error = 0;
+	int error = 0;
 
 	/* Allocate component buffers. */
 	addr = bp->b_data;
@@ -415,12 +421,12 @@ ld_ataraid_start_raid0(struct ld_softc *ld, struct buf *bp)
 			comp = off / sz;
 			cbn = ((tbn / aai->aai_width) * aai->aai_interleave) +
 			    (off % sz);
-			rcount = min(bcount, dbtob(sz));
+			rcount = uimin(bcount, dbtob(sz));
 		} else {
 			comp = tbn % aai->aai_width;
 			cbn = ((tbn / aai->aai_width) * aai->aai_interleave) +
 			    off;
-			rcount = min(bcount, dbtob(aai->aai_interleave - off));
+			rcount = uimin(bcount, dbtob(aai->aai_interleave - off));
 		}
 
 		/*
@@ -447,13 +453,13 @@ resource_shortage:
 			error = EAGAIN;
 free_and_exit:
 			/* Free the already allocated component buffers. */
-                       while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
-                               SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
+		       while ((cbp = SIMPLEQ_FIRST(&sc->sc_cbufq)) != NULL) {
+			       SIMPLEQ_REMOVE_HEAD(&sc->sc_cbufq, cb_q);
 				CBUF_PUT(cbp);
 			}
-                       return error;
+		       return error;
 		}
-               SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq, cbp, cb_q);
+	       SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq, cbp, cb_q);
 		if (mirror && !read && comp < aai->aai_width) {
 			comp += aai->aai_width;
 			adi = &aai->aai_disks[comp];
@@ -462,8 +468,8 @@ free_and_exit:
 				    comp, cbn, addr, rcount);
 				if (other_cbp == NULL)
 					goto resource_shortage;
-                               SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq,
-                                   other_cbp, cb_q);
+			       SIMPLEQ_INSERT_TAIL(&sc->sc_cbufq,
+				   other_cbp, cb_q);
 				other_cbp->cb_other = cbp;
 				cbp->cb_other = other_cbp;
 			}
@@ -473,9 +479,9 @@ free_and_exit:
 	}
 
 	/* Now fire off the requests. */
-       softint_schedule(sc->sc_sih_cookie);
+	softint_schedule(sc->sc_sih_cookie);
 
-       return error;
+	return error;
 }
 
 /*
@@ -494,6 +500,7 @@ ld_ataraid_iodone_raid0(struct buf *vbp)
 	int s, iodone;
 
 	s = splbio();
+	KERNEL_LOCK(1, NULL);		/* XXXSMP */
 
 	iodone = cbp->cb_flags & CBUF_IODONE;
 	other_cbp = cbp->cb_other;
@@ -565,6 +572,7 @@ ld_ataraid_iodone_raid0(struct buf *vbp)
 		lddone(&sc->sc_ld, bp);
 
 out:
+	KERNEL_UNLOCK_ONE(NULL);	/* XXXSMP */
 	splx(s);
 }
 
@@ -618,7 +626,7 @@ ld_ataraid_biovol(struct ld_ataraid_softc *sc, struct bioc_vol *bv)
 {
 	struct ataraid_array_info *aai = sc->sc_aai;
 	struct ld_softc *ld = &sc->sc_ld;
-#define	to_kibytes(ld,s)	(ld->sc_secsize*(s)/1024)
+#define to_kibytes(ld,s)	(ld->sc_secsize*(s)/1024)
 
 	/* Fill in data for _this_ volume */
 	bv->bv_percent = -1;
@@ -711,3 +719,112 @@ ld_ataraid_biodisk(struct ld_ataraid_softc *sc, struct bioc_disk *bd)
 	return 0;
 }
 #endif /* NBIO > 0 */
+
+static int
+ld_ataraid_ioctl(struct ld_softc *ld, u_long cmd, void *addr, int32_t flag,
+    bool poll)
+{
+	struct ld_ataraid_softc *sc = (void *)ld;
+	int error, i, j;
+	kauth_cred_t uc;
+
+	uc = kauth_cred_get();
+
+	switch (cmd) {
+	case DIOCGCACHE:
+	    {
+		int dkcache = 0;
+
+		/*
+		 * We pass this call down to all components and report
+		 * intersection of the flags returned by the components.
+		 * If any errors out, we return error. ATA RAID components
+		 * can only change via BIOS, device feature flags will remain
+		 * static. RCE/WCE can change if set directly on underlying
+		 * device.
+		 */
+		for (error = 0, i = 0; i < sc->sc_aai->aai_ndisks; i++) {
+			KASSERT(sc->sc_vnodes[i] != NULL);
+
+			error = VOP_IOCTL(sc->sc_vnodes[i], cmd, &j,
+				      flag, uc);
+			if (error)
+				break;
+
+			if (i == 0)
+				dkcache = j;
+			else
+				dkcache = DKCACHE_COMBINE(dkcache, j);
+		}
+
+		*((int *)addr) = dkcache;
+		break;
+	    }
+
+	case DIOCCACHESYNC:
+	    {
+		/*
+		 * We pass this call down to all components and report
+		 * the first error we encounter.
+		 */
+		for (error = 0, i = 0; i < sc->sc_aai->aai_ndisks; i++) {
+			KASSERT(sc->sc_vnodes[i] != NULL);
+
+			j = VOP_IOCTL(sc->sc_vnodes[i], cmd, addr,
+				      flag, uc);
+			if (j != 0 && error == 0)
+				error = j;
+		}
+		break;
+	    }
+
+	default:
+		error = EPASSTHROUGH;
+		break;
+	}
+
+	return error;
+}
+
+MODULE(MODULE_CLASS_DRIVER, ld_ataraid, "ld,ataraid");
+
+#ifdef _MODULE
+/*
+ * XXX Don't allow ioconf.c to redefine the "struct cfdriver ld_ataraid"
+ * XXX it will be defined in the common-code module
+ */     
+#undef	CFDRIVER_DECL
+#define CFDRIVER_DECL(name, class, attr)
+#include "ioconf.c"
+#endif 
+  
+static int
+ld_ataraid_modcmd(modcmd_t cmd, void *opaque)
+{ 
+#ifdef _MODULE
+	/*
+	 * We ignore the cfdriver_vec[] that ioconf provides, since
+	 * the cfdrivers are attached already.
+	 */
+	static struct cfdriver * const no_cfdriver_vec[] = { NULL };
+#endif
+	int error = 0;
+ 
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_init_component(no_cfdriver_vec,
+		    cfattach_ioconf_ld_ataraid, cfdata_ioconf_ld_ataraid);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_fini_component(no_cfdriver_vec,
+		    cfattach_ioconf_ld_ataraid, cfdata_ioconf_ld_ataraid);
+		break;
+	default:
+		error = ENOTTY;
+	break;
+	}
+#endif
+
+	return error;
+}

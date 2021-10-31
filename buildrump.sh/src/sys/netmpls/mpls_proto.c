@@ -1,4 +1,4 @@
-/*	$NetBSD: mpls_proto.c,v 1.29 2015/08/24 22:21:27 pooka Exp $ */
+/*	$NetBSD: mpls_proto.c,v 1.32 2019/01/28 12:53:01 martin Exp $ */
 
 /*
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpls_proto.c,v 1.29 2015/08/24 22:21:27 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpls_proto.c,v 1.32 2019/01/28 12:53:01 martin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -75,6 +75,7 @@ void mpls_init(void)
 #endif
 	memset(&mplsintrq, 0, sizeof(mplsintrq));
 	mplsintrq.ifq_maxlen = 256;
+	IFQ_LOCK_INIT(&mplsintrq);
 
 	sysctl_net_mpls_setup(NULL);
 }
@@ -219,6 +220,9 @@ static int
 mpls_sendoob(struct socket *so, struct mbuf *m, struct mbuf *control)
 {
 	KASSERT(solocked(so));
+
+	m_freem(m);
+	m_freem(control);
 
 	return EOPNOTSUPP;
 }
@@ -390,5 +394,4 @@ struct domain mplsdomain = {
 	.dom_mowner = MOWNER_INIT("MPLS", ""),
 	.dom_sa_cmpofs = offsetof(struct sockaddr_mpls, smpls_addr),
 	.dom_sa_cmplen = sizeof(union mpls_shim),
-	.dom_rtcache = LIST_HEAD_INITIALIZER(mplsdomain.dom_rtcache)
 };

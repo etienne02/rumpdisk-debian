@@ -1,7 +1,7 @@
-/*	$NetBSD: init_main.c,v 1.482 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: init_main.c,v 1.535 2021/04/01 04:41:38 simonb Exp $	*/
 
 /*-
- * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2009, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,8 +97,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.482 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.535 2021/04/01 04:41:38 simonb Exp $");
 
+#include "opt_cnmagic.h"
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_ipsec.h"
@@ -113,8 +114,9 @@ __KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.482 2016/07/07 06:55:43 msaitoh Exp 
 #include "opt_compat_netbsd.h"
 #include "opt_wapbl.h"
 #include "opt_ptrace.h"
-#include "opt_rnd_printf.h"
 #include "opt_splash.h"
+#include "opt_kernhist.h"
+#include "opt_gprof.h"
 
 #if defined(SPLASHSCREEN) && defined(makeoptions_SPLASHSCREEN_IMAGE)
 extern void *_binary_splash_image_start;
@@ -168,6 +170,7 @@ extern void *_binary_splash_image_end;
 #include <sys/disk.h>
 #include <sys/msgbuf.h>
 #include <sys/module.h>
+#include <sys/module_hook.h>
 #include <sys/event.h>
 #include <sys/lockf.h>
 #include <sys/once.h>
@@ -175,6 +178,9 @@ extern void *_binary_splash_image_end;
 #include <sys/ksyms.h>
 #include <sys/uidinfo.h>
 #include <sys/kprintf.h>
+#include <sys/bufq.h>
+#include <sys/threadpool.h>
+#include <sys/futex.h>
 #ifdef IPSEC
 #include <netipsec/ipsec.h>
 #endif
@@ -190,15 +196,16 @@ extern void *_binary_splash_image_end;
 #endif
 #include <sys/kauth.h>
 #include <net80211/ieee80211_netbsd.h>
-#ifdef PTRACE
-#include <sys/ptrace.h>
-#endif /* PTRACE */
 #include <sys/cprng.h>
+#include <sys/psref.h>
+#include <sys/radixtree.h>
 
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
 
 #include <sys/pax.h>
+
+#include <dev/clock_subr.h>
 
 #include <secmodel/secmodel.h>
 
@@ -216,6 +223,7 @@ extern void *_binary_splash_image_end;
 
 #include <net/bpf.h>
 #include <net/if.h>
+#include <net/pfil.h>
 #include <net/raw_cb.h>
 #include <net/if_llatbl.h>
 
@@ -233,12 +241,10 @@ struct	proc *initproc;
 
 struct	vnode *rootvp, *swapdev_vp;
 int	boothowto;
-int	cold = 1;			/* still working on startup */
-struct timespec boottime;	        /* time at system startup - will only follow settime deltas */
+int	cold __read_mostly = 1;		/* still working on startup */
+int	shutting_down __read_mostly;	/* system is shutting down */
 
 int	start_init_exec;		/* semaphore for start_init() */
-
-cprng_strong_t	*kern_cprng;
 
 static void check_console(struct lwp *l);
 static void start_init(void *);
@@ -266,6 +272,19 @@ main(void)
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
 
+#ifdef DIAGNOSTIC
+	/*
+	 * Verify that CPU_INFO_FOREACH() knows about the boot CPU
+	 * and only the boot CPU at this point.
+	 */
+	int cpucount = 0;
+	for (CPU_INFO_FOREACH(cii, ci)) {
+		KASSERT(ci == curcpu());
+		cpucount++;
+	}
+	KASSERT(cpucount == 1);
+#endif
+
 	l = &lwp0;
 #ifndef LWP0_CPU_INFO
 	l->l_cpu = curcpu();
@@ -277,9 +296,13 @@ main(void)
 	 * in case of early panic or other messages.
 	 */
 	consinit();
+#ifdef CNMAGIC
+	cn_set_magic(CNMAGIC);
+#endif
 
 	kernel_lock_init();
 	once_init();
+	todr_init();
 
 	mi_cpu_init();
 	kernconfig_lock_init();
@@ -306,7 +329,9 @@ main(void)
 
 	/* Initialize lock caches. */
 	mutex_obj_init();
-	rw_obj_init();
+
+	/* Initialize radix trees (used by numerous subsystems). */
+	radix_tree_init();
 
 	/* Passive serialization. */
 	pserialize_init();
@@ -336,8 +361,12 @@ main(void)
 	 */
 	bpf_setops();
 
+	/* Initialize what we can in ipi(9) before CPUs are detected. */
+	ipi_sysinit();
+
 	/* Start module system. */
 	module_init();
+	module_hook_init();
 
 	/*
 	 * Initialize the kernel authorization subsystem and start the
@@ -351,6 +380,11 @@ main(void)
 
 	/* Initialize the buffer cache */
 	bufinit();
+	biohist_init();
+
+#ifdef KERNHIST
+	sysctl_kernhist_init();
+#endif
 
 
 #if defined(SPLASHSCREEN) && defined(SPLASHSCREEN_IMAGE)
@@ -373,6 +407,9 @@ main(void)
 	procinit();
 	lwpinit();
 
+	/* Must be called after lwpinit (lwpinit_specificdata) */
+	psref_init();
+
 	/* Initialize signal-related data structures. */
 	signal_init();
 
@@ -386,14 +423,14 @@ main(void)
 	/* Disable preemption during boot. */
 	kpreempt_disable();
 
+	/* Initialize the threadpool system. */
+	threadpools_init();
+
 	/* Initialize the UID hash table. */
 	uid_init();
 
 	/* Charge root for one process. */
 	(void)chgproccnt(0, 1);
-
-	/* Initialize timekeeping. */
-	time_init();
 
 	/* Initialize the run queues, turnstiles and sleep queues. */
 	sched_rqinit();
@@ -412,8 +449,8 @@ main(void)
 	error = mi_cpu_attach(curcpu());
 	KASSERT(error == 0);
 
-	/* Initialize timekeeping, part 2. */
-	time_init2();
+	/* Initialize timekeeping. */
+	time_init();
 
 	/*
 	 * Initialize mbuf's.  Do this now because we might attempt to
@@ -430,6 +467,9 @@ main(void)
 	/* Second part of module system initialization. */
 	module_start_unload_thread();
 
+	/* Initialize autoconf data structures before any modules are loaded */
+	config_init_mi();
+
 	/* Initialize the file systems. */
 #ifdef NVNODE_IMPLICIT
 	/*
@@ -442,12 +482,28 @@ main(void)
 	    10, VNODE_KMEM_MAXPCT) / VNODE_COST;
 	if (usevnodes > desiredvnodes)
 		desiredvnodes = usevnodes;
-#endif
-	vfsinit();
-	lf_init();
+#endif /* NVNODE_IMPLICIT */
+#ifdef MAXFILES_IMPLICIT
+	/*
+	 * If maximum number of files is not explicitly defined in
+	 * kernel config, adjust the number so that it is somewhat
+	 * more reasonable on machines with larger memory sizes.
+	 * Arbitary numbers are 20,000 files for 16GB RAM or more
+	 * and 10,000 files for 1GB RAM or more.
+	 *
+	 * XXXtodo: adjust this and other values totally dynamically
+	 */
+	if (ctob((uint64_t)physmem) >= 16ULL * 1024 * 1024 * 1024)
+		maxfiles = MAX(maxfiles, 20000);
+	if (ctob((uint64_t)physmem) >= 1024 * 1024 * 1024)
+		maxfiles = MAX(maxfiles, 10000);
+#endif /* MAXFILES_IMPLICIT */
 
 	/* Initialize fstrans. */
 	fstrans_init();
+
+	vfsinit();
+	lf_init();
 
 	/* Initialize the file descriptor system. */
 	fd_sys_init();
@@ -471,9 +527,8 @@ main(void)
 	/* Initialize the disk wedge subsystem. */
 	dkwedge_init();
 
-	/* Initialize the kernel strong PRNG. */
-	kern_cprng = cprng_strong_create("kernel", IPL_VM,
-					 CPRNG_INIT_ANY|CPRNG_REKEY_ANY);
+	/* Initialize pfil */
+	pfil_init();
 
 	/* Initialize interfaces. */
 	ifinit1();
@@ -483,8 +538,19 @@ main(void)
 	/* Initialize sockets thread(s) */
 	soinit1();
 
+	/*
+	 * Initialize the bufq strategy sub-system and any built-in
+	 * strategy modules - they may be needed by some devices during
+	 * auto-configuration
+	 */
+	bufq_init();
+	module_init_class(MODULE_CLASS_BUFQ);
+
 	/* Configure the system hardware.  This will enable interrupts. */
 	configure();
+#ifdef __HAVE_LEGACY_INTRCNT
+	evcnt_attach_legacy_intrcnt();
+#endif
 
 	/* Once all CPUs are detected, initialize the per-CPU cprng_fast.  */
 	cprng_fast_init();
@@ -497,7 +563,10 @@ main(void)
 
 	configure2();
 
-	ipi_sysinit();
+	/* Initialize the rest of ipi(9) after CPUs have been detected. */
+	ipi_percpu_init();
+
+	futex_sys_init();
 
 	/* Now timer is working.  Enable preemption. */
 	kpreempt_enable();
@@ -507,11 +576,6 @@ main(void)
 
 	/* Enable deferred processing of RNG samples */
 	rnd_init_softint();
-
-#ifdef RND_PRINTF
-	/* Enable periodic injection of console output into entropy pool */
-	kprintf_init_callout();
-#endif
 
 	vmem_rehash_start();	/* must be before exec_init */
 
@@ -542,6 +606,7 @@ main(void)
 	lltableinit();
 #endif
 	domaininit(true);
+	ifinit_post();
 	if_attachdomain();
 	splx(s);
 
@@ -563,11 +628,6 @@ main(void)
 	ktrinit();
 #endif
 
-#ifdef PTRACE
-	/* Initialize ptrace. */
-	ptrace_init();
-#endif /* PTRACE */
-
 	machdep_init();
 
 	procinit_sysctl();
@@ -583,8 +643,16 @@ main(void)
 	 * wait for us to inform it that the root file system has been
 	 * mounted.
 	 */
-	if (fork1(l, 0, SIGCHLD, NULL, 0, start_init, NULL, NULL, &initproc))
+	if (fork1(l, 0, SIGCHLD, NULL, 0, start_init, NULL, NULL))
 		panic("fork init");
+
+	/*
+	 * The initproc variable cannot be initialized in start_init as there
+	 * is a race between vfs_mountroot and start_init.
+	 */
+	mutex_enter(&proc_lock);
+	initproc = proc_find_raw(1);
+	mutex_exit(&proc_lock);
 
 	/*
 	 * Load any remaining builtin modules, and hand back temporary
@@ -637,9 +705,8 @@ main(void)
 	 * munched in mi_switch() after the time got set.
 	 */
 	getnanotime(&time);
-	boottime = time;
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	LIST_FOREACH(p, &allproc, p_list) {
 		KASSERT((p->p_flag & PK_MARKER) == 0);
 		mutex_enter(p->p_lock);
@@ -651,7 +718,7 @@ main(void)
 		}
 		mutex_exit(p->p_lock);
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 	binuptime(&curlwp->l_stime);
 
 	for (CPU_INFO_FOREACH(cii, ci)) {
@@ -669,21 +736,16 @@ main(void)
 	    NULL, NULL, "ioflush"))
 		panic("fork syncer");
 
-	/* Create the aiodone daemon kernel thread. */
-	if (workqueue_create(&uvm.aiodone_queue, "aiodoned",
-	    uvm_aiodone_worker, NULL, PRI_VM, IPL_NONE, WQ_MPSAFE))
-		panic("fork aiodoned");
-
 	/* Wait for final configure threads to complete. */
 	config_finalize_mountroot();
 
 	/*
 	 * Okay, now we can let init(8) exec!  It's off to userland!
 	 */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	start_init_exec = 1;
 	cv_broadcast(&lbolt);
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	/* The scheduler is an infinite loop. */
 	uvm_scheduler();
@@ -697,8 +759,6 @@ static void
 configure(void)
 {
 
-	/* Initialize autoconf data structures. */
-	config_init_mi();
 	/*
 	 * XXX
 	 * callout_setfunc() requires mutex(9) so it can't be in config_init()
@@ -736,6 +796,9 @@ configure2(void)
 	struct cpu_info *ci;
 	int s;
 
+	/* Fix up CPU topology info, which has all been collected by now. */
+	cpu_topology_init();
+
 	/*
 	 * Now that we've found all the hardware, start the real time
 	 * and statistics clocks.
@@ -747,18 +810,22 @@ configure2(void)
 	curcpu()->ci_schedstate.spc_flags |= SPCF_RUNNING;
 	splx(s);
 
+	/* Setup the runqueues and scheduler. */
+	runq_init();
+	synch_init();
+
 	/* Boot the secondary processors. */
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		uvm_cpu_attach(ci);
 	}
+
+	/* Decide how to partition free memory. */
+	uvm_page_rebucket();
+
 	mp_online = true;
 #if defined(MULTIPROCESSOR)
 	cpu_boot_secondary_processors();
 #endif
-
-	/* Setup the runqueues and scheduler. */
-	runq_init();
-	synch_init();
 
 	/*
 	 * Bus scans can make it appear as if the system has paused, so
@@ -863,12 +930,14 @@ check_console(struct lwp *l)
 
 	error = namei_simple_kernel("/dev/console",
 				NSM_FOLLOW_NOEMULROOT, &vp);
-	if (error == 0)
+	if (error == 0) {
 		vrele(vp);
-	else if (error == ENOENT)
-		printf("warning: no /dev/console\n");
-	else
+	} else if (error == ENOENT) {
+		if (boothowto & (AB_VERBOSE|AB_DEBUG))
+			printf("warning: no /dev/console\n");
+	} else {
 		printf("warning: lookup /dev/console: error %d\n", error);
+	}
 }
 
 /*
@@ -913,10 +982,10 @@ start_init(void *arg)
 	/*
 	 * Wait for main() to tell us that it's safe to exec.
 	 */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	while (start_init_exec == 0)
-		cv_wait(&lbolt, proc_lock);
-	mutex_exit(proc_lock);
+		cv_wait(&lbolt, &proc_lock);
+	mutex_exit(&proc_lock);
 
 	/*
 	 * This is not the right way to do this.  We really should
@@ -931,10 +1000,10 @@ start_init(void *arg)
 	 */
 	addr = (vaddr_t)STACK_ALLOC(USRSTACK, PAGE_SIZE);
 	if (uvm_map(&p->p_vmspace->vm_map, &addr, PAGE_SIZE,
-                    NULL, UVM_UNKNOWN_OFFSET, 0,
-                    UVM_MAPFLAG(UVM_PROT_ALL, UVM_PROT_ALL, UVM_INH_COPY,
-		    UVM_ADV_NORMAL,
-                    UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW)) != 0)
+	    NULL, UVM_UNKNOWN_OFFSET, 0,
+	    UVM_MAPFLAG(UVM_PROT_RW, UVM_PROT_RW, UVM_INH_COPY,
+	    UVM_ADV_NORMAL,
+	    UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW)) != 0)
 		panic("init: couldn't allocate argument space");
 	p->p_vmspace->vm_maxsaddr = (void *)STACK_MAX(addr, PAGE_SIZE);
 
@@ -947,9 +1016,9 @@ start_init(void *arg)
 			printf(": ");
 			len = cngetsn(ipath, sizeof(ipath)-1);
 			if (len == 4 && strcmp(ipath, "halt") == 0) {
-				cpu_reboot(RB_HALT, NULL);
+				kern_reboot(RB_HALT, NULL);
 			} else if (len == 6 && strcmp(ipath, "reboot") == 0) {
-				cpu_reboot(0, NULL);
+				kern_reboot(0, NULL);
 #if defined(DDB)
 			} else if (len == 3 && strcmp(ipath, "ddb") == 0) {
 				console_debugger();
@@ -1113,6 +1182,6 @@ banner(void)
 	(*pr)("%s%s", copyright, version);
 	format_bytes(pbuf, MEM_PBUFSIZE, ctob((uint64_t)physmem));
 	(*pr)("total memory = %s\n", pbuf);
-	format_bytes(pbuf, MEM_PBUFSIZE, ctob((uint64_t)uvmexp.free));
+	format_bytes(pbuf, MEM_PBUFSIZE, ctob((uint64_t)uvm_availmem(false)));
 	(*pr)("avail memory = %s\n", pbuf);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpereg.h,v 1.4 2016/02/13 06:33:21 hikaru Exp $	*/
+/*	$NetBSD: if_mvxpereg.h,v 1.6 2021/08/17 22:00:31 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -558,7 +558,7 @@
 /*
  * Serial(SMI/MII) Registers
  */
-/* Port Seiral Control0 (MVXPE_PSC0) */
+/* Port Serial Control0 (MVXPE_PSC0) */
 #define MVXPE_PSC0_FORCE_FC_MASK	(0x3 << 5)
 #define MVXPE_PSC0_FORCE_FC(fc)		(((fc) & 0x3) << 5)
 #define MVXPE_PSC0_FORCE_FC_PAUSE	MVXPE_PSC0_FORCE_FC(0x1)
@@ -818,7 +818,7 @@ struct mvxpe_rx_desc {
 };
 
 /*
- * Received pakcet command header:
+ * Received packet command header:
  *  network controller => software
  * the controller parse the packet and set some flags.
  */
@@ -872,7 +872,7 @@ struct mvxpe_rx_desc {
 #define MVXPE_TX_CMD_L3_OFFSET(v)	(((v) & 0x7f) << 0) 
 
 /*
- * Transmit pakcet extra attributes
+ * Transmit packet extra attributes
  * and error status returned from network controller.
  */
 #define MVXPE_TX_F_DSA_TAG		(3 << 30)	/* DSA Tag */

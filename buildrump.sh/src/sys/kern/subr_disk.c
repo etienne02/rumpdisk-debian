@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_disk.c,v 1.116 2016/01/06 00:22:30 christos Exp $	*/
+/*	$NetBSD: subr_disk.c,v 1.133 2021/05/17 08:50:36 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1999, 2000, 2009 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_disk.c,v 1.116 2016/01/06 00:22:30 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_disk.c,v 1.133 2021/05/17 08:50:36 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -79,29 +79,6 @@ __KERNEL_RCSID(0, "$NetBSD: subr_disk.c,v 1.116 2016/01/06 00:22:30 christos Exp
 #include <sys/disk.h>
 #include <sys/sysctl.h>
 #include <lib/libkern/libkern.h>
-
-/*
- * Compute checksum for disk label.
- */
-u_int
-dkcksum(struct disklabel *lp)
-{
-
-	return dkcksum_sized(lp, lp->d_npartitions);
-}
-
-u_int
-dkcksum_sized(struct disklabel *lp, size_t npartitions)
-{
-	uint16_t *start, *end;
-	uint16_t sum = 0;
-
-	start = (uint16_t *)lp;
-	end = (uint16_t *)&lp->d_partitions[npartitions];
-	while (start < end)
-		sum ^= *start++;
-	return sum;
-}
 
 /*
  * Disk error is the preface to plaintive error messages
@@ -130,7 +107,7 @@ diskerr(const struct buf *bp, const char *dname, const char *what, int pri,
 	daddr_t sn;
 
 	if (/*CONSTCOND*/0)
-		/* Compiler will error this is the format is wrong... */
+		/* Compiler will error this if the format is wrong... */
 		printf("%" PRIdaddr, bp->b_blkno);
 
 	if (pri != LOG_PRINTF) {
@@ -199,6 +176,17 @@ disk_init(struct disk *diskp, const char *name, const struct dkdriver *driver)
 }
 
 /*
+ * Rename a disk.
+ */
+void
+disk_rename(struct disk *diskp, const char *name)
+{
+
+	diskp->dk_name = name;
+	iostat_rename(diskp->dk_stats, diskp->dk_name);
+}
+
+/*
  * Attach a disk.
  */
 void
@@ -211,8 +199,6 @@ disk_attach(struct disk *diskp)
 	diskp->dk_label = kmem_zalloc(sizeof(struct disklabel), KM_SLEEP);
 	diskp->dk_cpulabel = kmem_zalloc(sizeof(struct cpu_disklabel),
 	    KM_SLEEP);
-	if ((diskp->dk_label == NULL) || (diskp->dk_cpulabel == NULL))
-		panic("disk_attach: can't allocate storage for disklabel");
 
 	/*
 	 * Set up the stats collection.
@@ -272,6 +258,16 @@ disk_destroy(struct disk *diskp)
 
 	mutex_destroy(&diskp->dk_openlock);
 	mutex_destroy(&diskp->dk_rawlock);
+}
+
+/*
+ * Mark the disk as having work queued for metrics collection.
+ */
+void
+disk_wait(struct disk *diskp)
+{
+
+	iostat_wait(diskp->dk_stats);
 }
 
 /*
@@ -366,7 +362,7 @@ bounds_check_with_label(struct disk *dk, struct buf *bp, int wlabel)
 	}
 
 	/* Protect against division by zero. XXX: Should never happen?!?! */
-	if (lp->d_secpercyl == 0) {
+	if ((lp->d_secsize / DEV_BSIZE) == 0 || lp->d_secpercyl == 0) {
 		bp->b_error = EINVAL;
 		return -1;
 	}
@@ -421,6 +417,10 @@ int
 disk_read_sectors(void (*strat)(struct buf *), const struct disklabel *lp,
     struct buf *bp, unsigned int sector, int count)
 {
+
+	if ((lp->d_secsize / DEV_BSIZE) == 0 || lp->d_secpercyl == 0)
+		return EINVAL;
+
 	bp->b_blkno = btodb((off_t)sector * lp->d_secsize);
 	bp->b_bcount = count * lp->d_secsize;
 	bp->b_flags = (bp->b_flags & ~B_WRITE) | B_READ;
@@ -573,7 +573,7 @@ disk_ioctl(struct disk *dk, dev_t dev, u_long cmd, void *data, int flag,
 		pi = data;
 		memset(pi, 0, sizeof(*pi));
 		pi->pi_secsize = dk->dk_geom.dg_secsize;
-		pi->pi_bsize = BLKDEV_IOSIZE;
+		pi->pi_bsize = MAX(BLKDEV_IOSIZE, pi->pi_secsize);
 
 		if (DISKPART(dev) == RAW_PART) {
 			pi->pi_size = dk->dk_geom.dg_secperunit;
@@ -637,6 +637,13 @@ disk_ioctl(struct disk *dk, dev_t dev, u_long cmd, void *data, int flag,
 		dkwedge_discover(dk);
 		return 0;
 
+	case DIOCRMWEDGES:
+		if ((flag & FWRITE) == 0)
+			return EBADF;
+
+		dkwedge_delall(dk);
+		return 0;
+
 	default:
 		return EPASSTHROUGH;
 	}
@@ -657,21 +664,17 @@ disk_set_info(device_t dev, struct disk *dk, const char *type)
 	dk->dk_blkshift = DK_BSIZE2BLKSHIFT(dg->dg_secsize);
 	dk->dk_byteshift = DK_BSIZE2BYTESHIFT(dg->dg_secsize);
 
-	if (dg->dg_secperunit == 0 && dg->dg_ncylinders == 0) {
-#ifdef DIAGNOSTIC
-		printf("%s: secperunit and ncylinders are zero\n", dk->dk_name);
-#endif
-		return;
-	}
-
 	if (dg->dg_secperunit == 0) {
-		if (dg->dg_nsectors == 0 || dg->dg_ntracks == 0) {
 #ifdef DIAGNOSTIC
+		if (dg->dg_ncylinders == 0) {
+			printf("%s: secperunit and ncylinders are zero\n",
+			    dk->dk_name);
+		}
+		if (dg->dg_nsectors == 0 || dg->dg_ntracks == 0) {
 			printf("%s: secperunit and (sectors or tracks) "
 			    "are zero\n", dk->dk_name);
-#endif
-			return;
 		}
+#endif
 		dg->dg_secperunit = (int64_t) dg->dg_nsectors *
 		    dg->dg_ntracks * dg->dg_ncylinders;
 	}
@@ -707,7 +710,7 @@ disk_set_info(device_t dev, struct disk *dk, const char *type)
 	prop_dictionary_set(disk_info, "geometry", geom);
 
 	if (type)
-		prop_dictionary_set_cstring_nocopy(disk_info, "type", type);
+		prop_dictionary_set_string_nocopy(disk_info, "type", type);
 
 	prop_object_release(geom);
 

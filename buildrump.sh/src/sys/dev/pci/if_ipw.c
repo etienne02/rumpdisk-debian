@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ipw.c,v 1.60 2016/06/10 13:27:14 ozaki-r Exp $	*/
+/*	$NetBSD: if_ipw.c,v 1.74 2021/06/16 00:21:18 riastradh Exp $	*/
 /*	FreeBSD: src/sys/dev/ipw/if_ipw.c,v 1.15 2005/11/13 17:17:40 damien Exp 	*/
 
 /*-
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ipw.c,v 1.60 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ipw.c,v 1.74 2021/06/16 00:21:18 riastradh Exp $");
 
 /*-
  * Intel(R) PRO/Wireless 2100 MiniPCI driver
@@ -102,14 +102,15 @@ static uint16_t	ipw_read_prom_word(struct ipw_softc *, uint8_t);
 static void	ipw_command_intr(struct ipw_softc *, struct ipw_soft_buf *);
 static void	ipw_newstate_intr(struct ipw_softc *, struct ipw_soft_buf *);
 static void	ipw_data_intr(struct ipw_softc *, struct ipw_status *,
-    struct ipw_soft_bd *, struct ipw_soft_buf *);
+		    struct ipw_soft_bd *, struct ipw_soft_buf *);
 static void	ipw_rx_intr(struct ipw_softc *);
 static void	ipw_release_sbd(struct ipw_softc *, struct ipw_soft_bd *);
 static void	ipw_tx_intr(struct ipw_softc *);
 static int	ipw_intr(void *);
+static void	ipw_softintr(void *);
 static int	ipw_cmd(struct ipw_softc *, uint32_t, void *, uint32_t);
 static int	ipw_tx_start(struct ifnet *, struct mbuf *,
-    struct ieee80211_node *);
+		    struct ieee80211_node *);
 static void	ipw_start(struct ifnet *);
 static void	ipw_watchdog(struct ifnet *);
 static int	ipw_ioctl(struct ifnet *, u_long, void *);
@@ -131,12 +132,6 @@ static void	ipw_read_mem_1(struct ipw_softc *, bus_size_t, uint8_t *,
     bus_size_t);
 static void	ipw_write_mem_1(struct ipw_softc *, bus_size_t, uint8_t *,
     bus_size_t);
-
-/*
- * Supported rates for 802.11b mode (in 500Kbps unit).
- */
-static const struct ieee80211_rateset ipw_rateset_11b =
-	{ 4, { 2, 4, 11, 22 } };
 
 static inline uint8_t
 MEM_READ_1(struct ipw_softc *sc, uint32_t addr)
@@ -216,17 +211,24 @@ ipw_attach(device_t parent, device_t self, void *aux)
 
 	if (pci_intr_map(pa, &ih) != 0) {
 		aprint_error_dev(sc->sc_dev, "could not map interrupt\n");
-		return;
+		goto fail;
+	}
+
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, ipw_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(sc->sc_dev, "could not establish softint\n");
+		goto fail;
 	}
 
 	intrstr = pci_intr_string(sc->sc_pct, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(sc->sc_pct, ih, IPL_NET, ipw_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(sc->sc_pct, ih, IPL_NET, ipw_intr,
+	    sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(sc->sc_dev, "could not establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
 		aprint_error("\n");
-		return;
+		goto fail;
 	}
 	aprint_normal_dev(sc->sc_dev, "interrupting at %s\n", intrstr);
 
@@ -275,7 +277,7 @@ ipw_attach(device_t parent, device_t self, void *aux)
 	ic->ic_myaddr[5] = val & 0xff;
 
 	/* set supported .11b rates */
-	ic->ic_sup_rates[IEEE80211_MODE_11B] = ipw_rateset_11b;
+	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
 
 	/* set supported .11b channels (read from EEPROM) */
 	if ((val = ipw_read_prom_word(sc, IPW_EEPROM_CHANNEL_LIST)) == 0)
@@ -296,8 +298,11 @@ ipw_attach(device_t parent, device_t self, void *aux)
 	aprint_normal_dev(sc->sc_dev, "802.11 address %s\n",
 	    ether_sprintf(ic->ic_myaddr));
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
 
 	/* override state transition machine */
 	sc->sc_newstate = ic->ic_newstate;
@@ -354,6 +359,11 @@ ipw_detach(device_t self, int flags)
 	if (sc->sc_ih != NULL) {
 		pci_intr_disestablish(sc->sc_pct, sc->sc_ih);
 		sc->sc_ih = NULL;
+	}
+
+	if (sc->sc_soft_ih != NULL) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
 	}
 
 	bus_space_unmap(sc->sc_st, sc->sc_sh, sc->sc_sz);
@@ -592,6 +602,7 @@ ipw_dma_alloc(struct ipw_softc *sc)
 		MCLGET(sbuf->m, M_DONTWAIT);
 		if (!(sbuf->m->m_flags & M_EXT)) {
 			m_freem(sbuf->m);
+			sbuf->m = NULL;
 			aprint_error_dev(sc->sc_dev, "could not allocate rx mbuf cluster\n");
 			error = ENOMEM;
 			goto fail;
@@ -604,6 +615,7 @@ ipw_dma_alloc(struct ipw_softc *sc)
 		if (error != 0) {
 			aprint_error_dev(sc->sc_dev, "could not create rxbuf dma map\n");
 			m_freem(sbuf->m);
+			sbuf->m = NULL;
 			goto fail;
 		}
 
@@ -611,7 +623,9 @@ ipw_dma_alloc(struct ipw_softc *sc)
 		    sbuf->m, BUS_DMA_READ | BUS_DMA_NOWAIT);
 		if (error != 0) {
 			bus_dmamap_destroy(sc->sc_dmat, sbuf->map);
+			sbuf->map = NULL;
 			m_freem(sbuf->m);
+			sbuf->m = NULL;
 			aprint_error_dev(sc->sc_dev, "could not map rxbuf dma memory\n");
 			goto fail;
 		}
@@ -908,6 +922,7 @@ ipw_newstate_intr(struct ipw_softc *sc, struct ipw_soft_buf *sbuf)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = sc->sc_ic.ic_ifp;
 	uint32_t state;
+	int s;
 
 	bus_dmamap_sync(sc->sc_dmat, sbuf->map, 0, sizeof state,
 	    BUS_DMASYNC_POSTREAD);
@@ -915,6 +930,8 @@ ipw_newstate_intr(struct ipw_softc *sc, struct ipw_soft_buf *sbuf)
 	state = le32toh(*mtod(sbuf->m, uint32_t *));
 
 	DPRINTFN(2, ("entering state %u\n", state));
+
+	s = splnet();
 
 	switch (state) {
 	case IPW_STATE_ASSOCIATED:
@@ -943,6 +960,8 @@ ipw_newstate_intr(struct ipw_softc *sc, struct ipw_soft_buf *sbuf)
 		ipw_stop(ifp, 1);
 		break;
 	}
+
+	splx(s);
 }
 
 /*
@@ -971,12 +990,13 @@ ipw_fix_channel(struct ieee80211com *ic, struct mbuf *m)
 	efrm = mtod(m, uint8_t *) + m->m_len;
 
 	frm += 12;	/* skip tstamp, bintval and capinfo fields */
-	while (frm < efrm) {
-		if (*frm == IEEE80211_ELEMID_DSPARMS)
+	while (frm + 2 < efrm) {
+		if (*frm == IEEE80211_ELEMID_DSPARMS) {
 #if IEEE80211_CHAN_MAX < 255
-		if (frm[2] <= IEEE80211_CHAN_MAX)
+			if (frm[2] <= IEEE80211_CHAN_MAX)
 #endif
-			ic->ic_curchan = &ic->ic_channels[frm[2]];
+				ic->ic_curchan = &ic->ic_channels[frm[2]];
+		}
 
 		frm += frm[1] + 2;
 	}
@@ -991,7 +1011,7 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 	struct mbuf *mnew, *m;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
-	int error;
+	int error, s;
 
 	DPRINTFN(5, ("received frame len=%u, rssi=%u\n", le32toh(status->len),
 	    status->rssi));
@@ -1009,7 +1029,7 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 	MGETHDR(mnew, M_DONTWAIT, MT_DATA);
 	if (mnew == NULL) {
 		aprint_error_dev(sc->sc_dev, "could not allocate rx mbuf\n");
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1017,7 +1037,7 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 	if (!(mnew->m_flags & M_EXT)) {
 		aprint_error_dev(sc->sc_dev, "could not allocate rx mbuf cluster\n");
 		m_freem(mnew);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1041,7 +1061,7 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 			panic("%s: unable to remap rx buf",
 			    device_xname(sc->sc_dev));
 		}
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1057,12 +1077,14 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 	m_set_rcvif(m, ifp);
 	m->m_pkthdr.len = m->m_len = le32toh(status->len);
 
+	s = splnet();
+
 	if (sc->sc_drvbpf != NULL) {
 		struct ipw_rx_radiotap_header *tap = &sc->sc_rxtap;
 
 		tap->wr_antsignal = status->rssi;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m, BPF_D_IN);
 	}
 
 	if (ic->ic_state == IEEE80211_S_SCAN)
@@ -1076,6 +1098,8 @@ ipw_data_intr(struct ipw_softc *sc, struct ipw_status *status,
 
 	/* node is no longer needed */
 	ieee80211_free_node(ni);
+
+	splx(s);
 
 	bus_dmamap_sync(sc->sc_dmat, sbuf->map, 0,
 	    sbuf->map->dm_mapsize, BUS_DMASYNC_PREREAD);
@@ -1175,7 +1199,7 @@ ipw_release_sbd(struct ipw_softc *sc, struct ipw_soft_bd *sbd)
 		sbuf = sbd->priv;
 
 		bus_dmamap_sync(sc->sc_dmat, sbuf->map,
-		    0, MCLBYTES, BUS_DMASYNC_POSTWRITE);
+		    0, sbuf->map->dm_mapsize, BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(sc->sc_dmat, sbuf->map);
 		m_freem(sbuf->m);
 		if (sbuf->ni != NULL)
@@ -1194,9 +1218,12 @@ ipw_tx_intr(struct ipw_softc *sc)
 	struct ifnet *ifp = &sc->sc_if;
 	struct ipw_soft_bd *sbd;
 	uint32_t r, i;
+	int s;
 
 	if (!(sc->flags & IPW_FLAG_FW_INITED))
 		return;
+
+	s = splnet();
 
 	r = CSR_READ_4(sc, IPW_CSR_TX_READ);
 
@@ -1204,7 +1231,7 @@ ipw_tx_intr(struct ipw_softc *sc)
 		sbd = &sc->stbd_list[i];
 
 		if (sbd->type == IPW_SBD_TYPE_DATA)
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 
 		ipw_release_sbd(sc, sbd);
 		sc->txfree++;
@@ -1215,7 +1242,9 @@ ipw_tx_intr(struct ipw_softc *sc)
 
 	/* Call start() since some buffer descriptors have been released */
 	ifp->if_flags &= ~IFF_OACTIVE;
-	(*ifp->if_start)(ifp);
+	ipw_start(ifp); /* in softint */
+
+	splx(s);
 }
 
 static int
@@ -1231,10 +1260,27 @@ ipw_intr(void *arg)
 	/* Disable interrupts */
 	CSR_WRITE_4(sc, IPW_CSR_INTR_MASK, 0);
 
+	softint_schedule(sc->sc_soft_ih);
+	return 1;
+}
+
+static void
+ipw_softintr(void *arg)
+{
+	struct ipw_softc *sc = arg;
+	uint32_t r;
+	int s;
+
+	r = CSR_READ_4(sc, IPW_CSR_INTR);
+	if (r == 0 || r == 0xffffffff)
+		goto out;
+
 	if (r & (IPW_INTR_FATAL_ERROR | IPW_INTR_PARITY_ERROR)) {
 		aprint_error_dev(sc->sc_dev, "fatal error\n");
+		s = splnet();
 		sc->sc_ic.ic_ifp->if_flags &= ~IFF_UP;
 		ipw_stop(&sc->sc_if, 1);
+		splx(s);
 	}
 
 	if (r & IPW_INTR_FW_INIT_DONE) {
@@ -1251,10 +1297,9 @@ ipw_intr(void *arg)
 	/* Acknowledge all interrupts */
 	CSR_WRITE_4(sc, IPW_CSR_INTR, r);
 
+ out:
 	/* Re-enable interrupts */
 	CSR_WRITE_4(sc, IPW_CSR_INTR_MASK, IPW_INTR_MASK);
-
-	return 0;
 }
 
 /*
@@ -1328,7 +1373,7 @@ ipw_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni)
 	if (sc->sc_drvbpf != NULL) {
 		struct ipw_tx_radiotap_header *tap = &sc->sc_txtap;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0, BPF_D_OUT);
 	}
 
 	shdr = TAILQ_FIRST(&sc->sc_free_shdr);
@@ -1351,7 +1396,8 @@ ipw_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni)
 	/* trim IEEE802.11 header */
 	m_adj(m0, sizeof (struct ieee80211_frame));
 
-	error = bus_dmamap_load_mbuf(sc->sc_dmat, sbuf->map, m0, BUS_DMA_NOWAIT);
+	error = bus_dmamap_load_mbuf(sc->sc_dmat, sbuf->map, m0,
+	    BUS_DMA_NOWAIT);
 	if (error != 0 && error != EFBIG) {
 		aprint_error_dev(sc->sc_dev, "could not map mbuf (error %d)\n",
 		    error);
@@ -1368,7 +1414,7 @@ ipw_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni)
 			return ENOMEM;
 		}
 
-		M_COPY_PKTHDR(mnew, m0);
+		m_copy_pkthdr(mnew, m0);
 
 		/* If the data won't fit in the header, get a cluster */
 		if (m0->m_pkthdr.len > MHLEN) {
@@ -1387,7 +1433,8 @@ ipw_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni)
 		error = bus_dmamap_load_mbuf(sc->sc_dmat, sbuf->map, m0,
 		    BUS_DMA_WRITE | BUS_DMA_NOWAIT);
 		if (error != 0) {
-			aprint_error_dev(sc->sc_dev, "could not map mbuf (error %d)\n", error);
+			aprint_error_dev(sc->sc_dev,
+			    "could not map mbuf (error %d)\n", error);
 			m_freem(m0);
 			return error;
 		}
@@ -1451,7 +1498,7 @@ ipw_tx_start(struct ifnet *ifp, struct mbuf *m0, struct ieee80211_node *ni)
 	bus_dmamap_sync(sc->sc_dmat, sc->hdr_map, shdr->offset,
 	    sizeof (struct ipw_hdr), BUS_DMASYNC_PREWRITE);
 
-	bus_dmamap_sync(sc->sc_dmat, sbuf->map, 0, MCLBYTES,
+	bus_dmamap_sync(sc->sc_dmat, sbuf->map, 0, sbuf->map->dm_mapsize,
 	    BUS_DMASYNC_PREWRITE);
 
 	/* Inform firmware about this new packet */
@@ -1468,7 +1515,6 @@ ipw_start(struct ifnet *ifp)
 	struct mbuf *m0;
 	struct ether_header *eh;
 	struct ieee80211_node *ni;
-
 
 	if (ic->ic_state != IEEE80211_S_RUN)
 		return;
@@ -1495,7 +1541,7 @@ ipw_start(struct ifnet *ifp)
 			continue;
 		}
 
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		m0 = ieee80211_encap(ic, m0, ni);
 		if (m0 == NULL) {
@@ -1503,11 +1549,11 @@ ipw_start(struct ifnet *ifp)
 			continue;
 		}
 
-		bpf_mtap3(ic->ic_rawbpf, m0);
+		bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 
 		if (ipw_tx_start(ifp, m0, ni) != 0) {
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 		}
 
@@ -1527,7 +1573,7 @@ ipw_watchdog(struct ifnet *ifp)
 	if (sc->sc_tx_timer > 0) {
 		if (--sc->sc_tx_timer == 0) {
 			aprint_error_dev(sc->sc_dev, "device timeout\n");
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			ifp->if_flags &= ~IFF_UP;
 			ipw_stop(ifp, 1);
 			return;
@@ -1633,7 +1679,7 @@ ipw_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 			sc->sc_fwname = "ipw2100-1.2.fw";
 
 		ipw_free_firmware(sc);
-		/* FALLTRHOUGH */
+		/* FALLTHROUGH */
 	default:
 		error = ieee80211_ioctl(&sc->sc_ic, cmd, data);
 		if (error != ENETRESET)
@@ -1831,7 +1877,8 @@ ipw_load_firmware(struct ipw_softc *sc, u_char *fw, int size)
 
 	/* wait at most one second for firmware initialization to complete */
 	if ((error = tsleep(sc, 0, "ipwinit", hz)) != 0) {
-		aprint_error_dev(sc->sc_dev, "timeout waiting for firmware initialization "
+		aprint_error_dev(sc->sc_dev,
+		    "timeout waiting for firmware initialization "
 		    "to complete\n");
 		return error;
 	}
@@ -2140,7 +2187,8 @@ ipw_init(struct ifnet *ifp)
 
 	if (!(sc->flags & IPW_FLAG_FW_CACHED)) {
 		if (ipw_cache_firmware(sc) != 0) {
-			aprint_error_dev(sc->sc_dev, "could not cache the firmware (%s)\n",
+			aprint_error_dev(sc->sc_dev,
+			    "could not cache the firmware (%s)\n",
 			    sc->sc_fwname);
 			goto fail;
 		}

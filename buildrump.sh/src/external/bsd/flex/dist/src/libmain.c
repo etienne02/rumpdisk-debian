@@ -1,4 +1,4 @@
-/*	$NetBSD: libmain.c,v 1.2 2016/01/09 17:38:57 christos Exp $	*/
+/*	$NetBSD: libmain.c,v 1.6 2019/01/27 03:19:42 oster Exp $	*/
 
 /* libmain - flex run-time support library "main" function */
 
@@ -22,10 +22,14 @@
 /*  IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED */
 /*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR */
 /*  PURPOSE. */
+#ifndef HAVE_NBTOOL_CONFIG_H
 #include <sys/cdefs.h>
 #ifdef __RCSID
-__RCSID("$NetBSD: libmain.c,v 1.2 2016/01/09 17:38:57 christos Exp $");
+__RCSID("$NetBSD: libmain.c,v 1.6 2019/01/27 03:19:42 oster Exp $");
 #endif
+#endif
+
+#include <stdlib.h>
 
 extern int yylex (void);
 
@@ -36,5 +40,5 @@ int     main (int argc, char *argv[])
 
 	while (yylex () != 0) ;
 
-	return 0;
+	exit(0);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: piixide.c,v 1.65 2016/02/01 08:28:48 msaitoh Exp $	*/
+/*	$NetBSD: piixide.c,v 1.67 2018/09/03 16:29:32 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2001 Manuel Bouyer.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: piixide.c,v 1.65 2016/02/01 08:28:48 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: piixide.c,v 1.67 2018/09/03 16:29:32 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -287,6 +287,11 @@ static const struct pciide_product_desc pciide_intel_products[] =  {
 	  PCI_PRODUCT_INTEL_82965PM_IDE,
 	  0,
 	  "Intel 82965PM IDE controller",
+	  piixsata_chip_map,
+	},
+	{ PCI_PRODUCT_INTEL_82Q45_IDER,
+	  0,
+	  "Intel 82Q45 IDE Redirection controller",
 	  piixsata_chip_map,
 	},
 	{
@@ -615,7 +620,7 @@ piix_setup_channel(struct ata_channel *chp)
 	if ((drvp[0].drive_flags & ATA_DRIVE_DMA) &&
 	    (drvp[1].drive_flags & ATA_DRIVE_DMA)) {
 		mode[0] = mode[1] =
-		    min(drvp[0].DMA_mode, drvp[1].DMA_mode);
+		    uimin(drvp[0].DMA_mode, drvp[1].DMA_mode);
 		    drvp[0].DMA_mode = mode[0];
 		    drvp[1].DMA_mode = mode[1];
 		goto ok;
@@ -652,7 +657,7 @@ piix_setup_channel(struct ata_channel *chp)
 		mode[0] = drvp[0].PIO_mode;
 	} else {
 		mode[0] = mode[1] =
-		    min(drvp[1].PIO_mode, drvp[0].PIO_mode);
+		    uimin(drvp[1].PIO_mode, drvp[0].PIO_mode);
 		drvp[0].PIO_mode = mode[0];
 		drvp[1].PIO_mode = mode[1];
 	}

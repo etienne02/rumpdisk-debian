@@ -1,4 +1,4 @@
-/*	$NetBSD: sockin.c,v 1.63 2016/01/26 23:12:19 pooka Exp $	*/
+/*	$NetBSD: sockin.c,v 1.66 2018/06/26 06:48:03 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2008, 2009 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sockin.c,v 1.63 2016/01/26 23:12:19 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sockin.c,v 1.66 2018/06/26 06:48:03 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/condvar.h>
@@ -162,7 +162,6 @@ struct domain sockindomain = {
 	.dom_ifqueues = { NULL },
 	.dom_link = { NULL },
 	.dom_mowner = MOWNER_INIT("",""),
-	.dom_rtcache = { NULL },
 	.dom_sockaddr_cmp = NULL
 };
 struct domain sockin6domain = {
@@ -181,7 +180,6 @@ struct domain sockin6domain = {
 	.dom_ifqueues = { NULL },
 	.dom_link = { NULL },
 	.dom_mowner = MOWNER_INIT("",""),
-	.dom_rtcache = { NULL },
 	.dom_sockaddr_cmp = NULL
 };
 
@@ -291,7 +289,7 @@ sockin_process(struct socket *so)
 	}
 	m->m_len = m->m_pkthdr.len = n;
 
-	bpf_mtap_af(&sockin_if, AF_UNSPEC, m);
+	bpf_mtap_af(&sockin_if, AF_UNSPEC, m, BPF_D_IN);
 
 	mutex_enter(softnet_lock);
 	if (so->so_proto->pr_type == SOCK_DGRAM) {
@@ -628,7 +626,7 @@ sockin_send(struct socket *so, struct mbuf *m, struct sockaddr *saddr,
 	int error = 0;
 	int s;
 
-	bpf_mtap_af(&sockin_if, AF_UNSPEC, m);
+	bpf_mtap_af(&sockin_if, AF_UNSPEC, m, BPF_D_OUT);
 
 	memset(&mhdr, 0, sizeof(mhdr));
 
@@ -707,3 +705,4 @@ sockin_unavailable(void)
 __strong_alias(rtrequest,sockin_unavailable);
 __strong_alias(ifunit,sockin_unavailable);
 __strong_alias(ifreq_setaddr,sockin_unavailable);
+__strong_alias(rt_delete_matched_entries,sockin_unavailable);

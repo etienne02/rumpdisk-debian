@@ -1,5 +1,5 @@
 %{
-/*	$NetBSD: gram.y,v 1.53 2016/04/29 18:18:22 mlelstv Exp $	*/
+/*	$NetBSD: gram.y,v 1.56 2020/07/26 22:40:52 uwe Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: gram.y,v 1.53 2016/04/29 18:18:22 mlelstv Exp $");
+__RCSID("$NetBSD: gram.y,v 1.56 2020/07/26 22:40:52 uwe Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -60,6 +60,7 @@ __RCSID("$NetBSD: gram.y,v 1.53 2016/04/29 18:18:22 mlelstv Exp $");
 #define	stop(s)	cfgerror(s), exit(1)
 
 static	struct	config conf;	/* at most one active at a time */
+static	int	nowarn;		/* if warning suppression is on */
 
 
 /*
@@ -178,7 +179,7 @@ static struct loclist *namelocvals(const char *, struct loclist *);
 %token	IDENT IOCONF
 %token	LINKZERO
 %token	XMACHINE MAJOR MAKEOPTIONS MAXUSERS MAXPARTITIONS MINOR
-%token	NEEDS_COUNT NEEDS_FLAG NO
+%token	NEEDS_COUNT NEEDS_FLAG NO CNO
 %token	XOBJECT OBSOLETE ON OPTIONS
 %token	PACKAGE PLUSEQ PREFIX BUILDPREFIX PSEUDO_DEVICE PSEUDO_ROOT
 %token	ROOT
@@ -213,7 +214,7 @@ static struct loclist *namelocvals(const char *, struct loclist *);
 %type	<str>	value
 %type	<val>	major_minor
 %type	<num>	signed_number
-%type	<i32>	int32 npseudo device_flags
+%type	<i32>	int32 npseudo device_flags no
 %type	<str>	deffs
 %type	<list>	deffses
 %type	<defoptlist>	defopt
@@ -292,6 +293,11 @@ subarches:
 	| subarches WORD		{ $$ = new_nx($2, $1); }
 ;
 
+no:
+	  NO	{ $$ = 0; }
+	| CNO	{ $$ = 1; }
+;
+
 /************************************************************/
 
 /*
@@ -300,7 +306,11 @@ subarches:
 
 /* Complete definition part: the contents of all files.* files. */
 definition_part:
-	definitions ENDDEFS		{ check_maxpart(); check_version(); }
+	definitions ENDDEFS		{
+		CFGDBG(1, "ENDDEFS");
+		check_maxpart();
+		check_version();
+	}
 ;
 
 /* Zero or more definitions. Trap errors. */
@@ -740,11 +750,11 @@ select_attr:
 ;
 
 select_no_attr:
-	NO SELECT WORD			{ delattr($3); }
+	no SELECT WORD			{ delattr($3, $1); }
 ;
 
 select_no_filesystems:
-	NO FILE_SYSTEM no_fs_list
+	no FILE_SYSTEM { nowarn = $1; } no_fs_list { nowarn = 0; }
 ;
 
 select_filesystems:
@@ -752,7 +762,7 @@ select_filesystems:
 ;
 
 select_no_makeoptions:
-	NO MAKEOPTIONS no_mkopt_list
+	no MAKEOPTIONS { nowarn = $1; } no_mkopt_list { nowarn = 0; }
 ;
 
 select_makeoptions:
@@ -760,7 +770,7 @@ select_makeoptions:
 ;
 
 select_no_options:
-	NO OPTIONS no_opt_list
+	no OPTIONS { nowarn = $1; } no_opt_list { nowarn = 0; }
 ;
 
 select_options:
@@ -776,7 +786,7 @@ select_ident:
 ;
 
 select_no_ident:
-	NO IDENT			{ setident(NULL); }
+	no IDENT			{ setident(NULL); }
 ;
 
 select_config:
@@ -785,11 +795,11 @@ select_config:
 ;
 
 select_no_config:
-	NO CONFIG WORD			{ delconf($3); }
+	no CONFIG WORD			{ delconf($3, $1); }
 ;
 
 select_no_pseudodev:
-	NO PSEUDO_DEVICE WORD		{ delpseudo($3); }
+	no PSEUDO_DEVICE WORD		{ delpseudo($3, $1); }
 ;
 
 select_pseudodev:
@@ -801,16 +811,16 @@ select_pseudoroot:
 ;
 
 select_no_device_instance_attachment:
-	NO device_instance AT attachment
-					{ deldevi($2, $4); }
+	no device_instance AT attachment
+					{ deldevi($2, $4, $1); }
 ;
 
 select_no_device_attachment:
-	NO DEVICE AT attachment		{ deldeva($4); }
+	no DEVICE AT attachment		{ deldeva($4, $1); }
 ;
 
 select_no_device_instance:
-	NO device_instance		{ deldev($2); }
+	no device_instance		{ deldev($2, $1); }
 ;
 
 select_device_instance:
@@ -837,7 +847,7 @@ no_fs_list:
 
 /* one filesystem that had NO in front */
 no_fsoption:
-	WORD				{ delfsoption($1); }
+	WORD				{ delfsoption($1, nowarn); }
 ;
 
 /* list of make options */
@@ -862,7 +872,7 @@ no_mkopt_list:
 /* one make option that had NO in front */
 /* XXX shouldn't this be mkvarname rather than WORD? */
 no_mkoption:
-	WORD				{ delmkoption($1); }
+	WORD				{ delmkoption($1, nowarn); }
 ;
 
 /* list of options */
@@ -885,14 +895,14 @@ no_opt_list:
 
 /* one option that had NO in front */
 no_option:
-	WORD				{ deloption($1); }
+	WORD				{ deloption($1, nowarn); }
 ;
 
 /* the name in "config name root on ..." */
 conf:
 	WORD				{
 		conf.cf_name = $1;
-		conf.cf_lineno = currentline();
+		conf.cf_where.w_srcline = currentline();
 		conf.cf_fstype = NULL;
 		conf.cf_root = NULL;
 		conf.cf_dump = NULL;

@@ -1,4 +1,4 @@
-/*	$NetBSD: exphy.c,v 1.54 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: exphy.c,v 1.58 2020/03/15 23:04:50 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000 The NetBSD Foundation, Inc.
@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: exphy.c,v 1.54 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: exphy.c,v 1.58 2020/03/15 23:04:50 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -97,15 +97,15 @@ exphymatch(device_t parent, cfdata_t match, void *aux)
 	 */
 	if (MII_OUI(ma->mii_id1, ma->mii_id2) != 0 &&
 	    MII_MODEL(ma->mii_id2) != 0)
-		return (0);
+		return 0;
 
 	/*
 	 * Make sure the parent is an `ex'.
 	 */
 	if (!device_is_a(parent, "ex"))
-		return (0);
+		return 0;
 
-	return (10);
+	return 10;
 }
 
 static void
@@ -124,7 +124,6 @@ exphyattach(device_t parent, device_t self, void *aux)
 	sc->mii_funcs = &exphy_funcs;
 	sc->mii_pdata = mii;
 	sc->mii_flags = ma->mii_flags;
-	sc->mii_anegticks = MII_ANEGTICKS;
 
 	/*
 	 * The 3Com PHY can never be isolated, so never allow non-zero
@@ -137,16 +136,16 @@ exphyattach(device_t parent, device_t self, void *aux)
 	}
 	sc->mii_flags |= MIIF_NOISOLATE;
 
+	mii_lock(mii);
+
 	PHY_RESET(sc);
 
-	sc->mii_capabilities = PHY_READ(sc, MII_BMSR) & ma->mii_capmask;
-	if ((sc->mii_capabilities & BMSR_MEDIAMASK) == 0)
-		aprint_error_dev(self, "no media present\n");
-	else {
-		aprint_normal_dev(self, "");
-		mii_phy_add_media(sc);
-		aprint_normal("\n");
-	}
+	PHY_READ(sc, MII_BMSR, &sc->mii_capabilities);
+	sc->mii_capabilities &= ma->mii_capmask;
+
+	mii_unlock(mii);
+
+	mii_phy_add_media(sc);
 }
 
 static int
@@ -154,20 +153,18 @@ exphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 {
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
 
-	/*
-	 * We can't isolate the 3Com PHY, so it has to be the only one!
-	 */
+	/* We can't isolate the 3Com PHY, so it has to be the only one! */
 	if (IFM_INST(ife->ifm_media) != sc->mii_inst)
 		panic("exphy_service: can't isolate 3Com PHY");
+
+	KASSERT(mii_locked(mii));
 
 	switch (cmd) {
 	case MII_POLLSTAT:
 		break;
 
 	case MII_MEDIACHG:
-		/*
-		 * If the interface is not up, don't do anything.
-		 */
+		/* If the interface is not up, don't do anything. */
 		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
 			break;
 
@@ -175,19 +172,17 @@ exphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		break;
 
 	case MII_TICK:
-		/*
-		 * Only used for autonegotiation.
-		 */
+		/* Only used for autonegotiation. */
 		if (IFM_SUBTYPE(ife->ifm_media) != IFM_AUTO)
 			break;
 
 		if (mii_phy_tick(sc) == EJUSTRETURN)
-			return (0);
+			return 0;
 		break;
 
 	case MII_DOWN:
 		mii_phy_down(sc);
-		return (0);
+		return 0;
 	}
 
 	/* Update the media status. */
@@ -195,12 +190,14 @@ exphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 
 	/* Callback if something changed. */
 	mii_phy_update(sc, cmd);
-	return (0);
+	return 0;
 }
 
 static void
 exphy_reset(struct mii_softc *sc)
 {
+
+	KASSERT(mii_locked(sc->mii_pdata));
 
 	mii_phy_reset(sc);
 
@@ -208,5 +205,5 @@ exphy_reset(struct mii_softc *sc)
 	 * XXX 3Com PHY doesn't set the BMCR properly after
 	 * XXX reset, which breaks autonegotiation.
 	 */
-	PHY_WRITE(sc, MII_BMCR, BMCR_S100|BMCR_AUTOEN|BMCR_FDX);
+	PHY_WRITE(sc, MII_BMCR, BMCR_S100 | BMCR_AUTOEN | BMCR_FDX);
 }

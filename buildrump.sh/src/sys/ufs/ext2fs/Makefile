@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.2 2016/06/03 21:55:50 joerg Exp $
+#	$NetBSD: Makefile,v 1.4 2016/08/09 13:18:50 kre Exp $
 
 INCSDIR= /usr/include/ufs/ext2fs
 

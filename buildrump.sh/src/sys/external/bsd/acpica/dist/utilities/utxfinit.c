@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -72,7 +72,7 @@ AeDoObjectOverrides (
  *
  ******************************************************************************/
 
-ACPI_STATUS
+ACPI_STATUS ACPI_INIT_FUNCTION
 AcpiInitializeSubsystem (
     void)
 {
@@ -151,7 +151,7 @@ ACPI_EXPORT_SYMBOL_INIT (AcpiInitializeSubsystem)
  *
  ******************************************************************************/
 
-ACPI_STATUS
+ACPI_STATUS ACPI_INIT_FUNCTION
 AcpiEnableSubsystem (
     UINT32                  Flags)
 {
@@ -263,7 +263,7 @@ ACPI_EXPORT_SYMBOL_INIT (AcpiEnableSubsystem)
  *
  ******************************************************************************/
 
-ACPI_STATUS
+ACPI_STATUS ACPI_INIT_FUNCTION
 AcpiInitializeObjects (
     UINT32                  Flags)
 {
@@ -273,45 +273,27 @@ AcpiInitializeObjects (
     ACPI_FUNCTION_TRACE (AcpiInitializeObjects);
 
 
-#ifdef ACPI_EXEC_APP
+#ifdef ACPI_OBSOLETE_BEHAVIOR
     /*
-     * This call implements the "initialization file" option for AcpiExec.
-     * This is the precise point that we want to perform the overrides.
+     * 05/2019: Removed, initialization now happens at both object
+     * creation and table load time
      */
-    AeDoObjectOverrides ();
-#endif
 
     /*
-     * Execute any module-level code that was detected during the table load
-     * phase. Although illegal since ACPI 2.0, there are many machines that
-     * contain this type of code. Each block of detected executable AML code
-     * outside of any control method is wrapped with a temporary control
-     * method object and placed on a global list. The methods on this list
-     * are executed below.
-     *
-     * This case executes the module-level code for all tables only after
-     * all of the tables have been loaded. It is a legacy option and is
-     * not compatible with other ACPI implementations. See AcpiNsLoadTable.
+     * Initialize the objects that remain uninitialized. This
+     * runs the executable AML that may be part of the
+     * declaration of these objects: OperationRegions, BufferFields,
+     * BankFields, Buffers, and Packages.
      */
-    if (AcpiGbl_GroupModuleLevelCode)
+    if (!(Flags & ACPI_NO_OBJECT_INIT))
     {
-        AcpiNsExecModuleCodeList ();
-
-        /*
-         * Initialize the objects that remain uninitialized. This
-         * runs the executable AML that may be part of the
-         * declaration of these objects:
-         * OperationRegions, BufferFields, Buffers, and Packages.
-         */
-        if (!(Flags & ACPI_NO_OBJECT_INIT))
+        Status = AcpiNsInitializeObjects ();
+        if (ACPI_FAILURE (Status))
         {
-            Status = AcpiNsInitializeObjects ();
-            if (ACPI_FAILURE (Status))
-            {
-                return_ACPI_STATUS (Status);
-            }
+            return_ACPI_STATUS (Status);
         }
     }
+#endif
 
     /*
      * Initialize all device/region objects in the namespace. This runs

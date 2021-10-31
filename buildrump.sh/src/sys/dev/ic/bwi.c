@@ -1,4 +1,4 @@
-/*	$NetBSD: bwi.c,v 1.30 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: bwi.c,v 1.38 2021/06/16 00:21:18 riastradh Exp $	*/
 /*	$OpenBSD: bwi.c,v 1.74 2008/02/25 21:13:30 mglocker Exp $	*/
 
 /*
@@ -48,7 +48,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bwi.c,v 1.30 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bwi.c,v 1.38 2021/06/16 00:21:18 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -61,6 +61,7 @@ __KERNEL_RCSID(0, "$NetBSD: bwi.c,v 1.30 2016/06/10 13:27:13 ozaki-r Exp $");
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/intr.h>
 
 #include <machine/endian.h>
 
@@ -693,131 +694,151 @@ int
 bwi_intr(void *arg)
 {
 	struct bwi_softc *sc = arg;
-	struct bwi_mac *mac;
 	struct ifnet *ifp = &sc->sc_if;
-	uint32_t intr_status;
-	uint32_t txrx_intr_status[BWI_TXRX_NRING];
-	int i, txrx_error, tx = 0, rx_data = -1;
 
 	if (!device_is_active(sc->sc_dev) ||
 	    (ifp->if_flags & IFF_RUNNING) == 0)
 		return (0);
 
-	/*
-	 * Get interrupt status
-	 */
-	intr_status = CSR_READ_4(sc, BWI_MAC_INTR_STATUS);
-	if (intr_status == 0xffffffff)	/* Not for us */
-		return (0);
-
-	intr_status &= CSR_READ_4(sc, BWI_MAC_INTR_MASK);
-	if (intr_status == 0)		/* Nothing is interesting */
-		return (0);
-
-	DPRINTF(sc, BWI_DBG_INTR, "intr status 0x%08x\n", intr_status);
-
-	KASSERT(sc->sc_cur_regwin->rw_type == BWI_REGWIN_T_MAC);
-	mac = (struct bwi_mac *)sc->sc_cur_regwin;
-
-	txrx_error = 0;
-
-	for (i = 0; i < BWI_TXRX_NRING; ++i) {
-		uint32_t mask;
-
-		if (BWI_TXRX_IS_RX(i))
-			mask = BWI_TXRX_RX_INTRS;
-		else
-			mask = BWI_TXRX_TX_INTRS;
-
-		txrx_intr_status[i] =
-		    CSR_READ_4(sc, BWI_TXRX_INTR_STATUS(i)) & mask;
-
-		if (txrx_intr_status[i] & BWI_TXRX_INTR_ERROR) {
-			aprint_error_dev(sc->sc_dev,
-			    "intr fatal TX/RX (%d) error 0x%08x\n",
-			    i, txrx_intr_status[i]);
-			txrx_error = 1;
-		}
-	}
-
-	/*
-	 * Acknowledge interrupt
-	 */
-	CSR_WRITE_4(sc, BWI_MAC_INTR_STATUS, intr_status);
-
-	for (i = 0; i < BWI_TXRX_NRING; ++i)
-		CSR_WRITE_4(sc, BWI_TXRX_INTR_STATUS(i), txrx_intr_status[i]);
-
 	/* Disable all interrupts */
 	bwi_disable_intrs(sc, BWI_ALL_INTRS);
 
-	if (intr_status & BWI_INTR_PHY_TXERR) {
-		if (mac->mac_flags & BWI_MAC_F_PHYE_RESET) {
-			aprint_error_dev(sc->sc_dev, "intr PHY TX error\n");
-			/* XXX to netisr0? */
-			bwi_init_statechg(sc, 0);
-			return (0);
+	softint_schedule(sc->sc_soft_ih);
+	return (1);
+}
+
+static void
+bwi_softintr(void *arg)
+{
+	struct bwi_softc *sc = arg;
+	struct bwi_mac *mac;
+	struct ifnet *ifp = &sc->sc_if;
+	uint32_t intr_status;
+	uint32_t txrx_intr_status[BWI_TXRX_NRING];
+	int i, s, txrx_error, tx = 0, rx_data = -1;
+
+	if (!device_is_active(sc->sc_dev) ||
+	    (ifp->if_flags & IFF_RUNNING) == 0)
+		return;
+
+	for (;;) {
+		/*
+		 * Get interrupt status
+		 */
+		intr_status = CSR_READ_4(sc, BWI_MAC_INTR_STATUS);
+		if (intr_status == 0xffffffff)	/* Not for us */
+			goto out;
+
+		intr_status &= CSR_READ_4(sc, BWI_MAC_INTR_MASK);
+		if (intr_status == 0)		/* Nothing is interesting */
+			goto out;
+
+		DPRINTF(sc, BWI_DBG_INTR, "intr status 0x%08x\n", intr_status);
+
+		KASSERT(sc->sc_cur_regwin->rw_type == BWI_REGWIN_T_MAC);
+		mac = (struct bwi_mac *)sc->sc_cur_regwin;
+
+		txrx_error = 0;
+
+		for (i = 0; i < BWI_TXRX_NRING; ++i) {
+			uint32_t mask;
+
+			if (BWI_TXRX_IS_RX(i))
+				mask = BWI_TXRX_RX_INTRS;
+			else
+				mask = BWI_TXRX_TX_INTRS;
+
+			txrx_intr_status[i] =
+			    CSR_READ_4(sc, BWI_TXRX_INTR_STATUS(i)) & mask;
+
+			if (txrx_intr_status[i] & BWI_TXRX_INTR_ERROR) {
+				aprint_error_dev(sc->sc_dev,
+				    "intr fatal TX/RX (%d) error 0x%08x\n",
+				    i, txrx_intr_status[i]);
+				txrx_error = 1;
+			}
+		}
+
+		/*
+		 * Acknowledge interrupt
+		 */
+		CSR_WRITE_4(sc, BWI_MAC_INTR_STATUS, intr_status);
+
+		for (i = 0; i < BWI_TXRX_NRING; ++i)
+			CSR_WRITE_4(sc, BWI_TXRX_INTR_STATUS(i),
+			    txrx_intr_status[i]);
+
+		if (intr_status & BWI_INTR_PHY_TXERR) {
+			if (mac->mac_flags & BWI_MAC_F_PHYE_RESET) {
+				aprint_error_dev(sc->sc_dev,
+				    "intr PHY TX error\n");
+				/* XXX to netisr0? */
+				s = splnet();
+				bwi_init_statechg(sc, 0);
+				splx(s);
+				goto out;
+			}
+		}
+
+		if (txrx_error) {
+			/* TODO: reset device */
+		}
+
+		if (intr_status & BWI_INTR_TBTT)
+			bwi_mac_config_ps(mac);
+
+		if (intr_status & BWI_INTR_EO_ATIM)
+			aprint_normal_dev(sc->sc_dev, "EO_ATIM\n");
+
+		if (intr_status & BWI_INTR_PMQ) {
+			for (;;) {
+				if ((CSR_READ_4(sc, BWI_MAC_PS_STATUS) & 0x8)
+				    == 0)
+					break;
+			}
+			CSR_WRITE_2(sc, BWI_MAC_PS_STATUS, 0x2);
+		}
+
+		if (intr_status & BWI_INTR_NOISE)
+			aprint_normal_dev(sc->sc_dev, "intr noise\n");
+
+		if (txrx_intr_status[0] & BWI_TXRX_INTR_RX)
+			rx_data = (sc->sc_rxeof)(sc);
+
+		if (txrx_intr_status[3] & BWI_TXRX_INTR_RX) {
+			(sc->sc_txeof_status)(sc);
+			tx = 1;
+		}
+
+		if (intr_status & BWI_INTR_TX_DONE) {
+			bwi_txeof(sc);
+			tx = 1;
+		}
+
+		if (sc->sc_blink_led != NULL && sc->sc_led_blink) {
+			int evt = BWI_LED_EVENT_NONE;
+
+			if (tx && rx_data > 0) {
+				if (sc->sc_rx_rate > sc->sc_tx_rate)
+					evt = BWI_LED_EVENT_RX;
+				else
+					evt = BWI_LED_EVENT_TX;
+			} else if (tx) {
+				evt = BWI_LED_EVENT_TX;
+			} else if (rx_data > 0) {
+				evt = BWI_LED_EVENT_RX;
+			} else if (rx_data == 0) {
+				evt = BWI_LED_EVENT_POLL;
+			}
+
+			if (evt != BWI_LED_EVENT_NONE)
+				bwi_led_event(sc, evt);
 		}
 	}
 
-	if (txrx_error) {
-		/* TODO: reset device */
-	}
-
-	if (intr_status & BWI_INTR_TBTT)
-		bwi_mac_config_ps(mac);
-
-	if (intr_status & BWI_INTR_EO_ATIM)
-		aprint_normal_dev(sc->sc_dev, "EO_ATIM\n");
-
-	if (intr_status & BWI_INTR_PMQ) {
-		for (;;) {
-			if ((CSR_READ_4(sc, BWI_MAC_PS_STATUS) & 0x8) == 0)
-				break;
-		}
-		CSR_WRITE_2(sc, BWI_MAC_PS_STATUS, 0x2);
-	}
-
-	if (intr_status & BWI_INTR_NOISE)
-		aprint_normal_dev(sc->sc_dev, "intr noise\n");
-
-	if (txrx_intr_status[0] & BWI_TXRX_INTR_RX)
-		rx_data = (sc->sc_rxeof)(sc);
-
-	if (txrx_intr_status[3] & BWI_TXRX_INTR_RX) {
-		(sc->sc_txeof_status)(sc);
-		tx = 1;
-	}
-
-	if (intr_status & BWI_INTR_TX_DONE) {
-		bwi_txeof(sc);
-		tx = 1;
-	}
-
+out:
 	/* Re-enable interrupts */
 	bwi_enable_intrs(sc, BWI_INIT_INTRS);
-
-	if (sc->sc_blink_led != NULL && sc->sc_led_blink) {
-		int evt = BWI_LED_EVENT_NONE;
-
-		if (tx && rx_data > 0) {
-			if (sc->sc_rx_rate > sc->sc_tx_rate)
-				evt = BWI_LED_EVENT_RX;
-			else
-				evt = BWI_LED_EVENT_TX;
-		} else if (tx) {
-			evt = BWI_LED_EVENT_TX;
-		} else if (rx_data > 0) {
-			evt = BWI_LED_EVENT_RX;
-		} else if (rx_data == 0) {
-			evt = BWI_LED_EVENT_POLL;
-		}
-
-		if (evt != BWI_LED_EVENT_NONE)
-			bwi_led_event(sc, evt);
-	}
-
-	return (1);
 }
 
 int
@@ -831,6 +852,12 @@ bwi_attach(struct bwi_softc *sc)
 
 	/* [TRC: XXX Is this necessary?] */
 	s = splnet();
+
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, bwi_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		error = ENXIO;
+		goto fail;
+	}
 
 	/*
 	 * Initialize sysctl variables
@@ -994,8 +1021,10 @@ bwi_attach(struct bwi_softc *sc)
 
 	ic->ic_updateslot = bwi_updateslot;
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
 
 	/* [TRC: XXX Not supported on NetBSD?] */
 	/* ic->ic_flags_ext |= IEEE80211_FEXT_SWBMISS; */
@@ -1027,6 +1056,7 @@ bwi_attach(struct bwi_softc *sc)
 	return (0);
 fail:
 	/* [TRC: XXX DragonFlyBSD detaches the device here.  Should we?] */
+	splx(s);
 	return (error);
 }
 
@@ -1049,6 +1079,9 @@ bwi_detach(struct bwi_softc *sc)
 		bwi_mac_detach(&sc->sc_mac[i]);
 
 	sysctl_teardown(&sc->sc_sysctllog);
+
+	if (sc->sc_soft_ih != NULL)
+		softint_disestablish(sc->sc_soft_ih);
 
 	splx(s);
 
@@ -7382,7 +7415,7 @@ bwi_start(struct ifnet *ifp)
 			if (m->m_len < sizeof(*eh)) {
 				m = m_pullup(m, sizeof(*eh));
 				if (m == NULL) {
-					ifp->if_oerrors++;
+					if_statinc(ifp, if_oerrors);
 					continue;
 				}
 			}
@@ -7390,7 +7423,7 @@ bwi_start(struct ifnet *ifp)
 
 			ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 			if (ni == NULL) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				m_freem(m);
 				continue;
 			}
@@ -7412,7 +7445,7 @@ bwi_start(struct ifnet *ifp)
 				DPRINTF(sc, BWI_DBG_MISC,
 				    "%s: discard, classification failure\n",
 				    __func__);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				m_freem(m);
 				ieee80211_free_node(ni);
 				continue;
@@ -7420,27 +7453,27 @@ bwi_start(struct ifnet *ifp)
 
 			/* [TRC: XXX wi(4) and awi(4) do this; iwi(4)
 			   doesn't.] */
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 
 			/* [TRC: XXX When should the packet be
 			   filtered?  Different drivers appear to do it
 			   at different times.] */
 			/* TODO: PS */
-			bpf_mtap(ifp, m);
+			bpf_mtap(ifp, m, BPF_D_OUT);
 			m = ieee80211_encap(ic, m, ni);
 			if (m == NULL) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				ieee80211_free_node(ni);
 				continue;
 			}
 		}
-		bpf_mtap3(ic->ic_rawbpf, m);
+		bpf_mtap3(ic->ic_rawbpf, m, BPF_D_OUT);
 
 		wh = mtod(m, struct ieee80211_frame *);
 		/* [TRC: XXX What about ic->ic_flags & IEEE80211_F_PRIVACY?] */
 		if (wh->i_fc[1] & IEEE80211_FC1_WEP) {
 			if (ieee80211_crypto_encap(ic, ni, m) == NULL) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				m_freem(m);
 				ieee80211_free_node(ni);
 				continue;
@@ -7450,7 +7483,7 @@ bwi_start(struct ifnet *ifp)
 
 		if (bwi_encap(sc, idx, m, &ni, mgt_pkt) != 0) {
 			/* 'm' is freed in bwi_encap() if we reach here */
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			if (ni != NULL)
 				ieee80211_free_node(ni);
 			continue;
@@ -7486,7 +7519,7 @@ bwi_watchdog(struct ifnet *ifp)
 	if (sc->sc_tx_timer) {
 		if (--sc->sc_tx_timer == 0) {
 			aprint_error_dev(sc->sc_dev, "device timeout\n");
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			/* TODO */
 			/* [TRC: XXX TODO what?  Stop the device?
 			   Bring it down?  iwi(4) does this.] */
@@ -7664,7 +7697,9 @@ bwi_amrr_timeout(void *arg)
 {
 	struct bwi_softc *sc = arg;
 	struct ieee80211com *ic = &sc->sc_ic;
+	int s;
 
+	s = splnet();
 	if (ic->ic_opmode == IEEE80211_M_STA)
 		bwi_iter_func(sc, ic->ic_bss);
 	else
@@ -7673,6 +7708,7 @@ bwi_amrr_timeout(void *arg)
 		ieee80211_iterate_nodes(&ic->ic_sta, bwi_iter_func, sc);
 
 	callout_schedule(&sc->sc_amrr_ch, hz / 2);
+	splx(s);
 }
 
 static void
@@ -8292,7 +8328,7 @@ bwi_newbuf(struct bwi_softc *sc, int buf_idx, int init)
 	if (m == NULL)
 		return (ENOBUFS);
 	MCLGET(m, init ? M_WAITOK : M_DONTWAIT);
-	if (m == NULL) {
+	if ((m->m_flags & M_EXT) == 0) {
 		error = ENOBUFS;
 
 		/*
@@ -8416,7 +8452,7 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 	struct bwi_rxbuf_data *rbd = &sc->sc_rx_bdata;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &sc->sc_if;
-	int idx, rx_data = 0;
+	int s, idx, rx_data = 0;
 
 	idx = rbd->rbd_idx;
 	while (idx != end_idx) {
@@ -8434,7 +8470,7 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 		    rb->rb_dmap->dm_mapsize, BUS_DMASYNC_POSTREAD);
 
 		if (bwi_newbuf(sc, idx, 0)) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto next;
 		}
 
@@ -8450,7 +8486,7 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 		if (buflen < BWI_FRAME_MIN_LEN(wh_ofs)) {
 			aprint_error_dev(sc->sc_dev, "short frame %d,"
 			    " hdr_extra %d\n", buflen, hdr_extra);
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			m_freem(m);
 			goto next;
 		}
@@ -8466,6 +8502,8 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 			rate = bwi_ofdm_plcp2rate(plcp);
 		else
 			rate = bwi_ds_plcp2rate(plcp);
+
+		s = splnet();
 
 		/* RX radio tap */
 		if (sc->sc_drvbpf != NULL) {
@@ -8486,9 +8524,10 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 			mb.m_len = sc->sc_rxtap_len;
 			mb.m_next = m;
 			mb.m_nextpkt = NULL;
+			mb.m_owner = NULL;
 			mb.m_type = 0;
 			mb.m_flags = 0;
-			bpf_mtap3(sc->sc_drvbpf, &mb);
+			bpf_mtap3(sc->sc_drvbpf, &mb, BPF_D_IN);
 		}
 
 		m_adj(m, -IEEE80211_CRC_LEN);
@@ -8506,6 +8545,8 @@ bwi_rxeof(struct bwi_softc *sc, int end_idx)
 			rx_data = 1;
 			sc->sc_rx_rate = rate;
 		}
+
+		splx(s);
 next:
 		idx = (idx + 1) % BWI_RX_NDESC;
 	}
@@ -9065,7 +9106,7 @@ bwi_encap(struct bwi_softc *sc, int idx, struct mbuf *m,
 		mb.m_nextpkt = NULL;
 		mb.m_type = 0;
 		mb.m_flags = 0;
-		bpf_mtap3(sc->sc_drvbpf, &mb);
+		bpf_mtap3(sc->sc_drvbpf, &mb, BPF_D_OUT);
 	}
 
 	/*
@@ -9146,7 +9187,7 @@ bwi_encap(struct bwi_softc *sc, int idx, struct mbuf *m,
 			goto back;
 		}
 
-		M_COPY_PKTHDR(m_new, m);
+		m_copy_pkthdr(m_new, m);
 		if (m->m_pkthdr.len > MHLEN) {
 			MCLGET(m_new, M_DONTWAIT);
 			if (!(m_new->m_flags & M_EXT)) {
@@ -9238,7 +9279,9 @@ bwi_txeof_status32(struct bwi_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_if;
 	uint32_t val, ctrl_base;
-	int end_idx;
+	int end_idx, s;
+
+	s = splnet();
 
 	ctrl_base = sc->sc_txstats->stats_ctrl_base;
 
@@ -9253,6 +9296,8 @@ bwi_txeof_status32(struct bwi_softc *sc)
 
 	if ((ifp->if_flags & IFF_OACTIVE) == 0)
 		ifp->if_start(ifp); /* [TRC: XXX Why not bwi_start?] */
+
+	splx(s);
 }
 
 static void
@@ -9324,6 +9369,9 @@ static void
 bwi_txeof(struct bwi_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_if;
+	int s;
+
+	s = splnet();
 
 	for (;;) {
 		uint32_t tx_status0;
@@ -9342,11 +9390,13 @@ bwi_txeof(struct bwi_softc *sc)
 
 		_bwi_txeof(sc, tx_id);
 
-		ifp->if_opackets++;
+		if_statinc(ifp, if_opackets);
 	}
 
 	if ((ifp->if_flags & IFF_OACTIVE) == 0)
 		ifp->if_start(ifp);
+
+	splx(s);
 }
 
 static int

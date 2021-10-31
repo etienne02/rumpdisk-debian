@@ -27,7 +27,7 @@
 
    We create N_THREADS number of threads. Each thread has it's own scanner.
    Each thread selects one of the files specified in ARGV, scans it, then
-   closes it. This is repeated N_SCANS numebr of times for each thread.
+   closes it. This is repeated N_SCANS number of times for each thread.
 
    The idea is to press the scanner to break under threads.
    If we see  "Scanner Jammed", then we know
@@ -78,30 +78,30 @@ static int process_text(char* s, yyscan_t  scanner);
 <INITIAL,STATE_1,STATE_2>[[:space:]\r\n]+  { }
 %%
 
-int yywrap( yyscan_t  scanner) {
+int testwrap( yyscan_t  scanner) {
     (void)scanner;
     return 1;
 }
 static int process_text(char* s, yyscan_t  scanner)
 {
     (void)scanner;
-    return (int)(*s) + (int) *(s + yyget_leng(scanner)-1);
+    return (int)(*s) + (int) *(s + testget_leng(scanner)-1);
 }
 
 int main(int ARGC, char *ARGV[]);
 
-#ifndef HAVE_LIBPTHREAD
-  int main (int ARGC, char *ARGV[]) {
-    printf(
+#ifndef HAVE_PTHREAD_H
+int main (int ARGC, char *ARGV[]) {
+    puts(
        "TEST ABORTED because pthread library not available \n"
-       "-- This is expected on some systems. It is not a flex error.\n" );
-    return 0;
-  }
+       "-- This is expected on some systems. It is not a flex error.");
+    /* Exit status for a skipped test */
+    return 77;
+}
 #else
 
 #define N_THREADS 4
 #define N_SCANS   20
-#define INPUT_FILE "test.input"
 
 /* Each thread selects the next file to scan in round-robin fashion.
    If there are less files than threads, some threads may block. */
@@ -114,7 +114,7 @@ static pthread_mutex_t *file_locks;
 static char **filenames;
 
 
-void * thread_func ( void* arg )
+static void * thread_func ( void* arg )
 {
     int i;
 
@@ -126,8 +126,6 @@ void * thread_func ( void* arg )
 
     for( i =0 ; i < N_SCANS ; i++ )
     {
-        int main(int ARGC, char *ARGV[]);
-
         int next;
         yyscan_t  scanner;
         FILE * fp;
@@ -138,19 +136,19 @@ void * thread_func ( void* arg )
 
         pthread_mutex_lock ( &file_locks[ next ] );
 
-        yylex_init( &scanner );
+        testlex_init( &scanner );
         /*printf("Scanning file %s  #%d\n",filenames[next],i); fflush(stdout); */
         if((fp = fopen(filenames[next],"r"))==NULL) {
             perror("fopen");
             return NULL;
         }
-        yyset_in(fp,scanner);
+        testset_in(fp,scanner);
 
-        while( yylex( scanner) != 0)
+        while( testlex( scanner) != 0)
         {
         }
         fclose(fp);
-        yylex_destroy(scanner);
+        testlex_destroy(scanner);
         pthread_mutex_unlock ( &file_locks[ next ] );
     }
     return NULL;
@@ -167,7 +165,7 @@ int main (int ARGC, char *ARGV[])
     }
 
     /* Allocate and initialize the locks. One for each filename in ARGV. */
-    file_locks = (pthread_mutex_t*)malloc( (ARGC-1) * sizeof(pthread_mutex_t));
+    file_locks = malloc((size_t) (ARGC-1) * sizeof(pthread_mutex_t));
     for( i = 0; i < ARGC-1; i++)
         pthread_mutex_init( &file_locks[i], NULL );
 
@@ -206,5 +204,5 @@ int main (int ARGC, char *ARGV[])
     return 0;
 }
 
-#endif /* HAVE_LIBPTHREAD */
+#endif /* HAVE_PTHREAD_H */
 

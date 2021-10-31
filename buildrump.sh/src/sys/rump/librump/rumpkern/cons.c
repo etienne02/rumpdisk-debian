@@ -1,4 +1,4 @@
-/*	$NetBSD: cons.c,v 1.6 2016/01/26 23:12:17 pooka Exp $	*/
+/*	$NetBSD: cons.c,v 1.9 2020/01/02 15:42:27 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2013 Antti Kantee.  All Rights Reserved.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cons.c,v 1.6 2016/01/26 23:12:17 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cons.c,v 1.9 2020/01/02 15:42:27 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/file.h>
@@ -60,6 +60,7 @@ static int rumpcons_stat(struct file *, struct stat *);
 static int rumpcons_poll(struct file *, int events);
 
 static const struct fileops rumpcons_fileops = {
+	.fo_name = "rumpcons",
 	.fo_read = (void *)nullop,
 	.fo_write = rumpcons_write,
 	.fo_ioctl = rumpcons_ioctl,
@@ -109,7 +110,7 @@ rumpcons_write(struct file *fp, off_t *off, struct uio *uio,
 
 	buf = kmem_alloc(PAGE_SIZE, KM_SLEEP);
 	while (uio->uio_resid > 0) {
-		len = min(PAGE_SIZE, uio->uio_resid);
+		len = uimin(PAGE_SIZE, uio->uio_resid);
 		error = uiomove(buf, len, uio);
 		if (error)
 			break;
@@ -136,11 +137,14 @@ rumpcons_ioctl(struct file *fp, u_long cmd, void *data)
 static int
 rumpcons_stat(struct file *fp, struct stat *sb)
 {
+	struct timespec ts;
+
+	getnanoboottime(&ts);
 
 	memset(sb, 0, sizeof(*sb));
 	sb->st_mode = 0600 | _S_IFCHR;
-	sb->st_atimespec = sb->st_mtimespec = sb->st_ctimespec = boottime;
-	sb->st_birthtimespec = boottime;
+	sb->st_atimespec = sb->st_mtimespec = sb->st_ctimespec = ts;
+	sb->st_birthtimespec = ts;
 
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_loop.c,v 1.89 2016/06/22 10:44:32 knakahara Exp $	*/
+/*	$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.89 2016/06/22 10:44:32 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -83,6 +83,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.89 2016/06/22 10:44:32 knakahara Exp $
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/device.h>
+#include <sys/module.h>
 
 #include <sys/cpu.h>
 
@@ -135,6 +137,8 @@ static void	lostart(struct ifnet *);
 static int	loop_clone_create(struct if_clone *, int);
 static int	loop_clone_destroy(struct ifnet *);
 
+static void	loop_rtrequest(int, struct rtentry *, const struct rt_addrinfo *);
+
 static struct if_clone loop_cloner =
     IF_CLONE_INITIALIZER("lo", loop_clone_create, loop_clone_destroy);
 
@@ -142,8 +146,29 @@ void
 loopattach(int n)
 {
 
-	(void)loop_clone_create(&loop_cloner, 0);	/* lo0 always exists */
+#ifndef _MODULE
+	loop_clone_create(&loop_cloner, 0);	/* lo0 always exists */
+#endif
+}
+
+void
+loopinit(void)
+{
+
+	if (lo0ifp != NULL)	/* can happen in rump kernel */
+		return;
+
+#ifdef _MODULE
+	loop_clone_create(&loop_cloner, 0);	/* lo0 always exists */
+#endif
 	if_clone_attach(&loop_cloner);
+}
+
+static int
+loopdetach(void)
+{
+	/* no detach for now; we don't allow lo0 to be deleted */
+	return EBUSY;
 }
 
 static int
@@ -156,8 +181,10 @@ loop_clone_create(struct if_clone *ifc, int unit)
 	if_initname(ifp, ifc->ifc_name, unit);
 
 	ifp->if_mtu = LOMTU;
-	ifp->if_flags = IFF_LOOPBACK | IFF_MULTICAST | IFF_RUNNING;
-	ifp->if_extflags = IFEF_OUTPUT_MPSAFE;
+	ifp->if_flags = IFF_LOOPBACK | IFF_MULTICAST;
+#ifdef NET_MPSAFE
+	ifp->if_extflags = IFEF_MPSAFE;
+#endif
 	ifp->if_ioctl = loioctl;
 	ifp->if_output = looutput;
 #ifdef ALTQ
@@ -170,7 +197,8 @@ loop_clone_create(struct if_clone *ifc, int unit)
 	IFQ_SET_READY(&ifp->if_snd);
 	if (unit == 0)
 		lo0ifp = ifp;
-	if_attach(ifp);
+	if_initialize(ifp);
+	ifp->if_link_state = LINK_STATE_UP;
 	if_alloc_sadl(ifp);
 	bpf_attach(ifp, DLT_NULL, sizeof(u_int));
 #ifdef MBUFTRACE
@@ -181,6 +209,9 @@ loop_clone_create(struct if_clone *ifc, int unit)
 	MOWNER_ATTACH(ifp->if_mowner);
 #endif
 
+	ifp->if_flags |= IFF_RUNNING;
+	if_register(ifp);
+
 	return (0);
 }
 
@@ -190,6 +221,8 @@ loop_clone_destroy(struct ifnet *ifp)
 
 	if (ifp == lo0ifp)
 		return (EPERM);
+
+	ifp->if_flags &= ~IFF_RUNNING;
 
 #ifdef MBUFTRACE
 	MOWNER_DETACH(ifp->if_mowner);
@@ -217,12 +250,12 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 
 	MCLAIM(m, ifp->if_mowner);
 
-	KERNEL_LOCK(1, NULL);
+	KERNEL_LOCK_UNLESS_NET_MPSAFE();
 
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("looutput: no header mbuf");
 	if (ifp->if_flags & IFF_LOOPBACK)
-		bpf_mtap_af(ifp, dst->sa_family, m);
+		bpf_mtap_af(ifp, dst->sa_family, m, BPF_D_OUT);
 	m_set_rcvif(m, ifp);
 
 	if (rt && rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)) {
@@ -233,8 +266,8 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	}
 
 	pktlen = m->m_pkthdr.len;
-	ifp->if_opackets++;
-	ifp->if_obytes += pktlen;
+
+	if_statadd2(ifp, if_opackets, 1, if_obytes, pktlen);
 
 #ifdef ALTQ
 	/*
@@ -261,7 +294,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	}
 #endif /* ALTQ */
 
-	m_tag_delete_nonpersistent(m);
+	m_tag_delete_chain(m);
 
 #ifdef MPLS
 	if (rt != NULL && rt_gettag(rt) != NULL &&
@@ -283,9 +316,14 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		csum_flags = m->m_pkthdr.csum_flags;
 		KASSERT((csum_flags & ~(M_CSUM_IPv4|M_CSUM_UDPv4)) == 0);
 		if (csum_flags != 0 && IN_LOOPBACK_NEED_CHECKSUM(csum_flags)) {
-			ip_undefer_csum(m, 0, csum_flags);
+			in_undefer_cksum(m, 0, csum_flags);
+			m->m_pkthdr.csum_flags = 0;
+		} else {
+			/*
+			 * Do nothing. Pass M_CSUM_IPv4 and M_CSUM_UDPv4 as
+			 * they are to tell those are calculated and good.
+			 */
 		}
-		m->m_pkthdr.csum_flags = 0;
 		pktq = ip_pktq;
 		break;
 #endif
@@ -295,9 +333,14 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		KASSERT((csum_flags & ~M_CSUM_UDPv6) == 0);
 		if (csum_flags != 0 &&
 		    IN6_LOOPBACK_NEED_CHECKSUM(csum_flags)) {
-			ip6_undefer_csum(m, 0, csum_flags);
+			in6_undefer_cksum(m, 0, csum_flags);
+			m->m_pkthdr.csum_flags = 0;
+		} else {
+			/*
+			 * Do nothing. Pass M_CSUM_UDPv6 as
+			 * they are to tell those are calculated and good.
+			 */
 		}
-		m->m_pkthdr.csum_flags = 0;
 		m->m_flags |= M_LOOP;
 		pktq = ip6_pktq;
 		break;
@@ -321,8 +364,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		error = 0;
 
 		if (__predict_true(pktq_enqueue(pktq, m, 0))) {
-			ifp->if_ipackets++;
-			ifp->if_ibytes += pktlen;
+			if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
 		} else {
 			m_freem(m);
 			error = ENOBUFS;
@@ -337,13 +379,12 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		error = ENOBUFS;
 		goto out;
 	}
+	if_statadd2(ifp, if_ipackets, 1, if_ibytes, m->m_pkthdr.len);
 	IF_ENQUEUE(ifq, m);
 	schednetisr(isr);
-	ifp->if_ipackets++;
-	ifp->if_ibytes += m->m_pkthdr.len;
 	splx(s);
 out:
-	KERNEL_UNLOCK_ONE(NULL);
+	KERNEL_UNLOCK_UNLESS_NET_MPSAFE();
 	return error;
 }
 
@@ -398,8 +439,7 @@ lostart(struct ifnet *ifp)
 				splx(s);
 				return;
 			}
-			ifp->if_ipackets++;
-			ifp->if_ibytes += pktlen;
+			if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
 			splx(s);
 			continue;
 		}
@@ -411,16 +451,15 @@ lostart(struct ifnet *ifp)
 		}
 		IF_ENQUEUE(ifq, m);
 		schednetisr(isr);
-		ifp->if_ipackets++;
-		ifp->if_ibytes += pktlen;
+		if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
 		splx(s);
 	}
 }
 #endif /* ALTQ */
 
 /* ARGSUSED */
-void
-lortrequest(int cmd, struct rtentry *rt,
+static void
+loop_rtrequest(int cmd, struct rtentry *rt,
     const struct rt_addrinfo *info)
 {
 
@@ -445,7 +484,7 @@ loioctl(struct ifnet *ifp, u_long cmd, void *data)
 		ifp->if_flags |= IFF_UP;
 		ifa = (struct ifaddr *)data;
 		if (ifa != NULL)
-			ifa->ifa_rtrequest = lortrequest;
+			ifa->ifa_rtrequest = loop_rtrequest;
 		/*
 		 * Everything else is done at a higher level.
 		 */
@@ -487,3 +526,10 @@ loioctl(struct ifnet *ifp, u_long cmd, void *data)
 	}
 	return (error);
 }
+
+/*
+ * Module infrastructure
+ */
+#include "if_module.h"
+
+IF_MODULE(MODULE_CLASS_DRIVER, loop, NULL)

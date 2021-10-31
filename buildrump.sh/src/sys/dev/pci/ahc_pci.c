@@ -39,7 +39,7 @@
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGES.
  *
- * $Id: ahc_pci.c,v 1.71 2016/07/14 04:00:46 msaitoh Exp $
+ * $Id: ahc_pci.c,v 1.74 2019/11/10 21:16:36 chs Exp $
  *
  * //depot/aic7xxx/aic7xxx/aic7xxx_pci.c#57 $
  *
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahc_pci.c,v 1.71 2016/07/14 04:00:46 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahc_pci.c,v 1.74 2019/11/10 21:16:36 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -266,7 +266,7 @@ static ahc_device_setup_t ahc_aha394XX_setup;
 static ahc_device_setup_t ahc_aha494XX_setup;
 static ahc_device_setup_t ahc_aha398XX_setup;
 
-static struct ahc_pci_identity ahc_pci_ident_table [] =
+static const struct ahc_pci_identity ahc_pci_ident_table[] =
 {
 	/* aic7850 based controllers */
 	{
@@ -795,14 +795,7 @@ ahc_pci_attach(device_t parent, device_t self, void *aux)
 	aprint_normal(": %s\n", entry->name);
 
 	/* Keep information about the PCI bus */
-	bd = malloc(sizeof (struct ahc_pci_busdata), M_DEVBUF, M_NOWAIT);
-	if (bd == NULL) {
-		aprint_error("%s: unable to allocate bus-specific data\n",
-		    ahc_name(ahc));
-		return;
-	}
-	memset(bd, 0, sizeof(struct ahc_pci_busdata));
-
+	bd = malloc(sizeof (struct ahc_pci_busdata), M_DEVBUF, M_WAITOK | M_ZERO);
 	bd->pc = pa->pa_pc;
 	bd->tag = pa->pa_tag;
 	bd->func = pa->pa_function;
@@ -956,7 +949,8 @@ ahc_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	ahc->ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO, ahc_intr, ahc);
+	ahc->ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO, ahc_intr,
+	    ahc, device_xname(self));
 	if (ahc->ih == NULL) {
 		aprint_error_dev(ahc->sc_dev,
 		    "couldn't establish interrupt\n");
@@ -1022,11 +1016,7 @@ ahc_pci_attach(device_t parent, device_t self, void *aux)
 	}
 
 	ahc->seep_config = malloc(sizeof(*ahc->seep_config),
-				  M_DEVBUF, M_NOWAIT);
-	if (ahc->seep_config == NULL)
-		goto error_out;
-
-	memset(ahc->seep_config, 0, sizeof(*ahc->seep_config));
+				  M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/* See if we have a SEEPROM and perform auto-term */
 	ahc_check_extport(ahc, &sxfrctl1);

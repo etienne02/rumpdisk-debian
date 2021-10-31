@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwivar.h,v 1.18 2015/09/06 06:01:00 dholland Exp $ */
+/*	$NetBSD: if_iwivar.h,v 1.20 2020/03/20 13:33:23 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2004, 2005
@@ -146,6 +146,9 @@ struct iwi_softc {
 	pci_chipset_tag_t	sc_pct;
 	pcitag_t		sc_pcitag;
 	bus_size_t		sc_sz;
+	void			*sc_soft_ih;
+
+	kmutex_t		sc_media_mtx;	/* XXX */
 
 	struct sysctllog	*sc_sysctllog;
 

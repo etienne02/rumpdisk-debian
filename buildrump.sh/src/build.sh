@@ -1,5 +1,5 @@
 #! /usr/bin/env sh
-#	$NetBSD: build.sh,v 1.310 2016/06/03 00:00:01 kre Exp $
+#	$NetBSD: build.sh,v 1.355 2021/08/29 09:02:01 christos Exp $
 #
 # Copyright (c) 2001-2011 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -458,7 +458,8 @@ initdefaults()
 
 	[ -d usr.bin/make ] || cd "$(dirname $0)"
 	[ -d usr.bin/make ] ||
-	    bomb "build.sh must be run from the top source level"
+	    bomb "usr.bin/make not found; build.sh must be run from the top \
+level of source directory"
 	[ -f share/mk/bsd.own.mk ] ||
 	    bomb "src/share/mk is missing; please re-fetch the source tree"
 
@@ -493,7 +494,7 @@ initdefaults()
 	uname_m=$(uname -m 2>/dev/null)
 	uname_p=$(uname -p 2>/dev/null || echo "unknown")
 	case "${uname_p}" in
-	''|unknown|*[^-_A-Za-z0-9]*) uname_p="${uname_m}" ;;
+	''|unknown|*[!-_A-Za-z0-9]*) uname_p="${uname_m}" ;;
 	esac
 
 	id_u=$(id -u 2>/dev/null || /usr/xpg4/bin/id -u 2>/dev/null)
@@ -536,6 +537,7 @@ initdefaults()
 	do_rebuildmake=false
 	do_removedirs=false
 	do_tools=false
+	do_libs=false
 	do_cleandir=false
 	do_obj=false
 	do_build=false
@@ -557,6 +559,7 @@ initdefaults()
 	do_disk_image=false
 	do_params=false
 	do_rump=false
+	do_dtb=false
 
 	# done_{operation}=true if given operation has been done.
 	#
@@ -613,8 +616,7 @@ initdefaults()
 # and with a blank MACHINE_ARCH.
 #
 valid_MACHINE_ARCH='
-MACHINE=acorn26		MACHINE_ARCH=arm
-MACHINE=acorn32		MACHINE_ARCH=arm
+MACHINE=acorn32		MACHINE_ARCH=earmv4	ALIAS=eacorn32 DEFAULT
 MACHINE=algor		MACHINE_ARCH=mips64el	ALIAS=algor64
 MACHINE=algor		MACHINE_ARCH=mipsel	DEFAULT
 MACHINE=alpha		MACHINE_ARCH=alpha
@@ -625,40 +627,38 @@ MACHINE=arc		MACHINE_ARCH=mips64el	ALIAS=arc64
 MACHINE=arc		MACHINE_ARCH=mipsel	DEFAULT
 MACHINE=atari		MACHINE_ARCH=m68k
 MACHINE=bebox		MACHINE_ARCH=powerpc
-MACHINE=cats		MACHINE_ARCH=arm	ALIAS=ocats
 MACHINE=cats		MACHINE_ARCH=earmv4	ALIAS=ecats DEFAULT
 MACHINE=cesfic		MACHINE_ARCH=m68k
 MACHINE=cobalt		MACHINE_ARCH=mips64el	ALIAS=cobalt64
 MACHINE=cobalt		MACHINE_ARCH=mipsel	DEFAULT
 MACHINE=dreamcast	MACHINE_ARCH=sh3el
 MACHINE=emips		MACHINE_ARCH=mipseb
-MACHINE=epoc32		MACHINE_ARCH=arm
-MACHINE=evbarm		MACHINE_ARCH=arm	ALIAS=evboarm-el
-MACHINE=evbarm		MACHINE_ARCH=armeb	ALIAS=evboarm-eb
-MACHINE=evbarm		MACHINE_ARCH=earm	ALIAS=evbearm-el DEFAULT
-MACHINE=evbarm		MACHINE_ARCH=earmeb	ALIAS=evbearm-eb
-MACHINE=evbarm		MACHINE_ARCH=earmhf	ALIAS=evbearmhf-el
-MACHINE=evbarm		MACHINE_ARCH=earmhfeb	ALIAS=evbearmhf-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv4	ALIAS=evbearmv4-el
-MACHINE=evbarm		MACHINE_ARCH=earmv4eb	ALIAS=evbearmv4-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv5	ALIAS=evbearmv5-el
-MACHINE=evbarm		MACHINE_ARCH=earmv5eb	ALIAS=evbearmv5-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv6	ALIAS=evbearmv6-el
-MACHINE=evbarm		MACHINE_ARCH=earmv6hf	ALIAS=evbearmv6hf-el
-MACHINE=evbarm		MACHINE_ARCH=earmv6eb	ALIAS=evbearmv6-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv6hfeb	ALIAS=evbearmv6hf-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv7	ALIAS=evbearmv7-el
-MACHINE=evbarm		MACHINE_ARCH=earmv7eb	ALIAS=evbearmv7-eb
-MACHINE=evbarm		MACHINE_ARCH=earmv7hf	ALIAS=evbearmv7hf-el
-MACHINE=evbarm		MACHINE_ARCH=earmv7hfeb	ALIAS=evbearmv7hf-eb
-MACHINE=evbarm64	MACHINE_ARCH=aarch64	ALIAS=evbarm64-el DEFAULT
-MACHINE=evbarm64	MACHINE_ARCH=aarch64eb	ALIAS=evbarm64-eb
+MACHINE=epoc32		MACHINE_ARCH=earmv4	ALIAS=eepoc32 DEFAULT
+MACHINE=evbarm		MACHINE_ARCH=		NO_DEFAULT
+MACHINE=evbarm		MACHINE_ARCH=earmv4	ALIAS=evbearmv4-el	ALIAS=evbarmv4-el
+MACHINE=evbarm		MACHINE_ARCH=earmv4eb	ALIAS=evbearmv4-eb	ALIAS=evbarmv4-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv5	ALIAS=evbearmv5-el	ALIAS=evbarmv5-el
+MACHINE=evbarm		MACHINE_ARCH=earmv5hf	ALIAS=evbearmv5hf-el	ALIAS=evbarmv5hf-el
+MACHINE=evbarm		MACHINE_ARCH=earmv5eb	ALIAS=evbearmv5-eb	ALIAS=evbarmv5-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv5hfeb	ALIAS=evbearmv5hf-eb	ALIAS=evbarmv5hf-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv6	ALIAS=evbearmv6-el	ALIAS=evbarmv6-el
+MACHINE=evbarm		MACHINE_ARCH=earmv6hf	ALIAS=evbearmv6hf-el	ALIAS=evbarmv6hf-el
+MACHINE=evbarm		MACHINE_ARCH=earmv6eb	ALIAS=evbearmv6-eb	ALIAS=evbarmv6-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv6hfeb	ALIAS=evbearmv6hf-eb	ALIAS=evbarmv6hf-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv7	ALIAS=evbearmv7-el	ALIAS=evbarmv7-el
+MACHINE=evbarm		MACHINE_ARCH=earmv7eb	ALIAS=evbearmv7-eb	ALIAS=evbarmv7-eb
+MACHINE=evbarm		MACHINE_ARCH=earmv7hf	ALIAS=evbearmv7hf-el	ALIAS=evbarmv7hf-el
+MACHINE=evbarm		MACHINE_ARCH=earmv7hfeb	ALIAS=evbearmv7hf-eb	ALIAS=evbarmv7hf-eb
+MACHINE=evbarm		MACHINE_ARCH=aarch64	ALIAS=evbarm64-el	ALIAS=evbarm64
+MACHINE=evbarm		MACHINE_ARCH=aarch64eb	ALIAS=evbarm64-eb
 MACHINE=evbcf		MACHINE_ARCH=coldfire
 MACHINE=evbmips		MACHINE_ARCH=		NO_DEFAULT
 MACHINE=evbmips		MACHINE_ARCH=mips64eb	ALIAS=evbmips64-eb
 MACHINE=evbmips		MACHINE_ARCH=mips64el	ALIAS=evbmips64-el
 MACHINE=evbmips		MACHINE_ARCH=mipseb	ALIAS=evbmips-eb
 MACHINE=evbmips		MACHINE_ARCH=mipsel	ALIAS=evbmips-el
+MACHINE=evbmips		MACHINE_ARCH=mipsn64eb	ALIAS=evbmipsn64-eb
+MACHINE=evbmips		MACHINE_ARCH=mipsn64el	ALIAS=evbmipsn64-el
 MACHINE=evbppc		MACHINE_ARCH=powerpc	DEFAULT
 MACHINE=evbppc		MACHINE_ARCH=powerpc64	ALIAS=evbppc64
 MACHINE=evbsh3		MACHINE_ARCH=		NO_DEFAULT
@@ -667,14 +667,12 @@ MACHINE=evbsh3		MACHINE_ARCH=sh3el	ALIAS=evbsh3-el
 MACHINE=ews4800mips	MACHINE_ARCH=mipseb
 MACHINE=hp300		MACHINE_ARCH=m68k
 MACHINE=hppa		MACHINE_ARCH=hppa
-MACHINE=hpcarm		MACHINE_ARCH=arm	ALIAS=hpcoarm
 MACHINE=hpcarm		MACHINE_ARCH=earmv4	ALIAS=hpcearm DEFAULT
 MACHINE=hpcmips		MACHINE_ARCH=mipsel
 MACHINE=hpcsh		MACHINE_ARCH=sh3el
 MACHINE=i386		MACHINE_ARCH=i386
 MACHINE=ia64		MACHINE_ARCH=ia64
 MACHINE=ibmnws		MACHINE_ARCH=powerpc
-MACHINE=iyonix		MACHINE_ARCH=arm	ALIAS=oiyonix
 MACHINE=iyonix		MACHINE_ARCH=earm	ALIAS=eiyonix DEFAULT
 MACHINE=landisk		MACHINE_ARCH=sh3el
 MACHINE=luna68k		MACHINE_ARCH=m68k
@@ -685,7 +683,6 @@ MACHINE=mipsco		MACHINE_ARCH=mipseb
 MACHINE=mmeye		MACHINE_ARCH=sh3eb
 MACHINE=mvme68k		MACHINE_ARCH=m68k
 MACHINE=mvmeppc		MACHINE_ARCH=powerpc
-MACHINE=netwinder	MACHINE_ARCH=arm	ALIAS=onetwinder
 MACHINE=netwinder	MACHINE_ARCH=earmv4	ALIAS=enetwinder DEFAULT
 MACHINE=news68k		MACHINE_ARCH=m68k
 MACHINE=newsmips	MACHINE_ARCH=mipseb
@@ -708,7 +705,6 @@ MACHINE=sbmips		MACHINE_ARCH=mipseb	ALIAS=sbmips-eb
 MACHINE=sbmips		MACHINE_ARCH=mipsel	ALIAS=sbmips-el
 MACHINE=sgimips		MACHINE_ARCH=mips64eb	ALIAS=sgimips64
 MACHINE=sgimips		MACHINE_ARCH=mipseb	DEFAULT
-MACHINE=shark		MACHINE_ARCH=arm	ALIAS=oshark
 MACHINE=shark		MACHINE_ARCH=earmv4	ALIAS=eshark DEFAULT
 MACHINE=sparc		MACHINE_ARCH=sparc
 MACHINE=sparc64		MACHINE_ARCH=sparc64
@@ -716,7 +712,6 @@ MACHINE=sun2		MACHINE_ARCH=m68000
 MACHINE=sun3		MACHINE_ARCH=m68k
 MACHINE=vax		MACHINE_ARCH=vax
 MACHINE=x68k		MACHINE_ARCH=m68k
-MACHINE=zaurus		MACHINE_ARCH=arm	ALIAS=ozaurus
 MACHINE=zaurus		MACHINE_ARCH=earm	ALIAS=ezaurus DEFAULT
 '
 
@@ -813,7 +808,7 @@ validatearch()
 
 	case "${MACHINE_ARCH}" in
 	"")
-		bomb "No MACHINE_ARCH provided"
+		bomb "No MACHINE_ARCH provided. Use 'build.sh -m ${MACHINE} list-arch' to show options."
 		;;
 	esac
 
@@ -856,7 +851,7 @@ validatearch()
 
 # listarch -- list valid MACHINE/MACHINE_ARCH/ALIAS values,
 # optionally restricted to those where the MACHINE and/or MACHINE_ARCH
-# match specifed glob patterns.
+# match specified glob patterns.
 #
 listarch()
 {
@@ -951,11 +946,34 @@ setmakeenv()
 	eval "$1='$2'; export $1"
 	makeenv="${makeenv} $1"
 }
+safe_setmakeenv()
+{
+	case "$1" in
+
+	#	Look for any vars we want to prohibit here, like:
+	# Bad | Dangerous)	usage "Cannot override $1 with -V";;
+
+	# That first char is OK has already been verified.
+	*[!A-Za-z0-9_]*)	usage "Bad variable name (-V): '$1'";;
+	esac
+	setmakeenv "$@"
+}
 
 unsetmakeenv()
 {
 	eval "unset $1"
 	makeenv="${makeenv} $1"
+}
+safe_unsetmakeenv()
+{
+	case "$1" in
+
+	#	Look for any vars user should not be able to unset
+	# Needed | Must_Have)	usage "Variable $1 cannot be unset";;
+
+	[!A-Za-z_]* | *[!A-Za-z0-9_]*)	usage "Bad variable name (-Z): '$1'";;
+	esac
+	unsetmakeenv "$1"
 }
 
 # Given a variable name in $1, modify the variable in place as follows:
@@ -1003,9 +1021,9 @@ usage()
 	fi
 	cat <<_usage_
 
-Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
-                [-D dest] [-j njob] [-M obj] [-m mach] [-N noisy]
-                [-O obj] [-R release] [-S seed] [-T tools]
+Usage: ${progname} [-EhnoPRrUuxy] [-a arch] [-B buildid] [-C cdextras]
+                [-c compiler] [-D dest] [-j njob] [-M obj] [-m mach]
+                [-N noisy] [-O obj] [-R release] [-S seed] [-T tools]
                 [-V var=[value]] [-w wrapper] [-X x11src] [-Y extsrcsrc]
                 [-Z var]
                 operation [...]
@@ -1020,6 +1038,7 @@ Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
     makewrapper         Create ${toolprefix}make-\${MACHINE} wrapper and ${toolprefix}make.
                         Always performed.
     cleandir            Run "make cleandir".  [Default unless -u is used]
+    dtb			Build devicetree blobs.
     obj                 Run "make obj".  [Default unless -o is used]
     tools               Build and install tools.
     install=idir        Run "make installworld" to \`idir' to install all sets
@@ -1036,6 +1055,7 @@ Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
     sets                Create binary sets in
                         RELEASEDIR/RELEASEMACHINEDIR/binary/sets.
                         DESTDIR should be populated beforehand.
+    distsets            Same as "distribution sets".
     sourcesets          Create source sets in RELEASEDIR/source/sets.
     syspkgs             Create syspkgs in
                         RELEASEDIR/RELEASEMACHINEDIR/binary/syspkgs.
@@ -1056,9 +1076,14 @@ Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
     -a arch        Set MACHINE_ARCH to arch.  [Default: deduced from MACHINE]
     -B buildid     Set BUILDID to buildid.
     -C cdextras    Append cdextras to CDEXTRA variable for inclusion on CD-ROM.
+    -c compiler    Select compiler:
+                       clang
+                       gcc
+                   [Default: gcc]
     -D dest        Set DESTDIR to dest.  [Default: destdir.MACHINE]
     -E             Set "expert" mode; disables various safety checks.
-                   Should not be used without expert knowledge of the build system.
+                   Should not be used without expert knowledge of the build
+                   system.
     -h             Print this help message.
     -j njob        Run up to njob jobs in parallel; see make(1) -j.
     -M obj         Set obj root directory to obj; sets MAKEOBJDIRPREFIX.
@@ -1070,7 +1095,8 @@ Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
     -N noisy       Set the noisyness (MAKEVERBOSE) level of the build:
                        0   Minimal output ("quiet")
                        1   Describe what is occurring
-                       2   Describe what is occurring and echo the actual command
+                       2   Describe what is occurring and echo the actual
+                           command
                        3   Ignore the effect of the "@" prefix in make commands
                        4   Trace shell commands using the shell's -x flag
                    [Default: 2]
@@ -1078,6 +1104,8 @@ Usage: ${progname} [-EhnorUuxy] [-a arch] [-B buildid] [-C cdextras]
     -O obj         Set obj root directory to obj; sets a MAKEOBJDIR pattern.
                    Unsets MAKEOBJDIRPREFIX.
     -o             Set MKOBJDIRS=no; do not create objdirs at start of build.
+    -P             Set MKREPRO and MKREPRO_TIMESTAMP to the latest source
+                   CVS timestamp for reproducible builds.
     -R release     Set RELEASEDIR to release.  [Default: releasedir]
     -r             Remove contents of TOOLDIR and DESTDIR before building.
     -S seed        Set BUILDSEED to seed.  [Default: NetBSD-majorversion]
@@ -1103,7 +1131,7 @@ _usage_
 
 parseoptions()
 {
-	opts='a:B:C:D:Ehj:M:m:N:nO:oR:rS:T:UuV:w:X:xY:yZ:'
+	opts='a:B:C:c:D:Ehj:M:m:N:nO:oPR:rS:T:UuV:w:X:xY:yZ:'
 	opt_a=false
 	opt_m=false
 
@@ -1147,6 +1175,21 @@ parseoptions()
 		-C)
 			eval ${optargcmd}; resolvepaths OPTARG
 			CDEXTRA="${CDEXTRA}${CDEXTRA:+ }${OPTARG}"
+			;;
+
+		-c)
+			eval ${optargcmd}
+			case "${OPTARG}" in
+			gcc)	# default, no variables needed
+				;;
+			clang)	setmakeenv HAVE_LLVM yes
+				setmakeenv MKLLVM yes
+				setmakeenv MKGCC no
+				;;
+			#pcc)	...
+			#	;;
+			*)	bomb "Unknown compiler: ${OPTARG}"
+			esac
 			;;
 
 		-D)
@@ -1219,6 +1262,10 @@ parseoptions()
 			MKOBJDIRS=no
 			;;
 
+		-P)
+			MKREPRO=yes
+			;;
+
 		-R)
 			eval ${optargcmd}; resolvepath OPTARG
 			setmakeenv RELEASEDIR "${OPTARG}"
@@ -1252,11 +1299,14 @@ parseoptions()
 			eval ${optargcmd}
 			case "${OPTARG}" in
 		    # XXX: consider restricting which variables can be changed?
-			[a-zA-Z_][a-zA-Z_0-9]*=*)
-				setmakeenv "${OPTARG%%=*}" "${OPTARG#*=}"
+			[a-zA-Z_]*=*)
+				safe_setmakeenv "${OPTARG%%=*}" "${OPTARG#*=}"
+				;;
+			[a-zA-Z_]*)
+				safe_setmakeenv "${OPTARG}" ""
 				;;
 			*)
-				usage "-V argument must be of the form 'var=[value]'"
+				usage "-V argument must be of the form 'var[=value]'"
 				;;
 			esac
 			;;
@@ -1287,7 +1337,7 @@ parseoptions()
 		-Z)
 			eval ${optargcmd}
 		    # XXX: consider restricting which variables can be unset?
-			unsetmakeenv "${OPTARG}"
+			safe_unsetmakeenv "${OPTARG}"
 			;;
 
 		--)
@@ -1341,13 +1391,21 @@ parseoptions()
 			    bomb "Must supply a directory with \`install=...'"
 			;;
 
+		distsets)
+			operations="$(echo "$operations" | sed 's/distsets/distribution sets/')"
+			do_sets=true
+			op=distribution
+			;;
+
 		build|\
 		cleandir|\
 		distribution|\
+		dtb|\
 		install-image|\
 		iso-image-source|\
 		iso-image|\
 		kernels|\
+		libs|\
 		live-image|\
 		makewrapper|\
 		modules|\
@@ -1380,6 +1438,7 @@ parseoptions()
 		[ "${uname_s}" = "NetBSD" ] ||
 		    bomb "MACHINE must be set, or -m must be used, for cross builds."
 		MACHINE=${uname_m}
+		MACHINE_ARCH=${uname_p}
 	fi
 	if $opt_m && ! $opt_a; then
 		# Settings implied by the command line -m option
@@ -1399,6 +1458,7 @@ parseoptions()
 	export MAKEFLAGS MACHINE MACHINE_ARCH
 	setmakeenv USETOOLS "yes"
 	setmakeenv MAKEWRAPPERMACHINE "${makewrappermachine:-${MACHINE}}"
+	setmakeenv MAKE_OBJDIR_CHECK_WRITABLE no
 }
 
 # sanitycheck --
@@ -1425,7 +1485,7 @@ sanitycheck()
 	path="${path%:}"	# delete trailing ":"
 	path="${path%:.}"	# delete trailing ":."
 	case ":${path}:/" in
-	*:[!/]*)
+	*:[!/~]*)
 		if ${do_expertmode}; then
 			warning "PATH contains non-absolute components"
 		else
@@ -1434,8 +1494,82 @@ sanitycheck()
 		fi
 		;;
 	esac
+
+	while [ ${MKX11-no} = "yes" ]; do		# not really a loop
+		test -n "${X11SRCDIR}" && {
+		    test -d "${X11SRCDIR}" ||
+		    	bomb "X11SRCDIR (${X11SRCDIR}) does not exist (with -x)"
+		    break
+		}
+		for _xd in \
+		    "${NETBSDSRCDIR%/*}/xsrc" \
+		    "${NETBSDSRCDIR}/xsrc" \
+		    /usr/xsrc
+		do
+		    test -d "${_xd}" &&
+			setmakeenv X11SRCDIR "${_xd}" &&
+			break 2
+		done
+		bomb "Asked to build X11 but no xsrc"
+	done
 }
 
+# print_tooldir_make --
+# Try to find and print a path to an existing
+# ${TOOLDIR}/bin/${toolprefix}program
+print_tooldir_program()
+{
+	local possible_TOP_OBJ
+	local possible_TOOLDIR
+	local possible_program
+	local tooldir_program
+	local program=${1}
+
+	if [ -n "${TOOLDIR}" ]; then
+		echo "${TOOLDIR}/bin/${toolprefix}${program}"
+		return
+	fi
+
+	# Set host_ostype to something like "NetBSD-4.5.6-i386".  This
+	# is intended to match the HOST_OSTYPE variable in <bsd.own.mk>.
+	#
+	local host_ostype="${uname_s}-$(
+		echo "${uname_r}" | sed -e 's/([^)]*)//g' -e 's/ /_/g'
+		)-$(
+		echo "${uname_p}" | sed -e 's/([^)]*)//g' -e 's/ /_/g'
+		)"
+
+	# Look in a few potential locations for
+	# ${possible_TOOLDIR}/bin/${toolprefix}${program}.
+	# If we find it, then set possible_program.
+	#
+	# In the usual case (without interference from environment
+	# variables or /etc/mk.conf), <bsd.own.mk> should set TOOLDIR to
+	# "${_SRC_TOP_OBJ_}/tooldir.${host_ostype}".
+	#
+	# In practice it's difficult to figure out the correct value
+	# for _SRC_TOP_OBJ_.  In the easiest case, when the -M or -O
+	# options were passed to build.sh, then ${TOP_objdir} will be
+	# the correct value.  We also try a few other possibilities, but
+	# we do not replicate all the logic of <bsd.obj.mk>.
+	#
+	for possible_TOP_OBJ in \
+		"${TOP_objdir}" \
+		"${MAKEOBJDIRPREFIX:+${MAKEOBJDIRPREFIX}${TOP}}" \
+		"${TOP}" \
+		"${TOP}/obj" \
+		"${TOP}/obj.${MACHINE}"
+	do
+		[ -n "${possible_TOP_OBJ}" ] || continue
+		possible_TOOLDIR="${possible_TOP_OBJ}/tooldir.${host_ostype}"
+		possible_program="${possible_TOOLDIR}/bin/${toolprefix}${program}"
+		if [ -x "${possible_make}" ]; then
+			echo ${possible_program}
+			return;
+		fi
+	done
+	echo ""
+}
 # print_tooldir_make --
 # Try to find and print a path to an existing
 # ${TOOLDIR}/bin/${toolprefix}make, for use by rebuildmake() before a
@@ -1459,56 +1593,11 @@ sanitycheck()
 #
 print_tooldir_make()
 {
-	local possible_TOP_OBJ
-	local possible_TOOLDIR
 	local possible_make
+	local possible_TOOLDIR
 	local tooldir_make
 
-	if [ -n "${TOOLDIR}" ]; then
-		echo "${TOOLDIR}/bin/${toolprefix}make"
-		return 0
-	fi
-
-	# Set host_ostype to something like "NetBSD-4.5.6-i386".  This
-	# is intended to match the HOST_OSTYPE variable in <bsd.own.mk>.
-	#
-	local host_ostype="${uname_s}-$(
-		echo "${uname_r}" | sed -e 's/([^)]*)//g' -e 's/ /_/g'
-		)-$(
-		echo "${uname_p}" | sed -e 's/([^)]*)//g' -e 's/ /_/g'
-		)"
-
-	# Look in a few potential locations for
-	# ${possible_TOOLDIR}/bin/${toolprefix}make.
-	# If we find it, then set possible_make.
-	#
-	# In the usual case (without interference from environment
-	# variables or /etc/mk.conf), <bsd.own.mk> should set TOOLDIR to
-	# "${_SRC_TOP_OBJ_}/tooldir.${host_ostype}".
-	#
-	# In practice it's difficult to figure out the correct value
-	# for _SRC_TOP_OBJ_.  In the easiest case, when the -M or -O
-	# options were passed to build.sh, then ${TOP_objdir} will be
-	# the correct value.  We also try a few other possibilities, but
-	# we do not replicate all the logic of <bsd.obj.mk>.
-	#
-	for possible_TOP_OBJ in \
-		"${TOP_objdir}" \
-		"${MAKEOBJDIRPREFIX:+${MAKEOBJDIRPREFIX}${TOP}}" \
-		"${TOP}" \
-		"${TOP}/obj" \
-		"${TOP}/obj.${MACHINE}"
-	do
-		[ -n "${possible_TOP_OBJ}" ] || continue
-		possible_TOOLDIR="${possible_TOP_OBJ}/tooldir.${host_ostype}"
-		possible_make="${possible_TOOLDIR}/bin/${toolprefix}make"
-		if [ -x "${possible_make}" ]; then
-			break
-		else
-			unset possible_make
-		fi
-	done
-
+	possible_make=$(print_tooldir_program make)
 	# If the above didn't work, search the PATH for a suitable
 	# ${toolprefix}make, nbmake, bmake, or make.
 	#
@@ -1579,7 +1668,7 @@ rebuildmake()
 {
 	make="$(print_tooldir_make)"
 	if [ -n "${make}" ] && [ -x "${make}" ]; then
-		for f in usr.bin/make/*.[ch] usr.bin/make/lst.lib/*.[ch]; do
+		for f in usr.bin/make/*.[ch]; do
 			if [ "${f}" -nt "${make}" ]; then
 				statusmsg "${make} outdated" \
 					"(older than ${f}), needs building."
@@ -1597,23 +1686,23 @@ rebuildmake()
 		return
 	fi
 
+	# Silent configure with MAKEVERBOSE==0
+	if [ ${MAKEVERBOSE:-2} -eq 0 ]; then
+		configure_args=--silent
+	fi
+
 	statusmsg "Bootstrapping ${toolprefix}make"
 	${runcmd} cd "${tmpdir}"
-	${runcmd} env \
-\
-CC="${HOST_CC-cc}" \
-CPPFLAGS="${HOST_CPPFLAGS} -D_PATH_DEFSYSPATH="'\"'${NETBSDSRCDIR}/share/mk'\"' \
-CFLAGS="${HOST_CFLAGS--O}" \
-LDFLAGS="${HOST_LDFLAGS}" \
-\
-	    ${HOST_SH} "${TOP}/tools/make/configure" ||
+	${runcmd} env CC="${HOST_CC-cc}" CPPFLAGS="${HOST_CPPFLAGS}" \
+		CFLAGS="${HOST_CFLAGS--O}" LDFLAGS="${HOST_LDFLAGS}" \
+	    ${HOST_SH} "${TOP}/tools/make/configure" ${configure_args} ||
 	( cp ${tmpdir}/config.log ${tmpdir}-config.log
 	      bomb "Configure of ${toolprefix}make failed, see ${tmpdir}-config.log for details" )
 	${runcmd} ${HOST_SH} buildmake.sh ||
 	    bomb "Build of ${toolprefix}make failed"
 	make="${tmpdir}/${toolprefix}make"
 	${runcmd} cd "${TOP}"
-	${runcmd} rm -f usr.bin/make/*.o usr.bin/make/lst.lib/*.o
+	${runcmd} rm -f usr.bin/make/*.o
 	done_rebuildmake=true
 }
 
@@ -1876,7 +1965,7 @@ createmakewrapper()
 	eval cat <<EOF ${makewrapout}
 #! ${HOST_SH}
 # Set proper variables to allow easy "make" building of a NetBSD subtree.
-# Generated from:  \$NetBSD: build.sh,v 1.310 2016/06/03 00:00:01 kre Exp $
+# Generated from:  \$NetBSD: build.sh,v 1.355 2021/08/29 09:02:01 christos Exp $
 # with these arguments: ${_args}
 #
 
@@ -1907,8 +1996,8 @@ EOF
 
 make_in_dir()
 {
-	dir="$1"
-	op="$2"
+	local dir="$1"
+	local op="$2"
 	${runcmd} cd "${dir}" ||
 	    bomb "Failed to cd to \"${dir}\""
 	${runcmd} "${makewrapper}" ${parallel} ${op} ||
@@ -1928,6 +2017,21 @@ buildtools()
 	fi
 	make_in_dir tools build_install
 	statusmsg "Tools built to ${TOOLDIR}"
+}
+
+buildlibs()
+{
+	if [ "${MKOBJDIRS}" != "no" ]; then
+		${runcmd} "${makewrapper}" ${parallel} obj ||
+		    bomb "Failed to make obj"
+	fi
+	if [ "${MKUPDATE}" = "no" ]; then
+		make_in_dir lib cleandir
+	fi
+	make_in_dir . do-distrib-dirs
+	make_in_dir . includes
+	make_in_dir . do-lib
+	statusmsg "libs built"
 }
 
 getkernelconf()
@@ -1960,7 +2064,7 @@ getkernelconf()
 diskimage()
 {
 	ARG="$(echo $1 | tr '[:lower:]' '[:upper:]')"
-	[ -f "${DESTDIR}/etc/mtree/set.base" ] || 
+	[ -f "${DESTDIR}/etc/mtree/set.base" ] ||
 	    bomb "The release binaries must be built first"
 	kerneldir="${RELEASEDIR}/${RELEASEMACHINEDIR}/binary/kernel"
 	kernel="${kerneldir}/netbsd-${ARG}.gz"
@@ -2060,6 +2164,21 @@ buildmodules()
 	statusmsg "Successful build of kernel modules for NetBSD/${MACHINE} ${DISTRIBVER}"
 }
 
+builddtb()
+{
+	statusmsg "Building devicetree blobs for NetBSD/${MACHINE} ${DISTRIBVER}"
+	if [ "${MKOBJDIRS}" != "no" ]; then
+		make_in_dir sys/dtb obj
+	fi
+	if [ "${MKUPDATE}" = "no" ]; then
+		make_in_dir sys/dtb cleandir
+	fi
+	make_in_dir sys/dtb dependall
+	make_in_dir sys/dtb install
+
+	statusmsg "Successful build of devicetree blobs for NetBSD/${MACHINE} ${DISTRIBVER}"
+}
+
 installmodules()
 {
 	dir="$1"
@@ -2093,27 +2212,24 @@ installworld()
 #
 
 RUMP_LIBSETS='
-	-lrump,
-	-lrumpvfs -lrump,
-	-lrumpvfs -lrumpdev -lrump,
-	-lrumpnet -lrump,
-	-lrumpkern_tty -lrumpvfs -lrump,
-	-lrumpfs_tmpfs -lrumpvfs -lrump,
-	-lrumpfs_ffs -lrumpfs_msdos -lrumpvfs -lrumpdev_disk -lrumpdev -lrump,
+	-lrumpvfs_nofifofs -lrumpvfs -lrump,
+	-lrumpvfs_nofifofs -lrumpvfs -lrumpdev -lrump,
+	-lrumpvfs_nofifofs -lrumpvfs
 	-lrumpnet_virtif -lrumpnet_netinet -lrumpnet_net -lrumpnet -lrump,
-	-lrumpnet_sockin -lrumpfs_smbfs -lrumpdev_netsmb
-	    -lrumpkern_crypto -lrumpdev -lrumpnet -lrumpvfs -lrump,
-	-lrumpnet_sockin -lrumpfs_nfs -lrumpnet -lrumpvfs -lrump,
+	-lrumpkern_tty -lrumpvfs_nofifofs -lrumpvfs -lrump,
+	-lrumpfs_tmpfs -lrumpvfs_nofifofs -lrumpvfs -lrump,
+	-lrumpfs_ffs -lrumpfs_msdos -lrumpvfs_nofifofs -lrumpvfs -lrumpdev_disk -lrumpdev -lrump,
+	-lrumpnet_virtif -lrumpnet_netinet -lrumpnet_net -lrumpnet
+	    -lrumpdev -lrumpvfs_nofifofs -lrumpvfs -lrump,
+	-lrumpnet_sockin -lrumpfs_nfs
+	-lrumpnet_virtif -lrumpnet_netinet -lrumpnet_net -lrumpnet
+	-lrumpvfs_nofifofs -lrumpvfs -lrump,
 	-lrumpdev_cgd -lrumpdev_raidframe -lrumpdev_disk -lrumpdev_rnd
-	    -lrumpdev_dm -lrumpdev -lrumpvfs -lrumpkern_crypto -lrump'
+	    -lrumpdev_dm -lrumpdev -lrumpvfs_nofifofs -lrumpvfs -lrumpkern_crypto -lrump'
 dorump()
 {
 	local doclean=""
 	local doobjs=""
-
-	# we cannot link libs without building csu, and that leads to lossage
-	[ "${1}" != "rumptest" ] && bomb 'build.sh rump not yet functional. ' \
-	    'did you mean "rumptest"?'
 
 	export RUMPKERN_ONLY=1
 	# create obj and distrib dirs
@@ -2151,7 +2267,7 @@ dorump()
 	for set in ${RUMP_LIBSETS} ; do
 		IFS="${oIFS}"
 		${runcmd} ${tool_ld} -nostdlib -L${DESTDIR}/usr/lib	\
-		    -static --whole-archive ${set} 2>&1 -o /tmp/rumptest.$$ | \
+		    -static --whole-archive -lpthread -lc ${set} 2>&1 -o /tmp/rumptest.$$ | \
 		      awk -v quirks="${md_quirks}" '
 			/undefined reference/ &&
 			    !/more undefined references.*follow/{
@@ -2169,6 +2285,66 @@ dorump()
 		[ $? -ne 0 ] && bomb "Testlink of rump failed: ${set}"
 	done
 	statusmsg "Rump build&link tests successful"
+}
+
+repro_date() {
+	# try the bsd date fail back the the linux one
+	date -u -r "$1" 2> /dev/null || date -u -d "@$1"
+}
+
+setup_mkrepro()
+{
+	if [ ${MKREPRO-no} != "yes" ]; then
+		return
+	fi
+
+	local dirs=${NETBSDSRCDIR-/usr/src}/
+	if [ ${MKX11-no} = "yes" ]; then
+		dirs="$dirs ${X11SRCDIR-/usr/xsrc}/"
+	fi
+
+	local cvslatest=$(print_tooldir_program cvslatest)
+	if [ ! -x "${cvslatest}" ]; then
+		buildtools
+	fi
+
+	local cvslatestflags=
+	if ${do_expertmode}; then
+		cvslatestflags=-i
+	fi
+
+	MKREPRO_TIMESTAMP=0
+	local d
+	local t
+	local vcs
+	for d in ${dirs}; do
+		if [ -d "${d}CVS" ]; then
+			t=$("${cvslatest}" ${cvslatestflags} "${d}")
+			vcs=cvs
+		elif [ -d "${d}.git" ]; then
+			t=$(cd "${d}" && git log -1 --format=%ct)
+			vcs=git
+		elif [ -d "${d}.hg" ]; then
+			t=$(cd "${d}" &&
+			    hg log -r . --template '{date(date, "%s")}\n')
+			vcs=hg
+		else
+			bomb "Cannot determine VCS for '$d'"
+		fi
+
+		if [ -z "$t" ]; then
+			bomb "Failed to get timestamp for vcs=$vcs in '$d'"
+		fi
+
+		#echo "latest $d $vcs $t"
+		if [ "$t" -gt "$MKREPRO_TIMESTAMP" ]; then
+			MKREPRO_TIMESTAMP="$t"
+		fi
+	done
+
+	[ "${MKREPRO_TIMESTAMP}" != "0" ] || bomb "Failed to compute timestamp"
+	statusmsg2 "MKREPRO_TIMESTAMP" "$(repro_date "${MKREPRO_TIMESTAMP}")"
+	export MKREPRO MKREPRO_TIMESTAMP
 }
 
 main()
@@ -2201,6 +2377,7 @@ main()
 	rebuildmake
 	validatemakeparams
 	createmakewrapper
+	setup_mkrepro
 
 	# Perform the operations.
 	#
@@ -2214,6 +2391,9 @@ main()
 		tools)
 			buildtools
 			;;
+		libs)
+			buildlibs
+			;;
 
 		sets)
 			statusmsg "Building sets from pre-populated ${DESTDIR}"
@@ -2223,7 +2403,13 @@ main()
 			statusmsg "Built sets to ${setdir}"
 			;;
 
-		cleandir|obj|build|distribution|release|sourcesets|syspkgs|params)
+		build|distribution|release)
+			${runcmd} "${makewrapper}" ${parallel} ${op} ||
+			    bomb "Failed to make ${op}"
+			statusmsg "Successful make ${op}"
+			;;
+
+		cleandir|obj|sourcesets|syspkgs|params)
 			${runcmd} "${makewrapper}" ${parallel} ${op} ||
 			    bomb "Failed to make ${op}"
 			statusmsg "Successful make ${op}"
@@ -2270,6 +2456,10 @@ main()
 			diskimage "${arg}"
 			;;
 
+		dtb)
+			builddtb
+			;;
+
 		modules)
 			buildmodules
 			;;
@@ -2294,7 +2484,17 @@ main()
 			installworld "${arg}"
 			;;
 
-		rump|rumptest)
+		rump)
+			make_in_dir . do-distrib-dirs
+			make_in_dir . includes
+			make_in_dir lib/csu dependall
+			make_in_dir lib/csu install
+			make_in_dir external/gpl3/gcc/lib/libgcc dependall
+			make_in_dir external/gpl3/gcc/lib/libgcc install
+			dorump "${op}"
+			;;
+
+		rumptest)
 			dorump "${op}"
 			;;
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.184 2016/07/07 06:55:38 msaitoh Exp $ */
+/*	$NetBSD: trap.c,v 1.193 2021/02/02 08:18:42 martin Exp $ */
 
 /*
  * Copyright (c) 1996-2002 Eduardo Horvath.  All rights reserved.
@@ -50,11 +50,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.184 2016/07/07 06:55:38 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.193 2021/02/02 08:18:42 martin Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
-#include "opt_compat_svr4.h"
 #include "opt_compat_netbsd32.h"
 
 #include <sys/param.h>
@@ -84,12 +83,6 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.184 2016/07/07 06:55:38 msaitoh Exp $");
 #include <machine/db_machdep.h>
 #else
 #include <machine/frame.h>
-#endif
-#ifdef COMPAT_SVR4
-#include <machine/svr4_machdep.h>
-#endif
-#ifdef COMPAT_SVR4_32
-#include <machine/svr4_32_machdep.h>
 #endif
 
 #include <sparc64/sparc64/cache.h>
@@ -601,9 +594,7 @@ dopanic:
 			}
 			/* NOTREACHED */
 		}
-#if defined(COMPAT_SVR4) || defined(COMPAT_SVR4_32)
-badtrap:
-#endif
+
 		/* the following message is gratuitous */
 		/* ... but leave it in until we find anything */
 		printf("%s[%d]: unimplemented software trap 0x%x\n",
@@ -616,33 +607,12 @@ badtrap:
 		ksi.ksi_addr = (void *)pc;
 		break;
 
-#if defined(COMPAT_SVR4) || defined(COMPAT_SVR4_32)
-	case T_SVR4_GETCC:
-	case T_SVR4_SETCC:
-	case T_SVR4_GETPSR:
-	case T_SVR4_SETPSR:
-	case T_SVR4_GETHRTIME:
-	case T_SVR4_GETHRVTIME:
-	case T_SVR4_GETHRESTIME:
-#if defined(COMPAT_SVR4_32)
-		if (svr4_32_trap(type, l))
-			break;
-#endif
-#if defined(COMPAT_SVR4)
-		if (svr4_trap(type, l))
-			break;
-#endif
-		goto badtrap;
-#endif
-
 	case T_AST:
 		want_ast = 0;
 		if (l->l_pflag & LP_OWEUPC) {
 			l->l_pflag &= ~LP_OWEUPC;
 			ADDUPROF(l);
 		}
-		if (want_resched)
-			preempt();
 		break;
 
 	case T_INST_EXCEPT:
@@ -653,6 +623,7 @@ badtrap:
 		       l->l_proc->p_pid, l->l_lid, l->l_proc->p_comm,
 		       pc, type, type < N_TRAP_TYPES ? trap_type[type] : T);
 #endif
+		/* FALLTHROUGH */
 	case T_ILLINST:
 #if defined(DDB) && defined(DEBUG)
 		if (trapdebug & TDB_STOPSIG)
@@ -729,15 +700,27 @@ badtrap:
 	case T_LDDF_ALIGN:
 	case T_STDF_ALIGN:
 		{
-		int64_t dsfsr, dsfar=0;
+		int64_t dsfsr = 0, dsfar = 0;
 #ifdef DEBUG
-		int64_t isfsr;
+		int64_t isfsr = 0;
 #endif
-		dsfsr = ldxa(SFSR, ASI_DMMU);
-		if (dsfsr & SFSR_FV)
-			dsfar = ldxa(SFAR, ASI_DMMU);
+		if (!CPU_ISSUN4V) {
+			dsfsr = ldxa(SFSR, ASI_DMMU);
+			if (dsfsr & SFSR_FV)
+				dsfar = ldxa(SFAR, ASI_DMMU);
+		} else {
+			paddr_t mmu_fsa_dfa = cpus->ci_mmufsa
+			  + offsetof(struct mmufsa, dfa);
+			dsfar = ldxa(mmu_fsa_dfa, ASI_PHYS_CACHED);
+		}
 #ifdef DEBUG
-		isfsr = ldxa(SFSR, ASI_IMMU);
+		if (!CPU_ISSUN4V) {
+			isfsr = ldxa(SFSR, ASI_IMMU);
+		} else {
+		  paddr_t mmu_fsa_ifa = cpus->ci_mmufsa
+		    + offsetof(struct mmufsa, ifa);
+			isfsr = ldxa(mmu_fsa_ifa, ASI_PHYS_CACHED);
+		}
 #endif
 		/* 
 		 * If we're busy doing copyin/copyout continue
@@ -751,10 +734,34 @@ badtrap:
 		
 #ifdef DEBUG
 #define fmt64(x)	(u_int)((x)>>32), (u_int)((x))
-		printf("Alignment error: pid=%d.%d comm=%s dsfsr=%08x:%08x "
-		       "dsfar=%x:%x isfsr=%08x:%08x pc=%lx\n",
-		       l->l_proc->p_pid, l->l_lid, l->l_proc->p_comm, fmt64(dsfsr), fmt64(dsfar),
-		       fmt64(isfsr), pc);
+		if (!CPU_ISSUN4V) {
+			printf("Alignment error: pid=%d.%d comm=%s dsfsr=%08x:%08x "
+			       "dsfar=%x:%x isfsr=%08x:%08x pc=%lx\n",
+			       l->l_proc->p_pid, l->l_lid, l->l_proc->p_comm, fmt64(dsfsr), fmt64(dsfar),
+			       fmt64(isfsr), pc);
+		} else {
+		  
+			printf("Alignment error: pid=%d.%d comm=%s pc=%lx\n",
+			       l->l_proc->p_pid, l->l_lid, l->l_proc->p_comm, pc);
+			paddr_t mmufsa_ift_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ift);
+			paddr_t mmufsa_ifa_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ifa);
+			paddr_t mmufsa_ifc_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ifc);
+			paddr_t mmufsa_dft_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dft);
+			paddr_t mmufsa_dfa_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dfa);
+			paddr_t mmufsa_dfc_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dfc);
+			int64_t ift = ldxa(mmufsa_ift_addr, ASI_PHYS_CACHED);
+			printf("ift = %016lx\n", ift);
+			int64_t ifa = ldxa(mmufsa_ifa_addr, ASI_PHYS_CACHED);
+			printf("ifa = %016lx\n", ifa);
+			int64_t ifc = ldxa(mmufsa_ifc_addr, ASI_PHYS_CACHED);
+			printf("ifc = %016lx\n", ifc);
+			int64_t dft = ldxa(mmufsa_dft_addr, ASI_PHYS_CACHED);
+			printf("dft = %016lx\n", dft);
+			int64_t dfa = ldxa(mmufsa_dfa_addr, ASI_PHYS_CACHED);
+			printf("dfa = %016lx\n", dfa);
+			int64_t dfc = ldxa(mmufsa_dfc_addr, ASI_PHYS_CACHED);
+			printf("dfc = %016lx\n", dfc);
+		}
 #endif
 		
 #if defined(DDB) && defined(DEBUG)
@@ -1084,6 +1091,25 @@ data_access_fault(struct trapframe64 *tf, unsigned int type, vaddr_t pc,
 	LWP_CACHE_CREDS(l, p);
 	sticks = p->p_sticks;
 	tstate = tf->tf_tstate;
+
+#ifdef _LP64
+	/* deal with invalid VAs early */
+	if (__predict_false(addr >= (1UL<<HOLESHIFT) && addr < (1UL<<63))) {
+
+		if (tstate & TSTATE_PRIV)
+			panic("fault type %u for invalid va %lx", type, addr);
+
+		KSI_INIT_TRAP(&ksi);
+		ksi.ksi_signo = SIGSEGV;
+		ksi.ksi_code = SEGV_ACCERR;
+		ksi.ksi_trap = type;
+		ksi.ksi_addr = (void *)pc;
+		trapsignal(l, &ksi);
+		userret(l, pc, sticks);
+		share_fpu(l, tf);
+		return;
+	}
+#endif
 
 	/* Find the faulting va to give to uvm_fault */
 	va = trunc_page(addr);

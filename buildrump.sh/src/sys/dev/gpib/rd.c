@@ -1,4 +1,4 @@
-/*	$NetBSD: rd.c,v 1.41 2016/07/11 11:31:50 msaitoh Exp $ */
+/*	$NetBSD: rd.c,v 1.44 2021/07/31 20:29:37 andvar Exp $ */
 
 /*-
  * Copyright (c) 1996-2003 The NetBSD Foundation, Inc.
@@ -72,7 +72,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rd.c,v 1.41 2016/07/11 11:31:50 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rd.c,v 1.44 2021/07/31 20:29:37 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -95,6 +95,8 @@ __KERNEL_RCSID(0, "$NetBSD: rd.c,v 1.41 2016/07/11 11:31:50 msaitoh Exp $");
 #include <dev/gpib/cs80busvar.h>
 
 #include <dev/gpib/rdreg.h>
+
+#include "ioconf.h"
 
 #ifdef DEBUG
 int	rddebug = 0xff;
@@ -279,8 +281,6 @@ const struct cdevsw rd_cdevsw = {
 	.d_discard = nodiscard,
 	.d_flag = D_DISK
 };
-
-extern struct cfdriver rd_cd;
 
 int
 rdlookup(int id, int slave, int punit)
@@ -538,7 +538,7 @@ rdclose(dev_t dev, int flag, int mode, struct lwp *l)
 	dk->dk_openmask = dk->dk_copenmask | dk->dk_bopenmask;
 	/*
 	 * On last close, we wait for all activity to cease since
-	 * the label/parition info will become invalid.  Since we
+	 * the label/partition info will become invalid.  Since we
 	 * might sleep, we must block any opens while we are here.
 	 * Note we don't have to about other closes since we know
 	 * we are the last one.
@@ -871,7 +871,7 @@ rderror(struct rd_softc *sc)
 	}
 	/*
 	 * Only report error if we have reached the error reporting
-	 * threshhold.  By default, this will only report after the
+	 * threshold.  By default, this will only report after the
 	 * retry limit has been exceeded.
 	 */
 	if (sc->sc_errcnt < rderrthresh)

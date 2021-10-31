@@ -1,4 +1,4 @@
-/*	$NetBSD: powernow.c,v 1.9 2016/03/30 21:16:22 christos Exp $ */
+/*	$NetBSD: powernow.c,v 1.11 2020/10/25 16:39:00 nia Exp $ */
 /*	$OpenBSD: powernow-k8.c,v 1.8 2006/06/16 05:58:50 gwk Exp $ */
 
 /*-
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: powernow.c,v 1.9 2016/03/30 21:16:22 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: powernow.c,v 1.11 2020/10/25 16:39:00 nia Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -249,7 +249,7 @@ powernow_detach(device_t self, int flags)
 static int
 powernow_sysctl(device_t self)
 {
-	const struct sysctlnode *freqnode, *node, *pnownode;
+	const struct sysctlnode *freqnode, *node, *cpunode;
 	struct powernow_softc *sc = device_private(self);
 	int rv;
 
@@ -263,14 +263,14 @@ powernow_sysctl(device_t self)
 	if (rv != 0)
 		goto fail;
 
-	rv = sysctl_createv(&sc->sc_log, 0, &node, &pnownode,
-	    0, CTLTYPE_NODE, "powernow", NULL,
+	rv = sysctl_createv(&sc->sc_log, 0, &node, &cpunode,
+	    0, CTLTYPE_NODE, "cpu", NULL,
 	    NULL, 0, NULL, 0, CTL_CREATE, CTL_EOL);
 
 	if (rv != 0)
 		goto fail;
 
-	rv = sysctl_createv(&sc->sc_log, 0, &pnownode, &freqnode,
+	rv = sysctl_createv(&sc->sc_log, 0, &cpunode, &freqnode,
 	    0, CTLTYPE_NODE, "frequency", NULL,
 	    NULL, 0, NULL, 0, CTL_CREATE, CTL_EOL);
 
@@ -383,9 +383,6 @@ powernow_k7_init(device_t self)
 
 	sc->sc_state = kmem_alloc(sizeof(*sc->sc_state), KM_SLEEP);
 
-	if (sc->sc_state == NULL)
-		return ENOMEM;
-
 	if (sc->sc_ci->ci_signature == AMD_ERRATA_A0_CPUSIG)
 		sc->sc_flags |= PN7_FLAG_ERRATA_A0;
 
@@ -409,11 +406,6 @@ powernow_k7_init(device_t self)
 
 	sc->sc_freqs_len = sc->sc_state->n_states * (sizeof("9999 ") - 1) + 1;
 	sc->sc_freqs = kmem_zalloc(sc->sc_freqs_len, KM_SLEEP);
-
-	if (sc->sc_freqs == NULL) {
-		rv = ENOMEM;
-		goto fail;
-	}
 
 	for (i = 0; i < sc->sc_state->n_states; i++) {
 
@@ -672,9 +664,6 @@ powernow_k8_init(device_t self)
 
 	sc->sc_state = kmem_alloc(sizeof(*sc->sc_state), KM_SLEEP);
 
-	if (sc->sc_state == NULL)
-		return ENOMEM;
-
 	status = rdmsr(MSR_AMDK7_FIDVID_STATUS);
 	maxfid = PN8_STA_MFID(status);
 	maxvid = PN8_STA_MVID(status);
@@ -691,11 +680,6 @@ powernow_k8_init(device_t self)
 
 	sc->sc_freqs_len = sc->sc_state->n_states * (sizeof("9999 ") - 1) + 1;
 	sc->sc_freqs = kmem_zalloc(sc->sc_freqs_len, KM_SLEEP);
-
-	if (sc->sc_freqs == NULL) {
-		rv = ENOMEM;
-		goto fail;
-	}
 
 	for (i = 0; i < sc->sc_state->n_states; i++) {
 

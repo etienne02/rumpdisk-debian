@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_exec.c,v 1.21 2012/02/19 21:06:38 rmind Exp $ */
+/*	$NetBSD: linux32_exec.c,v 1.24 2018/08/10 21:44:58 pgoyette Exp $ */
 
 /*-
  * Copyright (c) 1994-2007 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux32_exec.c,v 1.21 2012/02/19 21:06:38 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux32_exec.c,v 1.24 2018/08/10 21:44:58 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -55,6 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux32_exec.c,v 1.21 2012/02/19 21:06:38 rmind Exp 
 #include <compat/linux32/linux32_syscall.h>
 
 extern struct sysent linux32_sysent[];
+extern const uint32_t linux32_sysent_nomodbits[];
 extern const char * const linux32_syscallnames[];
 extern char linux32_sigcode[], linux32_esigcode[];
 
@@ -74,10 +75,10 @@ struct emul emul_linux32 = {
 	.e_nsysent =		LINUX32_SYS_NSYSENT,
 #endif
 	.e_sysent =		linux32_sysent,
+	.e_nomodbits =		linux32_sysent_nomodbits,
 	.e_syscallnames =	linux32_syscallnames,
 	.e_sendsig =		linux32_sendsig,
 	.e_trapsignal =		linux_trapsignal,
-	.e_tracesig =		NULL,
 	.e_sigcode =		linux32_sigcode,
 	.e_esigcode =		linux32_esigcode,
 	.e_sigobject =		&emul_linux32_object,
@@ -89,7 +90,6 @@ struct emul emul_linux32 = {
 	.e_lwp_exit =		linux_e_lwp_exit,
 	.e_syscall_intern =	linux32_syscall_intern,
 	.e_sysctlovly =		NULL,
-	.e_fault =		NULL,
 	.e_vm_default_addr =	netbsd32_vm_default_addr,
 	.e_usertrap =		NULL,
 	.e_ucsize =		0,

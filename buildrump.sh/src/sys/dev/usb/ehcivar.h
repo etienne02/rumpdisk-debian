@@ -1,4 +1,4 @@
-/*	$NetBSD: ehcivar.h,v 1.43 2016/04/23 10:15:31 skrll Exp $ */
+/*	$NetBSD: ehcivar.h,v 1.48 2020/03/15 07:56:19 skrll Exp $ */
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@ typedef struct ehci_soft_qtd {
 	uint16_t len;
 } ehci_soft_qtd_t;
 #define EHCI_SQTD_ALIGN	MAX(EHCI_QTD_ALIGN, CACHE_LINE_SIZE)
-#define EHCI_SQTD_SIZE ((sizeof(struct ehci_soft_qtd) + EHCI_SQTD_ALIGN - 1) & -EHCI_SQTD_ALIGN)
+#define EHCI_SQTD_SIZE (roundup(sizeof(struct ehci_soft_qtd), EHCI_SQTD_ALIGN))
 #define EHCI_SQTD_CHUNK (EHCI_PAGE_SIZE / EHCI_SQTD_SIZE)
 
 typedef struct ehci_soft_qh {
@@ -56,7 +56,7 @@ typedef struct ehci_soft_qh {
 	int offs;			/* QH's offset in usb_dma_t */
 	int islot;
 } ehci_soft_qh_t;
-#define EHCI_SQH_SIZE ((sizeof(struct ehci_soft_qh) + EHCI_QH_ALIGN - 1) / EHCI_QH_ALIGN * EHCI_QH_ALIGN)
+#define EHCI_SQH_SIZE (roundup(sizeof(struct ehci_soft_qh), EHCI_QH_ALIGN))
 #define EHCI_SQH_CHUNK (EHCI_PAGE_SIZE / EHCI_SQH_SIZE)
 
 typedef struct ehci_soft_itd {
@@ -80,18 +80,17 @@ typedef struct ehci_soft_itd {
 	int slot;
 	struct timeval t; /* store free time */
 } ehci_soft_itd_t;
-#define EHCI_ITD_SIZE ((sizeof(struct ehci_soft_itd) + EHCI_QH_ALIGN - 1) / EHCI_ITD_ALIGN * EHCI_ITD_ALIGN)
+#define EHCI_ITD_SIZE (roundup(sizeof(struct ehci_soft_itd), EHCI_ITD_ALIGN))
 #define EHCI_ITD_CHUNK (EHCI_PAGE_SIZE / EHCI_ITD_SIZE)
 
 #define ehci_soft_sitd_t ehci_soft_itd_t
 #define ehci_soft_sitd ehci_soft_itd
 #define sc_softsitds sc_softitds
-#define EHCI_SITD_SIZE ((sizeof(struct ehci_soft_sitd) + EHCI_QH_ALIGN - 1) / EHCI_SITD_ALIGN * EHCI_SITD_ALIGN)
+#define EHCI_SITD_SIZE (roundup(sizeof(struct ehci_soft_sitd), EHCI_SITD_ALIGN))
 #define EHCI_SITD_CHUNK (EHCI_PAGE_SIZE / EHCI_SITD_SIZE)
 
 struct ehci_xfer {
 	struct usbd_xfer ex_xfer;
-	struct usb_task ex_aborttask;
 	TAILQ_ENTRY(ehci_xfer) ex_next; /* list of active xfers */
 	enum {
 		EX_NONE,
@@ -177,14 +176,21 @@ typedef struct ehci_softc {
 #define EHCIF_DROPPED_INTR_WORKAROUND	0x01
 #define EHCIF_ETTF			0x02 /* Emb. Transaction Translater func. */
 
-	char sc_vendor[32];		/* vendor string for root hub */
-	int sc_id_vendor;		/* vendor ID for root hub */
-
 	uint32_t sc_cmd;		/* shadow of cmd reg during suspend */
 
 	u_int sc_ncomp;
 	u_int sc_npcomp;
 	device_t sc_comps[EHCI_COMPANION_MAX];
+
+	/* This chunk to handle early RB_ASKNAME hand over. */
+	callout_t sc_compcallout;
+	kmutex_t sc_complock;
+	kcondvar_t sc_compcv;
+	enum {
+		CO_EARLY,
+		CO_SCHED,
+		CO_DONE,
+	} sc_comp_state;
 
 	usb_dma_t sc_fldma;
 	ehci_link_t *sc_flist;
@@ -211,8 +217,6 @@ typedef struct ehci_softc {
 	uint8_t sc_istthreshold;	/* ISOC Scheduling Threshold (uframes) */
 	struct usbd_xfer *sc_intrxfer;
 	char sc_isreset[EHCI_MAX_PORTS];
-	char sc_softwake;
-	kcondvar_t sc_softwake_cv;
 
 	uint32_t sc_eintrs;
 	ehci_soft_qh_t *sc_async_head;

@@ -1,4 +1,4 @@
-/*	$NetBSD: tty_pty.c,v 1.142 2015/08/20 09:45:45 christos Exp $	*/
+/*	$NetBSD: tty_pty.c,v 1.146 2020/12/11 03:00:09 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tty_pty.c,v 1.142 2015/08/20 09:45:45 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tty_pty.c,v 1.146 2020/12/11 03:00:09 thorpej Exp $");
 
 #include "opt_ptm.h"
 
@@ -675,7 +675,7 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 				 * opened again while we were out uiomoving.
 				 */
 				if (c & TIOCPKT_IOCTL) {
-					cc = min(uio->uio_resid,
+					cc = uimin(uio->uio_resid,
 						sizeof(tp->t_termios));
 					uiomove((void *) &tp->t_termios,
 						cc, uio);
@@ -714,7 +714,7 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 			error = EIO;
 	}
 	while (uio->uio_resid > 0 && error == 0) {
-		cc = q_to_b(&tp->t_outq, bf, min(uio->uio_resid, BUFSIZ));
+		cc = q_to_b(&tp->t_outq, bf, uimin(uio->uio_resid, BUFSIZ));
 		if (cc <= 0)
 			break;
 		mutex_spin_exit(&tty_lock);
@@ -750,8 +750,8 @@ again:
 			goto block;
 		while (uio->uio_resid > 0 && tp->t_canq.c_cc < TTYHOG) {
 			if (cc == 0) {
-				cc = min(uio->uio_resid, BUFSIZ);
-				cc = min(cc, TTYHOG - tp->t_canq.c_cc);
+				cc = uimin(uio->uio_resid, BUFSIZ);
+				cc = uimin(cc, TTYHOG - tp->t_canq.c_cc);
 				cp = locbuf;
 				mutex_spin_exit(&tty_lock);
 				error = uiomove(cp, cc, uio);
@@ -783,7 +783,7 @@ again:
 	}
 	while (uio->uio_resid > 0) {
 		if (cc == 0) {
-			cc = min(uio->uio_resid, BUFSIZ);
+			cc = uimin(uio->uio_resid, BUFSIZ);
 			cp = locbuf;
 			mutex_spin_exit(&tty_lock);
 			error = uiomove(cp, cc, uio);
@@ -904,7 +904,7 @@ filt_ptcrdetach(struct knote *kn)
 	pti = kn->kn_hook;
 
 	mutex_spin_enter(&tty_lock);
-	SLIST_REMOVE(&pti->pt_selr.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&pti->pt_selr, kn);
 	mutex_spin_exit(&tty_lock);
 }
 
@@ -938,6 +938,10 @@ filt_ptcread(struct knote *kn, long hint)
 		    ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl))
 			kn->kn_data++;
 	}
+	if (!ISSET(tp->t_state, TS_CARR_ON)) {
+		kn->kn_flags |= EV_EOF;
+		canread = 1;
+	}
 
 	if ((hint & NOTE_SUBMIT) == 0) {
 		mutex_spin_exit(&tty_lock);
@@ -954,7 +958,7 @@ filt_ptcwdetach(struct knote *kn)
 	pti = kn->kn_hook;
 
 	mutex_spin_enter(&tty_lock);
-	SLIST_REMOVE(&pti->pt_selw.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&pti->pt_selw, kn);
 	mutex_spin_exit(&tty_lock);
 }
 
@@ -997,24 +1001,33 @@ filt_ptcwrite(struct knote *kn, long hint)
 	return canwrite;
 }
 
-static const struct filterops ptcread_filtops =
-	{ 1, NULL, filt_ptcrdetach, filt_ptcread };
-static const struct filterops ptcwrite_filtops =
-	{ 1, NULL, filt_ptcwdetach, filt_ptcwrite };
+static const struct filterops ptcread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_ptcrdetach,
+	.f_event = filt_ptcread,
+};
+
+static const struct filterops ptcwrite_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_ptcwdetach,
+	.f_event = filt_ptcwrite,
+};
 
 int
 ptckqfilter(dev_t dev, struct knote *kn)
 {
 	struct pt_softc *pti = pt_softc[minor(dev)];
-	struct klist	*klist;
+	struct selinfo	*sip;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &pti->pt_selr.sel_klist;
+		sip = &pti->pt_selr;
 		kn->kn_fop = &ptcread_filtops;
 		break;
 	case EVFILT_WRITE:
-		klist = &pti->pt_selw.sel_klist;
+		sip = &pti->pt_selw;
 		kn->kn_fop = &ptcwrite_filtops;
 		break;
 	default:
@@ -1024,7 +1037,7 @@ ptckqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = pti;
 
 	mutex_spin_enter(&tty_lock);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(sip, kn);
 	mutex_spin_exit(&tty_lock);
 
 	return 0;

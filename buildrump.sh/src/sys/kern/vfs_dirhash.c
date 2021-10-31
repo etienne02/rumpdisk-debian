@@ -1,4 +1,4 @@
-/* $NetBSD: vfs_dirhash.c,v 1.12 2014/09/05 05:57:21 matt Exp $ */
+/* $NetBSD: vfs_dirhash.c,v 1.14 2021/08/21 09:59:46 andvar Exp $ */
 
 /*
  * Copyright (c) 2008 Reinoud Zandijk
@@ -28,7 +28,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_dirhash.c,v 1.12 2014/09/05 05:57:21 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_dirhash.c,v 1.14 2021/08/21 09:59:46 andvar Exp $");
 
 /* CLEAN UP! */
 #include <sys/param.h>
@@ -55,7 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_dirhash.c,v 1.12 2014/09/05 05:57:21 matt Exp $"
  *
  * The global dirhash_queue is protected by the dirhashmutex. This lock is
  * internal only and is FS/mountpoint/vnode independent. On exit of the
- * exported functions this mutex is not helt.
+ * exported functions this mutex is not held.
  *
  * The dirhash structure is considered part of the vnode/inode/udf_node
  * structure and will thus use the lock that protects that vnode/inode.
@@ -202,8 +202,7 @@ dirhash_get(struct dirhash **dirhp)
 	/* if no dirhash was given, allocate one */
 	dirh = *dirhp;
 	if (dirh == NULL) {
-		dirh = pool_get(&dirhash_pool, PR_WAITOK);
-		memset(dirh, 0, sizeof(struct dirhash));
+		dirh = pool_get(&dirhash_pool, PR_WAITOK | PR_ZERO);
 		for (hashline = 0; hashline < DIRHASH_HASHSIZE; hashline++) {
 			LIST_INIT(&dirh->entries[hashline]);
 		}
@@ -301,8 +300,7 @@ dirhash_enter(struct dirhash *dirh,
 	}
 
 	/* add to the hashline */
-	dirh_e = pool_get(&dirhash_entry_pool, PR_WAITOK);
-	memset(dirh_e, 0, sizeof(struct dirhash_entry));
+	dirh_e = pool_get(&dirhash_entry_pool, PR_WAITOK | PR_ZERO);
 
 	dirh_e->hashvalue = hashvalue;
 	dirh_e->offset    = offset;
@@ -333,8 +331,7 @@ dirhash_enter_freed(struct dirhash *dirh, uint64_t offset,
 
 	DPRINTF(("dirhash enter FREED %"PRIu64", %d\n",
 		offset, entry_size));
-	dirh_e = pool_get(&dirhash_entry_pool, PR_WAITOK);
-	memset(dirh_e, 0, sizeof(struct dirhash_entry));
+	dirh_e = pool_get(&dirhash_entry_pool, PR_WAITOK | PR_ZERO);
 
 	dirh_e->hashvalue = 0;		/* not relevant */
 	dirh_e->offset    = offset;

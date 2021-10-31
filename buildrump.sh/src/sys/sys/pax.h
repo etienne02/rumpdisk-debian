@@ -1,4 +1,4 @@
-/* $NetBSD: pax.h,v 1.24 2016/05/25 20:07:54 christos Exp $ */
+/* $NetBSD: pax.h,v 1.27 2020/01/23 10:21:14 ad Exp $ */
 
 /*-
  * Copyright (c) 2006 Elad Efrat <elad@NetBSD.org>
@@ -53,6 +53,8 @@ struct vmspace;
 extern int pax_aslr_debug;
 #endif
 
+void	pax_segvguard_cleanup(struct vnode *);
+
 #if defined(PAX_MPROTECT) || defined(PAX_SEGVGUARD) || defined(PAX_ASLR)
 void pax_init(void);
 void pax_set_flags(struct exec_package *, struct proc *);
@@ -63,23 +65,34 @@ void pax_setup_elf_flags(struct exec_package *, uint32_t);
 # define pax_setup_elf_flags(e, flags) __USE(flags)
 #endif
 
-void pax_mprotect_adjust(
+vm_prot_t pax_mprotect_maxprotect(
 #ifdef PAX_MPROTECT_DEBUG
     const char *, size_t,
 #endif
-    struct lwp *, vm_prot_t *, vm_prot_t *);
+    struct lwp *, vm_prot_t, vm_prot_t, vm_prot_t);
+int pax_mprotect_validate(
+#ifdef PAX_MPROTECT_DEBUG
+    const char *, size_t,
+#endif
+    struct lwp *, vm_prot_t);
+
 #ifndef PAX_MPROTECT
-# define PAX_MPROTECT_ADJUST(a, b, c)
+# define PAX_MPROTECT_MAXPROTECT(l, active, extra, max) (max)
+# define PAX_MPROTECT_VALIDATE(l, prot) (0)
 # define pax_mprotect_prot(l)	0
 #else
 # ifdef PAX_MPROTECT_DEBUG
-#  define PAX_MPROTECT_ADJUST(a, b, c) \
-    pax_mprotect_adjust(__FILE__, __LINE__, (a), (b), (c))
+#  define PAX_MPROTECT_MAXPROTECT(l, active, extra, max) \
+    pax_mprotect_maxprotect(__FILE__, __LINE__, (l), (active), (extra), (max))
+#  define PAX_MPROTECT_VALIDATE(l, prot) \
+    pax_mprotect_validate(__FILE__, __LINE__, (l), (prot))
 # else
-#  define PAX_MPROTECT_ADJUST(a, b, c) \
-    pax_mprotect_adjust((a), (b), (c))
+#  define PAX_MPROTECT_MAXPROTECT(l, active, extra, max) \
+    pax_mprotect_maxprotect((l), (active), (extra), (max))
+#  define PAX_MPROTECT_VALIDATE(l, prot) \
+    pax_mprotect_validate((l), (prot))
 # endif
-extern int pax_mprotect_prot(struct lwp *);
+int pax_mprotect_prot(struct lwp *);
 #endif
 int pax_segvguard(struct lwp *, struct vnode *, const char *, bool);
 
@@ -88,7 +101,7 @@ int pax_segvguard(struct lwp *, struct vnode *, const char *, bool);
 
 #ifdef PAX_ASLR
 void pax_aslr_init_vm(struct lwp *, struct vmspace *, struct exec_package *);
-void pax_aslr_stack(struct exec_package *, u_long *);
+void pax_aslr_stack(struct exec_package *, vsize_t *);
 uint32_t pax_aslr_stack_gap(struct exec_package *);
 vaddr_t pax_aslr_exec_offset(struct exec_package *, vaddr_t);
 voff_t pax_aslr_rtld_offset(struct exec_package *, vaddr_t, int);

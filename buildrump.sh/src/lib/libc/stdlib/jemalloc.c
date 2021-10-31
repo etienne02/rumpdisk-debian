@@ -1,4 +1,4 @@
-/*	$NetBSD: jemalloc.c,v 1.40 2016/04/12 18:07:08 joerg Exp $	*/
+/*	$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $	*/
 
 /*-
  * Copyright (C) 2006,2007 Jason Evans <jasone@FreeBSD.org>.
@@ -100,7 +100,6 @@
 #ifdef __NetBSD__
 #  define xutrace(a, b)		utrace("malloc", (a), (b))
 #  define __DECONST(x, y)	((x)__UNCONST(y))
-#  define NO_TLS
 #else
 #  define xutrace(a, b)		utrace((a), (b))
 #endif	/* __NetBSD__ */
@@ -118,7 +117,7 @@
 
 #include <sys/cdefs.h>
 /* __FBSDID("$FreeBSD: src/lib/libc/stdlib/malloc.c,v 1.147 2007/06/15 22:00:16 jasone Exp $"); */ 
-__RCSID("$NetBSD: jemalloc.c,v 1.40 2016/04/12 18:07:08 joerg Exp $");
+__RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 
 #ifdef __FreeBSD__
 #include "libc_private.h"
@@ -163,27 +162,7 @@ __RCSID("$NetBSD: jemalloc.c,v 1.40 2016/04/12 18:07:08 joerg Exp $");
 #  include <reentrant.h>
 #  include "extern.h"
 
-#define STRERROR_R(a, b, c)	__strerror_r(a, b, c);
-/*
- * A non localized version of strerror, that avoids bringing in
- * stdio and the locale code. All the malloc messages are in English
- * so why bother?
- */
-static int
-__strerror_r(int e, char *s, size_t l)
-{
-	int rval;
-	size_t slen;
-
-	if (e >= 0 && e < sys_nerr) {
-		slen = strlcpy(s, sys_errlist[e], l);
-		rval = 0;
-	} else {
-		slen = snprintf_ss(s, l, "Unknown error %u", e);
-		rval = EINVAL;
-	}
-	return slen >= l ? ERANGE : rval;
-}
+#define STRERROR_R(a, b, c)	strerror_r_ss(a, b, c);
 #endif
 
 #ifdef __FreeBSD__
@@ -236,19 +215,17 @@ __strerror_r(int e, char *s, size_t l)
 #ifdef __aarch64__
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	3
-#  define NO_TLS
+#  define TINY_MIN_2POW		3
 #endif
 #ifdef __alpha__
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	3
 #  define TINY_MIN_2POW		3
-#  define NO_TLS
 #endif
 #ifdef __sparc64__
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	3
 #  define TINY_MIN_2POW		3
-#  define NO_TLS
 #endif
 #ifdef __amd64__
 #  define QUANTUM_2POW_MIN	4
@@ -262,7 +239,6 @@ __strerror_r(int e, char *s, size_t l)
 #  ifdef __ARM_EABI__
 #    define TINY_MIN_2POW	3
 #  endif
-#  define NO_TLS
 #endif
 #ifdef __powerpc__
 #  define QUANTUM_2POW_MIN	4
@@ -284,6 +260,7 @@ __strerror_r(int e, char *s, size_t l)
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	2
 #  define USE_BRK
+#  define NO_TLS
 #endif
 #ifdef __sh__
 #  define QUANTUM_2POW_MIN	4
@@ -294,20 +271,27 @@ __strerror_r(int e, char *s, size_t l)
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	2
 #  define USE_BRK
+#  ifdef __mc68010__
+#    define NO_TLS
+#  endif
 #endif
 #if defined(__mips__) || defined(__riscv__)
-# ifdef _LP64
-#  define SIZEOF_PTR_2POW	3
-#  define TINY_MIN_2POW		3
-# else
-#  define SIZEOF_PTR_2POW	2
-# endif
-# define QUANTUM_2POW_MIN	4
-# define USE_BRK
+#  ifdef _LP64
+#    define SIZEOF_PTR_2POW	3
+#    define TINY_MIN_2POW	3
+#  else
+#    define SIZEOF_PTR_2POW	2
+#  endif
+#  define QUANTUM_2POW_MIN	4
+#  define USE_BRK
+#  if defined(__mips__)
+#    define NO_TLS
+#  endif
 #endif
 #ifdef __hppa__                                                                                                                                         
-#  define QUANTUM_2POW_MIN     4                                                                                                                        
-#  define SIZEOF_PTR_2POW      2                                                                                                                        
+#  define QUANTUM_2POW_MIN	4                                                                                                                        
+#  define TINY_MIN_2POW		4
+#  define SIZEOF_PTR_2POW	2                                                                                                                        
 #  define USE_BRK                                                                                                                                       
 #endif           
 
@@ -723,7 +707,9 @@ static chunk_tree_t	huge;
  * base_pages_alloc() also uses sbrk(), but cannot lock chunks_mtx (doing so
  * could cause recursive lock acquisition).
  */
+#ifdef _REENTRANT
 static malloc_mutex_t	brk_mtx;
+#endif
 /* Result of first sbrk(0) call. */
 static void		*brk_base;
 /* Current end of brk, or ((void *)-1) if brk is exhausted. */
@@ -788,7 +774,8 @@ static malloc_mutex_t	arenas_mtx; /* Protects arenas initialization. */
  * for allocations.
  */
 #ifndef NO_TLS
-static __thread arena_t	**arenas_map;
+static __attribute__((tls_model("initial-exec")))
+__thread arena_t	**arenas_map;
 #else
 static arena_t	**arenas_map;
 #endif
@@ -796,7 +783,7 @@ static arena_t	**arenas_map;
 #if !defined(NO_TLS) || !defined(_REENTRANT)
 # define	get_arenas_map()	(arenas_map)
 # define	set_arenas_map(x)	(arenas_map = x)
-#else
+#else /* NO_TLS && _REENTRANT */
 
 static thread_key_t arenas_map_key = -1;
 
@@ -826,16 +813,20 @@ set_arenas_map(arena_t **a)
 	}
 
 	if (arenas_map_key == -1) {
+#ifndef NO_TLS
 		(void)thr_keycreate(&arenas_map_key, NULL);
+#endif
 		if (arenas_map != NULL) {
 			_DIAGASSERT(arenas_map == a);
 			arenas_map = NULL;
 		}
 	}
 
+#ifndef NO_TLS
 	thr_setspecific(arenas_map_key, a);
-}
 #endif
+}
+#endif /* NO_TLS && _REENTRANT */
 
 #ifdef MALLOC_STATS
 /* Chunk statistics. */
@@ -1285,7 +1276,6 @@ stats_print(arena_t *arena)
  * Begin chunk management functions.
  */
 
-#ifndef lint
 static inline int
 chunk_comp(chunk_node_t *a, chunk_node_t *b)
 {
@@ -1302,8 +1292,7 @@ chunk_comp(chunk_node_t *a, chunk_node_t *b)
 }
 
 /* Generate red-black tree code for chunks. */
-RB_GENERATE_STATIC(chunk_tree_s, chunk_node_s, link, chunk_comp);
-#endif
+RB_GENERATE_STATIC(chunk_tree_s, chunk_node_s, link, chunk_comp)
 
 static void *
 pages_map_align(void *addr, size_t size, int align)
@@ -1380,18 +1369,15 @@ chunk_alloc(size_t size)
 		 * to use them.
 		 */
 
-		/* LINTED */
 		tchunk = RB_MIN(chunk_tree_s, &old_chunks);
 		while (tchunk != NULL) {
 			/* Found an address range.  Try to recycle it. */
 
 			chunk = tchunk->chunk;
 			delchunk = tchunk;
-			/* LINTED */
 			tchunk = RB_NEXT(chunk_tree_s, &old_chunks, delchunk);
 
 			/* Remove delchunk from the tree. */
-			/* LINTED */
 			RB_REMOVE(chunk_tree_s, &old_chunks, delchunk);
 			base_chunk_node_dealloc(delchunk);
 
@@ -1474,15 +1460,12 @@ RETURN:
 		 * memory we just allocated.
 		 */
 		key.chunk = ret;
-		/* LINTED */
 		tchunk = RB_NFIND(chunk_tree_s, &old_chunks, &key);
 		while (tchunk != NULL
 		    && (uintptr_t)tchunk->chunk >= (uintptr_t)ret
 		    && (uintptr_t)tchunk->chunk < (uintptr_t)ret + size) {
 			delchunk = tchunk;
-			/* LINTED */
 			tchunk = RB_NEXT(chunk_tree_s, &old_chunks, delchunk);
-			/* LINTED */
 			RB_REMOVE(chunk_tree_s, &old_chunks, delchunk);
 			base_chunk_node_dealloc(delchunk);
 		}
@@ -1560,7 +1543,6 @@ chunk_dealloc(void *chunk, size_t size)
 				node->chunk = (void *)((uintptr_t)chunk
 				    + (uintptr_t)offset);
 				node->size = chunksize;
-				/* LINTED */
 				RB_INSERT(chunk_tree_s, &old_chunks, node);
 			}
 		}
@@ -1580,7 +1562,6 @@ chunk_dealloc(void *chunk, size_t size)
 			if (node != NULL) {
 				node->chunk = (void *)(uintptr_t)chunk;
 				node->size = chunksize;
-				/* LINTED */
 				RB_INSERT(chunk_tree_s, &old_chunks, node);
 			}
 		}
@@ -1653,7 +1634,6 @@ choose_arena(void)
         return choose_arena_hard();
 }
 
-#ifndef lint
 static inline int
 arena_chunk_comp(arena_chunk_t *a, arena_chunk_t *b)
 {
@@ -1675,10 +1655,8 @@ arena_chunk_comp(arena_chunk_t *a, arena_chunk_t *b)
 }
 
 /* Generate red-black tree code for arena chunks. */
-RB_GENERATE_STATIC(arena_chunk_tree_s, arena_chunk_s, link, arena_chunk_comp);
-#endif
+RB_GENERATE_STATIC(arena_chunk_tree_s, arena_chunk_s, link, arena_chunk_comp)
 
-#ifndef lint
 static inline int
 arena_run_comp(arena_run_t *a, arena_run_t *b)
 {
@@ -1695,8 +1673,7 @@ arena_run_comp(arena_run_t *a, arena_run_t *b)
 }
 
 /* Generate red-black tree code for arena runs. */
-RB_GENERATE_STATIC(arena_run_tree_s, arena_run_s, link, arena_run_comp);
-#endif
+RB_GENERATE_STATIC(arena_run_tree_s, arena_run_s, link, arena_run_comp)
 
 static inline void *
 arena_run_reg_alloc(arena_run_t *run, arena_bin_t *bin)
@@ -1723,7 +1700,7 @@ arena_run_reg_alloc(arena_run_t *run, arena_bin_t *bin)
 		    + (bin->reg_size * regind));
 
 		/* Clear bit. */
-		mask ^= (1 << bit);
+		mask ^= (1U << bit);
 		run->regs_mask[i] = mask;
 
 		return (ret);
@@ -1740,7 +1717,7 @@ arena_run_reg_alloc(arena_run_t *run, arena_bin_t *bin)
 			    + (bin->reg_size * regind));
 
 			/* Clear bit. */
-			mask ^= (1 << bit);
+			mask ^= (1U << bit);
 			run->regs_mask[i] = mask;
 
 			/*
@@ -1855,8 +1832,8 @@ arena_run_reg_dalloc(arena_run_t *run, arena_bin_t *bin, void *ptr, size_t size)
 	if (elm < run->regs_minelm)
 		run->regs_minelm = elm;
 	bit = regind - (elm << (SIZEOF_INT_2POW + 3));
-	assert((run->regs_mask[elm] & (1 << bit)) == 0);
-	run->regs_mask[elm] |= (1 << bit);
+	assert((run->regs_mask[elm] & (1U << bit)) == 0);
+	run->regs_mask[elm] |= (1U << bit);
 #undef SIZE_INV
 #undef SIZE_INV_SHIFT
 }
@@ -1905,7 +1882,6 @@ arena_chunk_alloc(arena_t *arena)
 		chunk = arena->spare;
 		arena->spare = NULL;
 
-		/* LINTED */
 		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
 	} else {
 		chunk = (arena_chunk_t *)chunk_alloc(chunksize);
@@ -1951,7 +1927,6 @@ arena_chunk_dealloc(arena_t *arena, arena_chunk_t *chunk)
 	 * Remove chunk from the chunk tree, regardless of whether this chunk
 	 * will be cached, so that the arena does not use it.
 	 */
-	/* LINTED */
 	RB_REMOVE(arena_chunk_tree_s, &chunk->arena->chunks, chunk);
 
 	if (opt_hint == false) {
@@ -2154,10 +2129,8 @@ arena_bin_nonfull_run_get(arena_t *arena, arena_bin_t *bin)
 	unsigned i, remainder;
 
 	/* Look for a usable run. */
-	/* LINTED */
 	if ((run = RB_MIN(arena_run_tree_s, &bin->runs)) != NULL) {
 		/* run is guaranteed to have available space. */
-		/* LINTED */
 		RB_REMOVE(arena_run_tree_s, &bin->runs, run);
 #ifdef MALLOC_STATS
 		bin->stats.reruns++;
@@ -2630,7 +2603,6 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 				 * never gets inserted into the non-full runs
 				 * tree.
 				 */
-				/* LINTED */
 				RB_REMOVE(arena_run_tree_s, &bin->runs, run);
 			}
 #ifdef MALLOC_DEBUG
@@ -2651,13 +2623,11 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 				/* Switch runcur. */
 				if (bin->runcur->nfree > 0) {
 					/* Insert runcur. */
-					/* LINTED */
 					RB_INSERT(arena_run_tree_s, &bin->runs,
 					    bin->runcur);
 				}
 				bin->runcur = run;
 			} else {
-				/* LINTED */
 				RB_INSERT(arena_run_tree_s, &bin->runs, run);
 			}
 		}
@@ -2966,7 +2936,6 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 		 */
 		malloc_mutex_lock(&chunks_mtx);
 		key.chunk = __DECONST(void *, ptr);
-		/* LINTED */
 		node = RB_FIND(chunk_tree_s, &huge, &key);
 		assert(node != NULL);
 		assert(node->chunk == ptr);
@@ -3051,11 +3020,9 @@ huge_dalloc(void *ptr)
 
 	/* Extract from tree of huge allocations. */
 	key.chunk = ptr;
-	/* LINTED */
 	node = RB_FIND(chunk_tree_s, &huge, &key);
 	assert(node != NULL);
 	assert(node->chunk == ptr);
-	/* LINTED */
 	RB_REMOVE(chunk_tree_s, &huge, node);
 
 #ifdef MALLOC_STATS
@@ -3246,7 +3213,6 @@ isalloc(const void *ptr)
 
 		/* Extract from tree of huge allocations. */
 		key.chunk = __DECONST(void *, ptr);
-		/* LINTED */
 		node = RB_FIND(chunk_tree_s, &huge, &key);
 		assert(node != NULL);
 
@@ -4003,16 +3969,17 @@ _malloc_prefork(void)
 	unsigned i;
 
 	/* Acquire all mutexes in a safe order. */
-
+	malloc_mutex_lock(&init_lock);
 	malloc_mutex_lock(&arenas_mtx);
 	for (i = 0; i < narenas; i++) {
 		if (arenas[i] != NULL)
 			malloc_mutex_lock(&arenas[i]->mtx);
 	}
-
-	malloc_mutex_lock(&base_mtx);
-
 	malloc_mutex_lock(&chunks_mtx);
+	malloc_mutex_lock(&base_mtx);
+#ifdef USE_BRK
+	malloc_mutex_lock(&brk_mtx);
+#endif
 }
 
 void
@@ -4021,16 +3988,38 @@ _malloc_postfork(void)
 	unsigned i;
 
 	/* Release all mutexes, now that fork() has completed. */
-
+#ifdef USE_BRK
+	malloc_mutex_unlock(&brk_mtx);
+#endif
+	malloc_mutex_unlock(&base_mtx);
 	malloc_mutex_unlock(&chunks_mtx);
 
-	malloc_mutex_unlock(&base_mtx);
-
-	for (i = 0; i < narenas; i++) {
+	for (i = narenas; i-- > 0; ) {
 		if (arenas[i] != NULL)
 			malloc_mutex_unlock(&arenas[i]->mtx);
 	}
 	malloc_mutex_unlock(&arenas_mtx);
+	malloc_mutex_unlock(&init_lock);
+}
+
+void
+_malloc_postfork_child(void)
+{
+	unsigned i;
+
+	/* Release all mutexes, now that fork() has completed. */
+#ifdef USE_BRK
+	malloc_mutex_init(&brk_mtx);
+#endif
+	malloc_mutex_init(&base_mtx);
+	malloc_mutex_init(&chunks_mtx);
+
+	for (i = narenas; i-- > 0; ) {
+		if (arenas[i] != NULL)
+			malloc_mutex_init(&arenas[i]->mtx);
+	}
+	malloc_mutex_init(&arenas_mtx);
+	malloc_mutex_init(&init_lock);
 }
 
 /*

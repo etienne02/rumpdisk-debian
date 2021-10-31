@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_compat_50_sysv.c,v 1.1 2015/12/03 10:38:21 pgoyette Exp $	*/
+/*	$NetBSD: netbsd32_compat_50_sysv.c,v 1.4 2021/01/19 03:20:13 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -36,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_50_sysv.c,v 1.1 2015/12/03 10:38:21 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_50_sysv.c,v 1.4 2021/01/19 03:20:13 simonb Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_sysv.h"
@@ -45,11 +38,15 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_50_sysv.c,v 1.1 2015/12/03 10:38:21 
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/module.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
 
+#include <sys/syscallvar.h>
+
 #include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_syscall.h>
 #include <compat/netbsd32/netbsd32_syscallargs.h>
 #include <compat/netbsd32/netbsd32_conv.h>
 
@@ -121,7 +118,7 @@ do_netbsd32___semctl14(struct lwp *l, const struct compat_50_netbsd32___semctl14
 			error = copyin(NETBSD32PTR64(karg32.buf), &sembuf32,
 			    sizeof(sembuf32));
 			if (error)
-				return (error);
+				return error;
 			netbsd32_to_semid_ds50(&sembuf32, &sembuf);
 		}
 	}
@@ -135,7 +132,7 @@ do_netbsd32___semctl14(struct lwp *l, const struct compat_50_netbsd32___semctl14
 		    sizeof(sembuf32));
 	}
 
-	return (error);
+	return error;
 }
 #endif
 
@@ -206,5 +203,44 @@ compat_50_netbsd32___shmctl13(struct lwp *l, const struct compat_50_netbsd32___s
 	return error;
 }
 #endif
+
+#define _PKG_ENTRY(name)        \
+	{ NETBSD32_SYS_ ## name, 0, (sy_call_t *)name }
+
+static const struct syscall_package compat_sysvipc_50_syscalls[] = {
+#if defined(SYSVSEM)  
+	_PKG_ENTRY(compat_50_netbsd32___semctl14),
+#endif
+#if defined(SYSVSHM)
+	_PKG_ENTRY(compat_50_netbsd32___shmctl13),
+#endif
+#if defined(SYSVMSG)
+	_PKG_ENTRY(compat_50_netbsd32___msgctl13),
+#endif
+	{ 0, 0, NULL }
+};
+
+#define REQ1    "sysv_ipc,compat_sysv_50,"
+#define REQ2    "compat_netbsd32,compat_netbsd32_sysvipc,"
+
+MODULE(MODULE_CLASS_EXEC, compat_netbsd32_sysvipc_50, REQ1 REQ2);
+
+static int
+compat_netbsd32_sysvipc_50_modcmd(modcmd_t cmd, void *arg)
+{
+ 
+        switch (cmd) {
+        case MODULE_CMD_INIT:
+                return syscall_establish(&emul_netbsd32,
+                    compat_sysvipc_50_syscalls);
+ 
+        case MODULE_CMD_FINI:
+                return syscall_disestablish(&emul_netbsd32,
+                    compat_sysvipc_50_syscalls);
+   
+        default:
+                return ENOTTY;
+        }
+}
 
 #endif /* COMPAT_50 */

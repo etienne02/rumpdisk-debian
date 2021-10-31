@@ -1,4 +1,4 @@
-/*	$NetBSD: icp.c,v 1.31 2012/10/27 17:18:20 chs Exp $	*/
+/*	$NetBSD: icp.c,v 1.36 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2003 The NetBSD Foundation, Inc.
@@ -76,7 +76,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: icp.c,v 1.31 2012/10/27 17:18:20 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: icp.c,v 1.36 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -178,11 +178,8 @@ icp_init(struct icp_softc *icp, const char *intrstr)
 	/*
 	 * Allocate and initialize the command control blocks.
 	 */
-	ic = malloc(sizeof(*ic) * ICP_NCCBS, M_DEVBUF, M_NOWAIT | M_ZERO);
-	if ((icp->icp_ccbs = ic) == NULL) {
-		aprint_error_dev(icp->icp_dv, "malloc() failed\n");
-		goto bail_out;
-	}
+	ic = malloc(sizeof(*ic) * ICP_NCCBS, M_DEVBUF, M_WAITOK | M_ZERO);
+	icp->icp_ccbs = ic;
 	state++;
 
 	for (i = 0; i < ICP_NCCBS; i++, ic++) {
@@ -207,7 +204,7 @@ icp_init(struct icp_softc *icp, const char *intrstr)
 #endif
 
 	/*
-	 * Initalize the controller.
+	 * Initialize the controller.
 	 */
 	if (!icp_cmd(icp, ICP_SCREENSERVICE, ICP_INIT, 0, 0, 0)) {
 		aprint_error_dev(icp->icp_dv, "screen service init error %d\n",
@@ -368,8 +365,9 @@ icp_init(struct icp_softc *icp, const char *intrstr)
 			locs[ICPCF_UNIT] = j + ICPA_UNIT_SCSI;
 
 			icp->icp_children[icpa.icpa_unit] =
-				config_found_sm_loc(icp->icp_dv, "icp", locs,
-					&icpa, icp_print, config_stdsubmatch);
+			    config_found(icp->icp_dv, &icpa, icp_print,
+					 CFARGS(.submatch = config_stdsubmatch,
+						.locators = locs));
 		}
 	}
 
@@ -386,8 +384,9 @@ icp_init(struct icp_softc *icp, const char *intrstr)
 			locs[ICPCF_UNIT] = j;
 
 			icp->icp_children[icpa.icpa_unit] =
-			    config_found_sm_loc(icp->icp_dv, "icp", locs,
-				&icpa, icp_print, config_stdsubmatch);
+			    config_found(icp->icp_dv, &icpa, icp_print,
+					 CFARGS(.submatch = config_stdsubmatch,
+						.locators = locs));
 		}
 	}
 
@@ -511,8 +510,10 @@ icp_rescan(struct icp_softc *icp, int unit)
 
 		locs[ICPCF_UNIT] = unit;
 
-		icp->icp_children[unit] = config_found_sm_loc(icp->icp_dv,
-			"icp", locs, &icpa, icp_print, config_stdsubmatch);
+		icp->icp_children[unit] =
+		    config_found(icp->icp_dv, &icpa, icp_print,
+				 CFARGS(.submatch = config_stdsubmatch,
+					.locators = locs));
 	}
 
 	icp_recompute_openings(icp);

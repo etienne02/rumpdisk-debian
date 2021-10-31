@@ -1,4 +1,4 @@
-/*	$NetBSD: pset.h,v 1.5 2016/04/02 20:38:40 christos Exp $	*/
+/*	$NetBSD: pset.h,v 1.7 2019/11/21 17:54:04 ad Exp $	*/
 
 /*
  * Copyright (c) 2008, Mindaugas Rasiukevicius <rmind at NetBSD org>
@@ -39,9 +39,6 @@
 #define	PS_MYID			-1
 #define	PS_QUERY		-2
 
-/* For compatibility only */
-typedef	cpuid_t		processorid_t;
-
 __BEGIN_DECLS
 int	pset_assign(psetid_t, cpuid_t, psetid_t *);
 int	pset_bind(psetid_t, idtype_t, id_t, psetid_t *);
@@ -59,9 +56,6 @@ int	_pset_bind(idtype_t, id_t, id_t, psetid_t, psetid_t *);
 typedef struct {
 	int		ps_flags;
 } pset_info_t;
-
-/* Flags */
-#define	PSET_BUSY	0x01
 
 void	psets_init(void);
 

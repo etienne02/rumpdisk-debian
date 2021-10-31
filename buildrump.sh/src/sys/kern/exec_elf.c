@@ -1,7 +1,7 @@
-/*	$NetBSD: exec_elf.c,v 1.85 2016/05/25 17:25:32 christos Exp $	*/
+/*	$NetBSD: exec_elf.c,v 1.102 2021/05/18 08:59:44 hannken Exp $	*/
 
 /*-
- * Copyright (c) 1994, 2000, 2005, 2015 The NetBSD Foundation, Inc.
+ * Copyright (c) 1994, 2000, 2005, 2015, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: exec_elf.c,v 1.85 2016/05/25 17:25:32 christos Exp $");
+__KERNEL_RCSID(1, "$NetBSD: exec_elf.c,v 1.102 2021/05/18 08:59:44 hannken Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_pax.h"
@@ -89,10 +89,12 @@ extern struct emul emul_netbsd;
 
 #define elf_check_header	ELFNAME(check_header)
 #define elf_copyargs		ELFNAME(copyargs)
+#define elf_populate_auxv	ELFNAME(populate_auxv)
 #define elf_load_interp		ELFNAME(load_interp)
 #define elf_load_psection	ELFNAME(load_psection)
 #define exec_elf_makecmds	ELFNAME2(exec,makecmds)
 #define netbsd_elf_signature	ELFNAME2(netbsd,signature)
+#define netbsd_elf_note       	ELFNAME2(netbsd,note)
 #define netbsd_elf_probe	ELFNAME2(netbsd,probe)
 #define	coredump		ELFNAMEEND(coredump)
 #define	elf_free_emul_arg	ELFNAME(free_emul_arg)
@@ -100,57 +102,66 @@ extern struct emul emul_netbsd;
 static int
 elf_load_interp(struct lwp *, struct exec_package *, char *,
     struct exec_vmcmd_set *, u_long *, Elf_Addr *);
-static void
+static int
 elf_load_psection(struct exec_vmcmd_set *, struct vnode *, const Elf_Phdr *,
     Elf_Addr *, u_long *, int);
 
 int	netbsd_elf_signature(struct lwp *, struct exec_package *, Elf_Ehdr *);
+int	netbsd_elf_note(struct exec_package *, const Elf_Nhdr *, const char *,
+	    const char *);
 int	netbsd_elf_probe(struct lwp *, struct exec_package *, void *, char *,
 	    vaddr_t *);
 
 static void	elf_free_emul_arg(void *);
 
+#ifdef DEBUG_ELF
+#define DPRINTF(a, ...)	printf("%s: " a "\n", __func__, ##__VA_ARGS__)
+#else
+#define DPRINTF(a, ...)
+#endif
+
 /* round up and down to page boundaries. */
 #define	ELF_ROUND(a, b)		(((a) + (b) - 1) & ~((b) - 1))
 #define	ELF_TRUNC(a, b)		((a) & ~((b) - 1))
 
-static void
+static int
 elf_placedynexec(struct exec_package *epp, Elf_Ehdr *eh, Elf_Phdr *ph)
 {
 	Elf_Addr align, offset;
 	int i;
 
-	for (align = i = 0; i < eh->e_phnum; i++)
+	for (align = 1, i = 0; i < eh->e_phnum; i++)
 		if (ph[i].p_type == PT_LOAD && ph[i].p_align > align)
 			align = ph[i].p_align;
 
 	offset = (Elf_Addr)pax_aslr_exec_offset(epp, align);
-	offset += epp->ep_vm_minaddr;
+	if (offset < epp->ep_vm_minaddr)
+		offset = roundup(epp->ep_vm_minaddr, align);
+	if ((offset & (align - 1)) != 0) {
+		DPRINTF("bad offset=%#jx align=%#jx",
+		    (uintmax_t)offset, (uintmax_t)align);
+		return EINVAL;
+	}
 
 	for (i = 0; i < eh->e_phnum; i++)
 		ph[i].p_vaddr += offset;
 	epp->ep_entryoffset = offset;
 	eh->e_entry += offset;
+	return 0;
 }
 
-/*
- * Copy arguments onto the stack in the normal way, but add some
- * extra information in case of dynamic binding.
- */
+
 int
-elf_copyargs(struct lwp *l, struct exec_package *pack,
-    struct ps_strings *arginfo, char **stackp, void *argp)
+elf_populate_auxv(struct lwp *l, struct exec_package *pack, char **stackp)
 {
 	size_t len, vlen;
 	AuxInfo ai[ELF_AUX_ENTRIES], *a, *execname;
 	struct elf_args *ap;
+	char *path = l->l_proc->p_path;
 	int error;
 
-	if ((error = copyargs(l, pack, arginfo, stackp, argp)) != 0)
-		return error;
-
-	a = ai;
 	execname = NULL;
+	a = ai;
 
 	memset(ai, 0, sizeof(ai));
 
@@ -215,7 +226,8 @@ elf_copyargs(struct lwp *l, struct exec_package *pack,
 		a->a_v = l->l_proc->p_stackbase;
 		a++;
 
-		if (pack->ep_path) {
+		/* "/" means fexecve(2) could not resolve the pathname */
+		if (path[0] == '/' && path[1] != '\0') {
 			execname = a;
 			a->a_type = AT_SUN_EXECNAME;
 			a++;
@@ -233,20 +245,36 @@ elf_copyargs(struct lwp *l, struct exec_package *pack,
 	KASSERT(vlen <= sizeof(ai));
 
 	if (execname) {
-		char *path = pack->ep_path;
 		execname->a_v = (uintptr_t)(*stackp + vlen);
 		len = strlen(path) + 1;
 		if ((error = copyout(path, (*stackp + vlen), len)) != 0)
 			return error;
 		len = ALIGN(len);
-	} else
+	} else {
 		len = 0;
+	}
 
 	if ((error = copyout(ai, *stackp, vlen)) != 0)
 		return error;
 	*stackp += vlen + len;
 
 	return 0;
+}
+
+/*
+ * Copy arguments onto the stack in the normal way, but add some
+ * extra information in case of dynamic binding.
+ */
+int
+elf_copyargs(struct lwp *l, struct exec_package *pack,
+    struct ps_strings *arginfo, char **stackp, void *argp)
+{
+	int error;
+
+	if ((error = copyargs(l, pack, arginfo, stackp, argp)) != 0)
+		return error;
+
+	return elf_populate_auxv(l, pack, stackp);
 }
 
 /*
@@ -259,22 +287,32 @@ elf_check_header(Elf_Ehdr *eh)
 {
 
 	if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
-	    eh->e_ident[EI_CLASS] != ELFCLASS)
+	    eh->e_ident[EI_CLASS] != ELFCLASS) {
+		DPRINTF("bad magic e_ident[EI_MAG0,EI_MAG3] %#x%x%x%x, "
+		    "e_ident[EI_CLASS] %#x", eh->e_ident[EI_MAG0],
+		    eh->e_ident[EI_MAG1], eh->e_ident[EI_MAG2],
+		    eh->e_ident[EI_MAG3], eh->e_ident[EI_CLASS]);
 		return ENOEXEC;
+	}
 
 	switch (eh->e_machine) {
 
 	ELFDEFNNAME(MACHDEP_ID_CASES)
 
 	default:
+		DPRINTF("bad machine %#x", eh->e_machine);
 		return ENOEXEC;
 	}
 
-	if (ELF_EHDR_FLAGS_OK(eh) == 0)
+	if (ELF_EHDR_FLAGS_OK(eh) == 0) {
+		DPRINTF("bad flags %#x", eh->e_flags);
 		return ENOEXEC;
+	}
 
-	if (eh->e_shnum > ELF_MAXSHNUM || eh->e_phnum > ELF_MAXPHNUM)
+	if (eh->e_shnum > ELF_MAXSHNUM || eh->e_phnum > ELF_MAXPHNUM) {
+		DPRINTF("bad shnum/phnum %#x/%#x", eh->e_shnum, eh->e_phnum);
 		return ENOEXEC;
+	}
 
 	return 0;
 }
@@ -284,13 +322,15 @@ elf_check_header(Elf_Ehdr *eh)
  *
  * Load a psection at the appropriate address
  */
-static void
+static int
 elf_load_psection(struct exec_vmcmd_set *vcset, struct vnode *vp,
     const Elf_Phdr *ph, Elf_Addr *addr, u_long *size, int flags)
 {
 	u_long msize, psize, rm, rf;
 	long diff, offset;
 	int vmprot = 0;
+
+	KASSERT(VOP_ISLOCKED(vp) != LK_NONE);
 
 	/*
 	 * If the user specified an address, then we load there.
@@ -303,7 +343,12 @@ elf_load_psection(struct exec_vmcmd_set *vcset, struct vnode *vp,
 		 * Make sure we are virtually aligned as we are supposed to be.
 		 */
 		diff = ph->p_vaddr - ELF_TRUNC(ph->p_vaddr, ph->p_align);
-		KASSERT(*addr - diff == ELF_TRUNC(*addr, ph->p_align));
+		if (*addr - diff != ELF_TRUNC(*addr, ph->p_align)) {
+			DPRINTF("bad alignment %#jx != %#jx\n",
+			    (uintptr_t)(*addr - diff),
+			    (uintptr_t)ELF_TRUNC(*addr, ph->p_align));
+			return EINVAL;
+		}
 		/*
 		 * But make sure to not map any pages before the start of the
 		 * psection by limiting the difference to within a page.
@@ -362,6 +407,7 @@ elf_load_psection(struct exec_vmcmd_set *vcset, struct vnode *vp,
 		    0, vmprot, flags & VMCMD_RELATIVE);
 		*size = msize;
 	}
+	return 0;
 }
 
 /*
@@ -375,7 +421,6 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 {
 	int error, i;
 	struct vnode *vp;
-	struct vattr attr;
 	Elf_Ehdr eh;
 	Elf_Phdr *ph = NULL;
 	const Elf_Phdr *base_ph;
@@ -410,7 +455,7 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 	}
 	/* We'll tidy this ourselves - otherwise we have locking issues */
 	epp->ep_interp = NULL;
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(vp, LK_SHARED | LK_RETRY);
 
 	/*
 	 * Similarly, if it's not marked as executable, or it's not a regular
@@ -418,14 +463,10 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 	 */
 	if (vp->v_type != VREG) {
 		error = EACCES;
-		goto badunlock;
+		goto bad;
 	}
 	if ((error = VOP_ACCESS(vp, VEXEC, l->l_cred)) != 0)
-		goto badunlock;
-
-	/* get attributes */
-	if ((error = VOP_GETATTR(vp, &attr, l->l_cred)) != 0)
-		goto badunlock;
+		goto bad;
 
 	/*
 	 * Check mount point.  Though we're not trying to exec this binary,
@@ -434,23 +475,23 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 	 */
 	if (vp->v_mount->mnt_flag & MNT_NOEXEC) {
 		error = EACCES;
-		goto badunlock;
+		goto bad;
 	}
 	if (vp->v_mount->mnt_flag & MNT_NOSUID)
 		epp->ep_vap->va_mode &= ~(S_ISUID | S_ISGID);
 
 	error = vn_marktext(vp);
 	if (error)
-		goto badunlock;
+		goto bad;
 
-	VOP_UNLOCK(vp);
-
-	if ((error = exec_read_from(l, vp, 0, &eh, sizeof(eh))) != 0)
+	error = exec_read(l, vp, 0, &eh, sizeof(eh), IO_NODELOCKED);
+	if (error != 0)
 		goto bad;
 
 	if ((error = elf_check_header(&eh)) != 0)
 		goto bad;
 	if (eh.e_type != ET_DYN || eh.e_phnum == 0) {
+		DPRINTF("bad interpreter type %#x", eh.e_type);
 		error = ENOEXEC;
 		goto bad;
 	}
@@ -458,7 +499,8 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 	phsize = eh.e_phnum * sizeof(Elf_Phdr);
 	ph = kmem_alloc(phsize, KM_SLEEP);
 
-	if ((error = exec_read_from(l, vp, eh.e_phoff, ph, phsize)) != 0)
+	error = exec_read(l, vp, eh.e_phoff, ph, phsize, IO_NODELOCKED);
+	if (error != 0)
 		goto bad;
 
 #ifdef ELF_INTERP_NON_RELOCATABLE
@@ -495,6 +537,7 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 		}
 
 		if (base_ph == NULL) {
+			DPRINTF("no interpreter loadable sections");
 			error = ENOEXEC;
 			goto bad;
 		}
@@ -557,8 +600,9 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 				flags = VMCMD_RELATIVE;
 			}
 			last_ph = &ph[i];
-			elf_load_psection(vcset, vp, &ph[i], &addr,
-			    &size, flags);
+			if ((error = elf_load_psection(vcset, vp, &ph[i], &addr,
+			    &size, flags)) != 0)
+				goto bad;
 			/*
 			 * If entry is within this psection then this
 			 * must contain the .text section.  *entryoff is
@@ -582,16 +626,13 @@ elf_load_interp(struct lwp *l, struct exec_package *epp, char *path,
 	 * This value is ignored if TOPDOWN.
 	 */
 	*last = addr;
-	vrele(vp);
+	vput(vp);
 	return 0;
-
-badunlock:
-	VOP_UNLOCK(vp);
 
 bad:
 	if (ph != NULL)
 		kmem_free(ph, phsize);
-	vrele(vp);
+	vput(vp);
 	return error;
 }
 
@@ -616,23 +657,33 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 	struct elf_args *ap;
 	bool is_dyn = false;
 
-	if (epp->ep_hdrvalid < sizeof(Elf_Ehdr))
+	if (epp->ep_hdrvalid < sizeof(Elf_Ehdr)) {
+		DPRINTF("small header %#x", epp->ep_hdrvalid);
 		return ENOEXEC;
+	}
 	if ((error = elf_check_header(eh)) != 0)
 		return error;
 
 	if (eh->e_type == ET_DYN)
 		/* PIE, and some libs have an entry point */
 		is_dyn = true;
-	else if (eh->e_type != ET_EXEC)
+	else if (eh->e_type != ET_EXEC) {
+		DPRINTF("bad type %#x", eh->e_type);
 		return ENOEXEC;
+	}
 
-	if (eh->e_phnum == 0)
+	if (eh->e_phnum == 0) {
+		DPRINTF("no program headers");
 		return ENOEXEC;
+	}
 
+	/* XXX only LK_EXCLUSIVE to match all others - allow spinning */
+	vn_lock(epp->ep_vp, LK_EXCLUSIVE | LK_RETRY);
 	error = vn_marktext(epp->ep_vp);
-	if (error)
+	if (error) {
+		VOP_UNLOCK(epp->ep_vp);
 		return error;
+	}
 
 	/*
 	 * Allocate space to hold all the program headers, and read them
@@ -641,9 +692,12 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 	phsize = eh->e_phnum * sizeof(Elf_Phdr);
 	ph = kmem_alloc(phsize, KM_SLEEP);
 
-	if ((error = exec_read_from(l, epp->ep_vp, eh->e_phoff, ph, phsize)) !=
-	    0)
+	error = exec_read(l, epp->ep_vp, eh->e_phoff, ph, phsize,
+	    IO_NODELOCKED);
+	if (error != 0) {
+		VOP_UNLOCK(epp->ep_vp);
 		goto bad;
+	}
 
 	epp->ep_taddr = epp->ep_tsize = ELFDEFNNAME(NO_ADDR);
 	epp->ep_daddr = epp->ep_dsize = ELFDEFNNAME(NO_ADDR);
@@ -652,16 +706,24 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 		pp = &ph[i];
 		if (pp->p_type == PT_INTERP) {
 			if (pp->p_filesz < 2 || pp->p_filesz > MAXPATHLEN) {
+				DPRINTF("bad interpreter namelen %#jx",
+				    (uintmax_t)pp->p_filesz);
 				error = ENOEXEC;
+				VOP_UNLOCK(epp->ep_vp);
 				goto bad;
 			}
 			interp = PNBUF_GET();
-			if ((error = exec_read_from(l, epp->ep_vp,
-			    pp->p_offset, interp, pp->p_filesz)) != 0)
+			error = exec_read(l, epp->ep_vp, pp->p_offset, interp,
+			    pp->p_filesz, IO_NODELOCKED);
+			if (error != 0) {
+				VOP_UNLOCK(epp->ep_vp);
 				goto bad;
+			}
 			/* Ensure interp is NUL-terminated and of the expected length */
 			if (strnlen(interp, pp->p_filesz) != pp->p_filesz - 1) {
+				DPRINTF("bad interpreter name");
 				error = ENOEXEC;
+				VOP_UNLOCK(epp->ep_vp);
 				goto bad;
 			}
 			break;
@@ -682,13 +744,17 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 
 		error = (*epp->ep_esch->u.elf_probe_func)(l, epp, eh, interp,
 							  &startp);
-		if (error)
+		if (error) {
+			VOP_UNLOCK(epp->ep_vp);
 			goto bad;
+		}
 		pos = (Elf_Addr)startp;
 	}
 
-	if (is_dyn)
-		elf_placedynexec(epp, eh, ph);
+	if (is_dyn && (error = elf_placedynexec(epp, eh, ph)) != 0) {
+		VOP_UNLOCK(epp->ep_vp);
+		goto bad;
+	}
 
 	/*
 	 * Load all the necessary sections
@@ -699,8 +765,12 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 
 		switch (ph[i].p_type) {
 		case PT_LOAD:
-			elf_load_psection(&epp->ep_vmcmds, epp->ep_vp,
-			    &ph[i], &addr, &size, VMCMD_FIXED);
+			if ((error = elf_load_psection(&epp->ep_vmcmds,
+			    epp->ep_vp, &ph[i], &addr, &size, VMCMD_FIXED))
+			    != 0) {
+				VOP_UNLOCK(epp->ep_vp);
+				goto bad;
+			}
 
 			/*
 			 * Consider this as text segment, if it is executable.
@@ -743,9 +813,13 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 		}
 	}
 
+	/* Now done with the vnode. */
+	VOP_UNLOCK(epp->ep_vp);
+
 	if (epp->ep_vmcmds.evs_used == 0) {
 		/* No VMCMD; there was no PT_LOAD section, or those
 		 * sections were empty */
+		DPRINTF("no vmcommands");
 		error = ENOEXEC;
 		goto bad;
 	}
@@ -769,6 +843,7 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 		}
 		if (epp->ep_vmcmds.evs_used == nused) {
 			/* elf_load_interp() has not set up any new VMCMD */
+			DPRINTF("no vmcommands for interpreter");
 			error = ENOEXEC;
 			goto bad;
 		}
@@ -782,10 +857,11 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 	} else {
 		epp->ep_entry = eh->e_entry;
 		if (epp->ep_flags & EXEC_FORCEAUX) {
-			ap = kmem_alloc(sizeof(*ap), KM_SLEEP);
+			ap = kmem_zalloc(sizeof(*ap), KM_SLEEP);
 			ap->arg_interp = (vaddr_t)NULL;
-		} else
+		} else {
 			ap = NULL;
+		}
 	}
 
 	if (ap) {
@@ -824,13 +900,91 @@ netbsd_elf_signature(struct lwp *l, struct exec_package *epp,
     Elf_Ehdr *eh)
 {
 	size_t i;
-	Elf_Shdr *sh;
-	Elf_Nhdr *np;
-	size_t shsize, nsize;
+	Elf_Phdr *ph;
+	size_t phsize;
+	char *nbuf;
 	int error;
 	int isnetbsd = 0;
-	char *ndata, *ndesc;
-	
+
+	epp->ep_pax_flags = 0;
+
+	if (eh->e_phnum > ELF_MAXPHNUM || eh->e_phnum == 0) {
+		DPRINTF("no signature %#x", eh->e_phnum);
+		return ENOEXEC;
+	}
+
+	phsize = eh->e_phnum * sizeof(Elf_Phdr);
+	ph = kmem_alloc(phsize, KM_SLEEP);
+	error = exec_read(l, epp->ep_vp, eh->e_phoff, ph, phsize,
+	    IO_NODELOCKED);
+	if (error)
+		goto out;
+
+	nbuf = kmem_alloc(ELF_MAXNOTESIZE, KM_SLEEP);
+	for (i = 0; i < eh->e_phnum; i++) {
+		const char *nptr;
+		size_t nlen;
+
+		if (ph[i].p_type != PT_NOTE ||
+		    ph[i].p_filesz > ELF_MAXNOTESIZE)
+			continue;
+
+		nlen = ph[i].p_filesz;
+		error = exec_read(l, epp->ep_vp, ph[i].p_offset, nbuf, nlen,
+		    IO_NODELOCKED);
+		if (error)
+			continue;
+
+		nptr = nbuf;
+		while (nlen > 0) {
+			const Elf_Nhdr *np;
+			const char *ndata, *ndesc;
+
+			/* note header */
+			np = (const Elf_Nhdr *)nptr;
+			if (nlen < sizeof(*np)) {
+				break;
+			}
+			nptr += sizeof(*np);
+			nlen -= sizeof(*np);
+
+			/* note name */
+			ndata = nptr;
+			if (nlen < roundup(np->n_namesz, 4)) {
+				break;
+			}
+			nptr += roundup(np->n_namesz, 4);
+			nlen -= roundup(np->n_namesz, 4);
+
+			/* note description */
+			ndesc = nptr;
+			if (nlen < roundup(np->n_descsz, 4)) {
+				break;
+			}
+			nptr += roundup(np->n_descsz, 4);
+			nlen -= roundup(np->n_descsz, 4);
+
+			isnetbsd |= netbsd_elf_note(epp, np, ndata, ndesc);
+		}
+	}
+	kmem_free(nbuf, ELF_MAXNOTESIZE);
+
+	error = isnetbsd ? 0 : ENOEXEC;
+#ifdef DEBUG_ELF
+	if (error)
+		DPRINTF("not netbsd");
+#endif
+out:
+	kmem_free(ph, phsize);
+	return error;
+}
+
+int
+netbsd_elf_note(struct exec_package *epp,
+		const Elf_Nhdr *np, const char *ndata, const char *ndesc)
+{
+	int isnetbsd = 0;
+
 #ifdef DIAGNOSTIC
 	const char *badnote;
 #define BADNOTE(n) badnote = (n)
@@ -838,175 +992,122 @@ netbsd_elf_signature(struct lwp *l, struct exec_package *epp,
 #define BADNOTE(n)
 #endif
 
-	epp->ep_pax_flags = 0;
-	if (eh->e_shnum > ELF_MAXSHNUM || eh->e_shnum == 0)
-		return ENOEXEC;
-
-	shsize = eh->e_shnum * sizeof(Elf_Shdr);
-	sh = kmem_alloc(shsize, KM_SLEEP);
-	error = exec_read_from(l, epp->ep_vp, eh->e_shoff, sh, shsize);
-	if (error)
-		goto out;
-
-	np = kmem_alloc(ELF_MAXNOTESIZE, KM_SLEEP);
-	for (i = 0; i < eh->e_shnum; i++) {
-		Elf_Shdr *shp = &sh[i];
-
-		if (shp->sh_type != SHT_NOTE ||
-		    shp->sh_size > ELF_MAXNOTESIZE ||
-		    shp->sh_size < sizeof(Elf_Nhdr) + ELF_NOTE_NETBSD_NAMESZ)
-			continue;
-
-		error = exec_read_from(l, epp->ep_vp, shp->sh_offset, np,
-		    shp->sh_size);
-		if (error)
-			continue;
-
-		/* Point to the note, skip the header */
-		ndata = (char *)(np + 1);
+	switch (np->n_type) {
+	case ELF_NOTE_TYPE_NETBSD_TAG:
+		/* It is us */
+		if (np->n_namesz == ELF_NOTE_NETBSD_NAMESZ &&
+		    np->n_descsz == ELF_NOTE_NETBSD_DESCSZ &&
+		    memcmp(ndata, ELF_NOTE_NETBSD_NAME,
+		    ELF_NOTE_NETBSD_NAMESZ) == 0) {
+			memcpy(&epp->ep_osversion, ndesc,
+			    ELF_NOTE_NETBSD_DESCSZ);
+			isnetbsd = 1;
+			break;
+		}
 
 		/*
-		 * Padding is present if necessary to ensure 4-byte alignment.
-		 * The actual section size is therefore:
-		 *    header size + 4-byte aligned name + 4-byte aligned desc
-		 * Ensure this size is consistent with what is indicated
-		 * in sh_size. The first check avoids integer overflows.
-		 *
-		 * Binaries from before NetBSD 1.6 have two notes in the same
-		 * note section.  The second note was never used, so as long as
-		 * the section is at least as big as it should be, it's ok.
-		 * These binaries also have a second note section with a note of
-		 * type ELF_NOTE_TYPE_NETBSD_TAG, which can be ignored as well.
+		 * Ignore SuSE tags; SuSE's n_type is the same the
+		 * NetBSD one.
 		 */
-		if (np->n_namesz > shp->sh_size || np->n_descsz > shp->sh_size) {
-			BADNOTE("note size limit");
-			goto bad;
+		if (np->n_namesz == ELF_NOTE_SUSE_NAMESZ &&
+		    memcmp(ndata, ELF_NOTE_SUSE_NAME,
+		    ELF_NOTE_SUSE_NAMESZ) == 0)
+			break;
+		/*
+		 * Ignore old GCC
+		 */
+		if (np->n_namesz == ELF_NOTE_OGCC_NAMESZ &&
+		    memcmp(ndata, ELF_NOTE_OGCC_NAME,
+		    ELF_NOTE_OGCC_NAMESZ) == 0)
+			break;
+		BADNOTE("NetBSD tag");
+		goto bad;
+
+	case ELF_NOTE_TYPE_PAX_TAG:
+		if (np->n_namesz == ELF_NOTE_PAX_NAMESZ &&
+		    np->n_descsz == ELF_NOTE_PAX_DESCSZ &&
+		    memcmp(ndata, ELF_NOTE_PAX_NAME,
+		    ELF_NOTE_PAX_NAMESZ) == 0) {
+			uint32_t flags;
+			memcpy(&flags, ndesc, sizeof(flags));
+			/* Convert the flags and insert them into
+			 * the exec package. */
+			pax_setup_elf_flags(epp, flags);
+			break;
 		}
-		nsize = sizeof(*np) + roundup(np->n_namesz, 4) +
-		    roundup(np->n_descsz, 4);
-		if (nsize > shp->sh_size) {
-			BADNOTE("note size");
-			goto bad;
+		BADNOTE("PaX tag");
+		goto bad;
+
+	case ELF_NOTE_TYPE_MARCH_TAG:
+		/* Copy the machine arch into the package. */
+		if (np->n_namesz == ELF_NOTE_MARCH_NAMESZ
+		    && memcmp(ndata, ELF_NOTE_MARCH_NAME,
+			    ELF_NOTE_MARCH_NAMESZ) == 0) {
+			/* Do not truncate the buffer */
+			if (np->n_descsz > sizeof(epp->ep_machine_arch)) {
+				BADNOTE("description size limit");
+				goto bad;
+			}
+			/*
+			 * Ensure ndesc is NUL-terminated and of the
+			 * expected length.
+			 */
+			if (strnlen(ndesc, np->n_descsz) + 1 !=
+			    np->n_descsz) {
+				BADNOTE("description size");
+				goto bad;
+			}
+			strlcpy(epp->ep_machine_arch, ndesc,
+			    sizeof(epp->ep_machine_arch));
+			break;
 		}
-		ndesc = ndata + roundup(np->n_namesz, 4);
+		BADNOTE("march tag");
+		goto bad;
 
-		switch (np->n_type) {
-		case ELF_NOTE_TYPE_NETBSD_TAG:
-			/* It is us */
-			if (np->n_namesz == ELF_NOTE_NETBSD_NAMESZ &&
-			    np->n_descsz == ELF_NOTE_NETBSD_DESCSZ &&
-			    memcmp(ndata, ELF_NOTE_NETBSD_NAME,
-			    ELF_NOTE_NETBSD_NAMESZ) == 0) {
-				memcpy(&epp->ep_osversion, ndesc,
-				    ELF_NOTE_NETBSD_DESCSZ);
-				isnetbsd = 1;
-				break;
-			}
-
-			/*
-			 * Ignore SuSE tags; SuSE's n_type is the same the
-			 * NetBSD one.
-			 */
-			if (np->n_namesz == ELF_NOTE_SUSE_NAMESZ &&
-			    memcmp(ndata, ELF_NOTE_SUSE_NAME,
-			    ELF_NOTE_SUSE_NAMESZ) == 0)
-				break;
-			/*
-			 * Ignore old GCC
-			 */
-			if (np->n_namesz == ELF_NOTE_OGCC_NAMESZ &&
-			    memcmp(ndata, ELF_NOTE_OGCC_NAME,
-			    ELF_NOTE_OGCC_NAMESZ) == 0)
-				break;
-			BADNOTE("NetBSD tag");
-			goto bad;
-
-		case ELF_NOTE_TYPE_PAX_TAG:
-			if (np->n_namesz == ELF_NOTE_PAX_NAMESZ &&
-			    np->n_descsz == ELF_NOTE_PAX_DESCSZ &&
-			    memcmp(ndata, ELF_NOTE_PAX_NAME,
-			    ELF_NOTE_PAX_NAMESZ) == 0) {
-				uint32_t flags;
-				memcpy(&flags, ndesc, sizeof(flags));
-				/* Convert the flags and insert them into
-				 * the exec package. */
-				pax_setup_elf_flags(epp, flags);
-				break;
-			}
-			BADNOTE("PaX tag");
-			goto bad;
-
-		case ELF_NOTE_TYPE_MARCH_TAG:
-			/* Copy the machine arch into the package. */
-			if (np->n_namesz == ELF_NOTE_MARCH_NAMESZ
-			    && memcmp(ndata, ELF_NOTE_MARCH_NAME,
-				    ELF_NOTE_MARCH_NAMESZ) == 0) {
-				/* Do not truncate the buffer */
-				if (np->n_descsz > sizeof(epp->ep_machine_arch)) {
-					BADNOTE("description size limit");
-					goto bad;
-				}
-				/*
-				 * Ensure ndesc is NUL-terminated and of the
-				 * expected length.
-				 */
-				if (strnlen(ndesc, np->n_descsz) + 1 !=
-				    np->n_descsz) {
-					BADNOTE("description size");
-					goto bad;
-				}
-				strlcpy(epp->ep_machine_arch, ndesc,
-				    sizeof(epp->ep_machine_arch));
-				break;
-			}
-			BADNOTE("march tag");
-			goto bad;
-
-		case ELF_NOTE_TYPE_MCMODEL_TAG:
-			/* arch specific check for code model */
+	case ELF_NOTE_TYPE_MCMODEL_TAG:
+		/* arch specific check for code model */
 #ifdef ELF_MD_MCMODEL_CHECK
-			if (np->n_namesz == ELF_NOTE_MCMODEL_NAMESZ
-			    && memcmp(ndata, ELF_NOTE_MCMODEL_NAME,
-				    ELF_NOTE_MCMODEL_NAMESZ) == 0) {
-				ELF_MD_MCMODEL_CHECK(epp, ndesc, np->n_descsz);
-				break;
-			}
-			BADNOTE("mcmodel tag");
-			goto bad;
+		if (np->n_namesz == ELF_NOTE_MCMODEL_NAMESZ
+		    && memcmp(ndata, ELF_NOTE_MCMODEL_NAME,
+			    ELF_NOTE_MCMODEL_NAMESZ) == 0) {
+			ELF_MD_MCMODEL_CHECK(epp, ndesc, np->n_descsz);
+			break;
+		}
+		BADNOTE("mcmodel tag");
+		goto bad;
 #endif
-			break;
+		break;
 
-		case ELF_NOTE_TYPE_SUSE_VERSION_TAG:
-			break;
+	case ELF_NOTE_TYPE_SUSE_VERSION_TAG:
+		break;
 
-		case ELF_NOTE_TYPE_GO_BUILDID_TAG:
-			break;
+	case ELF_NOTE_TYPE_GO_BUILDID_TAG:
+		break;
 
-		default:
-			BADNOTE("unknown tag");
+	case ELF_NOTE_TYPE_NETBSD_EMUL_TAG:
+		/* Ancient NetBSD version tag */
+		break;
+
+	default:
+		BADNOTE("unknown tag");
 bad:
 #ifdef DIAGNOSTIC
-			/* Ignore GNU tags */
-			if (np->n_namesz == ELF_NOTE_GNU_NAMESZ &&
-			    memcmp(ndata, ELF_NOTE_GNU_NAME,
-			    ELF_NOTE_GNU_NAMESZ) == 0)
-			    break;
+		/* Ignore GNU tags */
+		if (np->n_namesz == ELF_NOTE_GNU_NAMESZ &&
+		    memcmp(ndata, ELF_NOTE_GNU_NAME,
+		    ELF_NOTE_GNU_NAMESZ) == 0)
+		    break;
 
-			int ns = MIN(np->n_namesz, shp->sh_size - sizeof(*np));
-			printf("%s: Unknown elf note type %d (%s): "
-			    "[namesz=%d, descsz=%d name=%-*.*s]\n",
-			    epp->ep_kname, np->n_type, badnote, np->n_namesz,
-			    np->n_descsz, ns, ns, ndata);
+		int ns = (int)np->n_namesz;
+		printf("%s: Unknown elf note type %d (%s): "
+		    "[namesz=%d, descsz=%d name=%-*.*s]\n",
+		    epp->ep_kname, np->n_type, badnote, np->n_namesz,
+		    np->n_descsz, ns, ns, ndata);
 #endif
-			break;
-		}
+		break;
 	}
-	kmem_free(np, ELF_MAXNOTESIZE);
 
-	error = isnetbsd ? 0 : ENOEXEC;
-out:
-	kmem_free(sh, shsize);
-	return error;
+	return isnetbsd;
 }
 
 int

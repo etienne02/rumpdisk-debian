@@ -1,4 +1,4 @@
-/*	$NetBSD: usscanner.c,v 1.40 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: usscanner.c,v 1.50 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -47,7 +47,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: usscanner.c,v 1.40 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: usscanner.c,v 1.50 2021/08/07 16:19:17 thorpej Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include "scsibus.h"
 #include <sys/param.h>
@@ -92,7 +96,7 @@ int	usscannerdebug = 0;
 #define USSCANNER_TIMEOUT 2000
 
 struct usscanner_softc {
- 	device_t		sc_dev;
+	device_t		sc_dev;
 	struct usbd_device	*sc_udev;
 	struct usbd_interface	*sc_iface;
 
@@ -147,17 +151,17 @@ Static callback usscanner_data_cb;
 Static callback usscanner_sensecmd_cb;
 Static callback usscanner_sensedata_cb;
 
-int usscanner_match(device_t, cfdata_t, void *);
-void usscanner_attach(device_t, device_t, void *);
-void usscanner_childdet(device_t, device_t);
-int usscanner_detach(device_t, int);
-int usscanner_activate(device_t, enum devact);
-extern struct cfdriver usscanner_cd;
+static int usscanner_match(device_t, cfdata_t, void *);
+static void usscanner_attach(device_t, device_t, void *);
+static void usscanner_childdet(device_t, device_t);
+static int usscanner_detach(device_t, int);
+static int usscanner_activate(device_t, enum devact);
+
 CFATTACH_DECL2_NEW(usscanner, sizeof(struct usscanner_softc),
     usscanner_match, usscanner_attach, usscanner_detach, usscanner_activate,
     NULL, usscanner_childdet);
 
-int
+static int
 usscanner_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -171,7 +175,7 @@ usscanner_match(device_t parent, cfdata_t match, void *aux)
 		return UMATCH_NONE;
 }
 
-void
+static void
 usscanner_attach(device_t parent, device_t self, void *aux)
 {
 	struct usscanner_softc *sc = device_private(self);
@@ -277,8 +281,7 @@ usscanner_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_cmd_buffer = usbd_get_buffer(sc->sc_cmd_xfer);
 
-	error = usbd_create_xfer(sc->sc_intr_pipe, 1, USBD_SHORT_XFER_OK,
-	    0, &sc->sc_intr_xfer);
+	error = usbd_create_xfer(sc->sc_intr_pipe, 1, 0, 0, &sc->sc_intr_xfer);
 	if (error) {
 		aprint_error_dev(self, "alloc intr xfer failed, error=%d\n",
 		    error);
@@ -287,7 +290,7 @@ usscanner_attach(device_t parent, device_t self, void *aux)
 	}
 
 	error = usbd_create_xfer(sc->sc_in_pipe, USSCANNER_MAX_TRANSFER_SIZE,
-	    USBD_SHORT_XFER_OK, 0, &sc->sc_datain_xfer);
+	    0, 0, &sc->sc_datain_xfer);
 	if (error) {
 		aprint_error_dev(self, "alloc data xfer failed, error=%d\n",
 		    error);
@@ -297,7 +300,7 @@ usscanner_attach(device_t parent, device_t self, void *aux)
 	sc->sc_datain_buffer = usbd_get_buffer(sc->sc_datain_xfer);
 
 	error = usbd_create_xfer(sc->sc_out_pipe, USSCANNER_MAX_TRANSFER_SIZE,
-	    USBD_SHORT_XFER_OK, 0, &sc->sc_dataout_xfer);
+	    0, 0, &sc->sc_dataout_xfer);
 	if (error) {
 		aprint_error_dev(self, "alloc data xfer failed, err=%d\n", err);
 		usscanner_cleanup(sc);
@@ -328,7 +331,8 @@ usscanner_attach(device_t parent, device_t self, void *aux)
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, sc->sc_udev, sc->sc_dev);
 
-	sc->sc_child = config_found(sc->sc_dev, &sc->sc_channel, scsiprint);
+	sc->sc_child = config_found(sc->sc_dev, &sc->sc_channel, scsiprint,
+	    CFARGS_NONE);
 
 	DPRINTFN(10, ("usscanner_attach: %p\n", sc->sc_udev));
 
@@ -346,7 +350,7 @@ usscanner_attach(device_t parent, device_t self, void *aux)
 #endif
 }
 
-void
+static void
 usscanner_childdet(device_t self, device_t child)
 {
 	struct usscanner_softc *sc = device_private(self);
@@ -355,7 +359,7 @@ usscanner_childdet(device_t self, device_t child)
 	sc->sc_child = NULL;
 }
 
-int
+static int
 usscanner_detach(device_t self, int flags)
 {
 	struct usscanner_softc *sc = device_private(self);
@@ -384,7 +388,9 @@ usscanner_detach(device_t self, int flags)
 	else
 		rv = 0;
 
-	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
+	if (sc->sc_udev != NULL)
+		usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev,
+		    sc->sc_dev);
 
 	return rv;
 }
@@ -418,7 +424,7 @@ usscanner_cleanup(struct usscanner_softc *sc)
 	}
 }
 
-int
+static int
 usscanner_activate(device_t self, enum devact act)
 {
 	struct usscanner_softc *sc = device_private(self);
@@ -706,7 +712,7 @@ usscanner_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 		xs = arg;
 
 		DPRINTFN(8, ("%s: usscanner_scsipi_request: %d:%d "
-		    "xs=%p cmd=0x%02x datalen=%d (quirks=0x%x, poll=%d)\n",
+		    "xs=%p cmd=0x%02x datalen=%d (quirks=%#x, poll=%d)\n",
 		    device_xname(sc->sc_dev),
 		    xs->xs_periph->periph_target, xs->xs_periph->periph_lun,
 		    xs, xs->cmd->opcode, xs->datalen,

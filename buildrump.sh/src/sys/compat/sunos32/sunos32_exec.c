@@ -1,4 +1,4 @@
-/*	$NetBSD: sunos32_exec.c,v 1.33 2012/02/19 21:06:44 rmind Exp $	 */
+/*	$NetBSD: sunos32_exec.c,v 1.36 2018/08/10 21:44:59 pgoyette Exp $	 */
 
 /*
  * Copyright (c) 2001 Matthew R. Green
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunos32_exec.c,v 1.33 2012/02/19 21:06:44 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunos32_exec.c,v 1.36 2018/08/10 21:44:59 pgoyette Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_syscall_debug.h"
@@ -50,6 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD: sunos32_exec.c,v 1.33 2012/02/19 21:06:44 rmind Exp 
 
 extern int nsunos32_sysent;
 extern struct sysent sunos32_sysent[];
+extern const uint32_t sunos32_sysent_nomodbits[];
 #ifdef SYSCALL_DEBUG
 extern const char * const sunos32_syscallnames[];
 #endif
@@ -71,6 +72,7 @@ struct emul emul_sunos = {
 	.e_nsysent =		SUNOS32_SYS_NSYSENT,
 #endif
 	.e_sysent =		sunos32_sysent,
+	.e_nomodbits =		sunos32_sysent_nomodbits,
 #ifdef SYSCALL_DEBUG
 	.e_syscallnames =	sunos32_syscallnames,
 #else
@@ -78,7 +80,6 @@ struct emul emul_sunos = {
 #endif
 	.e_sendsig =		sunos32_sendsig,
 	.e_trapsignal =		trapsignal,
-	.e_tracesig =		NULL,
 	.e_sigcode =		sunos_sigcode,
 	.e_esigcode =		sunos_esigcode,
 	.e_sigobject =		&emul_sunos32_object,
@@ -94,7 +95,6 @@ struct emul emul_sunos = {
 	.e_syscall_intern =	syscall,
 #endif
 	.e_sysctlovly =		NULL,
-	.e_fault =		NULL,
 	.e_vm_default_addr =	uvm_default_mapaddr,
 	.e_usertrap =		NULL,
 	.e_ucsize =		0,

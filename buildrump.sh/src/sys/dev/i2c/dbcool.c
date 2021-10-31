@@ -1,4 +1,4 @@
-/*	$NetBSD: dbcool.c,v 1.46 2016/07/11 14:44:49 msaitoh Exp $ */
+/*	$NetBSD: dbcool.c,v 1.63 2021/08/09 20:49:09 andvar Exp $ */
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dbcool.c,v 1.46 2016/07/11 14:44:49 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dbcool.c,v 1.63 2021/08/09 20:49:09 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -731,10 +731,14 @@ static char dbcool_cur_behav[16];
 CFATTACH_DECL_NEW(dbcool, sizeof(struct dbcool_softc),
     dbcool_match, dbcool_attach, dbcool_detach, NULL);
 
-static const char * dbcool_compats[] = {
-	"i2c-adm1031",
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "i2c-adm1031" },
+	{ .compat = "adt7467" },
+	{ .compat = "adt7460" },
+	{ .compat = "adm1030" },
+	DEVICE_COMPAT_EOL
 };
+
 int
 dbcool_match(device_t parent, cfdata_t cf, void *aux)
 {
@@ -745,20 +749,16 @@ dbcool_match(device_t parent, cfdata_t cf, void *aux)
 	dc.dc_chip = NULL;
 	dc.dc_readreg = dbcool_readreg;
 	dc.dc_writereg = dbcool_writereg;
+	int match_result;
 
-	/* Direct config - match compats */
-	if (ia->ia_name) {
-		if (ia->ia_ncompat > 0) {
-			if (iic_compat_match(ia, dbcool_compats))
-				return 1;
-		}
-	/* Indirect config - check address and chip ID */
-	} else {
-		if ((ia->ia_addr & DBCOOL_ADDRMASK) != DBCOOL_ADDR)
-			return 0;
-		if (dbcool_chip_ident(&dc) >= 0)
-			return 1;
-	}
+	if (iic_use_direct_match(ia, cf, compat_data, &match_result))
+		return match_result;
+
+	if ((ia->ia_addr & DBCOOL_ADDRMASK) != DBCOOL_ADDR)
+		return 0;
+	if (dbcool_chip_ident(&dc) >= 0)
+		return I2C_MATCH_ADDRESS_AND_PROBE;
+
 	return 0;
 }
 
@@ -774,8 +774,12 @@ dbcool_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dc.dc_chip = NULL;
 	sc->sc_dc.dc_readreg = dbcool_readreg;
 	sc->sc_dc.dc_writereg = dbcool_writereg;
-	(void)dbcool_chip_ident(&sc->sc_dc);
 	sc->sc_dev = self;
+	sc->sc_prop = args->ia_prop;
+	prop_object_retain(sc->sc_prop);
+
+	if (dbcool_chip_ident(&sc->sc_dc) < 0 || sc->sc_dc.dc_chip == NULL)
+		panic("could not identify chip at addr %d", args->ia_addr);
 
 	aprint_naive("\n");
 	aprint_normal("\n");
@@ -815,16 +819,21 @@ dbcool_detach(device_t self, int flags)
 
 	pmf_device_deregister(self);
 
-	sysmon_envsys_unregister(sc->sc_sme);
+	if (sc->sc_sme != NULL)
+		sysmon_envsys_unregister(sc->sc_sme);
 
 	sysctl_teardown(&sc->sc_sysctl_log);
 
-	sc->sc_sme = NULL;
 	return 0;
 }
 
-/* On suspend, we save the state of the SHDN bit, then set it */
-bool dbcool_pmf_suspend(device_t dev, const pmf_qual_t *qual)
+/*
+ * On suspend, we save the state of the SHDN bit, then set it
+ * On resume, we restore the previous state of the SHDN bit (which
+ * we saved in sc_suspend)
+ */
+static bool
+dbcool_do_pmf(device_t dev, const pmf_qual_t *qual, bool suspend)
 {
 	struct dbcool_softc *sc = device_private(dev);
 	uint8_t reg, bit, cfg;
@@ -840,34 +849,29 @@ bool dbcool_pmf_suspend(device_t dev, const pmf_qual_t *qual)
 		bit = DBCOOL_CFG2_SHDN;
 	}
 	cfg = sc->sc_dc.dc_readreg(&sc->sc_dc, reg);
-	sc->sc_suspend = cfg & bit;
-	cfg |= bit;
+	if (suspend) {
+		sc->sc_suspend = (cfg & bit) != 0;
+		cfg |= bit;
+	} else {
+		cfg &= sc->sc_suspend ? bit : 0;
+	}
 	sc->sc_dc.dc_writereg(&sc->sc_dc, reg, cfg);
 
 	return true;
 }
 
-/* On resume, we restore the previous state of the SHDN bit (which
-   we saved in sc_suspend) */
-bool dbcool_pmf_resume(device_t dev, const pmf_qual_t *qual)
+bool
+dbcool_pmf_suspend(device_t dev, const pmf_qual_t *qual)
 {
-	struct dbcool_softc *sc = device_private(dev);
-	uint8_t reg, cfg;
 
-	if ((sc->sc_dc.dc_chip->flags & DBCFLAG_HAS_SHDN) == 0)
-		return true;
+	return dbcool_do_pmf(dev, qual, true);
+}
 
-	if (sc->sc_dc.dc_chip->flags & DBCFLAG_ADT7466) {
-		reg = DBCOOL_ADT7466_CONFIG2;
-	} else {
-		reg = DBCOOL_CONFIG2_REG;
-	}
-	cfg = sc->sc_dc.dc_readreg(&sc->sc_dc, reg);
-	cfg &= ~sc->sc_suspend;
-	sc->sc_dc.dc_writereg(&sc->sc_dc, reg, cfg);
+bool
+dbcool_pmf_resume(device_t dev, const pmf_qual_t *qual)
+{
 
-	return true;
-
+	return dbcool_do_pmf(dev, qual, false);
 }
 
 uint8_t
@@ -1076,9 +1080,10 @@ dbcool_read_volt(struct dbcool_softc *sc, uint8_t reg, int nom_idx, bool extres)
 		if (reg == DBCOOL_IMON) {
 			val = v1;
 			ext >>= 6;
-		} else
+		} else {
 			val = v2;
 			ext >>= 4;
+		}
 		ext &= 0x0f;
 	} else {
 		ext = sc->sc_dc.dc_readreg(&sc->sc_dc, DBCOOL_EXTRES1_REG);
@@ -1310,7 +1315,7 @@ sysctl_dbcool_behavior(SYSCTLFN_ARGS)
 			break;
 	if (i >= __arraycount(behavior))
 		return EINVAL;
-
+	newreg = i;
 	if (sc->sc_dc.dc_chip->flags & DBCFLAG_ADM1030) {
 		/*
 		 * ADM1030 splits fan controller behavior across two
@@ -1496,7 +1501,7 @@ dbcool_setup(device_t self)
 	/*
 	 * Some chips are capable of reporting an extended temperature range
 	 * by default.  On these models, config register 5 bit 0 can be set
-	 * to 1 for compatability with other chips that report 2s complement.
+	 * to 1 for compatibility with other chips that report 2s complement.
 	 */
 	if (sc->sc_dc.dc_chip->flags & DBCFLAG_ADT7466) {
 		if (sc->sc_dc.dc_readreg(&sc->sc_dc, DBCOOL_ADT7466_CONFIG1) & 0x80)
@@ -1595,6 +1600,7 @@ dbcool_setup(device_t self)
 
 out:
 	sysmon_envsys_destroy(sc->sc_sme);
+	sc->sc_sme = NULL;
 }
 
 static int
@@ -1686,10 +1692,18 @@ dbcool_attach_sensor(struct dbcool_softc *sc, int idx)
 {
 	int name_index;
 	int error = 0;
+	char name[8];
+	const char *desc;
 
 	name_index = sc->sc_dc.dc_chip->table[idx].name_index;
-	strlcpy(sc->sc_sensor[idx].desc, dbc_sensor_names[name_index],
-		sizeof(sc->sc_sensor[idx].desc));
+	snprintf(name, 7, "s%02x", sc->sc_dc.dc_chip->table[idx].reg.val_reg);
+	if (prop_dictionary_get_string(sc->sc_prop, name, &desc)) {
+		 strlcpy(sc->sc_sensor[idx].desc, desc,
+			sizeof(sc->sc_sensor[idx].desc));
+	} else {
+		strlcpy(sc->sc_sensor[idx].desc, dbc_sensor_names[name_index],
+			sizeof(sc->sc_sensor[idx].desc));
+	}
 	sc->sc_regs[idx] = &sc->sc_dc.dc_chip->table[idx].reg;
 	sc->sc_nom_volt[idx] = sc->sc_dc.dc_chip->table[idx].nom_volt_index;
 
@@ -1718,9 +1732,12 @@ dbcool_attach_temp_control(struct dbcool_softc *sc, int idx,
 
 	/* create sysctl node for the sensor if not one already there */
 	if (sc->sc_sysctl_num[j] == -1) {
+		int name_index = sc->sc_dc.dc_chip->table[idx].name_index;
+		
 		ret = sysctl_createv(&sc->sc_sysctl_log, 0, NULL, &me2,
 				     CTLFLAG_READWRITE,
-				     CTLTYPE_NODE, sc->sc_sensor[j].desc, NULL,
+				     CTLTYPE_NODE, dbc_sensor_names[name_index],
+				     sc->sc_sensor[j].desc,
 				     NULL, 0, NULL, 0,
 				     CTL_HW, sc->sc_root_sysctl_num, CTL_CREATE,
 					CTL_EOL);
@@ -1881,7 +1898,7 @@ dbcool_chip_ident(struct dbcool_chipset *dc)
 			return i;
 		}
 
-	aprint_verbose("dbcool_chip_ident: addr 0x%02x c_id 0x%02x d_id 0x%02x"
+	aprint_debug("dbcool_chip_ident: addr 0x%02x c_id 0x%02x d_id 0x%02x"
 			" r_id 0x%02x: No match.\n", dc->dc_addr, c_id, d_id,
 			r_id);
 

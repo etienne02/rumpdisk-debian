@@ -1,6 +1,6 @@
-/*	$NetBSD: fenv.h,v 1.1 2014/09/19 17:36:26 matt Exp $	*/
+/*	$NetBSD: fenv.h,v 1.3 2020/03/14 16:12:16 skrll Exp $	*/
 
-/* 
+/*
  * Based on ieeefp.h written by J.T. Conklin, Apr 28, 1995
  * Public domain.
  */
@@ -27,7 +27,7 @@ typedef int fexcept_t;
 __BEGIN_DECLS
 
 /* Default floating-point environment */
-extern fenv_t	__fe_dfl_env;
+extern const fenv_t	__fe_dfl_env;
 #define FE_DFL_ENV	(&__fe_dfl_env)
 
 __END_DECLS

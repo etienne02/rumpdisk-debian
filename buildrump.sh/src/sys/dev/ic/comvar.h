@@ -1,4 +1,4 @@
-/*	$NetBSD: comvar.h,v 1.82 2016/05/27 20:01:49 bouyer Exp $	*/
+/*	$NetBSD: comvar.h,v 1.94 2021/03/25 05:34:49 rin Exp $	*/
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All rights reserved.
@@ -61,7 +61,7 @@ int com_is_console(bus_space_tag_t, bus_addr_t, bus_space_handle_t *);
 /* Hardware flag masks */
 #define	COM_HW_NOIEN	0x01
 #define	COM_HW_FIFO	0x02
-		/*	0x04	free for use */
+#define	COM_HW_BROKEN_ETXRDY	0x04
 #define	COM_HW_FLOW	0x08
 #define	COM_HW_DEV_OK	0x20
 #define	COM_HW_CONSOLE	0x40
@@ -75,7 +75,6 @@ int com_is_console(bus_space_tag_t, bus_addr_t, bus_space_handle_t *);
 #define	COM_RING_SIZE	2048
 #endif
 
-#ifdef	COM_REGMAP
 #define	COM_REG_RXDATA		0
 #define	COM_REG_TXDATA		1
 #define	COM_REG_DLBL		2
@@ -83,93 +82,33 @@ int com_is_console(bus_space_tag_t, bus_addr_t, bus_space_handle_t *);
 #define	COM_REG_IER		4
 #define	COM_REG_IIR		5
 #define	COM_REG_FIFO		6
-#define	COM_REG_TCR		6
-#define	COM_REG_EFR		7
-#define	COM_REG_TLR		7
-#define	COM_REG_LCR		8
-#define	COM_REG_MDR1		8
-#define	COM_REG_MCR		9
-#define	COM_REG_LSR		10
-#define	COM_REG_MSR		11
-#ifdef	COM_16750
-#define	COM_REG_USR		31
-#endif
-#ifdef	COM_AWIN
-#define	COM_REG_USR		31
-#define	COM_REG_TFL		32
-#define	COM_REG_RFL		33
-#define	COM_REG_HALT		41
-#endif
+#define	COM_REG_TCR		7
+#define	COM_REG_EFR		8
+#define	COM_REG_TLR		9
+#define	COM_REG_LCR		10
+#define	COM_REG_MCR		11
+#define	COM_REG_LSR		12
+#define	COM_REG_MSR		13
+#define	COM_REG_MDR1		14		/* TI OMAP */
+#define	COM_REG_USR		15		/* 16750/DW APB */
+#define	COM_REG_TFL		16		/* DW APB */
+#define	COM_REG_RFL		17		/* DW APB */
+#define	COM_REG_HALT		18		/* DW APB */
+
+#define	COM_REGMAP_NENTRIES	19
 
 struct com_regs {
 	bus_space_tag_t		cr_iot;
 	bus_space_handle_t	cr_ioh;
 	bus_addr_t		cr_iobase;
 	bus_size_t		cr_nports;
-#ifdef COM_16750
-	bus_size_t		cr_map[32];
-#else
-	bus_size_t		cr_map[16];
-#endif
+	bus_size_t		cr_map[COM_REGMAP_NENTRIES];
 };
 
-#ifdef COM_16750
-extern const bus_size_t com_std_map[32];
-#else
-extern const bus_size_t com_std_map[16];
-#endif
-
-#define	COM_INIT_REGS(regs, tag, hdl, addr)				\
-	do {								\
-		regs.cr_iot = tag;					\
-		regs.cr_ioh = hdl;					\
-		regs.cr_iobase = addr;					\
-		regs.cr_nports = COM_NPORTS;				\
-		memcpy(regs.cr_map, com_std_map, sizeof (regs.cr_map));	\
-	} while (0)
-
-#else
-#define	COM_REG_RXDATA		com_data
-#define	COM_REG_TXDATA		com_data
-#define	COM_REG_DLBL		com_dlbl
-#define	COM_REG_DLBH		com_dlbh
-#define	COM_REG_IER		com_ier
-#define	COM_REG_IIR		com_iir
-#define	COM_REG_FIFO		com_fifo
-#define	COM_REG_EFR		com_efr
-#define	COM_REG_LCR		com_lctl
-#define	COM_REG_MCR		com_mcr
-#define	COM_REG_LSR		com_lsr
-#define	COM_REG_MSR		com_msr
-#define	COM_REG_TCR		com_msr
-#define	COM_REG_TLR		com_scratch
-#define	COM_REG_MDR1		8
-#ifdef	COM_16750
-#define COM_REG_USR		com_usr
-#endif
-#ifdef	COM_AWIN
-#define COM_REG_USR		com_usr
-#define	COM_REG_TFL		com_tfl
-#define	COM_REG_RFL		com_rfl
-#define	COM_REG_HALT		com_halt
-#endif
-
-struct com_regs {
-	bus_space_tag_t		cr_iot;
-	bus_space_handle_t	cr_ioh;
-	bus_addr_t		cr_iobase;
-	bus_size_t		cr_nports;
-};
-
-#define	COM_INIT_REGS(regs, tag, hdl, addr)		\
-	do {						\
-		regs.cr_iot = tag;			\
-		regs.cr_ioh = hdl;			\
-		regs.cr_iobase = addr;			\
-		regs.cr_nports = COM_NPORTS;		\
-	} while (0)
-
-#endif
+void	com_init_regs(struct com_regs *, bus_space_tag_t, bus_space_handle_t,
+		      bus_addr_t);
+void	com_init_regs_stride(struct com_regs *, bus_space_tag_t,
+			     bus_space_handle_t, bus_addr_t, u_int);
 
 struct comcons_info {
 	struct com_regs regs;
@@ -184,7 +123,8 @@ struct com_softc {
 	void *sc_si;
 	struct tty *sc_tty;
 
-	struct callout sc_diag_callout;
+	callout_t sc_diag_callout;
+	callout_t sc_poll_callout;
 
 	int sc_frequency;
 
@@ -229,9 +169,7 @@ struct com_softc {
 	    sc_mcr_active, sc_lcr, sc_ier, sc_fifo, sc_dlbl, sc_dlbh, sc_efr;
 	u_char sc_mcr_dtr, sc_mcr_rts, sc_msr_cts, sc_msr_dcd;
 
-#ifdef COM_HAYESP
-	u_char sc_prescaler;
-#endif
+	u_char sc_prescaler;		/* for COM_TYPE_HAYESP */
 
 	/*
 	 * There are a great many almost-ns16550-compatible UARTs out
@@ -247,6 +185,12 @@ struct com_softc {
 #define	COM_TYPE_16550_NOERS	5	/* like a 16550, no ERS */
 #define	COM_TYPE_INGENIC	6	/* JZ4780 built-in */
 #define	COM_TYPE_TEGRA		7	/* NVIDIA Tegra built-in */
+#define	COM_TYPE_BCMAUXUART	8	/* BCM2835 AUX UART */
+#define	COM_TYPE_16650		9
+#define	COM_TYPE_16750		10
+#define	COM_TYPE_DW_APB		11	/* DesignWare APB UART */
+
+	int sc_poll_ticks;
 
 	/* power management hooks */
 	int (*enable)(struct com_softc *);

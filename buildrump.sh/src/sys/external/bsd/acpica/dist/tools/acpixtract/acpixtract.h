@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -72,9 +72,9 @@
 #define AX_REQUIRED_TABLE           1
 
 #define AX_UTILITY_NAME             "ACPI Binary Table Extraction Utility"
-#define AX_SUPPORTED_OPTIONS        "ahlms:v"
+#define AX_SUPPORTED_OPTIONS        "afhlms:v^"
 #define AX_MULTI_TABLE_FILENAME     "amltables.dat"
-#define AX_TABLE_INFO_FORMAT        "Acpi table [%4.4s] - %7u bytes written to %s\n"
+#define AX_TABLE_INFO_FORMAT        "  %4.4s - %7u bytes written (0x%8.8X) - %s\n"
 
 /* Extraction states */
 
@@ -85,6 +85,9 @@
 
 #define AX_LINE_BUFFER_SIZE         256
 #define AX_MIN_BLOCK_HEADER_LENGTH  6   /* strlen ("DSDT @") */
+#define AX_HEX_DATA_LENGTH          49  /*  (3 * 16) + 1 for the colon delimiter */
+#define AX_IS_TABLE_BLOCK_HEADER    (strlen (Gbl_LineBuffer) < AX_HEX_DATA_LENGTH && \
+                                    strstr (Gbl_LineBuffer, " @ "))
 
 
 typedef struct AxTableInfo
@@ -102,11 +105,12 @@ typedef struct AxTableInfo
 ACPI_GLOBAL (char,           Gbl_LineBuffer[AX_LINE_BUFFER_SIZE]);
 ACPI_GLOBAL (char,           Gbl_HeaderBuffer[AX_LINE_BUFFER_SIZE]);
 ACPI_GLOBAL (char,           Gbl_InstanceBuffer[AX_LINE_BUFFER_SIZE]);
-
 ACPI_GLOBAL (AX_TABLE_INFO, *Gbl_TableListHead);
 ACPI_GLOBAL (char,           Gbl_OutputFilename[32]);
 ACPI_GLOBAL (unsigned char,  Gbl_BinaryData[16]);
 ACPI_GLOBAL (unsigned int,   Gbl_TableCount);
+ACPI_GLOBAL (BOOLEAN,        Gbl_ForceExtraction);
+
 
 /*
  * acpixtract.c
@@ -122,18 +126,13 @@ AxExtractToMultiAmlFile (
     char                    *InputPathname);
 
 int
-AxListTables (
+AxListAllTables (
     char                    *InputPathname);
 
 
 /*
  * axutils.c
  */
-size_t
-AxGetTableHeader (
-    FILE                    *InputFile,
-    unsigned char           *OutputData);
-
 unsigned int
 AxCountTableInstances (
     char                    *InputPathname,
@@ -153,21 +152,32 @@ AxCheckAscii (
     char                    *Name,
     int                     Count);
 
-int
+BOOLEAN
+AxIsFileAscii (
+    FILE                    *Handle);
+
+BOOLEAN
+AxIsHexDataLine (
+    void);
+
+BOOLEAN
 AxIsEmptyLine (
     char                    *Buffer);
 
-int
+BOOLEAN
 AxIsDataBlockHeader (
     void);
 
-long
-AxProcessOneTextLine (
+int
+AxConvertAndWrite (
     FILE                    *OutputFile,
-    char                    *ThisSignature,
-    unsigned int            ThisTableBytesWritten);
+    char                    *ThisSignature);
 
-size_t
-AxConvertLine (
+int
+AxConvertToBinary (
     char                    *InputLine,
     unsigned char           *OutputData);
+
+void
+AxDumpTableHeader (
+    unsigned char           *Header);

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -48,13 +48,13 @@
 /*
  * Compiler versions and names
  */
-#define ASL_COMPILER_NAME           "ASL+ Optimizing Compiler"
+#define ASL_COMPILER_NAME           "ASL+ Optimizing Compiler/Disassembler"
 #define AML_DISASSEMBLER_NAME       "AML/ASL+ Disassembler"
 #define ASL_INVOCATION_NAME         "iasl"
 #define ASL_CREATOR_ID              "INTL"
 #define ASL_DEFINE                  "__IASL__"
-
-#define ASL_COMPLIANCE              "Supports ACPI Specification Revision 6.1"
+#define ASL_PREFIX                  "iASL: "
+#define ASL_COMPLIANCE              "Supports ACPI Specification Revision 6.3"
 
 
 /* Configuration constants */
@@ -114,11 +114,12 @@
 
 /* Misc */
 
-#define ASL_EXTERNAL_METHOD         255
-#define ASL_ABORT                   TRUE
-#define ASL_NO_ABORT                FALSE
-#define ASL_EOF                     ACPI_UINT32_MAX
-#define ASL_IGNORE_LINE            (ACPI_UINT32_MAX -1)
+#define ASL_EXTERNAL_METHOD_UNKNOWN_PARAMS  255
+#define ASL_ABORT                           TRUE
+#define ASL_NO_ABORT                        FALSE
+#define ASL_EOF                             ACPI_UINT32_MAX
+#define ASL_IGNORE_LINE                     (ACPI_UINT32_MAX -1)
+#define ASL_ERROR_CODE_LENGTH               4
 
 
 /* Listings */
@@ -159,7 +160,6 @@
 /*
  * Macros for debug output
  */
-
 #define DEBUG_MAX_LINE_LENGTH       61
 #define DEBUG_SPACES_PER_INDENT     3
 #define DEBUG_FULL_LINE_LENGTH      71
@@ -183,6 +183,28 @@
 
 #define ASL_PARSE_TREE_DEBUG2 \
     " %08X %04X %04X %01X     %04X  %04X %05X  %05X   "\
-    "%08X %08X %08X %08X %08X %08X %04X  %02d  %5d %5d %5d %5d\n"
+    "%8p %8p %8p %8p %08X %08X %04X  %02d  %5d %5d %5d %5d"
+
+/*
+ * Macros for ASL/ASL+ converter
+ */
+#define COMMENT_CAPTURE_ON    AslGbl_CommentState.CaptureComments = TRUE;
+#define COMMENT_CAPTURE_OFF   AslGbl_CommentState.CaptureComments = FALSE;
+
+/*
+ * Special name segments - these must only be declared at the root scope
+ */
+#define NAMESEG__PTS    "_PTS"
+#define NAMESEG__WAK    "_WAK"
+#define NAMESEG__S0     "_S0_"
+#define NAMESEG__S1     "_S1_"
+#define NAMESEG__S2     "_S2_"
+#define NAMESEG__S3     "_S3_"
+#define NAMESEG__S4     "_S4_"
+#define NAMESEG__S5     "_S5_"
+#define NAMESEG__TTS    "_TTS"
+
+#define MAX_SPECIAL_NAMES      9
+
 
 #endif /* ASLDEFINE.H */

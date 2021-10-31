@@ -1,4 +1,4 @@
-/*	$NetBSD: viaide.c,v 1.84 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: viaide.c,v 1.89 2019/06/02 14:48:55 jdolecek Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2001 Manuel Bouyer.
@@ -26,11 +26,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: viaide.c,v 1.84 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: viaide.c,v 1.89 2019/06/02 14:48:55 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
@@ -303,7 +302,7 @@ static const struct pciide_product_desc pciide_via_products[] =  {
 	{ PCI_PRODUCT_VIATECH_CX700_IDE,
 	  0,
 	  NULL,
-	  via_chip_map,
+	  via_sata_chip_map_new,
 	},
 	{ PCI_PRODUCT_VIATECH_CX700M2_IDE,
 	  0,
@@ -348,6 +347,11 @@ static const struct pciide_product_desc pciide_via_products[] =  {
 	{ PCI_PRODUCT_VIATECH_VT8237S_SATA,
 	  0,
 	  "VIA Technologies VT8237S SATA Controller",
+	  via_sata_chip_map_7,
+	},
+	{ PCI_PRODUCT_VIATECH_VT8237S_SATA_RAID,
+	  0,
+	  "VIA Technologies VT8237S SATA Controller (RAID mode)",
 	  via_sata_chip_map_7,
 	},
 	{ 0,
@@ -545,6 +549,14 @@ via_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 				break;
 			case PCI_PRODUCT_VIATECH_VT8251:
 				aprint_normal("VT8251 ATA133 controller\n");
+				sc->sc_wdcdev.sc_atac.atac_udma_cap = 6;
+				break;
+			case PCI_PRODUCT_VIATECH_VX800:
+				aprint_normal("VT800 ATA133 controller\n");
+				sc->sc_wdcdev.sc_atac.atac_udma_cap = 6;
+				break;
+			case PCI_PRODUCT_VIATECH_VX855:
+				aprint_normal("VT855 ATA133 controller\n");
 				sc->sc_wdcdev.sc_atac.atac_udma_cap = 6;
 				break;
 			default:
@@ -1071,14 +1083,7 @@ via_vt6421_chansetup(struct pciide_softc *sc, int channel)
 
 	cp->ata_channel.ch_channel = channel;
 	cp->ata_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-	cp->ata_channel.ch_queue =
-	    malloc(sizeof(struct ata_queue), M_DEVBUF, M_NOWAIT);
-	if (cp->ata_channel.ch_queue == NULL) {
-		aprint_error("%s channel %d: "
-		    "can't allocate memory for command queue",
-		    device_xname(sc->sc_wdcdev.sc_atac.atac_dev), channel);
-		return 0;
-	}
+
 	return 1;
 }
 
@@ -1133,8 +1138,9 @@ via_sata_chip_map_new(struct pciide_softc *sc,
 		return;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf, sizeof(intrbuf));
-	sc->sc_pci_ih = pci_intr_establish(pa->pa_pc,
-	    intrhandle, IPL_BIO, pciide_pci_intr, sc);
+	sc->sc_pci_ih = pci_intr_establish_xname(pa->pa_pc,
+	    intrhandle, IPL_BIO, pciide_pci_intr, sc,
+	    device_xname(sc->sc_wdcdev.sc_atac.atac_dev));
 	if (sc->sc_pci_ih == NULL) {
 		aprint_error_dev(sc->sc_wdcdev.sc_atac.atac_dev,
 		    "couldn't establish native-PCI interrupt");
@@ -1206,7 +1212,7 @@ via_sata_chip_map_new(struct pciide_softc *sc,
 			    "couldn't map channel %d ctl regs\n", channel);
 			return;
 		}
-		wdc_init_shadow_regs(wdc_cp);
+		wdc_init_shadow_regs(wdr);
 		wdr->data32iot = wdr->cmd_iot;
 		wdr->data32ioh = wdr->cmd_iohs[wd_data];
 		wdcattach(wdc_cp);

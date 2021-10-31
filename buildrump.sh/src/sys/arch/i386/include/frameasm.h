@@ -1,4 +1,4 @@
-/*	$NetBSD: frameasm.h,v 1.15 2011/07/26 12:57:35 yamt Exp $	*/
+/*	$NetBSD: frameasm.h,v 1.33 2020/05/01 09:40:47 maxv Exp $	*/
 
 #ifndef _I386_FRAMEASM_H_
 #define _I386_FRAMEASM_H_
@@ -8,115 +8,100 @@
 #include "opt_xen.h"
 #endif
 
-#if !defined(XEN)
-#define CLI(reg)        cli
-#define STI(reg)        sti
-#else
+
+#ifdef XEN
 /* XXX assym.h */
-#define TRAP_INSTR      int $0x82
-#define XEN_BLOCK_EVENTS(reg)   movb $1,EVTCHN_UPCALL_MASK(reg)
-#define XEN_UNBLOCK_EVENTS(reg) movb $0,EVTCHN_UPCALL_MASK(reg)
-#define XEN_TEST_PENDING(reg)   testb $0xFF,EVTCHN_UPCALL_PENDING(reg)
+#define TRAP_INSTR	int	$0x82
+#define XEN_BLOCK_EVENTS(reg)	movb	$1,EVTCHN_UPCALL_MASK(reg)
+#define XEN_UNBLOCK_EVENTS(reg)	movb	$0,EVTCHN_UPCALL_MASK(reg)
+#define XEN_TEST_PENDING(reg)	testb	$0xFF,EVTCHN_UPCALL_PENDING(reg)
+#endif /* XEN */
 
-#define CLI(reg)        movl    CPUVAR(VCPU),reg ;  \
-                        XEN_BLOCK_EVENTS(reg)
-#define STI(reg)        movl    CPUVAR(VCPU),reg ;  \
+#if defined(XENPV)
+#define CLI(reg)	movl	CPUVAR(VCPU),reg ;  \
+			XEN_BLOCK_EVENTS(reg)
+#define STI(reg)	movl	CPUVAR(VCPU),reg ;  \
 			XEN_UNBLOCK_EVENTS(reg)
-#define STIC(reg)       movl    CPUVAR(VCPU),reg ;  \
+#define STIC(reg)	movl	CPUVAR(VCPU),reg ;  \
 			XEN_UNBLOCK_EVENTS(reg)  ; \
-			testb $0xff,EVTCHN_UPCALL_PENDING(reg)
-#endif
-
-#ifndef TRAPLOG
-#define TLOG		/**/
+			testb	$0xff,EVTCHN_UPCALL_PENDING(reg)
+#define PUSHF(reg) 	movl	CPUVAR(VCPU),reg ;  \
+			movzbl	EVTCHN_UPCALL_MASK(reg), reg; \
+			pushl	reg
+#define POPF(reg)	call _C_LABEL(xen_write_psl); \
+			addl    $4,%esp
 #else
-/*
- * Fill in trap record
- */
-#define TLOG						\
-9:							\
-	movl	%fs:CPU_TLOG_OFFSET, %eax;		\
-	movl	%fs:CPU_TLOG_BASE, %ebx;		\
-	addl	$SIZEOF_TREC,%eax;			\
-	andl	$SIZEOF_TLOG-1,%eax;			\
-	addl	%eax,%ebx;				\
-	movl	%eax,%fs:CPU_TLOG_OFFSET;		\
-	movl	%esp,TREC_SP(%ebx);			\
-	movl	$9b,TREC_HPC(%ebx);			\
-	movl	TF_EIP(%esp),%eax;			\
-	movl	%eax,TREC_IPC(%ebx);			\
-	rdtsc			;			\
-	movl	%eax,TREC_TSC(%ebx);			\
-	movl	$MSR_LASTBRANCHFROMIP,%ecx;		\
-	rdmsr			;			\
-	movl	%eax,TREC_LBF(%ebx);			\
-	incl	%ecx		;			\
-	rdmsr			;			\
-	movl	%eax,TREC_LBT(%ebx);			\
-	incl	%ecx		;			\
-	rdmsr			;			\
-	movl	%eax,TREC_IBF(%ebx);			\
-	incl	%ecx		;			\
-	rdmsr			;			\
-	movl	%eax,TREC_IBT(%ebx)
-#endif
-		
+#define CLI(reg)	cli
+#define STI(reg)	sti
+#define PUSHF(reg)	pushf
+#define POPF(reg)	popf
+#ifdef XENPVHVM
+#define STIC(reg)	sti ; \
+			movl	CPUVAR(VCPU),reg ; \
+			XEN_UNBLOCK_EVENTS(reg)  ; \
+			testb	$0xff,EVTCHN_UPCALL_PENDING(reg)
+#endif /* XENPVHVM */
+
+#endif /* XENPV */
+
+#define HP_NAME_CLAC		1
+#define HP_NAME_STAC		2
+#define HP_NAME_NOLOCK		3
+#define HP_NAME_RETFENCE	4
+#define HP_NAME_SSE2_LFENCE	5
+#define HP_NAME_SSE2_MFENCE	6
+#define HP_NAME_CAS_64		7
+#define HP_NAME_SPLLOWER	8
+#define HP_NAME_MUTEX_EXIT	9
+
+#define HOTPATCH(name, size) \
+123:						; \
+	.pushsection	.rodata.hotpatch, "a"	; \
+	.byte		name			; \
+	.byte		size			; \
+	.long		123b			; \
+	.popsection
+
+#define SMAP_ENABLE \
+	HOTPATCH(HP_NAME_CLAC, 3)		; \
+	.byte 0x90, 0x90, 0x90
+
+#define SMAP_DISABLE \
+	HOTPATCH(HP_NAME_STAC, 3)		; \
+	.byte 0x90, 0x90, 0x90
+
 /*
  * These are used on interrupt or trap entry or exit.
  */
 #define	INTRENTRY \
+	SMAP_ENABLE			; \
 	subl	$TF_PUSHSIZE,%esp	; \
-	movw	%gs,TF_GS(%esp)	; \
-	movw	%fs,TF_FS(%esp) ; \
+	movw	%gs,TF_GS(%esp)		; \
+	movw	%fs,TF_FS(%esp) 	; \
 	movl	%eax,TF_EAX(%esp)	; \
-	movw	%es,TF_ES(%esp) ; \
-	movw	%ds,TF_DS(%esp) ; \
+	movw	%es,TF_ES(%esp) 	; \
+	movw	%ds,TF_DS(%esp) 	; \
 	movl	$GSEL(GDATA_SEL, SEL_KPL),%eax	; \
 	movl	%edi,TF_EDI(%esp)	; \
 	movl	%esi,TF_ESI(%esp)	; \
-	movw	%ax,%ds	; \
+	movw	%ax,%ds			; \
 	movl	%ebp,TF_EBP(%esp)	; \
-	movw	%ax,%es	; \
+	movw	%ax,%es			; \
 	movl	%ebx,TF_EBX(%esp)	; \
-	movw	%ax,%gs	; \
+	movw	%ax,%gs			; \
 	movl	%edx,TF_EDX(%esp)	; \
 	movl	$GSEL(GCPU_SEL, SEL_KPL),%eax	; \
 	movl	%ecx,TF_ECX(%esp)	; \
-	movl	%eax,%fs	; \
-	cld			; \
-	TLOG
+	movl	%eax,%fs		; \
+	cld
 
-/*
- * INTRFASTEXIT should be in sync with trap(), resume_iret and friends.
- */
 #define	INTRFASTEXIT \
-	movw	TF_GS(%esp),%gs	; \
-	movw	TF_FS(%esp),%fs	; \
-	movw	TF_ES(%esp),%es	; \
-	movw	TF_DS(%esp),%ds	; \
-	movl	TF_EDI(%esp),%edi	; \
-	movl	TF_ESI(%esp),%esi	; \
-	movl	TF_EBP(%esp),%ebp	; \
-	movl	TF_EBX(%esp),%ebx	; \
-	movl	TF_EDX(%esp),%edx	; \
-	movl	TF_ECX(%esp),%ecx	; \
-	movl	TF_EAX(%esp),%eax	; \
-	addl	$(TF_PUSHSIZE+8),%esp	; \
-	iret
+	jmp	intrfastexit
 
-#define	DO_DEFERRED_SWITCH \
-	cmpl	$0, CPUVAR(WANT_PMAPLOAD)		; \
-	jz	1f					; \
-	call	_C_LABEL(pmap_load)			; \
-	1:
-
-#define	DO_DEFERRED_SWITCH_RETRY \
-	1:						; \
-	cmpl	$0, CPUVAR(WANT_PMAPLOAD)		; \
-	jz	1f					; \
-	call	_C_LABEL(pmap_load)			; \
-	jmp	1b					; \
-	1:
+#define INTR_RECURSE_HWFRAME \
+	pushfl				; \
+	pushl	%cs			; \
+	pushl	%esi			;
 
 #define	CHECK_DEFERRED_SWITCH \
 	cmpl	$0, CPUVAR(WANT_PMAPLOAD)
@@ -124,6 +109,22 @@
 #define	CHECK_ASTPENDING(reg)	movl	CPUVAR(CURLWP),reg	; \
 				cmpl	$0, L_MD_ASTPENDING(reg)
 #define	CLEAR_ASTPENDING(reg)	movl	$0, L_MD_ASTPENDING(reg)
+
+/*
+ * If the FPU state is not in the CPU, restore it. Executed with interrupts
+ * disabled.
+ *
+ *     %ebx must not be modified
+ */
+#define HANDLE_DEFERRED_FPU	\
+	movl	CPUVAR(CURLWP),%eax			; \
+	testl	$MDL_FPU_IN_CPU,L_MD_FLAGS(%eax)	; \
+	jnz	1f					; \
+	pushl	%eax					; \
+	call	_C_LABEL(fpu_handle_deferred)		; \
+	popl	%eax					; \
+	orl	$MDL_FPU_IN_CPU,L_MD_FLAGS(%eax)	; \
+1:
 
 /*
  * IDEPTH_INCR:

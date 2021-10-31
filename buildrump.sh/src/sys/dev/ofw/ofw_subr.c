@@ -1,4 +1,30 @@
-/*	$NetBSD: ofw_subr.c,v 1.27 2015/12/16 19:33:39 jmcneill Exp $	*/
+/*	$NetBSD: ofw_subr.c,v 1.58 2021/04/24 23:36:57 thorpej Exp $	*/
+
+/*
+ * Copyright (c) 2021 The NetBSD Foundation, Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
+ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
 /*
  * Copyright 1998
@@ -34,15 +60,78 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofw_subr.c,v 1.27 2015/12/16 19:33:39 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofw_subr.c,v 1.58 2021/04/24 23:36:57 thorpej Exp $");
 
 #include <sys/param.h>
+#include <sys/device.h>
+#include <sys/kmem.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
 #include <dev/ofw/openfirm.h>
 
 #define	OFW_MAX_STACK_BUF_SIZE	256
 #define	OFW_PATH_BUF_SIZE	512
+
+/*
+ * OpenFirmware device handle support.
+ */
+
+static device_call_t
+of_devhandle_lookup_device_call(devhandle_t handle, const char *name,
+    devhandle_t *call_handlep)
+{
+	__link_set_decl(of_device_calls, struct device_call_descriptor);
+	struct device_call_descriptor * const *desc;
+
+	__link_set_foreach(desc, of_device_calls) {
+		if (strcmp((*desc)->name, name) == 0) {
+			return (*desc)->call;
+		}
+	}
+	return NULL;
+}
+
+static const struct devhandle_impl of_devhandle_impl = {
+	.type = DEVHANDLE_TYPE_OF,
+	.lookup_device_call = of_devhandle_lookup_device_call,
+};
+
+devhandle_t
+devhandle_from_of(int phandle)
+{
+	devhandle_t handle = {
+		.impl = &of_devhandle_impl,
+		.integer = phandle,
+	};
+
+	return handle;
+}
+
+int
+devhandle_to_of(devhandle_t const handle)
+{
+	KASSERT(devhandle_type(handle) == DEVHANDLE_TYPE_OF);
+
+	return handle.integer;
+}
+
+static int
+of_device_enumerate_children(device_t dev, devhandle_t call_handle, void *v)
+{
+	struct device_enumerate_children_args *args = v;
+	int phandle = devhandle_to_of(call_handle);
+	int child;
+
+	for (child = OF_child(phandle); child != 0; child = OF_peer(child)) {
+		if (!args->callback(dev, devhandle_from_of(child),
+				    args->callback_arg)) {
+			break;
+		}
+	}
+
+	return 0;
+}
+OF_DEVICE_CALL_REGISTER("device-enumerate-children",
+			of_device_enumerate_children)
 
 /*
  * int of_decode_int(p)
@@ -78,91 +167,10 @@ of_decode_int(const unsigned char *p)
  * This routine checks an OFW node's "compatible" entry to see if
  * it matches any of the provided strings.
  *
- * It should be used when determining whether a driver can drive
- * a particular device.
- *
- * Arguments:
- *	phandle		OFW phandle of device to be checked for
- *			compatibility.
- *	strings		Array of containing expected "compatibility"
- *			property values, presence of any of which
- *			indicates compatibility.
- *
- * Return Value:
- *	-1 if none of the strings are found in phandle's "compatibility"
- *	property, or the reverse index of the matching string in the
- *	phandle's "compatibility" property.
- *
- * Side Effects:
- *	None.
- */
-int
-of_compatible(int phandle, const char * const *strings)
-{
-
-	int len, olen, allocated, nstr, cstr, rv;
-	char *buf;
-	const char *sp, *nsp;
-
-	len = OF_getproplen(phandle, "compatible");
-	if (len <= 0)
-		return (-1);
-
-	if (len > OFW_MAX_STACK_BUF_SIZE) {
-		buf = malloc(len, M_TEMP, M_WAITOK);
-		allocated = 1;
-	} else {
-		buf = alloca(len);
-		allocated = 0;
-	}
-
-	/* 'compatible' size should not change. */
-	if (OF_getprop(phandle, "compatible", buf, len) != len) {
-		rv = -1;
-		goto out;
-	}
-
-	/* count 'compatible' strings */
-	sp = buf;
-	nstr = 0;
-	olen = len;
-	while (len && (nsp = memchr(sp, 0, len)) != NULL) {
-		nsp++;			/* skip over NUL char */
-		len -= (nsp - sp);
-		sp = nsp;
-		nstr++;
-	}
-	len = olen;
-
-	sp = buf;
-	rv = nstr;
-	while (len && (nsp = memchr(sp, 0, len)) != NULL) {
-		rv--;
-		/* look for a match among the strings provided */
-		for (cstr = 0; strings[cstr] != NULL; cstr++)
-			if (strcmp(sp, strings[cstr]) == 0)
-				goto out;
-
-		nsp++;			/* skip over NUL char */
-		len -= (nsp - sp);
-		sp = nsp;
-	}
-	rv = -1;
-
-out:
-	if (allocated)
-		free(buf, M_TEMP);
-	return (rv);
-}
-
-/*
- * int of_match_compatible(phandle, strings)
- *
- * This routine checks an OFW node's "compatible" entry to see if
- * it matches any of the provided strings.
- *
- * It should be used when determining whether a driver can drive
- * a particular device.
+ * of_compatible_match() is the preferred way to perform driver
+ * compatibility match.  However, this routine that deals with
+ * only strings is useful in some situations and is provided for
+ * convenience.
  *
  * Arguments:
  *	phandle		OFW phandle of device to be checked for
@@ -173,6 +181,63 @@ out:
  *
  * Return Value:
  *	0 if none of the strings are found in phandle's "compatibility"
+ *	property, or the reverse index of the matching string in the
+ *	phandle's "compatibility" property plus 1.
+ *
+ * Side Effects:
+ *	None.
+ */
+int
+of_compatible(int phandle, const char * const *strings)
+{
+	char *prop, propbuf[OFW_MAX_STACK_BUF_SIZE];
+	const char *cp;
+	int proplen, match = 0;
+
+	proplen = OF_getproplen(phandle, "compatible");
+	if (proplen <= 0) {
+		return 0;
+	}
+
+	prop = kmem_tmpbuf_alloc(proplen, propbuf, sizeof(propbuf), KM_SLEEP);
+
+	if (OF_getprop(phandle, "compatible", prop, proplen) != proplen) {
+		goto out;
+	}
+
+	for (; (cp = *strings) != NULL; strings++) {
+		if ((match = strlist_match(prop, proplen, cp)) != 0) {
+			break;
+		}
+	}
+
+ out:
+	kmem_tmpbuf_free(prop, proplen, propbuf);
+	return match;
+}
+
+/*
+ * int of_compatible_match(phandle, compat_data)
+ *
+ * This routine searches an array of device_compatible_entry structures
+ * for a matching "compatible" entry matching the supplied OFW node,
+ * and returns a weighted match value corresponding to which string
+ * from the "compatible" property was matched, which more weight given
+ * to the first string than the last.
+ *
+ * It should be used when determining whether a driver can drive
+ * a particular device.
+ *
+ * Arguments:
+ *	phandle		OFW phandle of device to be checked for
+ *			compatibility.
+ *	compat_data	Array of possible compat entry strings and
+ *			associated metadata. The last entry in the
+ *			list should have a "compat" of NULL to terminate
+ *			the list.
+ *
+ * Return Value:
+ *	0 if none of the strings are found in phandle's "compatibility"
  *	property, or a positive number based on the reverse index of the
  *	matching string in the phandle's "compatibility" property, plus 1.
  *
@@ -180,9 +245,76 @@ out:
  *	None.
  */
 int
-of_match_compatible(int phandle, const char * const *strings)
+of_compatible_match(int phandle,
+    const struct device_compatible_entry *compat_data)
 {
-	return of_compatible(phandle, strings) + 1;
+	char *prop, propbuf[OFW_MAX_STACK_BUF_SIZE];
+	int proplen, match = 0;
+
+	proplen = OF_getproplen(phandle, "compatible");
+	if (proplen <= 0) {
+		return 0;
+	}
+
+	prop = kmem_tmpbuf_alloc(proplen, propbuf, sizeof(propbuf), KM_SLEEP);
+
+	if (OF_getprop(phandle, "compatible", prop, proplen) != proplen) {
+		goto out;
+	}
+
+	match = device_compatible_match_strlist(prop, proplen, compat_data);
+
+ out:
+	kmem_tmpbuf_free(prop, proplen, propbuf);
+	return match;
+}
+
+/*
+ * const struct device_compatible_entry *of_compatible_lookup(phandle,
+ *							      compat_data)
+ *
+ * This routine searches an array of device_compatible_entry structures
+ * for a "compatible" entry matching the supplied OFW node.
+ *
+ * Arguments:
+ *	phandle		OFW phandle of device to be checked for
+ *			compatibility.
+ *	compat_data	Array of possible compat entry strings and
+ *			associated metadata. The last entry in the
+ *			list should have a "compat" of NULL to terminate
+ *			the list.
+ *
+ * Return Value:
+ *	The first matching compat_data entry in the array. If no matches
+ *	are found, NULL is returned.
+ *
+ * Side Effects:
+ *	None.
+ */
+const struct device_compatible_entry *
+of_compatible_lookup(int phandle,
+    const struct device_compatible_entry *compat_data)
+{
+	char *prop, propbuf[OFW_MAX_STACK_BUF_SIZE];
+	const struct device_compatible_entry *match = NULL;
+	int proplen;
+
+	proplen = OF_getproplen(phandle, "compatible");
+	if (proplen <= 0) {
+		return 0;
+	}
+
+	prop = kmem_tmpbuf_alloc(proplen, propbuf, sizeof(propbuf), KM_SLEEP);
+
+	if (OF_getprop(phandle, "compatible", prop, proplen) != proplen) {
+		goto out;
+	}
+
+	match = device_compatible_lookup_strlist(prop, proplen, compat_data);
+
+ out:
+	kmem_tmpbuf_free(prop, proplen, propbuf);
+	return match;
 }
 
 /*
@@ -222,7 +354,7 @@ of_packagename(int phandle, char *buf, int bufsize)
 	const char *lastslash;
 	int l, rv;
 
-	pbuf = malloc(OFW_PATH_BUF_SIZE, M_TEMP, M_WAITOK);
+	pbuf = kmem_alloc(OFW_PATH_BUF_SIZE, KM_SLEEP);
 	l = OF_package_to_path(phandle, pbuf, OFW_PATH_BUF_SIZE);
 
 	/* check that we could get the name, and that it's not too long. */
@@ -244,7 +376,7 @@ of_packagename(int phandle, char *buf, int bufsize)
 		rv = 0;
 	}
 
-	free(pbuf, M_TEMP);
+	kmem_free(pbuf, OFW_PATH_BUF_SIZE);
 	return (rv);
 }
 
@@ -264,6 +396,26 @@ of_find_firstchild_byname(int node, const char *name)
 		if (strcmp(name, namex) == 0)
 			return nn;
 	}
+	return -1;
+}
+
+/*
+ * Find a child node that is compatible with str. Recurses, starting at node.
+ */
+int
+of_find_bycompat(int node, const char *str)
+{
+	const char * compatible[] = { str, NULL };
+	int child, ret;
+
+	for (child = OF_child(node); child; child = OF_peer(child)) {
+		if (of_compatible(child, compatible))
+			return child;
+		ret = of_find_bycompat(child, str);
+		if (ret != -1)
+			return ret;
+	}
+
 	return -1;
 }
 
@@ -304,7 +456,7 @@ of_getnode_byname(int start, const char *target)
  * Create a uint32_t integer property from an OFW node property.
  */
 
-boolean_t
+bool
 of_to_uint32_prop(prop_dictionary_t dict, int node, const char *ofname,
     const char *propname)
 {
@@ -320,23 +472,18 @@ of_to_uint32_prop(prop_dictionary_t dict, int node, const char *ofname,
  * Create a data property from an OFW node property.  Max size of 256bytes.
  */
 
-boolean_t
+bool
 of_to_dataprop(prop_dictionary_t dict, int node, const char *ofname,
     const char *propname)
 {
-	prop_data_t data;
 	int len;
 	uint8_t prop[256];
-	boolean_t res;
 
 	len = OF_getprop(node, ofname, prop, 256);
 	if (len < 1)
 		return FALSE;
 
-	data = prop_data_create_data(prop, len);
-	res = prop_dictionary_set(dict, propname, data);
-	prop_object_release(data);
-	return res;
+	return prop_dictionary_set_data(dict, propname, prop, len);
 }
 
 /*
@@ -371,85 +518,41 @@ of_get_mode_string(char *buffer, int len)
 }
 
 /*
- * Iterate over the subtree of a i2c controller node.
- * Add all sub-devices into an array as part of the controller's
- * device properties.
- * This is used by the i2c bus attach code to do direct configuration.
+ * of_device_from_phandle --
+ *
+ *	Return a device_t associated with the specified phandle.
+ *
+ *	This is expected to be used rarely, so we don't care if
+ *	it's fast.  Also, it can only find devices that have
+ *	gone through of_device_register() (obviously).
  */
-void
-of_enter_i2c_devs(prop_dictionary_t props, int ofnode, size_t cell_size,
-    int addr_shift)
+device_t
+of_device_from_phandle(int phandle)
 {
-	int node, len;
-	char name[32], compatible[32];
-	uint64_t reg64;
-	uint32_t reg32;
-	uint64_t addr;
-	prop_array_t array = NULL;
-	prop_dictionary_t dev;
+	devhandle_t devhandle;
+	deviter_t di;
+	device_t dev;
 
-	for (node = OF_child(ofnode); node; node = OF_peer(node)) {
-		if (OF_getprop(node, "name", name, sizeof(name)) <= 0)
-			continue;
-		len = OF_getproplen(node, "reg");
-		addr = 0;
-		if (cell_size == 8 && len >= sizeof(reg64)) {
-			if (OF_getprop(node, "reg", &reg64, sizeof(reg64))
-			    < sizeof(reg64))
-				continue;
-			addr = be64toh(reg64);
-			/*
-			 * The i2c bus number (0 or 1) is encoded in bit 33
-			 * of the register, but we encode it in bit 8 of
-			 * i2c_addr_t.
-			 */
-			if (addr & 0x100000000)
-				addr = (addr & 0xff) | 0x100;
-		} else if (cell_size == 4 && len >= sizeof(reg32)) {
-			if (OF_getprop(node, "reg", &reg32, sizeof(reg32))
-			    < sizeof(reg32))
-				continue;
-			addr = be32toh(reg32);
-		} else {
-			continue;
+	for (dev = deviter_first(&di, DEVITER_F_ROOT_FIRST);
+	     dev != NULL;
+	     dev = deviter_next(&di)) {
+		devhandle = device_handle(dev);
+		if (devhandle_type(devhandle) == DEVHANDLE_TYPE_OF) {
+			if (devhandle_to_of(devhandle) == phandle) {
+				/* Found it! */
+				break;
+			}
 		}
-		addr >>= addr_shift;
-		if (addr == 0) continue;
-
-		if (array == NULL)
-			array = prop_array_create();
-
-		dev = prop_dictionary_create();
-		prop_dictionary_set_cstring(dev, "name", name);
-		prop_dictionary_set_uint32(dev, "addr", addr);
-		prop_dictionary_set_uint64(dev, "cookie", node);
-		of_to_dataprop(dev, node, "compatible", "compatible");
-		if (OF_getprop(node, "compatible", compatible,
-		    sizeof(compatible)) > 0) {
-			/* Set size for EEPROM's that we know about */
-			if (strcmp(compatible, "i2c-at24c64") == 0)
-				prop_dictionary_set_uint32(dev, "size", 8192);
-			if (strcmp(compatible, "i2c-at34c02") == 0)
-				prop_dictionary_set_uint32(dev, "size", 256);
-		}
-		prop_array_add(array, dev);
-		prop_object_release(dev);
 	}
-
-	if (array != NULL) {
-		prop_dictionary_set(props, "i2c-child-devices", array);
-		prop_object_release(array);
-	}
-
-	prop_dictionary_set_bool(props, "i2c-indirect-config", false);
+	deviter_release(&di);
+	return dev;
 }
 
 /*
- * Get the value of a boolean property. If the property is present,
- * return true. Otherwise, return false.
+ * Returns true if the specified property is present.
  */
 bool
-of_getprop_bool(int node, const char *prop)
+of_hasprop(int node, const char *prop)
 {
 	return OF_getproplen(node, prop) >= 0;
 }
@@ -469,5 +572,40 @@ of_getprop_uint32(int node, const char *prop, uint32_t *val)
 		return -1;
 
 	*val = be32toh(v);
+	return 0;
+}
+
+int
+of_getprop_uint32_array(int node, const char *prop, uint32_t *array, int n)
+{
+	uint32_t *v = array;
+	int len;
+
+	len = OF_getprop(node, prop, array, n * sizeof(*v));
+	if (len < (int)(n * sizeof(*v)))
+		return -1;
+
+	for (; n > 0; n--) {
+		BE32TOH(*v);
+		v++;
+	}
+
+	return 0;
+}
+/*
+ * Get the value of a uint64 property, compensating for host byte order.
+ * Returns 0 on success, non-zero on failure.
+ */
+int
+of_getprop_uint64(int node, const char *prop, uint64_t *val)
+{
+	uint64_t v;
+	int len;
+
+	len = OF_getprop(node, prop, &v, sizeof(v));
+	if (len != sizeof(v))
+		return -1;
+
+	*val = be64toh(v);
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_llatbl.c,v 1.14 2016/06/16 03:03:33 ozaki-r Exp $	*/
+/*	$NetBSD: if_llatbl.c,v 1.33 2020/09/11 15:16:00 roy Exp $	*/
 /*
  * Copyright (c) 2004 Luigi Rizzo, Alessandro Cerri. All rights reserved.
  * Copyright (c) 2004-2008 Qing Li. All rights reserved.
@@ -33,6 +33,7 @@
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include "arp.h"
@@ -58,13 +59,15 @@
 #include <net/if_llatbl.h>
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <net/nd.h>
 #include <net/route.h>
 #include <netinet/if_inarp.h>
+#include <netinet/in_var.h>
 #include <netinet6/in6_var.h>
-#include <netinet6/nd6.h>
 
 static SLIST_HEAD(, lltable) lltables;
 krwlock_t lltable_rwlock;
+static struct pool llentry_pool;
 
 static void lltable_unlink(struct lltable *llt);
 static void llentries_unlink(struct lltable *llt, struct llentries *head);
@@ -78,6 +81,8 @@ int
 lltable_dump_entry(struct lltable *llt, struct llentry *lle,
     struct rt_walkarg *w, struct sockaddr *sa)
 {
+#define RTF_LLINFO	0x400
+#define RTF_CLONED	0x2000
 	struct ifnet *ifp = llt->llt_ifp;
 	int error;
 	void *a;
@@ -105,9 +110,14 @@ lltable_dump_entry(struct lltable *llt, struct llentry *lle,
 		struct rt_msghdr *rtm = (struct rt_msghdr *)w->w_tmem;
 
 		/* Need to copy by myself */
-		rtm->rtm_rmx.rmx_expire =
-		    (lle->la_flags & LLE_STATIC) ? 0 : lle->la_expire;
+		rtm->rtm_index = ifp->if_index;
+		rtm->rtm_rmx.rmx_mtu = 0;
+		rtm->rtm_rmx.rmx_expire = (lle->la_flags & LLE_STATIC) ? 0 :
+		    time_mono_to_wall(lle->la_expire);
+		rtm->rtm_flags = RTF_UP;
 		rtm->rtm_flags |= RTF_HOST; /* For ndp */
+		/* For backward compatibility */
+		rtm->rtm_flags |= RTF_LLINFO | RTF_CLONED;
 		rtm->rtm_flags |= (lle->la_flags & LLE_STATIC) ? RTF_STATIC : 0;
 		if (lle->la_flags & LLE_PUB)
 			rtm->rtm_flags |= RTF_ANNOUNCE;
@@ -119,6 +129,8 @@ lltable_dump_entry(struct lltable *llt, struct llentry *lle,
 	}
 
 	return error;
+#undef RTF_LLINFO
+#undef RTF_CLONED
 }
 
 /*
@@ -147,7 +159,7 @@ lltable_dump_af(struct lltable *llt, struct rt_walkarg *w)
  * Dump arp state for a specific address family.
  */
 int
-lltable_sysctl_dumparp(int af, struct rt_walkarg *w)
+lltable_sysctl_dump(int af, struct rt_walkarg *w)
 {
 	struct lltable *llt;
 	int error = 0;
@@ -227,7 +239,8 @@ htable_unlink_entry(struct llentry *lle)
 		lle->lle_tbl = NULL;
 		lle->lle_head = NULL;
 #endif
-		KASSERT(lle->lle_tbl->llt_lle_count != 0);
+		KASSERTMSG(lle->lle_tbl->llt_lle_count != 0,
+		    "llt_lle_count=%u", lle->lle_tbl->llt_lle_count);
 		lle->lle_tbl->llt_lle_count--;
 	}
 }
@@ -324,6 +337,24 @@ lltable_drop_entry_queue(struct llentry *lle)
 	return (pkts_dropped);
 }
 
+struct llentry *
+llentry_pool_get(int flags)
+{
+	struct llentry *lle;
+
+	lle = pool_get(&llentry_pool, flags);
+	if (lle != NULL)
+		memset(lle, 0, sizeof(*lle));
+	return lle;
+}
+
+void
+llentry_pool_put(struct llentry *lle)
+{
+
+	pool_put(&llentry_pool, lle);
+}
+
 /*
  * Deletes an address from the address table.
  * This function is called by the timer functions
@@ -340,11 +371,25 @@ llentry_free(struct llentry *lle)
 
 	LLE_WLOCK_ASSERT(lle);
 
+	lle->la_flags |= LLE_DELETED;
+
 	if ((lle->la_flags & LLE_LINKED) != 0) {
 		llt = lle->lle_tbl;
 
 		IF_AFDATA_WLOCK_ASSERT(llt->llt_ifp);
 		llt->llt_unlink_entry(lle);
+	}
+
+	/*
+	 * Stop a pending callout if one exists.  If we cancel one, we have to
+	 * remove a reference to avoid a leak.  callout_pending is required to
+	 * to exclude the case that the callout has never been scheduled.
+	 */
+	/* XXX once softnet_lock goes away, we should use callout_halt */
+	if (callout_pending(&lle->la_timer)) {
+		bool expired = callout_stop(&lle->la_timer);
+		if (!expired)
+			LLE_REMREF(lle);
 	}
 
 	pkts_dropped = lltable_drop_entry_queue(lle);
@@ -368,14 +413,9 @@ llentry_alloc(struct ifnet *ifp, struct lltable *lt,
 	IF_AFDATA_RLOCK(ifp);
 	la = lla_lookup(lt, LLE_EXCLUSIVE, (struct sockaddr *)dst);
 	IF_AFDATA_RUNLOCK(ifp);
-	if ((la == NULL) &&
-#ifdef __FreeBSD__
-	    (ifp->if_flags & (IFF_NOARP | IFF_STATICARP)) == 0) {
-#else /* XXX */
-	    (ifp->if_flags & IFF_NOARP) == 0) {
-#endif
+	if ((la == NULL) && (ifp->if_flags & IFF_NOARP) == 0) {
 		IF_AFDATA_WLOCK(ifp);
-		la = lla_create(lt, 0, (struct sockaddr *)dst);
+		la = lla_create(lt, 0, (struct sockaddr *)dst, NULL /* XXX */);
 		IF_AFDATA_WUNLOCK(ifp);
 	}
 
@@ -422,12 +462,8 @@ lltable_purge_entries(struct lltable *llt)
 	llentries_unlink(llt, &dchain);
 	IF_AFDATA_WUNLOCK(llt->llt_ifp);
 
-	LIST_FOREACH_SAFE(lle, &dchain, lle_chain, next) {
-		if (callout_halt(&lle->la_timer, &lle->lle_lock))
-			LLE_REMREF(lle);
-		llentry_free(lle);
-	}
-
+	LIST_FOREACH_SAFE(lle, &dchain, lle_chain, next)
+		(void)llentry_free(lle);
 }
 
 /*
@@ -468,8 +504,8 @@ lltable_drain(int af)
 }
 
 void
-lltable_prefix_free(int af, struct sockaddr *prefix, struct sockaddr *mask,
-    u_int flags)
+lltable_prefix_free(const int af, const struct sockaddr *prefix,
+    const struct sockaddr *mask, const u_int flags)
 {
 	struct lltable *llt;
 
@@ -556,6 +592,13 @@ lltable_unlink_entry(struct lltable *llt, struct llentry *lle)
 }
 
 void
+lltable_free_entry(struct lltable *llt, struct llentry *lle)
+{
+
+	llt->llt_free_entry(llt, lle);
+}
+
+void
 lltable_fill_sa_entry(const struct llentry *lle, struct sockaddr *sa)
 {
 	struct lltable *llt;
@@ -622,25 +665,48 @@ lla_rt_output(const u_char rtm_type, const int rtm_flags, const time_t rtm_expir
 	error = 0;
 
 	switch (rtm_type) {
-	case RTM_ADD:
+	case RTM_ADD: {
+		struct rtentry *rt;
+
+		/* Never call rtalloc1 with IF_AFDATA_WLOCK */
+		rt = rtalloc1(dst, 0);
+
 		/* Add static LLE */
 		IF_AFDATA_WLOCK(ifp);
-		lle = lla_lookup(llt, 0, dst);
+		lle = lla_lookup(llt, LLE_EXCLUSIVE, dst);
 
 		/* Cannot overwrite an existing static entry */
 		if (lle != NULL &&
 		    (lle->la_flags & LLE_STATIC || lle->la_expire == 0)) {
 			LLE_RUNLOCK(lle);
 			IF_AFDATA_WUNLOCK(ifp);
+			if (rt != NULL)
+				rt_unref(rt);
 			error = EEXIST;
 			goto out;
 		}
-		if (lle != NULL)
-			LLE_RUNLOCK(lle);
 
-		lle = lla_create(llt, 0, dst);
+		/*
+		 * We can't overwrite an existing entry to avoid race
+		 * conditions so remove it first.
+		 */
+		if (lle != NULL) {
+#if defined(INET) && NARP > 0
+			size_t pkts_dropped = llentry_free(lle);
+			if (dst->sa_family == AF_INET) {
+				arp_stat_add(ARP_STAT_DFRDROPPED,
+				    (uint64_t)pkts_dropped);
+			}
+#else
+			(void) llentry_free(lle);
+#endif
+		}
+
+		lle = lla_create(llt, 0, dst, rt);
 		if (lle == NULL) {
 			IF_AFDATA_WUNLOCK(ifp);
+			if (rt != NULL)
+				rt_unref(rt);
 			error = ENOMEM;
 			goto out;
 		}
@@ -650,13 +716,19 @@ lla_rt_output(const u_char rtm_type, const int rtm_flags, const time_t rtm_expir
 		if ((rtm_flags & RTF_ANNOUNCE))
 			lle->la_flags |= LLE_PUB;
 		lle->la_flags |= LLE_VALID;
-#ifdef INET6
-		/*
-		 * ND6
-		 */
-		if (dst->sa_family == AF_INET6)
-			lle->ln_state = ND6_LLINFO_REACHABLE;
+		switch (dst->sa_family) {
+#ifdef INET
+		case AF_INET:
+			lle->ln_state = ND_LLINFO_REACHABLE;
+			break;
 #endif
+#ifdef INET6
+		case AF_INET6:
+			lle->ln_state = ND_LLINFO_REACHABLE;
+			break;
+#endif
+		}
+
 		/*
 		 * NB: arp and ndp always set (RTF_STATIC | RTF_HOST)
 		 */
@@ -669,18 +741,28 @@ lla_rt_output(const u_char rtm_type, const int rtm_flags, const time_t rtm_expir
 		laflags = lle->la_flags;
 		LLE_WUNLOCK(lle);
 		IF_AFDATA_WUNLOCK(ifp);
+		if (rt != NULL)
+			rt_unref(rt);
 #if defined(INET) && NARP > 0
 		/* gratuitous ARP */
-		if ((laflags & LLE_PUB) && dst->sa_family == AF_INET)
-			arprequest(ifp,
-			    &((const struct sockaddr_in *)dst)->sin_addr,
-			    &((const struct sockaddr_in *)dst)->sin_addr,
-			    CLLADDR(dl));
+		if ((laflags & LLE_PUB) && dst->sa_family == AF_INET) {
+			const struct sockaddr_in *sin;
+			struct in_ifaddr *ia;
+			struct psref _psref;
+
+			sin = satocsin(dst);
+			ia = in_get_ia_on_iface_psref(sin->sin_addr,
+			    ifp, &_psref);
+			if (ia != NULL) {
+				arpannounce(ifp, &ia->ia_ifa, CLLADDR(dl));
+				ia4_release(ia, &_psref);
+			}
+		}
 #else
 		(void)laflags;
 #endif
-
 		break;
+	    }
 
 	case RTM_DELETE:
 		IF_AFDATA_WLOCK(ifp);
@@ -705,6 +787,9 @@ lltableinit(void)
 
 	SLIST_INIT(&lltables);
 	rw_init(&lltable_rwlock);
+
+	pool_init(&llentry_pool, sizeof(struct llentry), 0, 0, 0, "llentrypl",
+	    NULL, IPL_SOFTNET);
 }
 
 #ifdef __FreeBSD__
@@ -762,7 +847,7 @@ llatbl_lle_show(struct llentry_sa *la)
 		char l3s[INET6_ADDRSTRLEN];
 
 		sin6 = (struct sockaddr_in6 *)&la->l3_addr;
-		ip6_sprintf(l3s, &sin6->sin6_addr);
+		IN6_PRINT(l3s, &sin6->sin6_addr);
 		db_printf(" l3_addr=%s\n", l3s);
 		break;
 	}

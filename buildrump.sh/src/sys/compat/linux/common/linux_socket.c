@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_socket.c,v 1.131 2016/07/07 09:32:02 ozaki-r Exp $	*/
+/*	$NetBSD: linux_socket.c,v 1.152 2020/11/03 22:08:44 christos Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998, 2008 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.131 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.152 2020/11/03 22:08:44 christos Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_inet.h"
@@ -82,6 +82,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.131 2016/07/07 09:32:02 ozaki-r E
 #include <compat/linux/common/linux_util.h>
 #include <compat/linux/common/linux_signal.h>
 #include <compat/linux/common/linux_ioctl.h>
+#include <compat/linux/common/linux_sched.h>
 #include <compat/linux/common/linux_socket.h>
 #include <compat/linux/common/linux_fcntl.h>
 #if !defined(__alpha__) && !defined(__amd64__)
@@ -124,8 +125,8 @@ static int linux_get_sa(struct lwp *, int, struct sockaddr_big *,
 static int linux_sa_put(struct osockaddr *osa);
 static int linux_to_bsd_msg_flags(int);
 static int bsd_to_linux_msg_flags(int);
-static void linux_to_bsd_msghdr(struct linux_msghdr *, struct msghdr *);
-static void bsd_to_linux_msghdr(struct msghdr *, struct linux_msghdr *);
+static void linux_to_bsd_msghdr(const struct linux_msghdr *, struct msghdr *);
+static void bsd_to_linux_msghdr(const struct msghdr *, struct linux_msghdr *);
 
 static const int linux_to_bsd_domain_[LINUX_AF_MAX] = {
 	AF_UNSPEC,
@@ -400,6 +401,7 @@ linux_sys_sendto(struct lwp *l, const struct linux_sys_sendto_args *uap, registe
 	struct msghdr   msg;
 	struct iovec    aiov;
 	struct sockaddr_big nam;
+	struct mbuf *m;
 	int bflags;
 	int error;
 
@@ -418,9 +420,13 @@ linux_sys_sendto(struct lwp *l, const struct linux_sys_sendto_args *uap, registe
 		error = linux_get_sa(l, SCARG(uap, s), &nam, SCARG(uap, to),
 		    SCARG(uap, tolen));
 		if (error)
-			return (error);
-		msg.msg_name = &nam;
-		msg.msg_namelen = SCARG(uap, tolen);
+			return error;
+		error = sockargs(&m, &nam, nam.sb_len, UIO_SYSSPACE, MT_SONAME);
+		if (error)
+			return error;
+		msg.msg_flags |= MSG_NAMEMBUF;
+		msg.msg_name = m;
+		msg.msg_namelen = nam.sb_len;
 	}
 
 	msg.msg_iov = &aiov;
@@ -432,7 +438,7 @@ linux_sys_sendto(struct lwp *l, const struct linux_sys_sendto_args *uap, registe
 }
 
 static void
-linux_to_bsd_msghdr(struct linux_msghdr *lmsg, struct msghdr *bmsg)
+linux_to_bsd_msghdr(const struct linux_msghdr *lmsg, struct msghdr *bmsg)
 {
 	bmsg->msg_name = lmsg->msg_name;
 	bmsg->msg_namelen = lmsg->msg_namelen;
@@ -444,7 +450,7 @@ linux_to_bsd_msghdr(struct linux_msghdr *lmsg, struct msghdr *bmsg)
 }
 
 static void
-bsd_to_linux_msghdr(struct msghdr *bmsg, struct linux_msghdr *lmsg)
+bsd_to_linux_msghdr(const struct msghdr *bmsg, struct linux_msghdr *lmsg)
 {
 	lmsg->msg_name = bmsg->msg_name;
 	lmsg->msg_namelen = bmsg->msg_namelen;
@@ -540,6 +546,8 @@ linux_sys_sendmsg(struct lwp *l, const struct linux_sys_sendmsg_args *uap, regis
 
 				case LINUX_SCM_CREDENTIALS:
 					/* no native equivalent, just drop it */
+					if (control != mtod(ctl_mbuf, void *))
+						free(control, M_MBUF);
 					m_free(ctl_mbuf);
 					ctl_mbuf = NULL;
 					msg.msg_control = NULL;
@@ -562,14 +570,15 @@ linux_sys_sendmsg(struct lwp *l, const struct linux_sys_sendmsg_args *uap, regis
 			/* Check the buffer is big enough */
 			if (__predict_false(cidx + cspace > clen)) {
 				u_int8_t *nc;
+				size_t nclen;
 
-				clen = cidx + cspace;
-				if (clen >= PAGE_SIZE) {
+				nclen = cidx + cspace;
+				if (nclen >= PAGE_SIZE) {
 					error = EINVAL;
 					goto done;
 				}
 				nc = realloc(clen <= MLEN ? NULL : control,
-						clen, M_TEMP, M_WAITOK);
+						nclen, M_TEMP, M_WAITOK);
 				if (!nc) {
 					error = ENOMEM;
 					goto done;
@@ -578,6 +587,7 @@ linux_sys_sendmsg(struct lwp *l, const struct linux_sys_sendmsg_args *uap, regis
 					/* Old buffer was in mbuf... */
 					memcpy(nc, control, cidx);
 				control = nc;
+				clen = nclen;
 			}
 
 			/* Copy header */
@@ -599,7 +609,7 @@ linux_sys_sendmsg(struct lwp *l, const struct linux_sys_sendmsg_args *uap, regis
 
 			resid -= LINUX_CMSG_ALIGN(l_cmsg.cmsg_len);
 			cidx += cspace;
-		} while ((l_cc = LINUX_CMSG_NXTHDR(&msg, l_cc)) && resid > 0);
+		} while ((l_cc = LINUX_CMSG_NXTHDR(&msg, l_cc, &l_cmsg)) && resid > 0);
 
 		/* If we allocated a buffer, attach to mbuf */
 		if (cidx > MLEN) {
@@ -851,11 +861,11 @@ linux_to_bsd_so_sockopt(int lopt)
 		return SO_DEBUG;
 	case LINUX_SO_REUSEADDR:
 		/*
-		 * Linux does not implement SO_REUSEPORT, but allows reuse of a
-		 * host:port pair through SO_REUSEADDR even if the address is not a
-		 * multicast-address.  Effectively, this means that we should use
-		 * SO_REUSEPORT to allow Linux applications to not exit with
-		 * EADDRINUSE
+		 * Linux does not implement SO_REUSEPORT, but allows reuse of
+		 * a host:port pair through SO_REUSEADDR even if the address
+		 * is not a multicast-address. Effectively, this means that we
+		 * should use SO_REUSEPORT to allow Linux applications to not
+		 * exit with EADDRINUSE
 		 */
 		return SO_REUSEPORT;
 	case LINUX_SO_TYPE:
@@ -870,20 +880,51 @@ linux_to_bsd_so_sockopt(int lopt)
 		return SO_SNDBUF;
 	case LINUX_SO_RCVBUF:
 		return SO_RCVBUF;
-	case LINUX_SO_SNDLOWAT:
-		return SO_SNDLOWAT;
-	case LINUX_SO_RCVLOWAT:
-		return SO_RCVLOWAT;
 	case LINUX_SO_KEEPALIVE:
 		return SO_KEEPALIVE;
 	case LINUX_SO_OOBINLINE:
 		return SO_OOBINLINE;
+	case LINUX_SO_NO_CHECK:
+	case LINUX_SO_PRIORITY:
+		return -1;
 	case LINUX_SO_LINGER:
 		return SO_LINGER;
+	case LINUX_SO_BSDCOMPAT:
+	case LINUX_SO_PASSCRED:
+	case LINUX_SO_PEERCRED:
+		return -1;
+	case LINUX_SO_RCVLOWAT:
+		return SO_RCVLOWAT;
+	case LINUX_SO_SNDLOWAT:
+		return SO_SNDLOWAT;
+	case LINUX_SO_RCVTIMEO:
+		return SO_RCVTIMEO;
+	case LINUX_SO_SNDTIMEO:
+		return SO_SNDTIMEO;
+	case LINUX_SO_SECURITY_AUTHENTICATION:
+	case LINUX_SO_SECURITY_ENCRYPTION_TRANSPORT:
+	case LINUX_SO_SECURITY_ENCRYPTION_NETWORK:
+	case LINUX_SO_BINDTODEVICE:
+	case LINUX_SO_ATTACH_FILTER:
+	case LINUX_SO_DETACH_FILTER:
+	case LINUX_SO_PEERNAME:
+		return -1;
+	case LINUX_SO_TIMESTAMP:
+		return SO_TIMESTAMP;
 	case LINUX_SO_ACCEPTCONN:
-		return SO_ACCEPTCONN;
-	case LINUX_SO_PRIORITY:
-	case LINUX_SO_NO_CHECK:
+	case LINUX_SO_PEERSEC:
+	case LINUX_SO_SNDBUFFORCE:
+	case LINUX_SO_RCVBUFFORCE:
+	case LINUX_SO_PASSSEC:
+	case LINUX_SO_TIMESTAMPNS:
+	case LINUX_SO_MARK:
+	case LINUX_SO_TIMESTAMPING:
+	case LINUX_SO_PROTOCOL:
+	case LINUX_SO_DOMAIN:
+	case LINUX_SO_RXQ_OVFL:
+	case LINUX_SO_WIFI_STATUS:
+	case LINUX_SO_PEEK_OFF:
+	case LINUX_SO_NOFCS:
 	default:
 		return -1;
 	}
@@ -1117,7 +1158,6 @@ linux_getifconf(struct lwp *l, register_t *retval, void *data)
 	struct linux_ifreq ifr, *ifrp = NULL;
 	struct linux_ifconf ifc;
 	struct ifnet *ifp;
-	struct ifaddr *ifa;
 	struct sockaddr *sa;
 	struct osockaddr *osa;
 	int space = 0, error;
@@ -1133,14 +1173,19 @@ linux_getifconf(struct lwp *l, register_t *retval, void *data)
 
 	docopy = ifc.ifc_req != NULL;
 	if (docopy) {
+		if (ifc.ifc_len < 0)
+			return EINVAL;
+
 		space = ifc.ifc_len;
 		ifrp = ifc.ifc_req;
 	}
+	memset(&ifr, 0, sizeof(ifr));
 
 	bound = curlwp_bind();
 	s = pserialize_read_enter();
 	IFNET_READER_FOREACH(ifp) {
-		psref_acquire(&psref, &ifp->if_psref, ifnet_psref_class);
+		struct ifaddr *ifa;
+		if_acquire(ifp, &psref);
 		pserialize_read_exit(s);
 
 		(void)strncpy(ifr.ifr_name, ifp->if_xname,
@@ -1150,25 +1195,35 @@ linux_getifconf(struct lwp *l, register_t *retval, void *data)
 			goto release_exit;
 		}
 
+		s = pserialize_read_enter();
 		IFADDR_READER_FOREACH(ifa, ifp) {
+			struct psref psref_ifa;
+			ifa_acquire(ifa, &psref_ifa);
+			pserialize_read_exit(s);
+
 			sa = ifa->ifa_addr;
 			if (sa->sa_family != AF_INET ||
 			    sa->sa_len > sizeof(*osa))
-				continue;
+				goto next;
 			memcpy(&ifr.ifr_addr, sa, sa->sa_len);
 			osa = (struct osockaddr *)&ifr.ifr_addr;
 			osa->sa_family = sa->sa_family;
 			if (space >= sz) {
 				error = copyout(&ifr, ifrp, sz);
-				if (error != 0)
+				if (error != 0) {
+					ifa_release(ifa, &psref_ifa);
 					goto release_exit;
+				}
 				ifrp++;
 			}
 			space -= sz;
+		next:
+			s = pserialize_read_enter();
+			ifa_release(ifa, &psref_ifa);
 		}
 
-		s = pserialize_read_enter();
-		psref_release(&psref, &ifp->if_psref, ifnet_psref_class);
+		KASSERT(pserialize_in_read_section());
+		if_release(ifp, &psref);
 	}
 	pserialize_read_exit(s);
 	curlwp_bindx(bound);
@@ -1181,7 +1236,7 @@ linux_getifconf(struct lwp *l, register_t *retval, void *data)
 	return copyout(&ifc, data, sizeof(ifc));
 
 release_exit:
-	psref_release(&psref, &ifp->if_psref, ifnet_psref_class);
+	if_release(ifp, &psref);
 	curlwp_bindx(bound);
 	return error;
 }
@@ -1588,8 +1643,20 @@ linux_get_sa(struct lwp *l, int s, struct sockaddr_big *sb,
 		sin6->sin6_scope_id = 0;
 	}
 
-	if (bdom == AF_INET)
-		namelen = sizeof(struct sockaddr_in);
+	/*
+	 * Linux is less strict than NetBSD and permits namelen to be larger
+	 * than valid struct sockaddr_in*.  If this is the case, truncate
+	 * the value to the correct size, so that NetBSD networking does not
+	 * return an error.
+	 */
+	switch (bdom) {
+	case AF_INET:
+		namelen = MIN(namelen, sizeof(struct sockaddr_in));
+		break;
+	case AF_INET6:
+		namelen = MIN(namelen, sizeof(struct sockaddr_in6));
+		break;
+	}
 
 	sb->sb_family = bdom;
 	sb->sb_len = namelen;
@@ -1695,4 +1762,232 @@ linux_sys_accept(struct lwp *l, const struct linux_sys_accept_args *uap, registe
 		return (error);
 
 	return (0);
+}
+
+int
+linux_sys_accept4(struct lwp *l, const struct linux_sys_accept4_args *uap, register_t *retval)
+{
+	/* {
+		syscallarg(int) s;
+		syscallarg(struct osockaddr *) name;
+		syscallarg(int *) anamelen;
+		syscallarg(int) flags;
+	} */
+	int error, flags;
+	struct sockaddr_big name;
+
+	if ((flags = linux_to_bsd_type(SCARG(uap, flags))) == -1)
+		return EINVAL;
+
+	name.sb_len = UCHAR_MAX;
+	error = do_sys_accept(l, SCARG(uap, s), (struct sockaddr *)&name,
+	    retval, NULL, flags, 0);
+	if (error != 0)
+		return error;
+
+	error = copyout_sockname_sb((struct sockaddr *)SCARG(uap, name),
+	    SCARG(uap, anamelen), MSG_LENUSRSPACE, &name);
+	if (error != 0) {
+		int fd = (int)*retval;
+		if (fd_getfile(fd) != NULL)
+			(void)fd_close(fd);
+		return error;
+	}
+	if (SCARG(uap, name) && (error = linux_sa_put(SCARG(uap, name))))
+		return error;
+
+	return 0;
+}
+
+int
+linux_sys_sendmmsg(struct lwp *l, const struct linux_sys_sendmmsg_args *uap,
+    register_t *retval)
+{
+	/* {
+		syscallarg(int) s;
+		syscallarg(struct linux_mmsghdr *) msgvec;
+		syscallarg(unsigned int) vlen;
+		syscallarg(unsigned int) flags;
+	} */
+	struct linux_mmsghdr lmsg;
+	struct mmsghdr bmsg;
+	struct socket *so;
+	file_t *fp;
+	struct msghdr *msg = &bmsg.msg_hdr;
+	int error, s;
+	unsigned int vlen, flags, dg;
+
+	if ((flags = linux_to_bsd_msg_flags(SCARG(uap, flags))) == -1)
+		return EINVAL;
+
+	flags = (flags & MSG_USERFLAGS) | MSG_IOVUSRSPACE;
+
+	s = SCARG(uap, s);
+	if ((error = fd_getsock1(s, &so, &fp)) != 0)
+		return error;
+
+	vlen = SCARG(uap, vlen);
+	if (vlen > 1024)
+		vlen = 1024;
+
+	for (dg = 0; dg < vlen;) {
+		error = copyin(SCARG(uap, msgvec) + dg, &lmsg, sizeof(lmsg));
+		if (error)
+			break;
+		linux_to_bsd_msghdr(&lmsg.msg_hdr, &bmsg.msg_hdr);
+
+		msg->msg_flags = flags;
+
+		error = do_sys_sendmsg_so(l, s, so, fp, msg, flags, retval);
+		if (error)
+			break;
+
+		ktrkuser("msghdr", msg, sizeof *msg);
+		lmsg.msg_len = *retval;
+		error = copyout(&lmsg, SCARG(uap, msgvec) + dg, sizeof(lmsg));
+		if (error)
+			break;
+		dg++;
+
+	}
+
+	*retval = dg;
+
+	fd_putfile(s);
+
+	/*
+	 * If we succeeded at least once, return 0.
+	 */
+	if (dg)
+		return 0;
+	return error;
+}
+
+int
+linux_sys_recvmmsg(struct lwp *l, const struct linux_sys_recvmmsg_args *uap,
+    register_t *retval)
+{
+	/* {
+		syscallarg(int) s;
+		syscallarg(struct linux_mmsghdr *) msgvec;
+		syscallarg(unsigned int) vlen;
+		syscallarg(unsigned int) flags;
+		syscallarg(struct linux_timespec *) timeout;
+	} */
+	struct linux_mmsghdr lmsg;
+	struct mmsghdr bmsg;
+	struct socket *so;
+	struct msghdr *msg = &bmsg.msg_hdr;
+	int error, s;
+	struct mbuf *from, *control;
+	struct timespec ts = {0}, now;
+	struct linux_timespec lts;
+	unsigned int vlen, flags, dg;
+
+	if (SCARG(uap, timeout)) {
+		error = copyin(SCARG(uap, timeout), &lts, sizeof(lts));
+			return error;
+		ts.tv_sec = lts.tv_sec;
+		ts.tv_nsec = lts.tv_nsec;
+		getnanotime(&now);
+		timespecadd(&now, &ts, &ts);
+	}
+
+	s = SCARG(uap, s);
+	if ((error = fd_getsock(s, &so)) != 0)
+		return error;
+
+	/*
+	 * If so->so_rerror holds a deferred error return it now.
+	 */
+	if (so->so_rerror) {
+		error = so->so_rerror;
+		so->so_rerror = 0;
+		fd_putfile(s);
+		return error;
+	}
+
+	vlen = SCARG(uap, vlen);
+	if (vlen > 1024)
+		vlen = 1024;
+
+	from = NULL;
+	flags = (SCARG(uap, flags) & MSG_USERFLAGS) | MSG_IOVUSRSPACE;
+
+	for (dg = 0; dg < vlen;) {
+		error = copyin(SCARG(uap, msgvec) + dg, &lmsg, sizeof(lmsg));
+		if (error)
+			break;
+		linux_to_bsd_msghdr(&lmsg.msg_hdr, &bmsg.msg_hdr);
+		msg->msg_flags = flags & ~MSG_WAITFORONE;
+
+		if (from != NULL) {
+			m_free(from);
+			from = NULL;
+		}
+
+		error = do_sys_recvmsg_so(l, s, so, msg, &from,
+		    msg->msg_control != NULL ? &control : NULL, retval);
+		if (error) {
+			if (error == EAGAIN && dg > 0)
+				error = 0;
+			break;
+		}
+
+		if (msg->msg_control != NULL)
+			error = linux_copyout_msg_control(l, msg, control);
+		if (error)
+			break;
+
+		if (from != NULL) {
+			mtod(from, struct osockaddr *)->sa_family =
+			    bsd_to_linux_domain(mtod(from,
+			    struct sockaddr *)->sa_family);
+			error = copyout_sockname(msg->msg_name,
+			    &msg->msg_namelen, 0, from);
+			if (error)
+				break;
+		}
+
+
+		lmsg.msg_len = *retval;
+		ktrkuser("msghdr", msg, sizeof(*msg));
+		bsd_to_linux_msghdr(msg, &lmsg.msg_hdr);
+		error = copyout(&lmsg, SCARG(uap, msgvec) + dg, sizeof(lmsg));
+		if (error)
+			break;
+
+		dg++;
+		if (msg->msg_flags & MSG_OOB)
+			break;
+
+		if (SCARG(uap, timeout)) {
+			getnanotime(&now);
+			timespecsub(&now, &ts, &now);
+			if (now.tv_sec > 0)
+				break;
+		}
+
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+	}
+
+	if (from != NULL)
+		m_free(from);
+
+	*retval = dg;
+
+	/*
+	 * If we succeeded at least once, return 0, hopefully so->so_rerror
+	 * will catch it next time.
+	 */
+	if (error && dg > 0) {
+		so->so_rerror = error;
+		error = 0;
+	}
+
+	fd_putfile(s);
+
+	return error;
 }

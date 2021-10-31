@@ -1,4 +1,4 @@
-/*	$NetBSD: bt_put.c,v 1.20 2011/06/26 22:20:31 christos Exp $	*/
+/*	$NetBSD: bt_put.c,v 1.22 2016/09/24 21:31:25 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993, 1994
@@ -37,7 +37,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: bt_put.c,v 1.20 2011/06/26 22:20:31 christos Exp $");
+__RCSID("$NetBSD: bt_put.c,v 1.22 2016/09/24 21:31:25 christos Exp $");
 
 #include "namespace.h"
 #include <sys/types.h>

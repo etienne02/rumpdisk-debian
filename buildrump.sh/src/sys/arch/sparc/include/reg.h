@@ -1,4 +1,4 @@
-/*	$NetBSD: reg.h,v 1.8 2005/12/11 12:19:06 christos Exp $ */
+/*	$NetBSD: reg.h,v 1.11 2018/01/15 10:06:49 martin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -102,21 +102,28 @@ struct fp_qentry {
 	int	*fq_addr;		/* the instruction's address */
 	int	fq_instr;		/* the instruction itself */
 };
+
+struct fpreg {
+	u_int	fr_regs[32];		/* our view is 32 32-bit registers */
+	int	fr_fsr;			/* %fsr */
+};
+
 struct fpstate {
-	u_int	fs_regs[32];		/* our view is 32 32-bit registers */
-	int	fs_fsr;			/* %fsr */
+	struct fpreg fs_reg;
+#define fs_regs fs_reg.fr_regs
+#define fs_fsr	fs_reg.fr_fsr
 	int	fs_qsize;		/* actual queue depth */
 	struct	fp_qentry fs_queue[FP_QSIZE];	/* queue contents */
-};
+}
+#ifdef _KERNEL
+ __aligned(8)				/* asm code uses std instructions */
+#endif
+;
 
 /*
  * The actual FP registers are made accessible (c.f. ptrace(2)) through
  * a `struct fpreg'; <arch/sparc/sparc/process_machdep.c> relies on the
  * fact that `fpreg' is a prefix of `fpstate'.
  */
-struct fpreg {
-	u_int	fr_regs[32];		/* our view is 32 32-bit registers */
-	int	fr_fsr;			/* %fsr */
-};
 
 #endif /* _MACHINE_REG_H_ */

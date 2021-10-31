@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_ktrace.c,v 1.167 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: kern_ktrace.c,v 1.178 2021/02/27 13:02:42 simonb Exp $	*/
 
 /*-
- * Copyright (c) 2006, 2007, 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_ktrace.c,v 1.167 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_ktrace.c,v 1.178 2021/02/27 13:02:42 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -126,8 +126,6 @@ struct ktr_desc {
 	kcondvar_t ktd_cv;
 };
 
-static int	ktealloc(struct ktrace_entry **, void **, lwp_t *, int,
-			 size_t);
 static void	ktrwrite(struct ktr_desc *, struct ktrace_entry *);
 static int	ktrops(lwp_t *, struct proc *, int, int,
 		    struct ktr_desc *);
@@ -142,18 +140,13 @@ static struct ktr_desc *
 		ktd_lookup(file_t *);
 static void	ktdrel(struct ktr_desc *);
 static void	ktdref(struct ktr_desc *);
-static void	ktraddentry(lwp_t *, struct ktrace_entry *, int);
-/* Flags for ktraddentry (3rd arg) */
-#define	KTA_NOWAIT		0x0000
-#define	KTA_WAITOK		0x0001
-#define	KTA_LARGE		0x0002
 static void	ktefree(struct ktrace_entry *);
 static void	ktd_logerrl(struct ktr_desc *, int);
 static void	ktrace_thread(void *);
 static int	ktrderefall(struct ktr_desc *, int);
 
 /*
- * Default vaules.
+ * Default values.
  */
 #define	KTD_MAXENTRY		1000	/* XXX: tune */
 #define	KTD_TIMEOUT		5	/* XXX: tune */
@@ -232,7 +225,7 @@ ktrace_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	if (action != KAUTH_PROCESS_KTRACE)
 		return result;
 
-	req = (enum kauth_process_req)(unsigned long)arg1;
+	req = (enum kauth_process_req)(uintptr_t)arg1;
 
 	/* Privileged; secmodel should handle these. */
 	if (req == KAUTH_REQ_PROCESS_KTRACE_PERSISTENT)
@@ -269,7 +262,7 @@ ktrinit(void)
 /*
  * Release a reference.  Called with ktrace_lock held.
  */
-void
+static void
 ktdrel(struct ktr_desc *ktd)
 {
 
@@ -285,7 +278,7 @@ ktdrel(struct ktr_desc *ktd)
 	}
 }
 
-void
+static void
 ktdref(struct ktr_desc *ktd)
 {
 
@@ -295,7 +288,7 @@ ktdref(struct ktr_desc *ktd)
 	ktrace_on++;
 }
 
-struct ktr_desc *
+static struct ktr_desc *
 ktd_lookup(file_t *fp)
 {
 	struct ktr_desc *ktd;
@@ -418,7 +411,7 @@ freekte:
 	ktrexit(l);
 }
 
-void
+static void
 ktefree(struct ktrace_entry *kte)
 {
 
@@ -433,7 +426,7 @@ ktefree(struct ktrace_entry *kte)
  * same underlying vnode/socket.
  */
 
-int
+static int
 ktrsamefile(file_t *f1, file_t *f2)
 {
 
@@ -469,14 +462,14 @@ ktradref(struct proc *p)
 	ktdref(ktd);
 }
 
-int
+static int
 ktrderefall(struct ktr_desc *ktd, int auth)
 {
 	lwp_t *curl = curlwp;
 	struct proc *p;
 	int error = 0;
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	PROCLIST_FOREACH(p, &allproc) {
 		if (p->p_tracep != ktd)
 			continue;
@@ -491,7 +484,7 @@ ktrderefall(struct ktr_desc *ktd, int auth)
 		mutex_exit(&ktrace_lock);
 		mutex_exit(p->p_lock);
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	return error;
 }
@@ -510,11 +503,7 @@ ktealloc(struct ktrace_entry **ktep, void **bufp, lwp_t *l, int type,
 
 	kte = pool_cache_get(kte_cache, PR_WAITOK);
 	if (sz > sizeof(kte->kte_space)) {
-		if ((buf = kmem_alloc(sz, KM_SLEEP)) == NULL) {
-			pool_cache_put(kte_cache, kte);
-			ktrexit(l);
-			return ENOMEM;
-		}
+		buf = kmem_alloc(sz, KM_SLEEP);
 	} else
 		buf = kte->kte_space;
 
@@ -535,6 +524,12 @@ ktealloc(struct ktrace_entry **ktep, void **bufp, lwp_t *l, int type,
 	*bufp = buf;
 
 	return 0;
+}
+
+void
+ktesethdrlen(struct ktrace_entry *kte, size_t l)
+{
+	kte->kte_kth.ktr_len = l;
 }
 
 void
@@ -692,7 +687,7 @@ ktr_io(lwp_t *l, int fd, enum uio_rw rw, struct iovec *iov, size_t len)
 	char *cp;
 
  next:
-	buflen = min(PAGE_SIZE, resid + sizeof(struct ktr_genio));
+	buflen = uimin(PAGE_SIZE, resid + sizeof(struct ktr_genio));
 
 	if (ktealloc(&kte, (void *)&ktp, l, KTR_GENIO, buflen))
 		return;
@@ -705,7 +700,7 @@ ktr_io(lwp_t *l, int fd, enum uio_rw rw, struct iovec *iov, size_t len)
 	kte->kte_kth.ktr_len = sizeof(struct ktr_genio);
 
 	while (buflen > 0) {
-		cnt = min(iov->iov_len, buflen);
+		cnt = uimin(iov->iov_len, buflen);
 		if (copyin(iov->iov_base, cp, cnt) != 0)
 			goto out;
 		kte->kte_kth.ktr_len += cnt;
@@ -725,7 +720,7 @@ ktr_io(lwp_t *l, int fd, enum uio_rw rw, struct iovec *iov, size_t len)
 	 */
 	ktraddentry(l, kte, KTA_WAITOK | KTA_LARGE);
 	if (resid > 0) {
-		if (curcpu()->ci_schedstate.spc_flags & SPCF_SHOULDYIELD) {
+		if (preempt_needed()) {
 			(void)ktrenter(l);
 			preempt();
 			ktrexit(l);
@@ -823,7 +818,7 @@ ktr_csw(int out, int user)
 		return;
 
 	/*
-	 * Don't record context switches resulting from blocking on 
+	 * Don't record context switches resulting from blocking on
 	 * locks; it's too easy to get duff results.
 	 */
 	if (l->l_syncobj == &mutex_syncobj || l->l_syncobj == &rw_syncobj)
@@ -836,7 +831,7 @@ ktr_csw(int out, int user)
 	 * XXX This is not ideal: it would be better to maintain a pool
 	 * of ktes and actually push this to the kthread when context
 	 * switch happens, however given the points where we are called
-	 * from that is difficult to do. 
+	 * from that is difficult to do.
 	 */
 	if (out) {
 		if (ktrenter(l))
@@ -873,7 +868,7 @@ ktr_csw(int out, int user)
 			kte->kte_kth.ktr_otv.tv_sec = ts->tv_sec;
 			kte->kte_kth.ktr_otv.tv_usec = ts->tv_nsec / 1000;
 			break;
-		case 1: 
+		case 1:
 			kte->kte_kth.ktr_ots.tv_sec = ts->tv_sec;
 			kte->kte_kth.ktr_ots.tv_nsec = ts->tv_nsec;
 			break;
@@ -931,14 +926,14 @@ ktruser(const char *id, void *addr, size_t len, int ustr)
 
 	user_dta = (void *)(ktp + 1);
 	if ((error = copyin(addr, user_dta, len)) != 0)
-		len = 0;
+		kte->kte_kth.ktr_len = 0;
 
 	ktraddentry(l, kte, KTA_WAITOK);
 	return error;
 }
 
 void
-ktr_kuser(const char *id, void *addr, size_t len)
+ktr_kuser(const char *id, const void *addr, size_t len)
 {
 	struct ktrace_entry *kte;
 	struct ktr_user *ktp;
@@ -990,7 +985,7 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 {
 	struct proc *p;
 	struct pgrp *pg;
-	struct ktr_desc *ktd = NULL;
+	struct ktr_desc *ktd = NULL, *nktd;
 	file_t *fp = *fpp;
 	int ret = 0;
 	int error = 0;
@@ -1020,22 +1015,22 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 		ktd = ktd_lookup(fp);
 		mutex_exit(&ktrace_lock);
 		if (ktd == NULL) {
-			ktd = kmem_alloc(sizeof(*ktd), KM_SLEEP);
-			TAILQ_INIT(&ktd->ktd_queue);
-			callout_init(&ktd->ktd_wakch, CALLOUT_MPSAFE);
-			cv_init(&ktd->ktd_cv, "ktrwait");
-			cv_init(&ktd->ktd_sync_cv, "ktrsync");
-			ktd->ktd_flags = 0;
-			ktd->ktd_qcount = 0;
-			ktd->ktd_error = 0;
-			ktd->ktd_errcnt = 0;
-			ktd->ktd_delayqcnt = ktd_delayqcnt;
-			ktd->ktd_wakedelay = mstohz(ktd_wakedelay);
-			ktd->ktd_intrwakdl = mstohz(ktd_intrwakdl);
-			ktd->ktd_ref = 0;
-			ktd->ktd_fp = fp;
+			nktd = kmem_alloc(sizeof(*nktd), KM_SLEEP);
+			TAILQ_INIT(&nktd->ktd_queue);
+			callout_init(&nktd->ktd_wakch, CALLOUT_MPSAFE);
+			cv_init(&nktd->ktd_cv, "ktrwait");
+			cv_init(&nktd->ktd_sync_cv, "ktrsync");
+			nktd->ktd_flags = 0;
+			nktd->ktd_qcount = 0;
+			nktd->ktd_error = 0;
+			nktd->ktd_errcnt = 0;
+			nktd->ktd_delayqcnt = ktd_delayqcnt;
+			nktd->ktd_wakedelay = mstohz(ktd_wakedelay);
+			nktd->ktd_intrwakdl = mstohz(ktd_intrwakdl);
+			nktd->ktd_ref = 0;
+			nktd->ktd_fp = fp;
 			mutex_enter(&ktrace_lock);
-			ktdref(ktd);
+			ktdref(nktd);
 			mutex_exit(&ktrace_lock);
 
 			/*
@@ -1043,16 +1038,16 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 			 * whether ktruss or ktrace.
 			 */
 			if (fp->f_type == DTYPE_PIPE)
-				ktd->ktd_flags |= KTDF_INTERACTIVE;
+				nktd->ktd_flags |= KTDF_INTERACTIVE;
 
 			mutex_enter(&fp->f_lock);
 			fp->f_count++;
 			mutex_exit(&fp->f_lock);
 			error = kthread_create(PRI_NONE, KTHREAD_MPSAFE, NULL,
-			    ktrace_thread, ktd, &ktd->ktd_lwp, "ktrace");
+			    ktrace_thread, nktd, &nktd->ktd_lwp, "ktrace");
 			if (error != 0) {
-				kmem_free(ktd, sizeof(*ktd));
-				ktd = NULL;
+				kmem_free(nktd, sizeof(*nktd));
+				nktd = NULL;
 				mutex_enter(&fp->f_lock);
 				fp->f_count--;
 				mutex_exit(&fp->f_lock);
@@ -1060,16 +1055,15 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 			}
 
 			mutex_enter(&ktrace_lock);
-			if (ktd_lookup(fp) != NULL) {
-				ktdrel(ktd);
-				ktd = NULL;
-			} else
-				TAILQ_INSERT_TAIL(&ktdq, ktd, ktd_list);
-			if (ktd == NULL)
-				cv_wait(&lbolt, &ktrace_lock);
+			ktd = ktd_lookup(fp);
+			if (ktd != NULL) {
+				ktdrel(nktd);
+				nktd = NULL;
+			} else {
+				TAILQ_INSERT_TAIL(&ktdq, nktd, ktd_list);
+				ktd = nktd;
+			}
 			mutex_exit(&ktrace_lock);
-			if (ktd == NULL)
-				goto done;
 		}
 		break;
 
@@ -1089,7 +1083,7 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 	/*
 	 * do it
 	 */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	if (pid < 0) {
 		/*
 		 * by process group
@@ -1120,7 +1114,7 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 		else
 			ret |= ktrops(curl, p, ops, facs, ktd);
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 	if (error == 0 && !ret)
 		error = EPERM;
 	*fpp = NULL;
@@ -1147,7 +1141,8 @@ done:
  */
 /* ARGSUSED */
 int
-sys_fktrace(struct lwp *l, const struct sys_fktrace_args *uap, register_t *retval)
+sys_fktrace(struct lwp *l, const struct sys_fktrace_args *uap,
+    register_t *retval)
 {
 	/* {
 		syscallarg(int) fd;
@@ -1170,7 +1165,7 @@ sys_fktrace(struct lwp *l, const struct sys_fktrace_args *uap, register_t *retva
 	return error;
 }
 
-int
+static int
 ktrops(lwp_t *curl, struct proc *p, int ops, int facs,
     struct ktr_desc *ktd)
 {
@@ -1230,20 +1225,20 @@ ktrops(lwp_t *curl, struct proc *p, int ops, int facs,
 #endif
 
  out:
- 	mutex_exit(&ktrace_lock);
- 	mutex_exit(p->p_lock);
+	mutex_exit(&ktrace_lock);
+	mutex_exit(p->p_lock);
 
 	return error ? 0 : 1;
 }
 
-int
+static int
 ktrsetchildren(lwp_t *curl, struct proc *top, int ops, int facs,
     struct ktr_desc *ktd)
 {
 	struct proc *p;
 	int ret = 0;
 
-	KASSERT(mutex_owned(proc_lock));
+	KASSERT(mutex_owned(&proc_lock));
 
 	p = top;
 	for (;;) {
@@ -1270,7 +1265,7 @@ ktrsetchildren(lwp_t *curl, struct proc *top, int ops, int facs,
 	/*NOTREACHED*/
 }
 
-void
+static void
 ktrwrite(struct ktr_desc *ktd, struct ktrace_entry *kte)
 {
 	size_t hlen;
@@ -1364,7 +1359,7 @@ again:
 	}
 }
 
-void
+static void
 ktrace_thread(void *arg)
 {
 	struct ktr_desc *ktd = arg;
@@ -1432,7 +1427,7 @@ ktrace_thread(void *arg)
  *
  * TODO: check groups.  use caller effective gid.
  */
-int
+static int
 ktrcanset(lwp_t *calll, struct proc *targetp)
 {
 	KASSERT(mutex_owned(targetp->p_lock));

@@ -1,4 +1,4 @@
-/* $NetBSD: features.c,v 1.1 2014/02/27 09:37:02 matt Exp $ */
+/* $NetBSD: features.c,v 1.3 2020/10/11 16:22:02 skrll Exp $ */
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -38,7 +38,8 @@
  * FEAT_THUMB2!=if ${COMPILE.c} -fsyntax-only -DTHUMB2_TEST ${TESTFILE} >/dev/null 2>/dev/null; then echo yes; else echo no; fi
  */
 
-#if defined (__ARM_ARCH_8A__)  || defined (__ARM_ARCH_7__) || \
+#if defined(__ARM_ARCH_8A) || defined (__ARM_ARCH_8A__)  || \
+    defined (__ARM_ARCH_7__) || \
     defined (__ARM_ARCH_7A__)  || defined (__ARM_ARCH_7R__) || \
     defined (__ARM_ARCH_7M__)  || defined (__ARM_ARCH_7EM__) || \
     defined (__ARM_ARCH_6T2__)
@@ -48,7 +49,7 @@
 #if defined (HAVE_THUMB2) || defined (__ARM_ARCH_6__) || \
     defined (__ARM_ARCH_6J__)  || defined (__ARM_ARCH_6K__) || \
     defined (__ARM_ARCH_6Z__)  || defined (__ARM_ARCH_6ZK__) || \
-    defined (__ARM_ARCH_6ZM__)
+    defined (__ARM_ARCH_6KZ__) || defined (__ARM_ARCH_6ZM__)
 #define HAVE_LDREX
 #endif
 

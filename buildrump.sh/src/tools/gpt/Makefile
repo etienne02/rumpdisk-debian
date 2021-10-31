@@ -1,12 +1,11 @@
-#	$NetBSD: Makefile,v 1.3 2014/09/30 18:00:28 christos Exp $
+#	$NetBSD: Makefile,v 1.5 2019/05/17 13:51:36 nakayama Exp $
 
-HOSTPROGNAME=	nbgpt
+HOSTPROGNAME=	${_TOOL_PREFIX}gpt
 HOST_SRCDIR=	sbin/gpt
 HOST_CPPFLAGS+=	-I${.CURDIR}
 
 HOST_SRCS+= opendisk.c dehumanize_number.c
 
-NOMAN=	# defined
 .PATH.c: ${.CURDIR}/../../lib/libutil ${.CURDIR}/../../lib/libc/gen
 
 .include "${.CURDIR}/../Makefile.nbincludes"

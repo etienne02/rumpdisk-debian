@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_machdep.h,v 1.19 2014/02/07 22:40:22 dsl Exp $	*/
+/*	$NetBSD: netbsd32_machdep.h,v 1.25 2019/11/27 09:16:58 rin Exp $	*/
 
 #ifndef _MACHINE_NETBSD32_H_
 #define _MACHINE_NETBSD32_H_
@@ -6,6 +6,26 @@
 #include <sys/ucontext.h>
 #include <compat/sys/ucontext.h>
 #include <compat/sys/siginfo.h>
+
+#include <x86/fpu.h>
+
+/*
+ * i386 ptrace constants
+ * Please keep in sync with sys/arch/i386/include/ptrace.h.
+ */
+#define	PT32_STEP		(PT_FIRSTMACH + 0)
+#define	PT32_GETREGS		(PT_FIRSTMACH + 1)
+#define	PT32_SETREGS		(PT_FIRSTMACH + 2)
+#define	PT32_GETFPREGS		(PT_FIRSTMACH + 3)
+#define	PT32_SETFPREGS		(PT_FIRSTMACH + 4)
+#define	PT32_GETXMMREGS		(PT_FIRSTMACH + 5)
+#define	PT32_SETXMMREGS		(PT_FIRSTMACH + 6)
+#define	PT32_GETDBREGS		(PT_FIRSTMACH + 7)
+#define	PT32_SETDBREGS		(PT_FIRSTMACH + 8)
+#define	PT32_SETSTEP		(PT_FIRSTMACH + 9)
+#define	PT32_CLEARSTEP		(PT_FIRSTMACH + 10)
+#define	PT32_GETXSTATE		(PT_FIRSTMACH + 11)
+#define	PT32_SETXSTATE		(PT_FIRSTMACH + 12)
 
 #define NETBSD32_POINTER_TYPE uint32_t
 typedef	struct { NETBSD32_POINTER_TYPE i32; } netbsd32_pointer_t;
@@ -114,6 +134,27 @@ struct fpreg32 {
 	char	__data[108];
 };
 
+struct dbreg32 {
+	int	dr[8];
+};
+
+struct xmmregs32 {
+	struct fxsave fxstate;
+};
+__CTASSERT(sizeof(struct xmmregs32) == 512);
+
+struct x86_get_ldt_args32 {
+	int32_t start;
+	uint32_t desc;
+	int32_t num;
+};
+
+struct x86_set_ldt_args32 {
+	int32_t start;
+	uint32_t desc;
+	int32_t num;
+};
+
 struct mtrr32 {
 	uint64_t base;
 	uint64_t len;
@@ -135,7 +176,15 @@ struct x86_64_set_mtrr_args32 {
 
 #define NETBSD32_MID_MACHINE MID_I386
 
+/* Translate ptrace() PT_* request from 32-bit userland to kernel. */
+int netbsd32_ptrace_translate_request(int);
+
 int netbsd32_process_read_regs(struct lwp *, struct reg32 *);
 int netbsd32_process_read_fpregs(struct lwp *, struct fpreg32 *, size_t *);
+int netbsd32_process_read_dbregs(struct lwp *, struct dbreg32 *, size_t *);
+
+int netbsd32_process_write_regs(struct lwp *, const struct reg32 *);
+int netbsd32_process_write_fpregs(struct lwp *, const struct fpreg32 *, size_t);
+int netbsd32_process_write_dbregs(struct lwp *, const struct dbreg32 *, size_t);
 
 #endif /* _MACHINE_NETBSD32_H_ */

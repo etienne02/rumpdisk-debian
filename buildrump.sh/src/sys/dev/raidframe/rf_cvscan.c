@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_cvscan.c,v 1.16 2011/08/31 18:31:02 plunky Exp $	*/
+/*	$NetBSD: rf_cvscan.c,v 1.18 2021/07/27 03:09:26 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -35,7 +35,7 @@
  ******************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_cvscan.c,v 1.16 2011/08/31 18:31:02 plunky Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_cvscan.c,v 1.18 2021/07/27 03:09:26 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 #include "rf_alloclist.h"
@@ -272,44 +272,6 @@ rf_CvscanDequeue(void *q_in)
 	return (ret);
 }
 
-
-
-RF_DiskQueueData_t *
-rf_CvscanPeek(void *q_in)
-{
-	RF_CvscanHeader_t *hdr = (RF_CvscanHeader_t *) q_in;
-	long    range, i, sum_dist_left, sum_dist_right;
-	RF_DiskQueueData_t *tmp, *headElement;
-
-	DO_CHECK_STATE(hdr);
-
-	if (hdr->left_cnt == 0 && hdr->right_cnt == 0)
-		headElement = NULL;
-	else {
-		range = RF_MIN(hdr->range_for_avg, RF_MIN(hdr->left_cnt, hdr->right_cnt));
-		for (i = 0, tmp = hdr->left, sum_dist_left =
-		    ((hdr->direction == rf_cvscan_RIGHT) ? range * hdr->change_penalty : 0);
-		    tmp != NULL && i < range;
-		    tmp = tmp->next, i++) {
-			sum_dist_left += hdr->cur_block - tmp->sectorOffset;
-		}
-		for (i = 0, tmp = hdr->right, sum_dist_right =
-		    ((hdr->direction == rf_cvscan_LEFT) ? range * hdr->change_penalty : 0);
-		    tmp != NULL && i < range;
-		    tmp = tmp->next, i++) {
-			sum_dist_right += tmp->sectorOffset - hdr->cur_block;
-		}
-
-		if (hdr->right_cnt == 0 || sum_dist_left < sum_dist_right)
-			headElement = hdr->left;
-		else
-			headElement = hdr->right;
-	}
-	return (headElement);
-}
-
-
-
 /*
 ** CVSCAN( 1, 0 ) is Shortest Seek Time First (SSTF)
 **				lowest average response time
@@ -326,8 +288,7 @@ rf_CvscanCreate(RF_SectorCount_t sectPerDisk,
 	long    range = 2;	/* Currently no mechanism to change these */
 	long    penalty = sectPerDisk / 5;
 
-	RF_MallocAndAdd(hdr, sizeof(RF_CvscanHeader_t), (RF_CvscanHeader_t *), clList);
-	memset((char *) hdr, 0, sizeof(RF_CvscanHeader_t));
+	hdr = RF_MallocAndAdd(sizeof(*hdr), clList);
 	hdr->range_for_avg = RF_MAX(range, 1);
 	hdr->change_penalty = RF_MAX(penalty, 0);
 	hdr->direction = rf_cvscan_RIGHT;

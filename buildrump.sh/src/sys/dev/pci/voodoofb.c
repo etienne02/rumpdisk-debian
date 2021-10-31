@@ -1,4 +1,4 @@
-/*	$NetBSD: voodoofb.c,v 1.51 2016/07/11 11:31:51 msaitoh Exp $	*/
+/*	$NetBSD: voodoofb.c,v 1.55 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, 2012 Michael Lorenz
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: voodoofb.c,v 1.51 2016/07/11 11:31:51 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: voodoofb.c,v 1.55 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -224,8 +224,6 @@ struct wsdisplay_accessops voodoofb_accessops = {
 };
 
 /* I2C glue */
-static int voodoofb_i2c_acquire_bus(void *, int);
-static void voodoofb_i2c_release_bus(void *, int);
 static int voodoofb_i2c_send_start(void *, int);
 static int voodoofb_i2c_send_stop(void *, int);
 static int voodoofb_i2c_initiate_xfer(void *, i2c_addr_t, int);
@@ -525,8 +523,8 @@ voodoofb_attach(device_t parent, device_t self, void *aux)
 	}
 
 	intrstr = pci_intr_string(sc->sc_pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(sc->sc_pc, ih, IPL_NET, voodoofb_intr,
-	    sc);
+	sc->sc_ih = pci_intr_establish_xname(sc->sc_pc, ih, IPL_NET,
+	    voodoofb_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "failed to establish interrupt");
 		if (intrstr != NULL)
@@ -548,8 +546,10 @@ voodoofb_attach(device_t parent, device_t self, void *aux)
 	aa.accessops = &voodoofb_accessops;
 	aa.accesscookie = &sc->vd;
 
-	config_found(self, &aa, wsemuldisplaydevprint);
-	config_found_ia(self, "drm", aux, voodoofb_drm_print);
+	config_found(self, &aa, wsemuldisplaydevprint,
+	    CFARGS(.iattr = "wsemuldisplaydev"));
+	config_found(self, aux, voodoofb_drm_print,
+	    CFARGS(.iattr = "drm"));
 }
 
 static int
@@ -1720,15 +1720,13 @@ voodoofb_setup_i2c(struct voodoofb_softc *sc)
 	int i;
 
 	/* Fill in the i2c tag */
+	iic_tag_init(&sc->sc_i2c);
 	sc->sc_i2c.ic_cookie = sc;
-	sc->sc_i2c.ic_acquire_bus = voodoofb_i2c_acquire_bus;
-	sc->sc_i2c.ic_release_bus = voodoofb_i2c_release_bus;
 	sc->sc_i2c.ic_send_start = voodoofb_i2c_send_start;
 	sc->sc_i2c.ic_send_stop = voodoofb_i2c_send_stop;
 	sc->sc_i2c.ic_initiate_xfer = voodoofb_i2c_initiate_xfer;
 	sc->sc_i2c.ic_read_byte = voodoofb_i2c_read_byte;
 	sc->sc_i2c.ic_write_byte = voodoofb_i2c_write_byte;
-	sc->sc_i2c.ic_exec = NULL;
 
 	sc->sc_i2creg = voodoo3_read32(sc, VIDSERPARPORT);
 #ifdef VOODOOFB_DEBUG
@@ -1819,19 +1817,6 @@ static uint32_t voodoofb_i2cbb_read(void *cookie)
 }
 
 /* higher level I2C stuff */
-static int
-voodoofb_i2c_acquire_bus(void *cookie, int flags)
-{
-	/* private bus */
-	return (0);
-}
-
-static void
-voodoofb_i2c_release_bus(void *cookie, int flags)
-{
-	/* private bus */
-}
-
 static int
 voodoofb_i2c_send_start(void *cookie, int flags)
 {

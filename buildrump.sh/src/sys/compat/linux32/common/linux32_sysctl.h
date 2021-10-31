@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_sysctl.h,v 1.2 2008/11/19 18:36:04 ad Exp $ */
+/*	$NetBSD: linux32_sysctl.h,v 1.6 2020/03/21 16:28:56 pgoyette Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -39,26 +39,13 @@ extern char linux32_version[];
 
 
 #define EMUL_LINUX32_KERN	1
-#define EMUL_LINUX32_MAXID	2 
-	 
-#define EMUL_LINUX32_NAMES { \
-	 { 0, 0 }, \
-	 { "kern", CTLTYPE_NODE }, \
-}	
 	 
 #define EMUL_LINUX32_KERN_OSTYPE	1
 #define EMUL_LINUX32_KERN_OSRELEASE	2
 #define EMUL_LINUX32_KERN_VERSION	3
-#define EMUL_LINUX32_KERN_MAXID		4 
 
-#define EMUL_LINUX32_KERN_NAMES { \
-	 { 0, 0 }, \
-	 { "ostype", CTLTYPE_STRING }, \
-	 { "osrelease", CTLTYPE_STRING }, \
-	 { "osversion", CTLTYPE_STRING }, \
-}  
-
-void	linux32_sysctl_init(void);
 void	linux32_sysctl_fini(void);
+
+int	linux32_sysctl_enable(SYSCTLFN_PROTO);
 
 #endif /* !_LINUX32_SYSCTL_H */

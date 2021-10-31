@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.h,v 1.146 2016/01/17 23:16:46 christos Exp $	*/
+/*	$NetBSD: conf.h,v 1.154 2019/10/08 12:49:56 uwe Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -63,6 +63,7 @@ struct vnode;
 #define	D_TYPEMASK	0x00ff
 #define	D_MPSAFE	0x0100
 #define	D_NEGOFFSAFE	0x0200
+#define	D_MCLOSE	0x0400
 
 /*
  * Block device switch table
@@ -125,31 +126,37 @@ devmajor_t cdevsw_lookup_major(const struct cdevsw *);
 #define	dev_type_kqfilter(n)	int n (dev_t, struct knote *)
 #define dev_type_discard(n)	int n (dev_t, off_t, off_t)
 
-#define	noopen		((dev_type_open((*)))enodev)
-#define	noclose		((dev_type_close((*)))enodev)
-#define	noread		((dev_type_read((*)))enodev)
-#define	nowrite		((dev_type_write((*)))enodev)
-#define	noioctl		((dev_type_ioctl((*)))enodev)
-#define	nostop		((dev_type_stop((*)))enodev)
+int devenodev(dev_t, ...);
+int deveopnotsupp(dev_t, ...);
+int devnullop(dev_t, ...);
+int ttyenodev(struct tty *, ...);
+void ttyvenodev(struct tty *, ...);
+void ttyvnullop(struct tty *, ...);
+
+#define	noopen		((dev_type_open((*)))devenodev)
+#define	noclose		((dev_type_close((*)))devenodev)
+#define	noread		((dev_type_read((*)))devenodev)
+#define	nowrite		((dev_type_write((*)))devenodev)
+#define	noioctl		((dev_type_ioctl((*)))devenodev)
+#define	nostop		((dev_type_stop((*)))ttyvenodev)
 #define	notty		NULL
 #define	nopoll		seltrue
-#define	nommap		((dev_type_mmap((*)))enodev)
-#define	nodump		((dev_type_dump((*)))enodev)
+paddr_t	nommap(dev_t, off_t, int);
+#define	nodump		((dev_type_dump((*)))devenodev)
 #define	nosize		NULL
 #define	nokqfilter	seltrue_kqfilter
-#define nodiscard	((dev_type_discard((*)))enodev)
+#define	nodiscard	((dev_type_discard((*)))devenodev)
 
-#define	nullopen	((dev_type_open((*)))nullop)
-#define	nullclose	((dev_type_close((*)))nullop)
-#define	nullread	((dev_type_read((*)))nullop)
-#define	nullwrite	((dev_type_write((*)))nullop)
-#define	nullioctl	((dev_type_ioctl((*)))nullop)
-#define	nullstop	((dev_type_stop((*)))nullop)
-#define	nullpoll	((dev_type_poll((*)))nullop)
-#define	nullmmap	((dev_type_mmap((*)))nullop)
-#define	nulldump	((dev_type_dump((*)))nullop)
-#define	nullkqfilter	((dev_type_kqfilter((*)))eopnotsupp)
-#define nulldiscard	((dev_type_discard((*)))nullop)
+#define	nullopen	((dev_type_open((*)))devnullop)
+#define	nullclose	((dev_type_close((*)))devnullop)
+#define	nullread	((dev_type_read((*)))devnullop)
+#define	nullwrite	((dev_type_write((*)))devnullop)
+#define	nullioctl	((dev_type_ioctl((*)))devnullop)
+#define	nullstop	((dev_type_stop((*)))ttyvnullop)
+#define	nullpoll	((dev_type_poll((*)))devnullop)
+#define	nulldump	((dev_type_dump((*)))devnullop)
+#define	nullkqfilter	((dev_type_kqfilter((*)))deveopnotsupp)
+#define	nulldiscard	((dev_type_discard((*)))devnullop)
 
 /* device access wrappers. */
 
@@ -174,7 +181,9 @@ dev_type_kqfilter(cdev_kqfilter);
 dev_type_discard(cdev_discard);
 
 int	cdev_type(dev_t);
+int	cdev_flags(dev_t);
 int	bdev_type(dev_t);
+int	bdev_flags(dev_t);
 
 /* symbolic sleep message strings */
 extern	const char devopn[], devio[], devwait[], devin[], devout[];
@@ -214,11 +223,10 @@ struct linesw *ttyldisc_default(void);
 void	       ttyldisc_release(struct linesw *);
 
 /* For those defining their own line disciplines: */
-#define	ttynodisc ((int (*)(dev_t, struct tty *))enodev)
-#define	ttyerrclose ((int (*)(struct tty *, int))enodev)
-#define	ttyerrio ((int (*)(struct tty *, struct uio *, int))enodev)
-#define	ttyerrinput ((int (*)(int, struct tty *))enodev)
-#define	ttyerrstart ((int (*)(struct tty *))enodev)
+#define	ttynodisc ((int (*)(dev_t, struct tty *))devenodev)
+#define	ttyerrclose ((int (*)(struct tty *, int))ttyenodev)
+#define	ttyerrio ((int (*)(struct tty *, struct uio *, int))ttyenodev)
+#define	ttyerrstart ((int (*)(struct tty *))ttyenodev)
 
 int	ttyerrpoll (struct tty *, int, struct lwp *);
 int	ttynullioctl(struct tty *, u_long, void *, int, struct lwp *);

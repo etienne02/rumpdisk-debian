@@ -1,4 +1,4 @@
-/*	$NetBSD: tty_subr.c,v 1.40 2011/09/24 00:05:38 christos Exp $	*/
+/*	$NetBSD: tty_subr.c,v 1.43 2019/12/27 09:41:51 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994 Theo de Raadt
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tty_subr.c,v 1.40 2011/09/24 00:05:38 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tty_subr.c,v 1.43 2019/12/27 09:41:51 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -72,16 +72,9 @@ clalloc(struct clist *clp, int size, int quot)
 {
 
 	clp->c_cs = kmem_zalloc(size, KM_SLEEP);
-	if (!clp->c_cs)
-		return (-1);
-
-	if (quot) {
+	if (quot)
 		clp->c_cq = kmem_zalloc(QMEM(size), KM_SLEEP);
-		if (!clp->c_cq) {
-			kmem_free(clp->c_cs, size);
-			return (-1);
-		}
-	} else
+	else
 		clp->c_cq = NULL;
 
 	clp->c_cf = clp->c_cl = NULL;
@@ -331,7 +324,7 @@ clrbits(u_char *cp, unsigned int off, unsigned int len)
 
 /*
  * Copy buffer to clist.
- * Return number of bytes not transfered.
+ * Return number of bytes not transferred.
  */
 int
 b_to_q(const u_char *cp, int count, struct clist *clp)
@@ -385,7 +378,7 @@ out:
 	return count;
 }
 
-static int cc;
+static int tty_global_cc;
 
 /*
  * Given a non-NULL pointer into the clist return the pointer
@@ -403,11 +396,11 @@ nextc(struct clist *clp, u_char *cp, int *c)
 		/*
 		 * First time initialization.
 		 */
-		cc = clp->c_cc;
+		tty_global_cc = clp->c_cc;
 	}
-	if (cc == 0 || cp == NULL)
+	if (tty_global_cc == 0 || cp == NULL)
 		return NULL;
-	if (--cc == 0)
+	if (--tty_global_cc == 0)
 		return NULL;
 	if (++cp == clp->c_ce)
 		cp = clp->c_cs;
@@ -439,8 +432,8 @@ firstc(struct clist *clp, int *c)
 {
 	u_char *cp;
 
-	cc = clp->c_cc;
-	if (cc == 0)
+	tty_global_cc = clp->c_cc;
+	if (tty_global_cc == 0)
 		return NULL;
 	cp = clp->c_cf;
 	*c = *cp & 0xff;

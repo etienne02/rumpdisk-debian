@@ -1,4 +1,4 @@
-/*	$NetBSD: i386func.S,v 1.17 2012/08/29 22:43:35 rmind Exp $	*/
+/*	$NetBSD: i386func.S,v 1.22 2020/05/19 21:40:55 ad Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2007, 2008 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: i386func.S,v 1.17 2012/08/29 22:43:35 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i386func.S,v 1.22 2020/05/19 21:40:55 ad Exp $");
 
 #include <machine/specialreg.h>
 #include <machine/segments.h>
@@ -65,23 +65,6 @@ ENTRY(ltr)
 	ltr	%ax
 	ret
 END(ltr)
-
-ENTRY(lcr0)
-	movl	4(%esp), %eax
-	movl	%eax, %cr0
-	ret
-END(lcr0)
-
-ENTRY(rcr0)
-	movl	%cr0, %eax
-	ret
-END(rcr0)
-
-ENTRY(lcr3)
-	movl	4(%esp), %eax
-	movl	%eax, %cr3
-	ret
-END(lcr3)
 
 /*
  * Big hammer: flush all TLB entries, including ones from PTE's
@@ -123,42 +106,10 @@ ENTRY(tlbflush)
 	ret
 END(tlbflush)
 
-ENTRY(ldr6)
-	movl	4(%esp), %eax
-	movl	%eax, %dr6
-	ret
-END(ldr6)
-
-ENTRY(rdr6)
-	movl	%dr6, %eax
-	ret
-END(rdr6)
-
-ENTRY(rcr2)
-	movl	%cr2, %eax
-	ret
-END(rcr2)
-
-ENTRY(lcr2)
-	movl	4(%esp), %eax
-	movl	%eax, %cr2
-	ret
-END(lcr2)
-
 ENTRY(wbinvd)
 	wbinvd
 	ret
 END(wbinvd)
-
-ENTRY(x86_disable_intr)
-	cli
-	ret
-END(x86_disable_intr)
-
-ENTRY(x86_enable_intr)
-	sti
-	ret
-END(x86_enable_intr)
 
 /*
  * void lgdt(struct region_descriptor *rdp);
@@ -186,17 +137,3 @@ ENTRY(lgdt)
 	movl	%eax, %fs
 	jmp	_C_LABEL(x86_flush)
 END(lgdt)
-
-ENTRY(tsc_get_timecount)
-	movl	CPUVAR(CURLWP), %ecx
-1:
-	pushl	L_NCSW(%ecx)
-	rdtsc
-	addl	CPUVAR(CC_SKEW), %eax
-	popl	%edx
-	cmpl	%edx, L_NCSW(%ecx)
-	jne	2f
-	ret
-2:
-	jmp	1b
-END(tsc_get_timecount)

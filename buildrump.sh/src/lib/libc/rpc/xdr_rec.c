@@ -1,4 +1,4 @@
-/*	$NetBSD: xdr_rec.c,v 1.36 2015/03/26 11:31:57 justin Exp $	*/
+/*	$NetBSD: xdr_rec.c,v 1.38 2021/08/21 23:00:30 andvar Exp $	*/
 
 /*
  * Copyright (c) 2010, Oracle America, Inc.
@@ -37,7 +37,7 @@
 static char *sccsid = "@(#)xdr_rec.c 1.21 87/08/11 Copyr 1984 Sun Micro";
 static char *sccsid = "@(#)xdr_rec.c	2.2 88/08/01 4.0 RPCSRC";
 #else
-__RCSID("$NetBSD: xdr_rec.c,v 1.36 2015/03/26 11:31:57 justin Exp $");
+__RCSID("$NetBSD: xdr_rec.c,v 1.38 2021/08/21 23:00:30 andvar Exp $");
 #endif
 #endif
 
@@ -121,7 +121,7 @@ static const struct  xdr_ops xdrrec_ops = {
  * meet the needs of xdr and rpc based on tcp.
  */
 
-#define LAST_FRAG ((uint32_t)(1 << 31))
+#define LAST_FRAG ((uint32_t)(1U << 31))
 
 typedef struct rec_strm {
 	char *tcp_handle;
@@ -479,7 +479,7 @@ xdrrec_skiprecord(XDR *xdrs)
 }
 
 /*
- * Look ahead fuction.
+ * Look ahead function.
  * Returns TRUE iff there is no more input in the buffer 
  * after consuming the rest of the current record.
  */

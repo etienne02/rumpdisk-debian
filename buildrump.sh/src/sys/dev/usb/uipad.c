@@ -1,4 +1,4 @@
-/*	$NetBSD: uipad.c,v 1.2 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: uipad.c,v 1.9 2020/01/07 06:42:26 maxv Exp $	*/
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific pipadr written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -37,7 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipad.c,v 1.2 2016/04/23 10:15:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipad.c,v 1.9 2020/01/07 06:42:26 maxv Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -69,26 +66,32 @@ int	uipaddebug = 0;
 #endif
 
 struct uipad_softc {
- 	device_t		sc_dev;
+	device_t		sc_dev;
 	struct usbd_device *	sc_udev;
 };
 
-/*
- * Note that we do not attach to USB_PRODUCT_RIM_BLACKBERRY_PEARL_DUAL
- * as we let umass claim the device instead.
- */
 static const struct usb_devno uipad_devs[] = {
 	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPAD },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPAD_2 },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPAD_3 },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPAD_MINI },
+#if 0
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_3G },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_3GS },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_4 },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_4_VZW },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_4S },
+	{ USB_VENDOR_APPLE, USB_PRODUCT_APPLE_IPHONE_5 },
+#endif
 };
 
 #define uipad_lookup(v, p) usb_lookup(uipad_devs, v, p)
 
-int	uipad_match(device_t, cfdata_t, void *);
-void	uipad_attach(device_t, device_t, void *);
-int	uipad_detach(device_t, int);
-int	uipad_activate(device_t, enum devact);
+static int	uipad_match(device_t, cfdata_t, void *);
+static void	uipad_attach(device_t, device_t, void *);
+static int	uipad_detach(device_t, int);
 
-extern struct cfdriver uipad_cd;
 CFATTACH_DECL_NEW(uipad, sizeof(struct uipad_softc), uipad_match,
     uipad_attach, uipad_detach, NULL);
 
@@ -98,15 +101,15 @@ uipad_cmd(struct uipad_softc *sc, uint8_t requestType, uint8_t reqno,
 {
 	usb_device_request_t req;
 	usbd_status err;
- 
+
 	DPRINTF(("ipad cmd type=%x, number=%x, value=%d, index=%d\n",
 	    requestType, reqno, value, index));
         req.bmRequestType = requestType;
         req.bRequest = reqno;
-        USETW(req.wValue, value); 
+        USETW(req.wValue, value);
         USETW(req.wIndex, index);
         USETW(req.wLength, 0);
-   
+
         if ((err = usbd_do_request(sc->sc_udev, &req, NULL)) != 0)
 		aprint_error_dev(sc->sc_dev, "sending command failed %d\n",
 		    err);
@@ -119,7 +122,7 @@ uipad_charge(struct uipad_softc *sc)
 		uipad_cmd(sc, UT_VENDOR | UT_WRITE, 0x40, 0x6400, 0x6400);
 }
 
-int 
+static int
 uipad_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -129,7 +132,7 @@ uipad_match(device_t parent, cfdata_t match, void *aux)
 	    UMATCH_VENDOR_PRODUCT : UMATCH_NONE;
 }
 
-void 
+static void
 uipad_attach(device_t parent, device_t self, void *aux)
 {
 	struct uipad_softc *sc = device_private(self);
@@ -160,7 +163,7 @@ uipad_attach(device_t parent, device_t self, void *aux)
 	return;
 }
 
-int 
+static int
 uipad_detach(device_t self, int flags)
 {
 	struct uipad_softc *sc = device_private(self);

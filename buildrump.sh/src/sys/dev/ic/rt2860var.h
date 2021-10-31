@@ -1,4 +1,4 @@
-/*	$NetBSD: rt2860var.h,v 1.3 2016/07/08 01:24:53 christos Exp $	*/
+/*	$NetBSD: rt2860var.h,v 1.6 2019/10/05 23:27:20 mrg Exp $	*/
 /*	$OpenBSD: rt2860var.h,v 1.23 2016/03/21 21:16:30 stsp Exp $	*/
 
 /*-
@@ -42,7 +42,7 @@ struct rt2860_rx_radiotap_header {
 	uint8_t		wr_dbm_antsignal;
 	uint8_t		wr_antenna;
 	uint8_t		wr_antsignal;
-} __packed __aligned(8);
+} __aligned(8);
 
 #define RT2860_RX_RADIOTAP_PRESENT			\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -59,7 +59,7 @@ struct rt2860_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_hwqueue;
-} __packed __aligned(8);
+} __aligned(8);
 
 #define RT2860_TX_RADIOTAP_PRESENT			\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -120,6 +120,7 @@ struct rt2860_softc {
 	bus_dma_tag_t			sc_dmat;
 	bus_space_tag_t			sc_st;
 	bus_space_handle_t		sc_sh;
+	void				*sc_soft_ih;
 
 	struct ethercom			sc_ec;
 #define sc_if  sc_ec.ec_if
@@ -211,6 +212,4 @@ struct rt2860_softc {
 
 int	rt2860_attach(void *, int);
 int	rt2860_detach(void *);
-void	rt2860_suspend(void *);
-void	rt2860_wakeup(void *);
 int	rt2860_intr(void *);

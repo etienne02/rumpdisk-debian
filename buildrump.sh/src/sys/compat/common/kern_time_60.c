@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_time_60.c,v 1.1 2013/03/29 01:02:50 christos Exp $	*/
+/*	$NetBSD: kern_time_60.c,v 1.3 2020/01/29 15:47:51 ad Exp $	*/
 
 /*-
- * Copyright (c) 2013 The NetBSD Foundation, Inc.
+ * Copyright (c) 2013, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -29,17 +29,27 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_time_60.c,v 1.1 2013/03/29 01:02:50 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_time_60.c,v 1.3 2020/01/29 15:47:51 ad Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lwp.h>
 #include <sys/time.h>
-#include <sys/sysctl.h>
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 
 #include <compat/common/compat_util.h>
 #include <compat/common/compat_mod.h>
+
+static const struct syscall_package compat_60_syscalls[] = {
+	{ SYS_compat_60__lwp_park, 0, (sy_call_t *)compat_60_sys__lwp_park },
+	{ 0, 0, NULL }
+};
 
 int
 compat_60_sys__lwp_park(struct lwp *l,
@@ -65,10 +75,24 @@ compat_60_sys__lwp_park(struct lwp *l,
 	}
 
 	if (SCARG(uap, unpark) != 0) {
-		error = lwp_unpark(SCARG(uap, unpark), SCARG(uap, unparkhint));
+		error = lwp_unpark(&SCARG(uap, unpark), 1);
 		if (error != 0)
 			return error;
 	}
 
-	return lwp_park(CLOCK_REALTIME, TIMER_ABSTIME, tsp, SCARG(uap, hint));
+	return lwp_park(CLOCK_REALTIME, TIMER_ABSTIME, tsp);
+}
+
+int
+kern_time_60_init(void)
+{
+
+	return syscall_establish(NULL, compat_60_syscalls);
+}
+
+int
+kern_time_60_fini(void)
+{
+
+	return syscall_disestablish(NULL, compat_60_syscalls);
 }

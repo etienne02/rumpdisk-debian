@@ -1,7 +1,7 @@
-/*	$NetBSD: intr.h,v 1.49 2016/07/07 06:55:39 msaitoh Exp $	*/
+/*	$NetBSD: intr.h,v 1.62 2020/04/25 15:26:18 bouyer Exp $	*/
 
 /*-
- * Copyright (c) 1998, 2001, 2006, 2007, 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 2001, 2006, 2007, 2008, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -33,10 +33,13 @@
 #define _X86_INTR_H_
 
 #define	__HAVE_FAST_SOFTINTS
+#if !defined(NO_PREEMPTION)
 #define	__HAVE_PREEMPTION
+#endif /* !defined(NO_PREEMPTION) */
 
 #ifdef _KERNEL
 #include <sys/types.h>
+#include <sys/kcpuset.h>
 #else
 #include <stdbool.h>
 #endif
@@ -44,6 +47,11 @@
 #include <sys/evcnt.h>
 #include <sys/queue.h>
 #include <machine/intrdefs.h>
+
+#ifdef XEN
+#include <xen/include/public/xen.h>
+#include <xen/include/public/event_channel.h>
+#endif /* XEN */
 
 #ifndef _LOCORE
 #include <machine/pic.h>
@@ -86,7 +94,21 @@ struct intrsource {
 	void *is_recurse;		/* entry for spllower */
 	void *is_resume;		/* entry for doreti */
 	lwp_t *is_lwp;			/* for soft interrupts */
+#if defined(XEN)
+	u_long ipl_evt_mask1;	/* pending events for this IPL */
+	u_long ipl_evt_mask2[NR_EVENT_CHANNELS];
+#endif
 	struct evcnt is_evcnt;		/* interrupt counter per cpu */
+	/*
+	 * is_mask_count requires special handling; it can only be modifed
+	 * or examined on the CPU that owns the interrupt source, and such
+	 * references need to be protected by disabling interrupts.  This
+	 * is because intr_mask() can be called from an interrupt handler.
+	 * is_distribute_pending does not require such special handling
+	 * because intr_unmask() cannot be called from an interrupt handler.
+	 */
+	u_int is_mask_count;		/* masked? (nested) [see above] */
+	int is_distribute_pending;	/* ci<->ci move pending [cpu_lock] */
 	int is_flags;			/* see below */
 	int is_type;			/* level, edge */
 	int is_idtvec;
@@ -109,6 +131,7 @@ struct intrsource {
  */
 
 struct intrhand {
+	struct pic *ih_pic;
 	int	(*ih_fun)(void *);
 	void	*ih_arg;
 	int	ih_level;
@@ -118,6 +141,9 @@ struct intrhand {
 	struct	intrhand **ih_prevp;
 	int	ih_pin;
 	int	ih_slot;
+#if defined(XEN)
+	struct	intrhand *ih_evt_next;
+#endif
 	struct cpu_info *ih_cpu;
 };
 
@@ -171,12 +197,14 @@ splraiseipl(ipl_cookie_t icookie)
  */
 
 void Xsoftintr(void);
-void Xpreemptrecurse(void);
-void Xpreemptresume(void);
+void Xrecurse_preempt(void);
+void Xresume_preempt(void);
 
-extern struct intrstub i8259_stubs[];
+extern struct intrstub legacy_stubs[];
 extern struct intrstub ioapic_edge_stubs[];
 extern struct intrstub ioapic_level_stubs[];
+extern struct intrstub x2apic_edge_stubs[];
+extern struct intrstub x2apic_level_stubs[];
 
 struct cpu_info;
 
@@ -189,6 +217,8 @@ void x86_nmi(void);
 void *intr_establish_xname(int, struct pic *, int, int, int, int (*)(void *),
 			   void *, bool, const char *);
 void *intr_establish(int, struct pic *, int, int, int, int (*)(void *), void *, bool);
+void intr_mask(struct intrhand *);
+void intr_unmask(struct intrhand *);
 void intr_disestablish(struct intrhand *);
 void intr_add_pcibus(struct pcibus_attach_args *);
 const char *intr_string(intr_handle_t, char *, size_t);
@@ -197,14 +227,24 @@ int intr_find_mpmapping(int, int, intr_handle_t *);
 struct pic *intr_findpic(int);
 void intr_printconfig(void);
 
+const char *intr_create_intrid(int, struct pic *, int, char *, size_t);
 struct intrsource *intr_allocate_io_intrsource(const char *);
 void intr_free_io_intrsource(const char *);
+
+void x86_init_preempt(struct cpu_info *);
+void x86_intr_calculatemasks(struct cpu_info *);
 
 int x86_send_ipi(struct cpu_info *, int);
 void x86_broadcast_ipi(int);
 void x86_ipi_handler(void);
 
+void x86_intr_get_devname(const char *, char *, size_t);
+void x86_intr_get_assigned(const char *, kcpuset_t *);
+uint64_t x86_intr_get_count(const char *, u_int);
+
+#ifndef XENPV
 extern void (* const ipifunc[X86_NIPI])(struct cpu_info *);
+#endif
 
 #endif /* _KERNEL */
 

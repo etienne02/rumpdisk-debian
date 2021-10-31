@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_paritylog.c,v 1.18 2011/05/11 06:03:06 mrg Exp $	*/
+/*	$NetBSD: rf_paritylog.c,v 1.20 2019/10/10 03:43:59 christos Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_paritylog.c,v 1.18 2011/05/11 06:03:06 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_paritylog.c,v 1.20 2019/10/10 03:43:59 christos Exp $");
 
 #include "rf_archs.h"
 
@@ -74,7 +74,7 @@ AllocParityLogCommonData(RF_Raid_t * raidPtr)
 		rf_unlock_mutex2(raidPtr->parityLogDiskQueue.mutex);
 	} else {
 		rf_unlock_mutex2(raidPtr->parityLogDiskQueue.mutex);
-		RF_Malloc(common, sizeof(RF_CommonLogData_t), (RF_CommonLogData_t *));
+		common = RF_Malloc(sizeof(*common));
 		/* destroy is in rf_paritylogging.c */
 		rf_init_mutex2(common->mutex, IPL_VM);
 	}
@@ -114,7 +114,7 @@ AllocParityLogData(RF_Raid_t * raidPtr)
 		rf_unlock_mutex2(raidPtr->parityLogDiskQueue.mutex);
 	} else {
 		rf_unlock_mutex2(raidPtr->parityLogDiskQueue.mutex);
-		RF_Malloc(data, sizeof(RF_ParityLogData_t), (RF_ParityLogData_t *));
+		data = RF_Malloc(sizeof(*data));
 	}
 	data->next = NULL;
 	data->prev = NULL;
@@ -262,7 +262,7 @@ rf_CreateParityLogData(
     RF_PhysDiskAddr_t * pda,
     void *bufPtr,
     RF_Raid_t * raidPtr,
-    int (*wakeFunc) (RF_DagNode_t * node, int status),
+    void (*wakeFunc)(void *, int),
     void *wakeArg,
     RF_AccTraceEntry_t * tracerec,
     RF_Etimer_t startTime)
@@ -669,7 +669,7 @@ rf_ParityLogAppend(
 	RF_ParityLog_t *log;
 	RF_Raid_t *raidPtr;
 	RF_Etimer_t timer;
-	int     (*wakeFunc) (RF_DagNode_t * node, int status);
+	void     (*wakeFunc) (void *, int);
 	void   *wakeArg;
 
 	/* Add parity to the appropriate log, one sector at a time. This

@@ -1,4 +1,4 @@
-/*	$NetBSD: mcd.c,v 1.116 2016/07/14 10:19:06 msaitoh Exp $	*/
+/*	$NetBSD: mcd.c,v 1.120 2020/02/24 12:20:29 rin Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994, 1995 Charles M. Hannum.  All rights reserved.
@@ -56,7 +56,7 @@
 /*static char COPYRIGHT[] = "mcd-driver (C)1993 by H.Veit & B.Moore";*/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mcd.c,v 1.116 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mcd.c,v 1.120 2020/02/24 12:20:29 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -262,6 +262,7 @@ mcdattach(device_t parent, device_t self, void *aux)
 	bus_space_handle_t ioh;
 	struct mcd_mbox mbx;
 
+	sc->sc_dev = self;
 	aprint_naive("\n");
 
 	/* Map i/o space */
@@ -452,7 +453,7 @@ mcdstrategy(struct buf *bp)
 	lp = sc->sc_dk.dk_label;
 
 	/* Test validity. */
-	MCD_TRACE("strategy: buf=0x%p blkno=%d bcount=%d\n", bp,
+	MCD_TRACE("strategy: buf=%p blkno=%d bcount=%d\n", bp,
 	    (int) bp->b_blkno, bp->b_bcount);
 	if (bp->b_blkno < 0 ||
 	    (bp->b_bcount % sc->blksize) != 0) {
@@ -522,7 +523,7 @@ loop:
 	}
 
 	/* Block found to process. */
-	MCD_TRACE("start: found block bp=0x%p\n", bp);
+	MCD_TRACE("start: found block bp=%p\n", bp);
 	splx(s);
 
 	/* Changed media? */
@@ -669,7 +670,7 @@ mcdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 		error = mcd_toc_entries(sc, te, entries, &count);
 		if (error == 0)
 			/* Copy the data back. */
-			error = copyout(entries, te->data, min(te->data_len,
+			error = copyout(entries, te->data, uimin(te->data_len,
 					count * sizeof(struct cd_toc_entry)));
 		return error;
 	}
@@ -1192,6 +1193,7 @@ mcdintr(void *arg)
 		mbx->count = RDELAY_WAITMODE;
 		mbx->state = MCD_S_WAITMODE;
 
+		/* FALLTHROUGH */
 	case MCD_S_WAITMODE:
 		callout_stop(&sc->sc_pintr_ch);
 		for (i = 20; i; i--) {
@@ -1212,7 +1214,7 @@ mcdintr(void *arg)
 		sc->lastmode = mbx->mode;
 
 	firstblock:
-		MCD_TRACE("doread: read blkno=%d for bp=0x%p\n",
+		MCD_TRACE("doread: read blkno=%d for bp=%p\n",
 		    (int) mbx->blkno, bp);
 
 		/* Build parameter block. */
@@ -1230,6 +1232,7 @@ mcdintr(void *arg)
 		mbx->count = RDELAY_WAITREAD;
 		mbx->state = MCD_S_WAITREAD;
 
+		/* FALLTHROUGH */
 	case MCD_S_WAITREAD:
 		callout_stop(&sc->sc_pintr_ch);
 	nextblock:

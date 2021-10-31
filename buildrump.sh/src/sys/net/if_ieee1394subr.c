@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ieee1394subr.c,v 1.56 2016/06/22 10:44:32 knakahara Exp $	*/
+/*	$NetBSD: if_ieee1394subr.c,v 1.66 2020/08/28 06:23:42 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ieee1394subr.c,v 1.56 2016/06/22 10:44:32 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ieee1394subr.c,v 1.66 2020/08/28 06:23:42 ozaki-r Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -118,8 +118,7 @@ ieee1394_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 	 */
 	unicast = !(m0->m_flags & (M_BCAST | M_MCAST));
 	if (unicast) {
-		mtag =
-		    m_tag_find(m0, MTAG_FIREWIRE_HWADDR, NULL);
+		mtag = m_tag_find(m0, MTAG_FIREWIRE_HWADDR);
 		if (!mtag) {
 			mtag = m_tag_get(MTAG_FIREWIRE_HWADDR,
 			    sizeof (struct ieee1394_hwaddr), M_NOWAIT);
@@ -143,7 +142,7 @@ ieee1394_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 			return error == EWOULDBLOCK ? 0 : error;
 		/* if broadcasting on a simplex interface, loopback a copy */
 		if ((m0->m_flags & M_BCAST) && (ifp->if_flags & IFF_SIMPLEX))
-			mcopy = m_copy(m0, 0, M_COPYALL);
+			mcopy = m_copypacket(m0, M_DONTWAIT);
 		etype = htons(ETHERTYPE_IP);
 		break;
 	case AF_ARP:
@@ -154,10 +153,21 @@ ieee1394_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 #endif /* INET */
 #ifdef INET6
 	case AF_INET6:
-		if (unicast && (!nd6_storelladdr(ifp, rt, m0, dst,
-		    hwdst->iha_uid, IEEE1394_ADDR_LEN))) {
-			/* something bad happened */
-			return 0;
+#if 0
+		/*
+		 * XXX This code was in nd6_storelladdr, which was replaced with
+		 * nd6_resolve, but it never be used because nd6_storelladdr was
+		 * called only if unicast. Should it be enabled?
+		 */
+		if (m0->m_flags & M_BCAST)
+			memcpy(hwdst->iha_uid, ifp->if_broadcastaddr,
+			    MIN(IEEE1394_ADDR_LEN, ifp->if_addrlen));
+#endif
+		if (unicast) {
+			error = nd6_resolve(ifp, rt, m0, dst, hwdst->iha_uid,
+			    IEEE1394_ADDR_LEN);
+			if (error != 0)
+				return error == EWOULDBLOCK ? 0 : error;
 		}
 		etype = htons(ETHERTYPE_IPV6);
 		break;
@@ -186,7 +196,7 @@ ieee1394_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 			    ifp->if_broadcastaddr)->iha_uid, 8);
 		memcpy(h.ibh_shost, myaddr->iha_uid, 8);
 		h.ibh_type = etype;
-		bpf_mtap2(ifp->if_bpf, &h, sizeof(h), m0);
+		bpf_mtap2(ifp->if_bpf, &h, sizeof(h), m0, BPF_D_OUT);
 	}
 	if ((ifp->if_flags & IFF_SIMPLEX) &&
 	    unicast &&
@@ -279,7 +289,7 @@ ieee1394_fragment(struct ifnet *ifp, struct mbuf *m0, int maxsize,
 		if (m == NULL)
 			goto bad;
 		m->m_flags |= m0->m_flags & (M_BCAST|M_MCAST);	/* copy bcast */
-		MH_ALIGN(m, sizeof(struct ieee1394_fraghdr));
+		m_align(m, sizeof(struct ieee1394_fraghdr));
 		m->m_len = sizeof(struct ieee1394_fraghdr);
 		ifh = mtod(m, struct ieee1394_fraghdr *);
 		ifh->ifh_ft_size =
@@ -287,9 +297,11 @@ ieee1394_fragment(struct ifnet *ifp, struct mbuf *m0, int maxsize,
 		ifh->ifh_etype_off = htons(off);
 		ifh->ifh_dgl = htons(ic->ic_dgl);
 		ifh->ifh_reserved = 0;
-		m->m_next = m_copy(m0, sizeof(*ifh) + off, fraglen);
-		if (m->m_next == NULL)
+		m->m_next = m_copym(m0, sizeof(*ifh) + off, fraglen, M_DONTWAIT);
+		if (m->m_next == NULL) {
+			m_freem(m);
 			goto bad;
+		}
 		m->m_pkthdr.len = sizeof(*ifh) + fraglen;
 		off += fraglen;
 		*mp = m;
@@ -316,7 +328,6 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 	pktqueue_t *pktq = NULL;
 	struct ifqueue *inq;
 	uint16_t etype;
-	int s;
 	struct ieee1394_unfraghdr *iuh;
 	int isr = 0;
 
@@ -345,7 +356,7 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 		struct m_tag *mtag;
 		const struct ieee1394_hwaddr *myaddr;
 
-		mtag = m_tag_find(m, MTAG_FIREWIRE_SENDER_EUID, 0);
+		mtag = m_tag_find(m, MTAG_FIREWIRE_SENDER_EUID);
 		if (mtag)
 			memcpy(h.ibh_shost, mtag + 1, 8);
 		else
@@ -360,7 +371,7 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 			memcpy(h.ibh_dhost, myaddr->iha_uid, 8);
 		}
 		h.ibh_type = htons(etype);
-		bpf_mtap2(ifp->if_bpf, &h, sizeof(h), m);
+		bpf_mtap2(ifp->if_bpf, &h, sizeof(h), m, BPF_D_IN);
 	}
 
 	switch (etype) {
@@ -393,15 +404,7 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 		return;
 	}
 
-	s = splnet();
-	if (IF_QFULL(inq)) {
-		IF_DROP(inq);
-		m_freem(m);
-	} else {
-		IF_ENQUEUE(inq, m);
-		schednetisr(isr);
-	}
-	splx(s);
+	IFQ_ENQUEUE_ISR(inq, m, isr);
 }
 
 static struct mbuf *
@@ -429,8 +432,7 @@ ieee1394_reass(struct ifnet *ifp, struct mbuf *m0, uint16_t src)
 	len = m0->m_pkthdr.len;
 	id = dgl | (src << 16);
 	if (ftype & IEEE1394_FT_SUBSEQ) {
-		m_tag_delete_chain(m0, NULL);
-		m0->m_flags &= ~M_PKTHDR;
+		m_remove_pkthdr(m0);
 		etype = 0;
 		off = ntohs(ifh->ifh_etype_off);
 	} else {

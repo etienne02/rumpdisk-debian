@@ -1,7 +1,7 @@
-/* $NetBSD: cpu_machdep.c,v 1.2 2015/04/14 22:36:54 jmcneill Exp $ */
+/* $NetBSD: cpu_machdep.c,v 1.11 2020/08/12 13:19:35 skrll Exp $ */
 
 /*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
+ * Copyright (c) 2014, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,9 +31,11 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: cpu_machdep.c,v 1.2 2015/04/14 22:36:54 jmcneill Exp $");
+__KERNEL_RCSID(1, "$NetBSD: cpu_machdep.c,v 1.11 2020/08/12 13:19:35 skrll Exp $");
 
-#include "opt_pic.h"
+#include "opt_multiprocessor.h"
+
+#define _INTR_PRIVATE
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -43,11 +45,14 @@ __KERNEL_RCSID(1, "$NetBSD: cpu_machdep.c,v 1.2 2015/04/14 22:36:54 jmcneill Exp
 #include <sys/kmem.h>
 #include <sys/xcall.h>
 
-#include <aarch64/locore.h>
+#include <aarch64/armreg.h>
+#include <aarch64/db_machdep.h>
+#include <aarch64/frame.h>
+#include <aarch64/machdep.h>
 #include <aarch64/pcb.h>
+#include <aarch64/userret.h>
 
-uint32_t cpu_boot_mbox;
-
+#ifdef __HAVE_FAST_SOFTINTS
 #if IPL_VM != IPL_SOFTSERIAL + 1
 #error IPLs are screwed up
 #elif IPL_SOFTSERIAL != IPL_SOFTNET + 1
@@ -63,22 +68,22 @@ uint32_t cpu_boot_mbox;
 #endif
 
 #ifndef __HAVE_PIC_FAST_SOFTINTS
-#define	SOFTINT2IPLMAP \
+#define SOFTINT2IPLMAP \
 	(((IPL_SOFTSERIAL - IPL_SOFTCLOCK) << (SOFTINT_SERIAL * 4)) | \
 	 ((IPL_SOFTNET    - IPL_SOFTCLOCK) << (SOFTINT_NET    * 4)) | \
 	 ((IPL_SOFTBIO    - IPL_SOFTCLOCK) << (SOFTINT_BIO    * 4)) | \
 	 ((IPL_SOFTCLOCK  - IPL_SOFTCLOCK) << (SOFTINT_CLOCK  * 4)))
-#define	SOFTINT2IPL(l)	((SOFTINT2IPLMAP >> ((l) * 4)) & 0x0f)
+#define SOFTINT2IPL(l)	((SOFTINT2IPLMAP >> ((l) * 4)) & 0x0f)
 
 /*
  * This returns a mask of softint IPLs that be dispatch at <ipl>
- * SOFTIPLMASK(IPL_NONE)	= 0x0000000f
- * SOFTIPLMASK(IPL_SOFTCLOCK)	= 0x0000000e
- * SOFTIPLMASK(IPL_SOFTBIO)	= 0x0000000c
- * SOFTIPLMASK(IPL_SOFTNET)	= 0x00000008
- * SOFTIPLMASK(IPL_SOFTSERIAL)	= 0x00000000
  */
-#define	SOFTIPLMASK(ipl) ((0x0f << (ipl)) & 0x0f)
+#define SOFTIPLMASK(ipl) ((0x0f << (ipl)) & 0x0f)
+CTASSERT(SOFTIPLMASK(IPL_NONE)		== 0x0000000f);
+CTASSERT(SOFTIPLMASK(IPL_SOFTCLOCK)	== 0x0000000e);
+CTASSERT(SOFTIPLMASK(IPL_SOFTBIO)	== 0x0000000c);
+CTASSERT(SOFTIPLMASK(IPL_SOFTNET)	== 0x00000008);
+CTASSERT(SOFTIPLMASK(IPL_SOFTSERIAL)	== 0x00000000);
 
 void
 softint_trigger(uintptr_t mask)
@@ -93,10 +98,14 @@ softint_init_md(lwp_t *l, u_int level, uintptr_t *machdep)
 	KASSERT(*lp == NULL || *lp == l);
 	*lp = l;
 	*machdep = 1 << SOFTINT2IPL(level);
-	KASSERT(level != SOFTINT_CLOCK || *machdep == (1 << (IPL_SOFTCLOCK - IPL_SOFTCLOCK)));
-	KASSERT(level != SOFTINT_BIO || *machdep == (1 << (IPL_SOFTBIO - IPL_SOFTCLOCK)));
-	KASSERT(level != SOFTINT_NET || *machdep == (1 << (IPL_SOFTNET - IPL_SOFTCLOCK)));
-	KASSERT(level != SOFTINT_SERIAL || *machdep == (1 << (IPL_SOFTSERIAL - IPL_SOFTCLOCK)));
+	KASSERT(level != SOFTINT_CLOCK ||
+	    *machdep == (1 << (IPL_SOFTCLOCK  - IPL_SOFTCLOCK)));
+	KASSERT(level != SOFTINT_BIO ||
+	    *machdep == (1 << (IPL_SOFTBIO    - IPL_SOFTCLOCK)));
+	KASSERT(level != SOFTINT_NET ||
+	    *machdep == (1 << (IPL_SOFTNET    - IPL_SOFTCLOCK)));
+	KASSERT(level != SOFTINT_SERIAL ||
+	    *machdep == (1 << (IPL_SOFTSERIAL - IPL_SOFTCLOCK)));
 }
 
 void
@@ -110,11 +119,13 @@ dosoftints(void)
 	for (;;) {
 		u_int softints = ci->ci_softints & softiplmask;
 		KASSERT((softints != 0) == ((ci->ci_softints >> opl) != 0));
-		KASSERT(opl == IPL_NONE || (softints & (1 << (opl - IPL_SOFTCLOCK))) == 0);
+		KASSERT(opl == IPL_NONE ||
+		    (softints & (1 << (opl - IPL_SOFTCLOCK))) == 0);
 		if (softints == 0) {
 #ifdef __HAVE_PREEMPTION
 			if (ci->ci_want_resched & RESCHED_KPREEMPT) {
-				ci->ci_want_resched &= ~RESCHED_KPREEMPT;
+				atomic_and_uint(&ci->ci_want_resched,
+				    ~RESCHED_KPREEMPT);
 				splsched();
 				kpreempt(-2);
 			}
@@ -122,8 +133,8 @@ dosoftints(void)
 			splx(opl);
 			return;
 		}
-#define	DOSOFTINT(n) \
-		if (ci->ci_softints & (1 << (IPL_SOFT ## n - IPL_SOFTCLOCK))) { \
+#define DOSOFTINT(n) \
+		if (ci->ci_softints & (1 << (IPL_SOFT ## n - IPL_SOFTCLOCK))) {\
 			ci->ci_softints &= \
 			    ~(1 << (IPL_SOFT ## n - IPL_SOFTCLOCK)); \
 			cpu_switchto_softint(ci->ci_softlwps[SOFTINT_ ## n], \
@@ -137,8 +148,8 @@ dosoftints(void)
 		panic("dosoftints wtf (softints=%u?, ipl=%d)", softints, opl);
 	}
 }
-
 #endif /* !__HAVE_PIC_FAST_SOFTINTS */
+#endif /* __HAVE_FAST_SOFTINTS */
 
 int
 cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
@@ -173,11 +184,9 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flagsp)
 	const struct trapframe * const tf = l->l_md.md_utf;
 
 	memcpy(mcp->__gregs, &tf->tf_regs, sizeof(mcp->__gregs));
-	if (l == curlwp) {
-		mcp->__gregs[_REG_TPIDR] = reg_tpidr_el0_read();
-	} else {
-		mcp->__gregs[_REG_TPIDR] = (uintptr_t)l->l_private;
-	}
+	mcp->__gregs[_REG_TPIDR] = (uintptr_t)l->l_private;
+	mcp->__gregs[_REG_SPSR] &= ~SPSR_A64_BTYPE;
+
 	if (fpu_used_p(l)) {
 		const struct pcb * const pcb = lwp_getpcb(l);
 		fpu_save(l);
@@ -190,6 +199,8 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flagsp)
 int
 cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 {
+	struct proc * const p = l->l_proc;
+
 	if (flags & _UC_CPU) {
 		struct trapframe * const tf = l->l_md.md_utf;
 		int error = cpu_mcontext_validate(l, mcp);
@@ -197,17 +208,23 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 			return error;
 
 		memcpy(&tf->tf_regs, mcp->__gregs, sizeof(tf->tf_regs));
-		l->l_private = mcp->__gregs[_REG_TPIDR];
-		if (l == curlwp) {
-			reg_tpidr_el0_write(tf->tf_tpidr);
-		}
 	}
+
+	if (flags & _UC_TLSBASE)
+		l->l_private = (void *)mcp->__gregs[_REG_TPIDR];
 
 	if (flags & _UC_FPU) {
 		struct pcb * const pcb = lwp_getpcb(l);
 		fpu_discard(l, true);
 		pcb->pcb_fpregs = *(const struct fpreg *)&mcp->__fregs;
 	}
+
+	mutex_enter(p->p_lock);
+	if (flags & _UC_SETSTACK)
+		l->l_sigstk.ss_flags |= SS_ONSTACK;
+	if (flags & _UC_CLRSTACK)
+		l->l_sigstk.ss_flags &= ~SS_ONSTACK;
+	mutex_exit(p->p_lock);
 
 	return 0;
 }
@@ -223,70 +240,29 @@ startlwp(void *arg)
 	KASSERT(error == 0);
 
 	kmem_free(uc, sizeof(*uc));
-	userret(l, l->l_md.md_utf);
+	userret(l);
 }
 
 void
-cpu_signotify(struct lwp *l)
+cpu_need_resched(struct cpu_info *ci, struct lwp *l, int flags)
 {
-	atomic_swap_uint(&l->l_cpu->ci_astpending, 1);
-}
-
-void
-cpu_need_resched(struct cpu_info *ci, int flags)
-{
-	struct lwp * const l = ci->ci_data.cpu_onproc;
-#ifdef MULTIPROCESSOR
-	struct cpu_info * const cur_ci = curcpu();
-#endif
-
 	KASSERT(kpreempt_disabled());
 
-	ci->ci_want_resched |= flags;
-
-	if (__predict_false((l->l_pflag & LP_INTR) != 0)) {
-		/*
-		 * No point doing anything, it will switch soon.
-		 * Also here to prevent an assertion failure in
-		 * kpreempt() due to preemption being set on a
-		 * soft interrupt LWP.
-		 */
-		return;
-	}
-
-	if (__predict_false(l == ci->ci_data.cpu_idlelwp)) {
-#ifdef MULTIPROCESSOR
-		/*
-		 * If the other CPU is idling, it must be waiting for an
-		 * interrupt.  So give it one.
-		 */
-		if (__predict_false(ci != cur_ci))
-			cpu_send_ipi(ci, IPI_NOP);
-#endif
-		return;
-	}
-
-#ifdef MULTIPROCESSOR
-	atomic_or_uint(&ci->ci_want_resched, flags);
-#else
-	ci->ci_want_resched |= flags;
-#endif
-
-	if (flags & RESCHED_KPREEMPT) {
+	if ((flags & RESCHED_KPREEMPT) != 0) {
 #ifdef __HAVE_PREEMPTION
-		atomic_or_uint(&l->l_dopreempt, DOPREEMPT_ACTIVE);
-		if (ci != cur_ci) {
-                        cpu_send_ipi(ci, IPI_KPREEMPT);
-                }
+		if ((flags & RESCHED_REMOTE) != 0) {
+			intr_ipi_send(ci->ci_kcpuset, IPI_KPREEMPT);
+		}
 #endif
 		return;
 	}
-	atomic_swap_uint(&ci->ci_astpending, 1); /* force call to ast() */
+	if ((flags & RESCHED_REMOTE) != 0) {
 #ifdef MULTIPROCESSOR
-	if (ci != cur_ci && (flags & RESCHED_IMMED)) {
-		cpu_send_ipi(ci, IPI_AST);
-	} 
+		intr_ipi_send(ci->ci_kcpuset, IPI_AST);
 #endif
+	} else {
+		l->l_md.md_astpending = 1;
+	}
 }
 
 void
@@ -296,23 +272,29 @@ cpu_need_proftick(struct lwp *l)
 	KASSERT(l->l_cpu == curcpu());
 
 	l->l_pflag |= LP_OWEUPC;
-	curcpu()->ci_astpending = 1;		/* force call to ast() */
+	l->l_md.md_astpending = 1;
 }
 
 void
-cpu_set_curpri(int pri)
+cpu_signotify(struct lwp *l)
 {
-	kpreempt_disable();
-	curcpu()->ci_schedstate.spc_curpriority = pri;
-	kpreempt_enable();
-}
 
+	KASSERT(kpreempt_disabled());
+
+	if (l->l_cpu != curcpu()) {
+#ifdef MULTIPROCESSOR
+		intr_ipi_send(l->l_cpu->ci_kcpuset, IPI_AST);
+#endif
+	} else {
+		l->l_md.md_astpending = 1;
+	}
+}
 
 #ifdef __HAVE_PREEMPTION
 bool
 cpu_kpreempt_enter(uintptr_t where, int s)
 {
-        KASSERT(kpreempt_disabled());
+	KASSERT(kpreempt_disabled());
 
 #if 0
 	if (where == (intptr_t)-2) {
@@ -360,36 +342,27 @@ cpu_kpreempt_disabled(void)
 
 #ifdef MULTIPROCESSOR
 void
-cpu_boot_secondary_processors(void)
-{
-	uint32_t mbox;
-	kcpuset_export_u32(kcpuset_attached, &mbox, sizeof(mbox));
-	atomic_swap_32(&cpu_boot_mbox, mbox);
-	membar_producer();
-	__asm __volatile("sev; sev; sev");
-}
-
-void
 xc_send_ipi(struct cpu_info *ci)
 {
 	KASSERT(kpreempt_disabled());
 	KASSERT(curcpu() != ci);
 
-	if (ci) {
-		/* Unicast, remote CPU */
-		printf("%s: -> %s", __func__, ci->ci_data.cpu_name);
-		intr_ipi_send(ci->ci_kcpuset, IPI_XCALL);
-	} else {
-		printf("%s: -> !%s", __func__, ci->ci_data.cpu_name);
-		/* Broadcast to all but ourselves */
-		kcpuset_t *kcp;
-		kcpuset_create(&kcp, (ci != NULL));
-		KASSERT(kcp != NULL);
-		kcpuset_copy(kcp, kcpuset_running);
-		kcpuset_clear(kcp, cpu_index(ci));
-		intr_ipi_send(kcp, IPI_XCALL);
-		kcpuset_destroy(kcp);
-	}
-	printf("\n");
+	intr_ipi_send(ci != NULL ? ci->ci_kcpuset : NULL, IPI_XCALL);
+}
+
+void
+cpu_ipi(struct cpu_info *ci)
+{
+	KASSERT(kpreempt_disabled());
+	KASSERT(curcpu() != ci);
+
+	intr_ipi_send(ci != NULL ? ci->ci_kcpuset : NULL, IPI_GENERIC);
+}
+
+int
+pic_ipi_shootdown(void *arg)
+{
+	/* may be populated in pmap.c */
+	return 1;
 }
 #endif /* MULTIPROCESSOR */

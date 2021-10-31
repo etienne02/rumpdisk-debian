@@ -1,4 +1,4 @@
-/* $NetBSD: atppc.c,v 1.32 2014/07/13 17:12:23 dholland Exp $ */
+/* $NetBSD: atppc.c,v 1.39 2021/08/07 16:19:12 thorpej Exp $ */
 
 /*
  * Copyright (c) 2001 Alcove - Nicolas Souchu
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: atppc.c,v 1.32 2014/07/13 17:12:23 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: atppc.c,v 1.39 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "opt_atppc.h"
 
@@ -235,7 +235,7 @@ atppc_sc_attach(struct atppc_softc *lsc)
 
 	/* Configure child of the device. */
 	lsc->child = config_found(lsc->sc_dev, &(sc_parport_adapter),
-		atppc_print);
+		atppc_print, CFARGS_NONE);
 
 	return;
 }
@@ -1544,27 +1544,22 @@ atppc_add_handler(device_t dev, void (*handler)(void *), void *arg)
 {
 	struct atppc_softc *atppc = device_private(dev);
 	struct atppc_handler_node *callback;
-	int rval = 0;
 
 	if (handler == NULL) {
 		ATPPC_DPRINTF(("%s(%s): attempt to register NULL handler.\n",
 			__func__, device_xname(dev)));
-		rval = EINVAL;
-	} else {
-		callback = kmem_alloc(sizeof(*callback), KM_SLEEP);
-		if (callback) {
-			callback->func = handler;
-			callback->arg = arg;
-			mutex_enter(&atppc->sc_lock);
-			SLIST_INSERT_HEAD(&(atppc->sc_handler_listhead),
-				callback, entries);
-			mutex_exit(&atppc->sc_lock);
-		} else {
-			rval = ENOMEM;
-		}
+		return EINVAL;
 	}
 
-	return rval;
+	callback = kmem_alloc(sizeof(*callback), KM_SLEEP);
+	callback->func = handler;
+	callback->arg = arg;
+	mutex_enter(&atppc->sc_lock);
+	SLIST_INSERT_HEAD(&(atppc->sc_handler_listhead),
+		callback, entries);
+	mutex_exit(&atppc->sc_lock);
+
+	return 0;
 }
 
 /* Remove a handler added by atppc_add_handler() */
@@ -1674,7 +1669,7 @@ atppc_nibble_read(struct atppc_softc *atppc)
 				return;
 		}
 
-		/* Store byte transfered */
+		/* Store byte transferred */
 		*(atppc->sc_inbstart) = ((nibble2char(nibble[1]) << 4) & 0xf0) |
 			(nibble2char(nibble[0]) & 0x0f);
 		atppc->sc_inbstart++;
@@ -1725,7 +1720,7 @@ atppc_byte_read(struct atppc_softc * const atppc)
 		if (atppc->sc_inerr)
 			return;
 
-		/* Store byte transfered */
+		/* Store byte transferred */
 		*(atppc->sc_inbstart) = atppc_r_dtr(atppc);
 		atppc_barrier_r(atppc);
 
@@ -1888,7 +1883,7 @@ atppc_ecp_read_dma(struct atppc_softc *atppc, unsigned int *length,
 	unsigned char ecr)
 {
 	/* Limit transfer to maximum DMA size and start it */
-	*length = min(*length, atppc->sc_dma_maxsize);
+	*length = uimin(*length, atppc->sc_dma_maxsize);
 	atppc->sc_dmastat = ATPPC_DMA_INIT;
 	atppc->sc_dma_start(atppc, atppc->sc_inbstart, *length,
 		ATPPC_DMA_MODE_READ);
@@ -1947,7 +1942,7 @@ atppc_ecp_read_error(struct atppc_softc *atppc)
 	/* Check for invalid states */
 	if ((ecr & ATPPC_FIFO_EMPTY) && (ecr & ATPPC_FIFO_FULL)) {
 		ATPPC_DPRINTF(("%s: FIFO full+empty bits set.\n", __func__));
-		ATPPC_DPRINTF(("%s: reseting FIFO.\n", __func__));
+		ATPPC_DPRINTF(("%s: resetting FIFO.\n", __func__));
 		atppc_w_ecr(atppc, ATPPC_ECR_PS2);
 		atppc_barrier_w(atppc);
 	}
@@ -2114,7 +2109,7 @@ atppc_fifo_write_dma(struct atppc_softc * const atppc, unsigned char ecr,
 		atppc_barrier_w(atppc);
 
 		/* Limit transfer to maximum DMA size and start it */
-		worklen = min(len, atppc->sc_dma_maxsize);
+		worklen = uimin(len, atppc->sc_dma_maxsize);
 		atppc->sc_dmastat = ATPPC_DMA_INIT;
 		atppc->sc_dma_start(atppc, atppc->sc_outbstart,
 			worklen, ATPPC_DMA_MODE_WRITE);
@@ -2199,7 +2194,7 @@ atppc_fifo_write_pio(struct atppc_softc * const atppc, unsigned char ecr,
 			return;
 
 		/* Limit transfer to minimum of space in FIFO and buffer */
-		worklen = min(len, atppc->sc_fifo);
+		worklen = uimin(len, atppc->sc_fifo);
 
 		/* Write to FIFO */
 		atppc_w_fifo_multi(atppc, atppc->sc_outbstart, worklen);
@@ -2315,7 +2310,7 @@ atppc_fifo_write_error(struct atppc_softc * const atppc,
 		atppc->sc_outbstart += worklen;
 	}
 
-	ATPPC_DPRINTF(("%s: reseting FIFO.\n", __func__));
+	ATPPC_DPRINTF(("%s: resetting FIFO.\n", __func__));
 	atppc_w_ecr(atppc, ATPPC_ECR_PS2);
 	atppc_barrier_w(atppc);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_frag.c,v 1.3 2012/07/22 14:27:51 darrenr Exp $	*/
+/*	$NetBSD: ip_frag.c,v 1.8 2020/04/05 02:51:34 christos Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -73,7 +73,6 @@ struct file;
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 #include "netinet/ip_compat.h"
-#include <netinet/tcpip.h>
 #include "netinet/ip_fil.h"
 #include "netinet/ip_nat.h"
 #include "netinet/ip_frag.h"
@@ -87,7 +86,7 @@ struct file;
 #if !defined(lint)
 #if defined(__NetBSD__)
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_frag.c,v 1.3 2012/07/22 14:27:51 darrenr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_frag.c,v 1.8 2020/04/05 02:51:34 christos Exp $");
 #else
 static const char sccsid[] = "@(#)ip_frag.c	1.11 3/24/96 (C) 1993-2000 Darren Reed";
 static const char rcsid[] = "@(#)Id: ip_frag.c,v 1.1.1.2 2012/07/22 13:45:17 darrenr Exp";
@@ -136,21 +135,6 @@ static void ipf_frag_delete(ipf_main_softc_t *, ipfr_t *, ipfr_t ***);
 static void ipf_frag_free(ipf_frag_softc_t *, ipfr_t *);
 
 static frentry_t ipfr_block;
-
-ipftuneable_t ipf_tuneables[] = {
-	{ { (void *)offsetof(ipf_frag_softc_t, ipfr_size) },
-		"frag_size",		1,	0x7fffffff,
-		stsizeof(ipf_frag_softc_t, ipfr_size),
-		IPFT_WRDISABLED,	NULL,	NULL },
-	{ { (void *)offsetof(ipf_frag_softc_t, ipfr_ttl) },
-		"frag_ttl",		1,	0x7fffffff,
-		stsizeof(ipf_frag_softc_t, ipfr_ttl),
-		0,			NULL,	NULL },
-	{ { NULL },
-		NULL,			0,	0,
-		0,
-		0,			NULL,	NULL }
-};
 
 #define	FBUMP(x)	softf->ipfr_stats.x++
 #define	FBUMPD(x)	do { softf->ipfr_stats.x++; DT(x); } while (0)
@@ -409,6 +393,7 @@ ipfr_frag_new(
 		}
 	}
 
+	memset(&frag, 0, sizeof(frag));
 	frag.ipfr_v = fin->fin_v;
 	idx = fin->fin_v;
 	frag.ipfr_p = fin->fin_p;
@@ -457,6 +442,7 @@ ipfr_frag_new(
 		FBUMPD(ifs_nomem);
 		return NULL;
 	}
+	memset(fran, 0, sizeof(*fran));
 
 	WRITE_ENTER(lock);
 
@@ -468,7 +454,7 @@ ipfr_frag_new(
 			  IPFR_CMPSZ)) {
 			RWLOCK_EXIT(lock);
 			FBUMPD(ifs_exists);
-			KFREE(fra);
+			KFREE(fran);
 			return NULL;
 		}
 
@@ -494,6 +480,7 @@ ipfr_frag_new(
 	table[idx] = fra;
 	bcopy((char *)&frag.ipfr_ifp, (char *)&fra->ipfr_ifp, IPFR_CMPSZ);
 	fra->ipfr_v = fin->fin_v;
+	fra->ipfr_p = fin->fin_p;
 	fra->ipfr_ttl = softc->ipf_ticks + softf->ipfr_ttl;
 	fra->ipfr_firstend = frag.ipfr_firstend;
 
@@ -671,6 +658,7 @@ ipf_frag_lookup(
 	 *
 	 * build up a hash value to index the table with.
 	 */
+	memset(&frag, 0, sizeof(frag));
 	frag.ipfr_v = fin->fin_v;
 	idx = fin->fin_v;
 	frag.ipfr_p = fin->fin_p;
@@ -726,6 +714,8 @@ ipf_frag_lookup(
 			} else if (off == 0)
 				f->ipfr_seen0 = 1;
 
+#if 0
+			/* We can't do this, since we only have a read lock! */
 			if (f != table[idx]) {
 				ipfr_t **fp;
 
@@ -745,9 +735,10 @@ ipf_frag_lookup(
 				f->ipfr_hprev = table + idx;
 				table[idx] = f;
 			}
+#endif
 
 			/*
-			 * If we've follwed the fragments, and this is the
+			 * If we've followed the fragments, and this is the
 			 * last (in order), shrink expiration time.
 			 */
 			if (off == f->ipfr_off) {

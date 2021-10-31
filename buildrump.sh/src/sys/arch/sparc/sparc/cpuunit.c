@@ -1,4 +1,4 @@
-/*	$NetBSD: cpuunit.c,v 1.15 2011/07/17 23:18:23 mrg Exp $	*/
+/*	$NetBSD: cpuunit.c,v 1.18 2021/08/07 16:19:05 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -34,10 +34,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpuunit.c,v 1.15 2011/07/17 23:18:23 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpuunit.c,v 1.18 2021/08/07 16:19:05 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 
@@ -98,7 +99,7 @@ cpuunit_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Initialize the bus space tag we pass on to our children.
 	 */
-	sbt = sc->sc_bustag = malloc(sizeof(*sbt), M_DEVBUF, M_WAITOK);
+	sbt = sc->sc_bustag = kmem_alloc(sizeof(*sbt), KM_SLEEP);
 	memcpy(sbt, sc->sc_st, sizeof(*sbt));
 	sbt->cookie = sc;
 	sbt->parent = sc->sc_st;
@@ -124,7 +125,7 @@ cpuunit_attach(device_t parent, device_t self, void *aux)
 		if (cpuunit_setup_attach_args(sc, sbt, node, &cpua))
 			panic("cpuunit_attach: failed to set up attach args");
 
-		(void) config_found(self, &cpua, cpuunit_print);
+		(void) config_found(self, &cpua, cpuunit_print, CFARGS_NONE);
 
 		cpuunit_destroy_attach_args(&cpua);
 	}

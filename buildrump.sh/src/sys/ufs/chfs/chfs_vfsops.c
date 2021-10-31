@@ -1,4 +1,4 @@
-/*	$NetBSD: chfs_vfsops.c,v 1.15 2015/01/11 17:29:57 hannken Exp $	*/
+/*	$NetBSD: chfs_vfsops.c,v 1.22 2020/09/05 16:30:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2010 Department of Software Engineering,
@@ -52,8 +52,8 @@
 #include <sys/lockdebug.h>
 #include <sys/ktrace.h>
 
-#include <uvm/uvm.h>
-#include <uvm/uvm_pager.h>
+#include <uvm/uvm_extern.h>
+
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/ufs_extern.h>
 #include <miscfs/genfs/genfs.h>
@@ -62,18 +62,16 @@
 #include "chfs.h"
 #include "chfs_args.h"
 
-MODULE(MODULE_CLASS_VFS, chfs, "flash");
-
 /* --------------------------------------------------------------------- */
 /* functions */
 
 static int chfs_mount(struct mount *, const char *, void *, size_t *);
 static int chfs_unmount(struct mount *, int);
-static int chfs_root(struct mount *, struct vnode **);
+static int chfs_root(struct mount *, int, struct vnode **);
 static int chfs_loadvnode(struct mount *, struct vnode *,
     const void *, size_t, const void **);
-static int chfs_vget(struct mount *, ino_t, struct vnode **);
-static int chfs_fhtovp(struct mount *, struct fid *, struct vnode **);
+static int chfs_vget(struct mount *, ino_t, int, struct vnode **);
+static int chfs_fhtovp(struct mount *, struct fid *, int, struct vnode **);
 static int chfs_vptofh(struct vnode *, struct fid *, size_t *);
 static int chfs_start(struct mount *, int);
 static int chfs_statvfs(struct mount *, struct statvfs *);
@@ -99,6 +97,7 @@ const struct genfs_ops chfs_genfsops = {
 	.gop_alloc = chfs_gop_alloc,
 	.gop_write = genfs_gop_write,
 	.gop_markupdate = ufs_gop_markupdate,
+	.gop_putrange = genfs_gop_putrange,
 };
 
 struct pool chfs_inode_pool;
@@ -227,7 +226,7 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 	err = vinvalbuf(devvp, V_SAVE, cred, l, 0, 0);
 	VOP_UNLOCK(devvp);
 	if (err)
-		return (err);
+		goto fail0;
 
 	/* Setup device. */
 	flash_major = cdevsw_lookup_major(&flash_cdevsw);
@@ -241,10 +240,8 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 		    major(dev), flash_major);
 		err = ENODEV;
 	}
-	if (err) {
-		vrele(devvp);
-		return (err);
-	}
+	if (err)
+		goto fail0;
 
 	/* Connect CHFS to UFS. */
 	ump = kmem_zalloc(sizeof(struct ufsmount), KM_SLEEP);
@@ -262,7 +259,7 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 	err = ebh_open(chmp->chm_ebh, devvp->v_rdev);
 	if (err) {
 		dbg("error while opening flash\n");
-		goto fail;
+		goto fail1;
 	}
 
 	//TODO check flash sizes
@@ -320,10 +317,8 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 
 	if (err) {
 		/* Armageddon and return. */
-		chfs_vnocache_hash_destroy(chmp->chm_vnocache_hash);
-		ebh_close(chmp->chm_ebh);
 		err = EIO;
-		goto fail;
+		goto fail2;
 	}
 
 	/* Initialize UFS. */
@@ -343,7 +338,7 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 	ump->um_maxfilesize = 1048512 * 1024;
 
 	/* Allocate the root vnode. */
-	err = VFS_VGET(mp, CHFS_ROOTINO, &vp);
+	err = VFS_VGET(mp, CHFS_ROOTINO, LK_EXCLUSIVE, &vp);
 	if (err) {
 		dbg("error: %d while allocating root node\n", err);
 		return err;
@@ -359,10 +354,31 @@ chfs_mountfs(struct vnode *devvp, struct mount *mp)
 	spec_node_setmountedfs(devvp, mp);
 	return 0;
 
-fail:
+fail2:
+	KASSERT(TAILQ_EMPTY(&chmp->chm_erase_pending_queue));
+	KASSERT(TAILQ_EMPTY(&chmp->chm_erasable_pending_wbuf_queue));
+	KASSERT(TAILQ_EMPTY(&chmp->chm_very_dirty_queue));
+	KASSERT(TAILQ_EMPTY(&chmp->chm_dirty_queue));
+	KASSERT(TAILQ_EMPTY(&chmp->chm_clean_queue));
+	KASSERT(TAILQ_EMPTY(&chmp->chm_free_queue));
+	rw_destroy(&chmp->chm_lock_wbuf);
+	kmem_free(chmp->chm_wbuf, chmp->chm_wbuf_pagesize);
+	mutex_destroy(&chmp->chm_lock_vnocache);
+	mutex_destroy(&chmp->chm_lock_sizes);
+	mutex_destroy(&chmp->chm_lock_mountfields);
+	kmem_free(chmp->chm_blocks, chmp->chm_ebh->peb_nr *
+	    sizeof(struct chfs_eraseblock));
+	chfs_vnocache_hash_destroy(chmp->chm_vnocache_hash);
+	ebh_close(chmp->chm_ebh);
+
+fail1:
 	kmem_free(chmp->chm_ebh, sizeof(struct chfs_ebh));
+	mutex_destroy(&ump->um_lock);
 	kmem_free(chmp, sizeof(struct chfs_mount));
 	kmem_free(ump, sizeof(struct ufsmount));
+
+fail0:
+	KASSERT(err);
 	return err;
 }
 
@@ -433,12 +449,12 @@ chfs_unmount(struct mount *mp, int mntflags)
 /* --------------------------------------------------------------------- */
 
 static int
-chfs_root(struct mount *mp, struct vnode **vpp)
+chfs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *vp;
 	int error;
 
-	if ((error = VFS_VGET(mp, (ino_t)UFS_ROOTINO, &vp)) != 0)
+	if ((error = VFS_VGET(mp, (ino_t)UFS_ROOTINO, lktype, &vp)) != 0)
 		return error;
 	*vpp = vp;
 	return 0;
@@ -624,7 +640,7 @@ chfs_loadvnode(struct mount *mp, struct vnode *vp,
 
 	}
 
-	/* Finish inode initalization. */
+	/* Finish inode initialization. */
 	ip->ch_type = VTTOCHT(vp->v_type);
 	ip->devvp = ump->um_devvp;
 	vref(ip->devvp);
@@ -640,7 +656,7 @@ chfs_loadvnode(struct mount *mp, struct vnode *vp,
 /* --------------------------------------------------------------------- */
 
 static int
-chfs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+chfs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 	int error;
 
@@ -648,7 +664,7 @@ chfs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 	if (error)
 		return error;
 
-	error = vn_lock(*vpp, LK_EXCLUSIVE);
+	error = vn_lock(*vpp, lktype);
 	if (error) {
 		vrele(*vpp);
 		*vpp = NULL;
@@ -662,7 +678,7 @@ chfs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 
 
 static int
-chfs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
+chfs_fhtovp(struct mount *mp, struct fid *fhp, int lktype, struct vnode **vpp)
 {
 	return ENODEV;
 }
@@ -801,7 +817,7 @@ struct vfsops chfs_vfsops = {
 	.vfs_done = chfs_done,
 	.vfs_snapshot = chfs_snapshot,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
@@ -809,6 +825,9 @@ struct vfsops chfs_vfsops = {
 };
 
 /* For using CHFS as a module. */
+
+MODULE(MODULE_CLASS_VFS, chfs, "ufs,flash");
+
 static int
 chfs_modcmd(modcmd_t cmd, void *arg)
 {

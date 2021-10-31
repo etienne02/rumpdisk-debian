@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -206,13 +206,8 @@ FlGenerateFilename (
      * Copy the original filename to a new buffer. Leave room for the worst
      * case where we append the suffix, an added dot and the null terminator.
      */
-    NewFilename = UtStringCacheCalloc ((ACPI_SIZE)
+    NewFilename = UtLocalCacheCalloc ((ACPI_SIZE)
         strlen (InputFilename) + strlen (Suffix) + 2);
-    if (!NewFilename)
-    {
-        return (NULL);
-    }
-
     strcpy (NewFilename, InputFilename);
 
     /* Try to find the last dot in the filename */
@@ -255,12 +250,7 @@ FlStrdup (
     char                *NewString;
 
 
-    NewString = UtStringCacheCalloc ((ACPI_SIZE) strlen (String) + 1);
-    if (!NewString)
-    {
-        return (NULL);
-    }
-
+    NewString = UtLocalCacheCalloc ((ACPI_SIZE) strlen (String) + 1);
     strcpy (NewString, String);
     return (NewString);
 }
@@ -355,4 +345,60 @@ FlSplitInputPathname (
     }
 
     return (AE_OK);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    FlGetFileBasename
+ *
+ * PARAMETERS:  FilePathname            - File path to be split
+ *
+ * RETURN:      The extracted base name of the file, in upper case
+ *
+ * DESCRIPTION: Extract the file base name (the file name with no extension)
+ *              from the input pathname.
+ *
+ *              Note: Any backslashes in the pathname should be previously
+ *              converted to forward slashes before calling this function.
+ *
+ ******************************************************************************/
+
+char *
+FlGetFileBasename (
+    char                    *FilePathname)
+{
+    char                    *FileBasename;
+    char                    *Substring;
+
+
+    /* Backup to last slash or colon */
+
+    Substring = strrchr (FilePathname, '/');
+    if (!Substring)
+    {
+        Substring = strrchr (FilePathname, ':');
+    }
+
+    /* Extract the full filename (base + extension) */
+
+    if (Substring)
+    {
+        FileBasename = FlStrdup (Substring + 1);
+    }
+    else
+    {
+        FileBasename = FlStrdup (FilePathname);
+    }
+
+    /* Remove the filename extension if present */
+
+    Substring = strchr (FileBasename, '.');
+    if (Substring)
+    {
+        *Substring = 0;
+    }
+
+    AcpiUtStrupr (FileBasename);
+    return (FileBasename);
 }

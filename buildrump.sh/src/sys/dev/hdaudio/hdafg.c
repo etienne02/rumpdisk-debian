@@ -1,4 +1,4 @@
-/* $NetBSD: hdafg.c,v 1.9 2015/11/15 23:03:50 jmcneill Exp $ */
+/* $NetBSD: hdafg.c,v 1.23 2020/06/11 02:39:30 thorpej Exp $ */
 
 /*
  * Copyright (c) 2009 Precedence Technologies Ltd <support@precedence.co.uk>
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.9 2015/11/15 23:03:50 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.23 2020/06/11 02:39:30 thorpej Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -73,8 +73,7 @@ __KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.9 2015/11/15 23:03:50 jmcneill Exp $");
 #include <sys/module.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
-#include <dev/auconv.h>
+#include <dev/audio/audio_if.h>
 
 #ifdef _KERNEL_OPT
 #include "opt_hdaudio.h"
@@ -271,7 +270,6 @@ struct hdaudio_mixer {
 struct hdaudio_audiodev {
 	struct hdafg_softc	*ad_sc;
 	device_t			ad_audiodev;
-	struct audio_encoding_set	*ad_encodings;
 	int				ad_nformats;
 	struct audio_format		ad_formats[HDAUDIO_MAXFORMATS];
 
@@ -357,12 +355,12 @@ CFATTACH_DECL2_NEW(
     hdafg_childdet
 );
 
-static int	hdafg_query_encoding(void *, struct audio_encoding *);
-static int	hdafg_set_params(void *, int, int,
-				   audio_params_t *,
-				   audio_params_t *,
-				   stream_filter_list_t *,
-				   stream_filter_list_t *);
+static int	hdafg_query_format(void *, audio_format_query_t *);
+static int	hdafg_set_format(void *, int,
+				   const audio_params_t *,
+				   const audio_params_t *,
+				   audio_filter_reg_t *,
+				   audio_filter_reg_t *);
 static int	hdafg_round_blocksize(void *, int, int,
 					const audio_params_t *);
 static int	hdafg_commit_settings(void *);
@@ -374,8 +372,6 @@ static int	hdafg_query_devinfo(void *, mixer_devinfo_t *);
 static void *	hdafg_allocm(void *, int, size_t);
 static void	hdafg_freem(void *, void *, size_t);
 static int	hdafg_getdev(void *, struct audio_device *);
-static size_t	hdafg_round_buffersize(void *, int, size_t);
-static paddr_t	hdafg_mappage(void *, void *, off_t, int);
 static int	hdafg_get_props(void *);
 static int	hdafg_trigger_output(void *, void *, void *, int,
 				       void (*)(void *), void *,
@@ -386,8 +382,8 @@ static int	hdafg_trigger_input(void *, void *, void *, int,
 static void	hdafg_get_locks(void *, kmutex_t **, kmutex_t **);
 
 static const struct audio_hw_if hdafg_hw_if = {
-	.query_encoding		= hdafg_query_encoding,
-	.set_params		= hdafg_set_params,
+	.query_format		= hdafg_query_format,
+	.set_format		= hdafg_set_format,
 	.round_blocksize	= hdafg_round_blocksize,
 	.commit_settings	= hdafg_commit_settings,
 	.halt_output		= hdafg_halt_output,
@@ -398,8 +394,6 @@ static const struct audio_hw_if hdafg_hw_if = {
 	.query_devinfo		= hdafg_query_devinfo,
 	.allocm			= hdafg_allocm,
 	.freem			= hdafg_freem,
-	.round_buffersize	= hdafg_round_buffersize,
-	.mappage		= hdafg_mappage,
 	.get_props		= hdafg_get_props,
 	.trigger_output		= hdafg_trigger_output,
 	.trigger_input		= hdafg_trigger_input,
@@ -797,14 +791,12 @@ hdafg_assoc_count_channels(struct hdafg_softc *sc,
 		return 0;
 
 	dacmap = kmem_zalloc(dacmapsz, KM_SLEEP);
-	if (dacmap == NULL)
-		return 0;
 
 	for (i = 0; i < HDAUDIO_MAXPINS; i++)
 		if (as->as_dacs[i])
 			dacmap[as->as_dacs[i]] = 1;
 
-	for (i = 1; i < sc->sc_endnode; i++) {
+	for (i = sc->sc_startnode; i < sc->sc_endnode; i++) {
 		if (!dacmap[i])
 			continue;
 		w = hdafg_widget_lookup(sc, i);
@@ -881,18 +873,23 @@ hdafg_assoc_dump_dd(struct hdafg_softc *sc, struct hdaudio_assoc *as, int pin,
 			res = (*cmd)(sc->sc_codec, as->as_pins[pin],
 			    CORB_GET_HDMI_ELD_DATA, i);
 			if (!(res & COP_ELD_VALID)) {
+#ifdef HDAFG_HDMI_DEBUG
 				hda_error(sc, "bad ELD size (%u/%u)\n",
 				    i, elddatalen);
+#endif
 				break;
 			}
 			elddata[i] = COP_ELD_DATA(res);
 		}
 
 		if (hdafg_dd_parse_info(elddata, elddatalen, &hdi) != 0) {
+#ifdef HDAFG_HDMI_DEBUG
 			hda_error(sc, "failed to parse ELD data\n");
+#endif
 			return;
 		}
 
+#ifdef HDAFG_HDMI_DEBUG
 		hda_print(sc, "  ELD version=0x%x", ELD_VER(&hdi.eld));
 		hda_print1(sc, ",len=%u", hdi.eld.header.baseline_eld_len * 4);
 		hda_print1(sc, ",edid=0x%x", ELD_CEA_EDID_VER(&hdi.eld));
@@ -918,6 +915,7 @@ hdafg_assoc_dump_dd(struct hdafg_softc *sc, struct hdaudio_assoc *as, int pin,
 				    CEA_MAX_BITRATE(&hdi.sad[i]));
 			hda_print1(sc, "\n");
 		}
+#endif
 	}
 }
 
@@ -1263,10 +1261,6 @@ hdafg_control_parse(struct hdafg_softc *sc)
 
 	cnt = 0;
 	for (i = sc->sc_startnode; cnt < maxctls && i < sc->sc_endnode; i++) {
-		if (cnt >= maxctls) {
-			hda_error(sc, "ctl overflow\n");
-			break;
-		}
 		w = hdafg_widget_lookup(sc, i);
 		if (w == NULL || w->w_enable == false)
 			continue;
@@ -1468,7 +1462,6 @@ hdafg_disable_useless(struct hdafg_softc *sc)
 	do {
 		done = 1;
 		/* Disable and mute controls for disabled widgets */
-		i = 0;
 		for (i = 0; i < sc->sc_nctls; i++) {
 			ctl = &sc->sc_ctls[i];
 			if (ctl->ctl_enable == false)
@@ -2105,25 +2098,25 @@ hdafg_disable_unassoc(struct hdafg_softc *sc)
 	struct hdaudio_control *ctl;
 	int i, j, k;
 
-	/* Disable unassociated widgets */
 	for (i = sc->sc_startnode; i < sc->sc_endnode; i++) {
 		w = hdafg_widget_lookup(sc, i);
 		if (w == NULL || w->w_enable == false)
 			continue;
-		if (w->w_bindas == -1) {
-			w->w_enable = 0;
-			hda_trace(sc, "disable %02X [unassociated]\n",
-			    w->w_nid);
+		
+		/* Disable unassociated widgets */
+		if (w->w_type != COP_AWCAP_TYPE_PIN_COMPLEX) {
+			if (w->w_bindas == -1) {
+				w->w_enable = 0;
+				hda_trace(sc, "disable %02X [unassociated]\n",
+				    w->w_nid);
+			}
+			continue;
 		}
-	}
 
-	/* Disable input connections on input pin and output on output */
-	for (i = sc->sc_startnode; i < sc->sc_endnode; i++) {
-		w = hdafg_widget_lookup(sc, i);
-		if (w == NULL || w->w_enable == false)
-			continue;
-		if (w->w_type != COP_AWCAP_TYPE_PIN_COMPLEX)
-			continue;
+		/*
+		 * Disable input connections on input pin
+		 * and output on output pin
+		 */
 		if (w->w_bindas < 0)
 			continue;
 		if (as[w->w_bindas].as_dir == HDAUDIO_PINDIR_IN) {
@@ -2790,7 +2783,6 @@ hdafg_assign_mixers(struct hdafg_softc *sc)
 		}
 	}
 	/* Treat unrequired as possible */
-	i = 0;
 	for (i = 0; i < sc->sc_nctls; i++) {
 		ctl = &sc->sc_ctls[i];
 		if (ctl->ctl_audiomask == 0)
@@ -3384,6 +3376,9 @@ hdafg_probe_encoding(struct hdafg_softc *sc,
 		if (hdafg_rate_supported(sc, rate))
 			f.frequency[f.frequency_type++] = rate;
 	}
+	/* XXX ad hoc.. */
+	if (encoding == AUDIO_ENCODING_AC3)
+		f.priority = -1;
 
 #define HDAUDIO_INITFMT(ch, chmask)			\
 	do {						\
@@ -3424,13 +3419,13 @@ hdafg_configure_encodings(struct hdafg_softc *sc)
 
 	sc->sc_pchan = sc->sc_rchan = 0;
 
-	for (nchan = 0, i = 0; i < sc->sc_nassocs; i++) {
+	for (i = 0; i < sc->sc_nassocs; i++) {
 		nchan = hdafg_assoc_count_channels(sc, &as[i],
 		    HDAUDIO_PINDIR_OUT);
 		if (nchan > sc->sc_pchan)
 			sc->sc_pchan = nchan;
 	}
-	for (nchan = 0, i = 0; i < sc->sc_nassocs; i++) {
+	for (i = 0; i < sc->sc_nassocs; i++) {
 		nchan = hdafg_assoc_count_channels(sc, &as[i],
 		    HDAUDIO_PINDIR_IN);
 		if (nchan > sc->sc_rchan)
@@ -3663,11 +3658,11 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 	struct hdafg_softc *sc = device_private(self);
 	audio_params_t defparams;
 	prop_dictionary_t args = opaque;
-	char vendor[16], product[16];
+	char vendor[MAX_AUDIO_DEV_LEN], product[MAX_AUDIO_DEV_LEN];
 	uint64_t fgptr = 0;
 	uint32_t astype = 0;
 	uint8_t nid = 0;
-	int err, i;
+	int i;
 	bool rv;
 
 	aprint_naive("\n");
@@ -3781,18 +3776,18 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 	hda_debug(sc, "configuring encodings\n");
 	sc->sc_audiodev.ad_sc = sc;
 	hdafg_configure_encodings(sc);
-	err = auconv_create_encodings(sc->sc_audiodev.ad_formats,
-	    sc->sc_audiodev.ad_nformats, &sc->sc_audiodev.ad_encodings);
-	if (err) {
-		hda_error(sc, "couldn't create encodings\n");
-		return;
-	}
 
 	hda_debug(sc, "reserving streams\n");
 	sc->sc_audiodev.ad_capture = hdaudio_stream_establish(sc->sc_host,
 	    HDAUDIO_STREAM_ISS, hdafg_stream_intr, &sc->sc_audiodev);
 	sc->sc_audiodev.ad_playback = hdaudio_stream_establish(sc->sc_host,
 	    HDAUDIO_STREAM_OSS, hdafg_stream_intr, &sc->sc_audiodev);
+
+	if (sc->sc_audiodev.ad_capture == NULL &&
+	    sc->sc_audiodev.ad_playback == NULL) {
+		hda_error(sc, "couldn't find any input or output streams\n");
+		return;
+	}
 
 	hda_debug(sc, "connecting streams\n");
 	defparams.channels = 2;
@@ -3840,8 +3835,6 @@ hdafg_detach(device_t self, int flags)
 		prop_object_release(sc->sc_config);
 	if (sc->sc_audiodev.ad_audiodev)
 		config_detach(sc->sc_audiodev.ad_audiodev, flags);
-	if (sc->sc_audiodev.ad_encodings)
-		auconv_delete_encodings(sc->sc_audiodev.ad_encodings);
 	if (sc->sc_audiodev.ad_playback)
 		hdaudio_stream_disestablish(sc->sc_audiodev.ad_playback);
 	if (sc->sc_audiodev.ad_capture)
@@ -3924,39 +3917,44 @@ hdafg_resume(device_t self, const pmf_qual_t *qual)
 }
 
 static int
-hdafg_query_encoding(void *opaque, struct audio_encoding *ae)
+hdafg_query_format(void *opaque, audio_format_query_t *afp)
 {
 	struct hdaudio_audiodev *ad = opaque;
-	return auconv_query_encoding(ad->ad_encodings, ae);
+
+	return audio_query_format(ad->ad_formats, ad->ad_nformats, afp);
 }
 
 static int
-hdafg_set_params(void *opaque, int setmode, int usemode,
-    audio_params_t *play, audio_params_t *rec,
-    stream_filter_list_t *pfil, stream_filter_list_t *rfil)
+hdafg_set_format(void *opaque, int setmode,
+    const audio_params_t *play, const audio_params_t *rec,
+    audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
 {
 	struct hdaudio_audiodev *ad = opaque;
-	int index;
 
 	if (play && (setmode & AUMODE_PLAY)) {
-		index = auconv_set_converter(ad->ad_formats, ad->ad_nformats,
-		    AUMODE_PLAY, play, TRUE, pfil);
-		if (index < 0)
-			return EINVAL;
-		ad->ad_sc->sc_pparam = pfil->req_size > 0 ?
-		    pfil->filters[0].param : *play;
+		ad->ad_sc->sc_pparam = *play;
 		hdafg_stream_connect(ad->ad_sc, AUMODE_PLAY);
 	}
 	if (rec && (setmode & AUMODE_RECORD)) {
-		index = auconv_set_converter(ad->ad_formats, ad->ad_nformats,
-		    AUMODE_RECORD, rec, TRUE, rfil);
-		if (index < 0)
-			return EINVAL;
-		ad->ad_sc->sc_rparam = rfil->req_size > 0 ?
-		    rfil->filters[0].param : *rec;
+		ad->ad_sc->sc_rparam = *rec;
 		hdafg_stream_connect(ad->ad_sc, AUMODE_RECORD);
 	}
 	return 0;
+}
+
+/* LCM for round_blocksize */
+static u_int gcd(u_int, u_int);
+static u_int lcm(u_int, u_int);
+
+static u_int gcd(u_int a, u_int b)
+{
+
+	return (b == 0) ? a : gcd(b, a % b);
+}
+static u_int lcm(u_int a, u_int b)
+{
+
+	return a * b / gcd(a, b);
 }
 
 static int
@@ -3965,7 +3963,8 @@ hdafg_round_blocksize(void *opaque, int blksize, int mode,
 {
 	struct hdaudio_audiodev *ad = opaque;
 	struct hdaudio_stream *st;
-	int bufsize, nblksize;
+	u_int minblksize;
+	int bufsize;
 
 	st = (mode == AUMODE_PLAY) ? ad->ad_playback : ad->ad_capture;
 	if (st == NULL) {
@@ -3976,22 +3975,30 @@ hdafg_round_blocksize(void *opaque, int blksize, int mode,
 
 	if (blksize > 8192)
 		blksize = 8192;
-	else if (blksize < 0)
-		blksize = 128;
-
-	/* HD audio wants a multiple of 128, and OSS wants a power of 2 */
-	for (nblksize = 128; nblksize < blksize; nblksize <<= 1)
-		;
 
 	/* Make sure there are enough BDL descriptors */
 	bufsize = st->st_data.dma_size;
-	if (bufsize > HDAUDIO_BDL_MAX * nblksize) {
+	if (bufsize > HDAUDIO_BDL_MAX * blksize) {
 		blksize = bufsize / HDAUDIO_BDL_MAX;
-		for (nblksize = 128; nblksize < blksize; nblksize <<= 1)
-			;
 	}
 
-	return nblksize;
+	/*
+	 * HD audio's buffer constraint looks like following:
+	 * - The buffer MUST start on a 128bytes boundary.
+	 * - The buffer size MUST be one sample or more.
+	 * - The buffer size is preferred multiple of 128bytes for efficiency.
+	 *
+	 * https://www.intel.co.jp/content/www/jp/ja/standards/high-definition-audio-specification.html , p70.
+	 *
+	 * Also, the audio layer requires that the blocksize must be a
+	 * multiple of the number of channels.
+	 */
+	minblksize = lcm(128, param->channels);
+	blksize = rounddown(blksize, minblksize);
+	if (blksize < minblksize)
+		blksize = minblksize;
+
+	return blksize;
 }
 
 static int
@@ -4058,7 +4065,7 @@ hdafg_getdev(void *opaque, struct audio_device *audiodev)
 	    sc->sc_vendor);
 	hdaudio_findproduct(audiodev->version, sizeof(audiodev->version),
 	    sc->sc_vendor, sc->sc_product);
-	snprintf(audiodev->config, sizeof(audiodev->config) - 1,
+	snprintf(audiodev->config, sizeof(audiodev->config),
 	    "%02Xh", sc->sc_nid);
 
 	return 0;
@@ -4234,41 +4241,11 @@ hdafg_freem(void *opaque, void *addr, size_t size)
 	hdaudio_dma_free(st->st_host, &st->st_data);
 }
 
-static size_t
-hdafg_round_buffersize(void *opaque, int direction, size_t bufsize)
-{
-	/* Multiple of 128 */
-	bufsize &= ~127;
-	if (bufsize <= 0)
-		bufsize = 128;
-	return bufsize;
-}
-
-static paddr_t
-hdafg_mappage(void *opaque, void *addr, off_t off, int prot)
-{
-	struct hdaudio_audiodev *ad = opaque;
-	struct hdaudio_stream *st;
-
-	if (addr == DMA_KERNADDR(&ad->ad_playback->st_data))
-		st = ad->ad_playback;
-	else if (addr == DMA_KERNADDR(&ad->ad_capture->st_data))
-		st = ad->ad_capture;
-	else
-		return -1;
-
-	if (st->st_data.dma_valid == false)
-		return -1;
-
-	return bus_dmamem_mmap(st->st_host->sc_dmat, st->st_data.dma_segs,
-	    st->st_data.dma_nsegs, off, prot, BUS_DMA_WAITOK);
-}
-
 static int
 hdafg_get_props(void *opaque)
 {
 	struct hdaudio_audiodev *ad = opaque;
-	int props = AUDIO_PROP_MMAP;
+	int props = 0;
 
 	if (ad->ad_playback)
 		props |= AUDIO_PROP_PLAYBACK;
@@ -4346,7 +4323,9 @@ hdafg_unsol(device_t self, uint8_t tag)
 
 	switch (tag) {
 	case HDAUDIO_UNSOLTAG_EVENT_DD:
+#ifdef HDAFG_HDMI_DEBUG
 		hda_print(sc, "unsol: display device hotplug\n");
+#endif
 		for (i = 0; i < sc->sc_nassocs; i++) {
 			if (as[i].as_displaydev == false)
 				continue;
@@ -4358,7 +4337,9 @@ hdafg_unsol(device_t self, uint8_t tag)
 		}
 		break;
 	default:
+#ifdef HDAFG_HDMI_DEBUG
 		hda_print(sc, "unsol: tag=%u\n", tag);
+#endif
 		break;
 	}
 
@@ -4390,7 +4371,7 @@ hdafg_widget_info(void *opaque, prop_dictionary_t request,
 	wcap = hda_get_wparam(w, PIN_CAPABILITIES);
 	config = hdaudio_command(sc->sc_codec, w->w_nid,
 	    CORB_GET_CONFIGURATION_DEFAULT, 0);
-	prop_dictionary_set_cstring_nocopy(response, "name", w->w_name);
+	prop_dictionary_set_string_nocopy(response, "name", w->w_name);
 	prop_dictionary_set_bool(response, "enable", w->w_enable);
 	prop_dictionary_set_uint8(response, "nid", w->w_nid);
 	prop_dictionary_set_uint8(response, "type", w->w_type);
@@ -4402,8 +4383,8 @@ hdafg_widget_info(void *opaque, prop_dictionary_t request,
 	for (i = 0; i < w->w_nconns; i++) {
 		if (w->w_conns[i] == 0)
 			continue;
-		prop_array_add(connlist,
-		    prop_number_create_unsigned_integer(w->w_conns[i]));
+		prop_array_add_and_rel(connlist,
+		    prop_number_create_unsigned(w->w_conns[i]));
 	}
 	prop_dictionary_set(response, "connlist", connlist);
 	prop_object_release(connlist);

@@ -36,8 +36,32 @@
  *      $FILE/AHHYTM_E2.1.pdf
  */ 
 
+/*
+ * FDT direct configuration fragment to be added to i2cX definition in dtsi file
+ * like in bcm2835-rpi.dtsi or another specific file.
+ *
+ * &i2c1 { 
+ *         pinctrl-names = "default";
+ *         pinctrl-0 = <&i2c1_gpio2>;
+ *         status = "okay";
+ *         clock-frequency = <100000>;
+ *         #address-cells = <1>;
+ *         #size-cells = <0>;
+ *         hythygtemp@28 { 
+ *                         compatible = "ist-ag,i2c-hytp14";
+ *                         reg = <0x28>;
+ *                         status = "okay";
+ *         };
+ *         hythygtemp@29 { 
+ *                         compatible = "ist-ag,i2c-hytp14";
+ *                         reg = <0x29>;
+ *                         status = "okay";
+ *         };
+ * };
+ */
+
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hytp14.c,v 1.7 2016/07/03 12:26:55 kardel Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hytp14.c,v 1.14 2021/06/15 04:39:49 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -95,23 +119,30 @@ static struct hytp14_sensor hytp14_sensors[] = {
 	}
 };
 
+static const struct device_compatible_entry compat_data[] = {
+        { .compat = "i2c-hytp14" },
+	DEVICE_COMPAT_EOL
+}; 
+
 static int
 hytp14_match(device_t parent, cfdata_t match, void *aux)
 {
-	struct i2c_attach_args *ia;
+	struct i2c_attach_args *ia = aux;
+	int match_result;
 
-	ia = aux;
+	if (iic_use_direct_match(ia, match, compat_data, &match_result))
+		return match_result;
 
-	if (ia->ia_name) {
-		/* direct config - check name */
-		if (strcmp(ia->ia_name, "hythygtemp") == 0)
-			return 1;
-	} else {
-		/* indirect config - check for configured address */
-		if ((ia->ia_addr > 0) && (ia->ia_addr <= 0x7F))
-			return 1;
-	}
-	return 0;
+	/*
+	 * This device can be reprogrammed to use a different
+	 * I2C address, thus checking for specific addresses 
+	 * is not helpful here.
+         * reprogramming is done via setting new values in
+         * the device EEPROM via the hytctl utility and
+	 * a special GPIO setup - see hythygtemp(4) for more
+	 * information.
+	 */
+	return I2C_MATCH_ADDRESS_ONLY;
 }
 
 static void
@@ -158,6 +189,7 @@ hytp14_attach(device_t parent, device_t self, void *aux)
 			aprint_error_dev(sc->sc_dev,
 			    "unable to attach sensor\n");
 			sysmon_envsys_destroy(sc->sc_sme);
+			sc->sc_sme = NULL;
 			return;
 		}
 	}
@@ -172,6 +204,7 @@ hytp14_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(sc->sc_dev,
 		    "unable to register with sysmon\n");
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		return;
 	}
 
@@ -212,10 +245,8 @@ hytp14_detach(device_t self, int flags)
 
 	sc = device_private(self);
 
-	if (sc->sc_sme != NULL) {
+	if (sc->sc_sme != NULL)
 		sysmon_envsys_unregister(sc->sc_sme);
-		sc->sc_sme = NULL;
-	}
 
 	/* stop measurement thread */
 	mutex_enter(&sc->sc_mutex);

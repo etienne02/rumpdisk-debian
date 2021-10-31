@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee80211.c,v 1.56 2015/08/24 22:21:26 pooka Exp $	*/
+/*	$NetBSD: ieee80211.c,v 1.61 2021/08/21 11:55:25 andvar Exp $	*/
 /*-
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
@@ -36,7 +36,7 @@
 __FBSDID("$FreeBSD: src/sys/net80211/ieee80211.c,v 1.22 2005/08/10 16:22:29 sam Exp $");
 #endif
 #ifdef __NetBSD__
-__KERNEL_RCSID(0, "$NetBSD: ieee80211.c,v 1.56 2015/08/24 22:21:26 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ieee80211.c,v 1.61 2021/08/21 11:55:25 andvar Exp $");
 #endif
 
 /*
@@ -150,6 +150,30 @@ ieee80211_default_reset(struct ifnet *ifp)
 	return ENETRESET;
 }
 
+static void
+ieee80211_init_link_state(struct ieee80211com *ic)
+{
+	struct ifnet *ifp = ic->ic_ifp;
+
+	/*
+	 * Link state does not make sense in IBSS or HOSTAP modes.
+	 * We know that the link in MONITOR mode is DOWN as we cannot
+	 * transmit, only monitor.
+	 * That leaves BSS mode, which starts off DOWN and will
+	 * transition to UP when it joins a node.
+	 */
+	switch (ic->ic_opmode) {
+	case IEEE80211_M_AHDEMO:
+	case IEEE80211_M_HOSTAP:
+	case IEEE80211_M_IBSS:
+		if_link_state_change(ifp, LINK_STATE_UNKNOWN);
+		break;
+	default:
+		if_link_state_change(ifp, LINK_STATE_DOWN);
+		break;
+	}
+}
+
 void
 ieee80211_ifattach(struct ieee80211com *ic)
 {
@@ -246,6 +270,8 @@ ieee80211_ifattach(struct ieee80211com *ic)
 	 */
 	if (ic->ic_reset == NULL)
 		ic->ic_reset = ieee80211_default_reset;
+
+	ieee80211_init_link_state(ic);
 }
 
 void
@@ -260,7 +286,7 @@ ieee80211_ifdetach(struct ieee80211com *ic)
 	ieee80211_crypto_detach(ic);
 	ieee80211_node_detach(ic);
 	LIST_REMOVE(ic, ic_list);
-	ifmedia_delete_instance(&ic->ic_media, IFM_INST_ANY);
+	ifmedia_fini(&ic->ic_media);
 
 	IEEE80211_BEACON_LOCK_DESTROY(ic);
 
@@ -346,8 +372,9 @@ ieee80211_ieee2mhz(u_int chan, u_int flags)
  * ieee80211_attach and before most anything else.
  */
 void
-ieee80211_media_init(struct ieee80211com *ic,
-	ifm_change_cb_t media_change, ifm_stat_cb_t media_stat)
+ieee80211_media_init_with_lock(struct ieee80211com *ic,
+	ifm_change_cb_t media_change, ifm_stat_cb_t media_stat,
+	ieee80211_media_lock_t *lock)
 {
 #define	ADD(_ic, _s, _o) \
 	ifmedia_add(&(_ic)->ic_media, \
@@ -371,7 +398,8 @@ ieee80211_media_init(struct ieee80211com *ic,
 	/*
 	 * Fill in media characteristics.
 	 */
-	ifmedia_init(&ic->ic_media, 0, media_change, media_stat);
+	ifmedia_init_with_lock(&ic->ic_media, 0,
+	    media_change, media_stat, lock);
 	maxrate = 0;
 	memset(&allrates, 0, sizeof(allrates));
 	for (mode = IEEE80211_MODE_AUTO; mode < IEEE80211_MODE_MAX; mode++) {
@@ -455,6 +483,14 @@ ieee80211_media_init(struct ieee80211com *ic,
 }
 
 void
+ieee80211_media_init(struct ieee80211com *ic,
+	ifm_change_cb_t media_change, ifm_stat_cb_t media_stat)
+{
+
+	ieee80211_media_init_with_lock(ic, media_change, media_stat, NULL);
+}
+
+void
 ieee80211_announce(struct ieee80211com *ic)
 {
 	struct ifnet *ifp = ic->ic_ifp;
@@ -464,7 +500,7 @@ ieee80211_announce(struct ieee80211com *ic)
 	for (mode = IEEE80211_MODE_11A; mode < IEEE80211_MODE_MAX; mode++) {
 		if ((ic->ic_modecaps & (1<<mode)) == 0)
 			continue;
-		aprint_normal("%s: %s rates: ", ifp->if_xname,
+		aprint_debug("%s: %s rates: ", ifp->if_xname,
 		    ieee80211_phymode_name[mode]);
 		rs = &ic->ic_sup_rates[mode];
 		for (i = 0; i < rs->rs_nrates; i++) {
@@ -472,11 +508,11 @@ ieee80211_announce(struct ieee80211com *ic)
 			mword = ieee80211_rate2media(ic, rate, mode);
 			if (mword == 0)
 				continue;
-			aprint_normal("%s%d%sMbps", (i != 0 ? " " : ""),
+			aprint_debug("%s%d%sMbps", (i != 0 ? " " : ""),
 			    (rate & IEEE80211_RATE_VAL) / 2,
 			    ((rate & 0x1) != 0 ? ".5" : ""));
 		}
-		aprint_normal("\n");
+		aprint_debug("\n");
 	}
 }
 
@@ -693,6 +729,7 @@ ieee80211_media_change(struct ifnet *ifp)
 		 */
 		ieee80211_reset_erp(ic);
 		ieee80211_wme_initparams(ic);	/* after opmode change */
+		ieee80211_init_link_state(ic);	/* after opmode change */
 		error = ENETRESET;
 	}
 #ifdef notdef
@@ -1011,7 +1048,7 @@ ieee80211_rate2media(struct ieee80211com *ic, int rate, enum ieee80211_phymode m
 		{  72 | IFM_IEEE80211_11G, IFM_IEEE80211_OFDM36 },
 		{  96 | IFM_IEEE80211_11G, IFM_IEEE80211_OFDM48 },
 		{ 108 | IFM_IEEE80211_11G, IFM_IEEE80211_OFDM54 },
-		/* NB: OFDM72 doesn't realy exist so we don't handle it */
+		/* NB: OFDM72 doesn't really exist so we don't handle it */
 	};
 	u_int mask, i;
 

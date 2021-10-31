@@ -1,4 +1,4 @@
-/*	$NetBSD: ninjascsi32.c,v 1.24 2013/09/14 21:52:49 martin Exp $	*/
+/*	$NetBSD: ninjascsi32.c,v 1.28 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2004, 2006, 2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ninjascsi32.c,v 1.24 2013/09/14 21:52:49 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ninjascsi32.c,v 1.28 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -666,7 +666,8 @@ njsc32_attach(struct njsc32_softc *sc)
 	sc->sc_channel.chan_nluns = NJSC32_NLU;
 	sc->sc_channel.chan_id = NJSC32_INITIATOR_ID;
 
-	sc->sc_scsi = config_found(sc->sc_dev, &sc->sc_channel, scsiprint);
+	sc->sc_scsi = config_found(sc->sc_dev, &sc->sc_channel, scsiprint,
+	    CFARGS_NONE);
 }
 
 int
@@ -1369,13 +1370,15 @@ njsc32_reset_bus(struct njsc32_softc *sc)
 	/* initialize target structure */
 	njsc32_init_targets(sc);
 
-	/* XXXSMP scsipi */
-	KERNEL_LOCK(1, curlwp);
-	s = splbio();
-	scsipi_async_event(&sc->sc_channel, ASYNC_EVENT_RESET, NULL);
-	splx(s);
-	/* XXXSMP scsipi */
-	KERNEL_UNLOCK_ONE(curlwp);
+	if (sc->sc_scsi != NULL) {
+		/* XXXSMP scsipi */
+		KERNEL_LOCK(1, curlwp);
+		s = splbio();
+		scsipi_async_event(&sc->sc_channel, ASYNC_EVENT_RESET, NULL);
+		splx(s);
+		/* XXXSMP scsipi */
+		KERNEL_UNLOCK_ONE(curlwp);
+	}
 
 	/* release SCSI bus reset */
 	njsc32_write_1(sc, NJSC32_REG_SCSI_BUS_CONTROL, 0);

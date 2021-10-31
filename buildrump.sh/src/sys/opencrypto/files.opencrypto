@@ -1,4 +1,4 @@
-#	$NetBSD: files.opencrypto,v 1.25 2011/11/19 22:51:30 tls Exp $
+#	$NetBSD: files.opencrypto,v 1.30 2020/06/29 23:34:48 riastradh Exp $
 #
 #
 
@@ -7,7 +7,7 @@
 # that use the opencrypto framework, should list opencrypto as a dependency
 # to pull in the framework.
 
-define	opencrypto
+define	opencrypto: aes
 file	opencrypto/criov.c		opencrypto
 file	opencrypto/xform.c		opencrypto
 file	opencrypto/crypto.c		opencrypto
@@ -25,6 +25,8 @@ file	opencrypto/gmac.c		swcrypto
 # (and thus crypto hardware accelerators).
 defpseudo crypto: opencrypto
 file	opencrypto/cryptodev.c		crypto
-file	opencrypto/ocryptodev.c		crypto & compat_50
+file	opencrypto/ocryptodev.c		compat_50 & crypto
+file	opencrypto/compat_crypto_50.c	compat_50 & crypto
 
 defflag opt_ocf.h	CRYPTO_DEBUG CRYPTO_TIMING
+defparam opt_ocf.h	CRYPTO_RET_Q_MAXLEN CRYPTO_RET_KQ_MAXLEN

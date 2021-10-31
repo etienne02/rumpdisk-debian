@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_exit.c,v 1.258 2016/04/27 21:15:40 christos Exp $	*/
+/*	$NetBSD: kern_exit.c,v 1.291 2020/12/05 18:17:01 thorpej Exp $	*/
 
 /*-
- * Copyright (c) 1998, 1999, 2006, 2007, 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 1999, 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -67,11 +67,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_exit.c,v 1.258 2016/04/27 21:15:40 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_exit.c,v 1.291 2020/12/05 18:17:01 thorpej Exp $");
 
 #include "opt_ktrace.h"
 #include "opt_dtrace.h"
-#include "opt_perfctrs.h"
 #include "opt_sysv.h"
 
 #include <sys/param.h>
@@ -85,13 +84,11 @@ __KERNEL_RCSID(0, "$NetBSD: kern_exit.c,v 1.258 2016/04/27 21:15:40 christos Exp
 #include <sys/buf.h>
 #include <sys/wait.h>
 #include <sys/file.h>
+#include <sys/fstrans.h>
 #include <sys/vnode.h>
 #include <sys/syslog.h>
 #include <sys/pool.h>
 #include <sys/uidinfo.h>
-#if defined(PERFCTRS)
-#include <sys/pmc.h>
-#endif
 #include <sys/ptrace.h>
 #include <sys/acct.h>
 #include <sys/filedesc.h>
@@ -102,12 +99,14 @@ __KERNEL_RCSID(0, "$NetBSD: kern_exit.c,v 1.258 2016/04/27 21:15:40 christos Exp
 #include <sys/syscallargs.h>
 #include <sys/kauth.h>
 #include <sys/sleepq.h>
+#include <sys/lock.h>
 #include <sys/lockdebug.h>
 #include <sys/ktrace.h>
 #include <sys/cpu.h>
 #include <sys/lwpctl.h>
 #include <sys/atomic.h>
 #include <sys/sdt.h>
+#include <sys/psref.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -206,6 +205,12 @@ exit1(struct lwp *l, int exitcode, int signo)
 
 	p = l->l_proc;
 
+	/* Verify that we hold no locks other than p->p_lock. */
+	LOCKDEBUG_BARRIER(p->p_lock, 0);
+
+	/* XXX Temporary: something is leaking kernel_lock. */
+	KERNEL_UNLOCK_ALL(l, NULL);
+
 	KASSERT(mutex_owned(p->p_lock));
 	KASSERT(p->p_vmspace != NULL);
 
@@ -232,23 +237,23 @@ exit1(struct lwp *l, int exitcode, int signo)
 		KERNEL_UNLOCK_ALL(l, &l->l_biglocks);
 		sigclearall(p, &contsigmask, &kq);
 
-		if (!mutex_tryenter(proc_lock)) {
+		if (!mutex_tryenter(&proc_lock)) {
 			mutex_exit(p->p_lock);
-			mutex_enter(proc_lock);
+			mutex_enter(&proc_lock);
 			mutex_enter(p->p_lock);
 		}
 		p->p_waited = 0;
 		p->p_pptr->p_nstopchild++;
 		p->p_stat = SSTOP;
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		lwp_lock(l);
 		p->p_nrlwps--;
 		l->l_stat = LSSTOP;
 		lwp_unlock(l);
 		mutex_exit(p->p_lock);
 		lwp_lock(l);
+		spc_lock(l->l_cpu);
 		mi_switch(l);
-		KERNEL_LOCK(l->l_biglocks, l);
 		mutex_enter(p->p_lock);
 	}
 
@@ -259,7 +264,16 @@ exit1(struct lwp *l, int exitcode, int signo)
 	sigfillset(&p->p_sigctx.ps_sigignore);
 	sigclearall(p, NULL, &kq);
 	p->p_stat = SDYING;
-	mutex_exit(p->p_lock);
+
+	/*
+	 * Perform any required thread cleanup.  Do this early so
+	 * anyone wanting to look us up by our global thread ID
+	 * will fail to find us.
+	 *
+	 * N.B. this will unlock p->p_lock on our behalf.
+	 */
+	lwp_thread_cleanup(l);
+
 	ksiginfo_queue_drain(&kq);
 
 	/* Destroy any lwpctl info. */
@@ -274,7 +288,7 @@ exit1(struct lwp *l, int exitcode, int signo)
 
 	DPRINTF(("%s: %d.%d exiting.\n", __func__, p->p_pid, l->l_lid));
 
-	timers_free(p, TIMERS_ALL);
+	ptimers_free(p, TIMERS_ALL);
 #if defined(__HAVE_RAS)
 	ras_purgeall();
 #endif
@@ -325,6 +339,7 @@ exit1(struct lwp *l, int exitcode, int signo)
 	 * we run at this moment, nothing runs in userland
 	 * anymore.
 	 */
+	ruspace(p);	/* Update our vm resource use */
 	uvm_proc_exit(p);
 
 	/*
@@ -341,9 +356,8 @@ exit1(struct lwp *l, int exitcode, int signo)
 	 * wake up the parent early to avoid deadlock.  We can do this once
 	 * the VM resources are released.
 	 */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	if (p->p_lflag & PL_PPWAIT) {
-#if 0
 		lwp_t *lp;
 
 		l->l_lwpctl = NULL; /* was on loan from blocked parent */
@@ -351,13 +365,8 @@ exit1(struct lwp *l, int exitcode, int signo)
 
 		lp = p->p_vforklwp;
 		p->p_vforklwp = NULL;
-		lp->l_pflag &= ~LP_VFORKWAIT; /* XXX */
+		lp->l_vforkwaiting = false;
 		cv_broadcast(&lp->l_waitcv);
-#else
-		l->l_lwpctl = NULL; /* was on loan from blocked parent */
-		p->p_lflag &= ~PL_PPWAIT;
-		cv_broadcast(&p->p_pptr->p_waitcv);
-#endif
 	}
 
 	if (SESS_LEADER(p)) {
@@ -383,9 +392,9 @@ exit1(struct lwp *l, int exitcode, int signo)
 				if (pgrp != NULL) {
 					pgsignal(pgrp, SIGHUP, 1);
 				}
-				mutex_exit(proc_lock);
+				mutex_exit(&proc_lock);
 				(void) ttywait(tp);
-				mutex_enter(proc_lock);
+				mutex_enter(&proc_lock);
 
 				/* The tty could have been revoked. */
 				vprevoke = sp->s_ttyvp;
@@ -407,13 +416,16 @@ exit1(struct lwp *l, int exitcode, int signo)
 				proc_sessrele(sp);
 				VOP_REVOKE(vprevoke, REVOKEALL);
 			} else
-				mutex_exit(proc_lock);
+				mutex_exit(&proc_lock);
 			if (vprele != NULL)
 				vrele(vprele);
-			mutex_enter(proc_lock);
+			mutex_enter(&proc_lock);
 		}
 	}
 	fixjobc(p, p->p_pgrp, 0);
+
+	/* Release fstrans private data. */
+	fstrans_lwp_dtor(l);
 
 	/*
 	 * Finalize the last LWP's specificdata, as well as the
@@ -432,17 +444,6 @@ exit1(struct lwp *l, int exitcode, int signo)
 		 (p->p_xsig ? CLD_KILLED : CLD_EXITED)),
 		0,0,0,0);
 
-#if PERFCTRS
-	/*
-	 * Save final PMC information in parent process & clean up.
-	 */
-	if (PMC_ENABLED(p)) {
-		pmc_save_context(p);
-		pmc_accumulate(p->p_pptr, p);
-		pmc_process_exit(p);
-	}
-#endif
-
 	/*
 	 * Reset p_opptr pointer of all former children which got
 	 * traced by another process and were reparented. We reset
@@ -454,6 +455,10 @@ exit1(struct lwp *l, int exitcode, int signo)
 	if (__predict_false(p->p_slflag & PSL_CHTRACED)) {
 		struct proc *q;
 		PROCLIST_FOREACH(q, &allproc) {
+			if (q->p_opptr == p)
+				q->p_opptr = NULL;
+		}
+		PROCLIST_FOREACH(q, &zombproc) {
 			if (q->p_opptr == p)
 				q->p_opptr = NULL;
 		}
@@ -477,7 +482,7 @@ exit1(struct lwp *l, int exitcode, int signo)
 		if (__predict_false(child->p_slflag & PSL_TRACED)) {
 			mutex_enter(p->p_lock);
 			child->p_slflag &=
-			    ~(PSL_TRACED|PSL_FSTRACE|PSL_SYSCALL);
+			    ~(PSL_TRACED|PSL_SYSCALL);
 			mutex_exit(p->p_lock);
 			if (child->p_opptr != child->p_pptr) {
 				struct proc *t = child->p_opptr;
@@ -534,8 +539,7 @@ exit1(struct lwp *l, int exitcode, int signo)
 	/* Reload parent pointer, since p may have been reparented above */
 	new_parent = p->p_pptr;
 
-	if (__predict_false((p->p_slflag & PSL_FSTRACE) == 0 &&
-	    p->p_exitsig != 0)) {
+	if (__predict_false(p->p_exitsig != 0)) {
 		exit_psignal(p, new_parent, &ksi);
 		kpsignal(new_parent, &ksi, NULL);
 	}
@@ -555,9 +559,8 @@ exit1(struct lwp *l, int exitcode, int signo)
 	pcu_discard_all(l);
 
 	mutex_enter(p->p_lock);
-	/* Free the linux lwp id */
-	if ((l->l_pflag & LP_PIDLID) != 0 && l->l_lid != p->p_pid)
-		proc_free_pid(l->l_lid);
+	/* Free the LWP ID */
+	proc_free_lwpid(p, l->l_lid);
 	lwp_drainrefs(l);
 	lwp_lock(l);
 	l->l_prflag &= ~LPR_DETACHED;
@@ -578,10 +581,7 @@ exit1(struct lwp *l, int exitcode, int signo)
 	 */
 	cv_broadcast(&p->p_pptr->p_waitcv);
 	rw_exit(&p->p_reflock);
-	mutex_exit(proc_lock);
-
-	/* Verify that we hold no locks other than the kernel lock. */
-	LOCKDEBUG_BARRIER(&kernel_lock, 0);
+	mutex_exit(&proc_lock);
 
 	/*
 	 * NOTE: WE ARE NO LONGER ALLOWED TO SLEEP!
@@ -594,17 +594,11 @@ exit1(struct lwp *l, int exitcode, int signo)
 	 */
 	cpu_lwp_free(l, 1);
 
-	pmap_deactivate(l);
-
-	/* This process no longer needs to hold the kernel lock. */
-#ifdef notyet
-	/* XXXSMP hold in lwp_userret() */
-	KERNEL_UNLOCK_LAST(l);
-#else
-	KERNEL_UNLOCK_ALL(l, NULL);
-#endif
-
-	lwp_exit_switchaway(l);
+	/* Switch away into oblivion. */
+	lwp_lock(l);
+	spc_lock(l->l_cpu);
+	mi_switch(l);
+	panic("exit1");
 }
 
 void
@@ -612,9 +606,7 @@ exit_lwps(struct lwp *l)
 {
 	proc_t *p = l->l_proc;
 	lwp_t *l2;
-	int nlocks;
 
-	KERNEL_UNLOCK_ALL(l, &nlocks);
 retry:
 	KASSERT(mutex_owned(p->p_lock));
 
@@ -629,10 +621,12 @@ retry:
 		l2->l_flag |= LW_WEXIT;
 		if ((l2->l_stat == LSSLEEP && (l2->l_flag & LW_SINTR)) ||
 		    l2->l_stat == LSSUSPENDED || l2->l_stat == LSSTOP) {
+			l2->l_flag &= ~LW_DBGSUSPEND;
 		    	/* setrunnable() will release the lock. */
 			setrunnable(l2);
 			continue;
 		}
+		lwp_need_userret(l2);
 		lwp_unlock(l2);
 	}
 
@@ -647,29 +641,29 @@ retry:
 		}
 	}
 
-	KERNEL_LOCK(nlocks, l);
 	KASSERT(p->p_nlwps == 1);
 }
 
-static int
+int
 do_sys_waitid(idtype_t idtype, id_t id, int *pid, int *status, int options,
     struct wrusage *wru, siginfo_t *si)
 {
 	proc_t *child;
 	int error;
 
-	
+
 	if (wru != NULL)
 		memset(wru, 0, sizeof(*wru));
 	if (si != NULL)
 		memset(si, 0, sizeof(*si));
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	error = find_stopped_child(curproc, idtype, id, options, &child,
 	    wru, si);
 	if (child == NULL) {
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		*pid = 0;
+		*status = 0;
 		return error;
 	}
 	*pid = child->p_pid;
@@ -679,15 +673,15 @@ do_sys_waitid(idtype_t idtype, id_t id, int *pid, int *status, int options,
 		*status = P_WAITSTATUS(child);
 		/* proc_free() will release the proc_lock. */
 		if (options & WNOWAIT) {
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 		} else {
 			proc_free(child, wru);
 		}
 	} else {
-		/* Child state must have been SSTOP. */
-		*status = child->p_xsig == SIGCONT ? W_CONTCODE() :
-		    W_STOPCODE(child->p_xsig);
-		mutex_exit(proc_lock);
+		/* Don't mark SIGCONT if we are being stopped */
+		*status = (child->p_xsig == SIGCONT && child->p_stat != SSTOP) ?
+		    W_CONTCODE() : W_STOPCODE(child->p_xsig);
+		mutex_exit(&proc_lock);
 	}
 	return 0;
 }
@@ -793,7 +787,7 @@ sys_wait6(struct lwp *l, const struct sys_wait6_args *uap, register_t *retval)
 	retval[0] = pid; 	/* tell userland who it was */
 
 #if 0
-	/* 
+	/*
 	 * should we copyout if there was no process, hence no useful data?
 	 * We don't for an old sytle wait4() (etc) but I believe
 	 * FreeBSD does for wait6(), so a tossup...  Go with FreeBSD for now.
@@ -822,7 +816,7 @@ sys_wait6(struct lwp *l, const struct sys_wait6_args *uap, register_t *retval)
  *	 2:	This is the only match
  */
 static int
-match_process(struct proc *pp, struct proc **q, idtype_t idtype, id_t id,
+match_process(const struct proc *pp, struct proc **q, idtype_t idtype, id_t id,
     int options, struct wrusage *wrusage, siginfo_t *siginfo)
 {
 	struct rusage *rup;
@@ -926,6 +920,66 @@ match_process(struct proc *pp, struct proc **q, idtype_t idtype, id_t id,
 }
 
 /*
+ * Determine if there are existing processes being debugged
+ * that used to be (and sometime later will be again) children
+ * of a specific parent (while matching wait criteria)
+ */
+static bool
+debugged_child_exists(idtype_t idtype, id_t id, int options, siginfo_t *si,
+    const struct proc *parent)
+{
+	struct proc *pp;
+
+	/*
+	 * If we are searching for a specific pid, we can optimise a little
+	 */
+	if (idtype == P_PID) {
+		/*
+		 * Check the specific process to see if its real parent is us
+		 */
+		pp = proc_find_raw((pid_t)id);
+		if (pp != NULL && pp->p_stat != SIDL && pp->p_opptr == parent) {
+			/*
+			 * using P_ALL here avoids match_process() doing the
+			 * same work that we just did, but incorrectly for
+			 * this scenario.
+			 */
+			if (match_process(parent, &pp, P_ALL, id, options,
+			    NULL, si))
+				return true;
+		}
+		return false;
+	}
+
+	/*
+	 * For the hard cases, just look everywhere to see if some
+	 * stolen (reparented) process is really our lost child.
+	 * Then check if that process could satisfy the wait conditions.
+	 */
+
+	/*
+	 * XXX inefficient, but hopefully fairly rare.
+	 * XXX should really use a list of reparented processes.
+	 */
+	PROCLIST_FOREACH(pp, &allproc) {
+		if (pp->p_stat == SIDL)		/* XXX impossible ?? */
+			continue;
+		if (pp->p_opptr == parent &&
+		    match_process(parent, &pp, idtype, id, options, NULL, si))
+			return true;
+	}
+	PROCLIST_FOREACH(pp, &zombproc) {
+		if (pp->p_stat == SIDL)		/* XXX impossible ?? */
+			continue;
+		if (pp->p_opptr == parent &&
+		    match_process(parent, &pp, idtype, id, options, NULL, si))
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * Scan list of child processes for a child process that has stopped or
  * exited.  Used by sys_wait4 and 'compat' equivalents.
  *
@@ -938,16 +992,14 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 	struct proc *child, *dead;
 	int error;
 
-	KASSERT(mutex_owned(proc_lock));
+	KASSERT(mutex_owned(&proc_lock));
 
-	if (options & ~(WUNTRACED|WNOHANG|WALTSIG|WALLSIG|WTRAPPED|WEXITED|
-	    WNOWAIT|WCONTINUED)
-	    && !(options & WOPTSCHECKED)) {
+	if (options & ~WALLOPTS) {
 		*child_p = NULL;
 		return EINVAL;
 	}
 
-	if ((options & (WEXITED|WUNTRACED|WCONTINUED|WTRAPPED)) == 0) {
+	if ((options & WSELECTOPTS) == 0) {
 		/*
 		 * We will be unable to find any matching processes,
 		 * because there are no known events to look for.
@@ -1036,7 +1088,7 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 				}
 				if (si) {
 					si->si_status = child->p_xsig;
-					si->si_code = 
+					si->si_code =
 					    (child->p_slflag & PSL_TRACED) ?
 					    CLD_TRAPPED : CLD_STOPPED;
 				}
@@ -1048,6 +1100,18 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 			}
 		}
 
+		/*
+		 * If we found nothing, but we are the bereaved parent
+		 * of a stolen child, look and see if that child (or
+		 * one of them) meets our search criteria.   If so, then
+		 * we cannot succeed, but we can hang (wait...), 
+		 * or if WNOHANG, return 0 instead of ECHILD
+		 */
+		if (child == NULL && error == ECHILD && 
+		    (parent->p_slflag & PSL_CHTRACED) &&
+		    debugged_child_exists(idtype, id, options, si, parent))
+			error = 0;
+
 		if (child != NULL || error != 0 ||
 		    ((options & WNOHANG) != 0 && dead == NULL)) {
 			*child_p = child;
@@ -1057,7 +1121,7 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 		/*
 		 * Wait for another child process to stop.
 		 */
-		error = cv_wait_sig(&parent->p_waitcv, proc_lock);
+		error = cv_wait_sig(&parent->p_waitcv, &proc_lock);
 
 		if (error != 0) {
 			*child_p = NULL;
@@ -1081,7 +1145,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 	kauth_cred_t cred1, cred2;
 	uid_t uid;
 
-	KASSERT(mutex_owned(proc_lock));
+	KASSERT(mutex_owned(&proc_lock));
 	KASSERT(p->p_nlwps == 1);
 	KASSERT(p->p_nzlwps == 1);
 	KASSERT(p->p_nrlwps == 0);
@@ -1097,7 +1161,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 	 */
 	if ((p->p_slflag & PSL_TRACED) != 0 && p->p_opptr != parent) {
 		mutex_enter(p->p_lock);
-		p->p_slflag &= ~(PSL_TRACED|PSL_FSTRACE|PSL_SYSCALL);
+		p->p_slflag &= ~(PSL_TRACED|PSL_SYSCALL);
 		mutex_exit(p->p_lock);
 		parent = (p->p_opptr == NULL) ? initproc : p->p_opptr;
 		proc_reparent(p, parent);
@@ -1107,7 +1171,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 			kpsignal(parent, &ksi, NULL);
 		}
 		cv_broadcast(&parent->p_waitcv);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		return;
 	}
 
@@ -1131,7 +1195,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 	p->p_xexit = 0;
 
 	/*
-	 * At this point we are going to start freeing the final resources. 
+	 * At this point we are going to start freeing the final resources.
 	 * If anyone tries to access the proc structure after here they will
 	 * get a shock - bits are missing.  Attempt to make it hard!  We
 	 * don't bother with any further locking past this point.
@@ -1145,6 +1209,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 	 * Let pid be reallocated.
 	 */
 	proc_free_pid(p->p_pid);
+	atomic_dec_uint(&nprocs);
 
 	/*
 	 * Unlink process from its process group.
@@ -1189,6 +1254,7 @@ proc_free(struct proc *p, struct wrusage *wru)
 	 */
 	if (p->p_textvp)
 		vrele(p->p_textvp);
+	kmem_strfree(p->p_path);
 
 	mutex_destroy(&p->p_auxlock);
 	mutex_obj_free(p->p_lock);
@@ -1201,6 +1267,33 @@ proc_free(struct proc *p, struct wrusage *wru)
 }
 
 /*
+ * Change the parent of a process for tracing purposes.
+ */
+void
+proc_changeparent(struct proc *t, struct proc *p)
+{
+	SET(t->p_slflag, PSL_TRACED);
+	t->p_opptr = t->p_pptr;
+	if (t->p_pptr == p)
+		return;
+	struct proc *parent = t->p_pptr;
+
+	if (parent->p_lock < t->p_lock) {
+		if (!mutex_tryenter(parent->p_lock)) {
+			mutex_exit(t->p_lock);
+			mutex_enter(parent->p_lock);
+			mutex_enter(t->p_lock);
+		}
+	} else if (parent->p_lock > t->p_lock) {
+		mutex_enter(parent->p_lock);
+	}
+	parent->p_slflag |= PSL_CHTRACED;
+	proc_reparent(t, p);
+	if (parent->p_lock != t->p_lock)
+		mutex_exit(parent->p_lock);
+}
+
+/*
  * make process 'parent' the new parent of process 'child'.
  *
  * Must be called with proc_lock held.
@@ -1209,7 +1302,7 @@ void
 proc_reparent(struct proc *child, struct proc *parent)
 {
 
-	KASSERT(mutex_owned(proc_lock));
+	KASSERT(mutex_owned(&proc_lock));
 
 	if (child->p_pptr == parent)
 		return;
@@ -1219,11 +1312,12 @@ proc_reparent(struct proc *child, struct proc *parent)
 		child->p_pptr->p_nstopchild--;
 		parent->p_nstopchild++;
 	}
-	if (parent == initproc)
+	if (parent == initproc) {
 		child->p_exitsig = SIGCHLD;
+		child->p_ppid = parent->p_pid;
+	}
 
 	LIST_REMOVE(child, p_sibling);
 	LIST_INSERT_HEAD(&parent->p_children, child, p_sibling);
 	child->p_pptr = parent;
-	child->p_ppid = parent->p_pid;
 }

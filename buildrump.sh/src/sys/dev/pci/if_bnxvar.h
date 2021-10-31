@@ -1,4 +1,4 @@
-/* $NetBSD */
+/*	$NetBSD: if_bnxvar.h,v 1.14 2020/07/14 15:37:40 jdolecek Exp $	*/
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -124,10 +124,12 @@ struct bnx_softc
 	bus_space_handle_t	bnx_bhandle;		/* Device bus handle */
 	bus_size_t		bnx_size;
 
+	pci_intr_handle_t	*bnx_ih;
 	void			*bnx_intrhand;		/* Interrupt handler */
 
 	/* packet allocation workqueue */
 	struct workqueue	*bnx_wq;
+	struct work		bnx_wk;
 
 	/* ASIC Chip ID. */
 	uint32_t		bnx_chipid;
@@ -149,6 +151,8 @@ struct bnx_softc
 	uint32_t		bnx_shared_hw_cfg;
 	uint32_t		bnx_port_hw_cfg;
 
+	int			bnx_flowflags;
+	
 	uint16_t		bus_speed_mhz;		/* PCI bus speed */
 	uint16_t		link_width;		/* PCIe link width */
 	uint16_t		link_speed;		/* PCIe link speed */
@@ -158,7 +162,10 @@ struct bnx_softc
 	char *			bnx_name;		/* Name string */
 
 	/* Tracks the version of bootcode firmware. */
-	uint32_t		bnx_fw_ver;
+	char			bnx_bc_ver[32];
+
+	/* Tracks the version of management firmware. */
+	char			bnx_mfw_ver[32];
 
 	/* Tracks the state of the firmware.  0 = Running while any     */
 	/* other value indicates that the firmware is not responding.   */
@@ -209,7 +216,9 @@ struct bnx_softc
 	uint16_t		tx_cons;
 	uint32_t		tx_prod_bseq;	/* Counts the bytes used.  */
 
+	int			bnx_link;
 	struct callout		bnx_timeout;
+	int			bnx_detaching;
 
 	/* Frame size and mbuf allocation size for RX frames. */
 	uint32_t		max_frame_size;
@@ -282,6 +291,11 @@ struct bnx_softc
 	uint16_t		max_rx_bd;
 	uint16_t		used_tx_bd;
 	uint16_t		max_tx_bd;
+
+	/* For interfacing with if_stats */
+	uint64_t	if_stat_collisions;
+	uint64_t	if_stat_ierrors;
+	uint64_t	if_stat_oerrors;
 
 	/* Provides access to hardware statistics through sysctl. */
 	uint64_t 	stat_IfHCInOctets;

@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.sys.mk,v 1.260 2016/07/07 20:52:53 matt Exp $
+#	$NetBSD: bsd.sys.mk,v 1.306 2021/04/26 00:38:23 christos Exp $
 #
 # Build definitions used for NetBSD source tree builds.
 
@@ -23,21 +23,41 @@ CPPFLAGS+=	-Wp,-iremap,${DESTDIR}:
 REPROFLAGS+=	-fdebug-prefix-map=\$$DESTDIR=
 .endif
 
+CPPFLAGS+=	-Wp,-fno-canonical-system-headers
 CPPFLAGS+=	-Wp,-iremap,${NETBSDSRCDIR}:/usr/src
 CPPFLAGS+=	-Wp,-iremap,${X11SRCDIR}:/usr/xsrc
+
 REPROFLAGS+=	-fdebug-prefix-map=\$$NETBSDSRCDIR=/usr/src
 REPROFLAGS+=	-fdebug-prefix-map=\$$X11SRCDIR=/usr/xsrc
+.if defined(MAKEOBJDIRPREFIX)
+NETBSDOBJDIR=	${MAKEOBJDIRPREFIX}${NETBSDSRCDIR}
+.endif
 
-REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj.${MACHINE}=/usr/obj/\1'
+.if defined(NETBSDOBJDIR)
+.export NETBSDOBJDIR
+REPROFLAGS+=	-fdebug-prefix-map=\$$NETBSDOBJDIR=/usr/obj
+.endif
+
+LINTFLAGS+=	-R${NETBSDSRCDIR}=/usr/src -R${X11SRCDIR}=/usr/xsrc
+LINTFLAGS+=	-R${DESTDIR}=
+
+# XXX: Cannot handle MAKEOBJDIR, yet.
+REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj$$=/usr/obj/\1'
+REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj/(.*)=/usr/obj/\1/\2'
+REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj\..*=/usr/obj/\1'
+REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj\..*/(.*)=/usr/obj/\1/\2'
 
 CFLAGS+=	${REPROFLAGS}
 CXXFLAGS+=	${REPROFLAGS}
 .endif
 
 # NetBSD sources use C99 style, with some GCC extensions.
+# Coverity does not like -std=gnu99
+.if !defined(COVERITY_TOP_CONFIG)
 CFLAGS+=	${${ACTIVE_CC} == "clang":? -std=gnu99 :}
 CFLAGS+=	${${ACTIVE_CC} == "gcc":? -std=gnu99 :}
 CFLAGS+=	${${ACTIVE_CC} == "pcc":? -std=gnu99 :}
+.endif
 
 .if defined(WARNS)
 CFLAGS+=	${${ACTIVE_CC} == "clang":? -Wno-sign-compare -Wno-pointer-sign :}
@@ -51,17 +71,14 @@ CFLAGS+=	-Wall -Wstrict-prototypes -Wmissing-prototypes -Wpointer-arith
 # differently in traditional and ansi environments' which is the warning
 # we wanted, and now we don't get anymore.
 CFLAGS+=	-Wno-sign-compare
+# Don't suppress warnings coming from constructs in system headers.
+# Our system headers should be clean and we want to warn about things like:
+# isdigit((char)1)
+CFLAGS+=	${${ACTIVE_CC} == "gcc" :? -Wsystem-headers :}
 CFLAGS+=	${${ACTIVE_CC} == "gcc" :? -Wno-traditional :}
 .if !defined(NOGCCERROR)
 # Set assembler warnings to be fatal
-CFLAGS+=	-Wa,--fatal-warnings
-.endif
-
-.if ${MKRELRO:Uno} != "no"
-LDFLAGS+=	-Wl,-z,relro
-.endif
-.if ${MKRELRO:Uno} == "full"
-LDFLAGS+=	-Wl,-z,now
+CFLAGS+=	${${ACTIVE_CC} == "gcc" :? -Wa,--fatal-warnings :}
 .endif
 
 # Set linker warnings to be fatal
@@ -86,7 +103,11 @@ CFLAGS+=	-Wcast-qual -Wwrite-strings
 CFLAGS+=	-Wextra -Wno-unused-parameter
 # Readd -Wno-sign-compare to override -Wextra with clang
 CFLAGS+=	-Wno-sign-compare
+.if "${ACTIVE_CC}" == "gcc" && ${HAVE_GCC} < 8
+#  XXX: Won't warn about anything.  -Wabi warns about differences from
+#  the most up-to-date ABI, which in g++ 8 is used by default.
 CXXFLAGS+=	-Wabi
+.endif
 CXXFLAGS+=	-Wold-style-cast
 CXXFLAGS+=	-Wctor-dtor-privacy -Wnon-virtual-dtor -Wreorder \
 		-Wno-deprecated -Woverloaded-virtual -Wsign-promo -Wsynth
@@ -107,15 +128,33 @@ CFLAGS+=	${${ACTIVE_CC} == "clang":? -Wpointer-sign -Wmissing-noreturn :}
 .endif
 .if (defined(HAVE_GCC) \
      && (${MACHINE_ARCH} == "coldfire" || \
-	 ${MACHINE_ARCH} == "sh3eb" || \
-	 ${MACHINE_ARCH} == "sh3el" || \
-	 ${MACHINE_ARCH} == "m68k" || \
-	 ${MACHINE_ARCH} == "m68000"))
+	 ${MACHINE_CPU} == "sh3" || \
+	 ${MACHINE_CPU} == "m68k"))
 # XXX GCC 4.5 for sh3 and m68k (which we compile with -Os) is extra noisy for
 # cases it should be better with
 CFLAGS+=	-Wno-uninitialized
 CFLAGS+=	-Wno-maybe-uninitialized
 .endif
+.endif
+
+.if ${MKRELRO:Uno} != "no"
+LDFLAGS+=	-Wl,-z,relro
+.endif
+.if ${MKRELRO:Uno} == "full"
+LDFLAGS+=	-Wl,-z,now
+.endif
+
+.if ${MKSANITIZER:Uno} == "yes"
+SANITIZERFLAGS:=	-fsanitize=${USE_SANITIZER} ${SANITIZERFLAGS}
+.else
+SANITIZERFLAGS=		# empty
+.endif
+
+.if ${MKLIBCSANITIZER:Uno} == "yes"
+LIBCSANITIZERFLAGS:=	-fsanitize=${USE_LIBCSANITIZER} ${LIBCSANITIZERFLAGS}
+LIBCSANITIZERFLAGS+=	-fno-sanitize=vptr	# Unsupported in micro-UBSan
+.else
+LIBCSANITIZERFLAGS=	# empty
 .endif
 
 CWARNFLAGS+=	${CWARNFLAGS.${ACTIVE_CC}}
@@ -126,9 +165,10 @@ CFLAGS+=	${${_NOWERROR} == "no" :?-Werror:} ${CWARNFLAGS}
 LINTFLAGS+=	${DESTDIR:D-d ${DESTDIR}/usr/include}
 
 .if !defined(NOSSP) && (${USE_SSP:Uno} != "no") && (${BINDIR:Ux} != "/usr/mdec")
-.if !defined(KERNSRCDIR) && !defined(KERN) # not for kernels nor kern modules
+.   if !defined(KERNSRCDIR) && !defined(KERN) # not for kernels / kern modules
 CPPFLAGS+=	-D_FORTIFY_SOURCE=2
-.endif
+.   endif
+.   if !defined(COVERITY_TOP_CONFIG)
 COPTS+=	-fstack-protector -Wstack-protector 
 
 # GCC 4.8 on m68k erroneously does not protect functions with
@@ -136,24 +176,28 @@ COPTS+=	-fstack-protector -Wstack-protector
 #	http://gcc.gnu.org/bugzilla/show_bug.cgi?id=59674
 # (the underlying issue for sh and vax may be different, needs more
 # investigation, symptoms are similar but for different sources)
-# also true for GCC 5.3
-.if "${ACTIVE_CC}" == "gcc" && \
-     ( ${HAVE_GCC} == "48" || \
-       ${HAVE_GCC} == "53" ) && \
+# also true for GCC 5, assume GCC 6 too.
+.	if "${ACTIVE_CC}" == "gcc" && \
+     ( ${HAVE_GCC} == "5" || \
+       ${HAVE_GCC} == "6" ) && \
      ( ${MACHINE_CPU} == "sh3" || \
        ${MACHINE_ARCH} == "vax" || \
        ${MACHINE_CPU} == "m68k" || \
        ${MACHINE_CPU} == "or1k" )
 COPTS+=	-Wno-error=stack-protector 
-.endif
+.	endif
 
 COPTS+=	${${ACTIVE_CC} == "clang":? --param ssp-buffer-size=1 :}
 COPTS+=	${${ACTIVE_CC} == "gcc":? --param ssp-buffer-size=1 :}
+.   endif
 .endif
 
 .if ${MKSOFTFLOAT:Uno} != "no"
+# sh3 defaults to soft-float and specifies hard-float a different way
+.if ${MACHINE_CPU} != "sh3"
 COPTS+=		${${ACTIVE_CC} == "gcc":? -msoft-float :}
 FOPTS+=		-msoft-float
+.endif
 .elif ${MACHINE_ARCH} == "coldfire"
 COPTS+=		-mhard-float
 FOPTS+=		-mhard-float
@@ -176,7 +220,7 @@ CFLAGS+=	-Wa,-Av8plus
 .endif
 
 .if !defined(NOGCCERROR)
-.if (${MACHINE_ARCH} == "mips64el") || (${MACHINE_ARCH} == "mips64eb")
+.if ${MACHINE_MIPS64}
 CPUFLAGS+=	-Wa,--fatal-warnings
 .endif
 .endif
@@ -185,12 +229,19 @@ CPUFLAGS+=	-Wa,--fatal-warnings
 #CFLAGS+=	-mips64 -mtune=sb1
 #.endif
 
-#.if (${MACHINE_ARCH} == "mips64el" || ${MACHINE_ARCH} == "mips64eb") && \
-#    (defined(MKPIC) && ${MKPIC} == "no")
+#.if ${MACHINE_MIPS64} && defined(MKPIC) && ${MKPIC} == "no"
 #CPUFLAGS+=	-mno-abicalls -fno-PIC
 #.endif
 CFLAGS+=	${CPUFLAGS}
 AFLAGS+=	${CPUFLAGS}
+
+.if ${KCOV:U0} > 0
+KCOVFLAGS=	-fsanitize-coverage=trace-pc,trace-cmp
+.for f in subr_kcov.c subr_asan.c subr_csan.c subr_msan.c ubsan.c
+KCOVFLAGS.${f}=		# empty
+.endfor
+CFLAGS+=	${KCOVFLAGS.${.IMPSRC:T}:U${KCOVFLAGS}}
+.endif
 
 .if !defined(NOPIE) && (!defined(LDSTATIC) || ${LDSTATIC} != "-static")
 # Position Independent Executable flags
@@ -199,7 +250,9 @@ PIE_LDFLAGS?=       -pie ${${ACTIVE_CC} == "gcc":? -shared-libgcc :}
 PIE_AFLAGS?=	    -fPIE
 .endif
 
-ELF2ECOFF?=	elf2ecoff
+ARM_ELF2AOUT?=	elf2aout
+M68K_ELF2AOUT?=	elf2aout
+MIPS_ELF2ECOFF?=	elf2ecoff
 MKDEP?=		mkdep
 MKDEPCXX?=	mkdep
 OBJCOPY?=	objcopy
@@ -212,10 +265,8 @@ STRIP?=		strip
 # C
 .c.o:
 	${_MKTARGET_COMPILE}
-	${COMPILE.c} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	${COMPILE.c} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 
 .c.ln:
 	${_MKTARGET_COMPILE}
@@ -234,10 +285,8 @@ STRIP?=		strip
 #  used for Objective C source)
 .m.o:
 	${_MKTARGET_COMPILE}
-	${COMPILE.m} ${OBJCOPTS} ${OBJCOPTS.${.IMPSRC:T}} ${.IMPSRC}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	${COMPILE.m} ${OBJCOPTS} ${OBJCOPTS.${.IMPSRC:T}} ${.IMPSRC} ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 
 # Host-compiled C objects
 # The intermediate step is necessary for Sun CC, which objects to calling
@@ -245,32 +294,28 @@ STRIP?=		strip
 .c.lo:
 	${_MKTARGET_COMPILE}
 	${HOST_COMPILE.c} -o ${.TARGET}.o ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC}
-	mv ${.TARGET}.o ${.TARGET}
+	${MV} ${.TARGET}.o ${.TARGET}
 
 # C++
 .cc.lo .cpp.lo .cxx.lo .C.lo:
 	${_MKTARGET_COMPILE}
 	${HOST_COMPILE.cc} -o ${.TARGET}.o ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC}
-	mv ${.TARGET}.o ${.TARGET}
+	${MV} ${.TARGET}.o ${.TARGET}
 
 # Assembly
 .s.o:
 	${_MKTARGET_COMPILE}
-	${COMPILE.s} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	${COMPILE.s} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 
 .S.o:
 	${_MKTARGET_COMPILE}
-	${COMPILE.S} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	${COMPILE.S} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 
 # Lex
 LFLAGS+=	${LPREFIX.${.IMPSRC:T}:D-P${LPREFIX.${.IMPSRC:T}}}
-LFLAGS+=	${LPREFIX:D-P${LPREFIX}}
+LFLAGS+=	${LPREFIX:D-P${LPREFIX}} ${LFLAGS.${.IMPSRC:T}}
 
 .l.c:
 	${_MKTARGET_LEX}
@@ -278,7 +323,7 @@ LFLAGS+=	${LPREFIX:D-P${LPREFIX}}
 
 # Yacc
 YFLAGS+=	${YPREFIX.${.IMPSRC:T}:D-p${YPREFIX.${.IMPSRC:T}}} ${YHEADER.${.IMPSRC:T}:D-d}
-YFLAGS+=	${YPREFIX:D-p${YPREFIX}} ${YHEADER:D-d}
+YFLAGS+=	${YPREFIX:D-p${YPREFIX}} ${YHEADER:D-d} ${YFLAGS.${.IMPSRC:T}}
 
 .y.c:
 	${_MKTARGET_YACC}
@@ -298,6 +343,11 @@ OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][dx]' -K '[$$][dx]\.*'
 # ARM big endian needs to preserve $a/$d/$t symbols for the linker.
 OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][adt]' -K '[$$][adt]\.*'
 .endif
+
+.if ${MKSTRIPSYM:Uyes} == "yes"
 OBJCOPYLIBFLAGS?=${"${.TARGET:M*.po}" != "":?-X:-x} ${OBJCOPYLIBFLAGS_EXTRA}
+.else
+OBJCOPYLIBFLAGS?=-X ${OBJCOPYLIBFLAGS_EXTRA}
+.endif
 
 .endif	# !defined(_BSD_SYS_MK_)

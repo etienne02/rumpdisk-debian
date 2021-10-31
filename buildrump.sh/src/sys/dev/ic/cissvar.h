@@ -1,4 +1,4 @@
-/*	$NetBSD: cissvar.h,v 1.6 2013/10/12 16:52:21 christos Exp $	*/
+/*	$NetBSD: cissvar.h,v 1.11 2020/07/15 14:33:58 jdolecek Exp $	*/
 /*	$OpenBSD: cissvar.h,v 1.15 2013/05/30 16:15:02 deraadt Exp $	*/
 
 /*
@@ -24,6 +24,8 @@
 #include <dev/sysmon/sysmonvar.h>
 #include <sys/envsys.h>
 
+#include "opt_ciss.h"
+
 struct ciss_ld {
 	struct ciss_blink bling;	/* a copy of blink state */
 	char	xname[16];		/* copy of the sdN name */
@@ -45,14 +47,12 @@ struct ciss_softc {
 	int			sc_flush;
 
 	struct scsipi_channel	sc_channel;
-	struct scsipi_channel	*sc_channel_raw;
 	struct scsipi_adapter	sc_adapter;
-	struct scsipi_adapter	*sc_adapter_raw;
 	struct callout		sc_hb;
 
 	u_int	sc_flags;
 	int ccblen, maxcmd, maxsg, nbus, ndrives, maxunits;
-	ciss_queue_head	sc_free_ccb, sc_ccbq, sc_ccbdone;
+	ciss_queue_head		sc_free_ccb;
 	kcondvar_t		sc_condvar;
 
 	bus_dmamap_t		cmdmap;
@@ -63,8 +63,16 @@ struct ciss_softc {
 
 	bus_space_handle_t	cfg_ioh;
 
+	struct ciss_perf_config	perfcfg;
+	bus_dmamap_t		replymap;
+	bus_dma_segment_t	replyseg[1];
+	uint64_t		*perf_reply;
+	int			perf_rqidx, perf_cycle;
+#define	CISS_IS_PERF(sc)	((sc)->perf_reply != NULL)
+
 	int fibrillation;
 	struct ciss_config cfg;
+#define CISS_PERF_SUPPORTED(sc)	((sc)->cfg.methods & CISS_METH_PERF)
 	int cfgoff;
 	u_int32_t iem;
 	u_int32_t heartbeat;
@@ -83,4 +91,6 @@ struct ciss_rawsoftc {
 };
 
 int	ciss_attach(struct ciss_softc *sc);
-int	ciss_intr(void *v);
+int	ciss_intr_simple_intx(void *v);
+int	ciss_intr_perf_intx(void *v);
+int	ciss_intr_perf_msi(void *v);

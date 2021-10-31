@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,6 +42,7 @@
  */
 
 #include "aslcompiler.h"
+#include "acapps.h"
 
 #define _COMPONENT          ACPI_COMPILER
         ACPI_MODULE_NAME    ("ashex")
@@ -87,7 +88,7 @@ HxDoHexOutput (
     void)
 {
 
-    switch (Gbl_HexOutputFlag)
+    switch (AslGbl_HexOutputFlag)
     {
     case HEX_OUTPUT_C:
 
@@ -133,9 +134,9 @@ HxReadAmlOutputFile (
 
 
     Actual = fread (Buffer, 1, HEX_TABLE_LINE_SIZE,
-        Gbl_Files[ASL_FILE_AML_OUTPUT].Handle);
+        AslGbl_Files[ASL_FILE_AML_OUTPUT].Handle);
 
-    if (ferror (Gbl_Files[ASL_FILE_AML_OUTPUT].Handle))
+    if (ferror (AslGbl_Files[ASL_FILE_AML_OUTPUT].Handle))
     {
         FlFileError (ASL_FILE_AML_OUTPUT, ASL_MSG_READ);
         AslAbort ();
@@ -157,6 +158,9 @@ HxReadAmlOutputFile (
  *              output file, but formatted into hex/ascii bytes suitable for
  *              inclusion into a C source file.
  *
+ *              Note: the base name of the hex output file is prepended to
+ *              all symbols as they are output to the file.
+ *
  ******************************************************************************/
 
 static void
@@ -168,17 +172,29 @@ HxDoHexOutputC (
     UINT32                  Offset = 0;
     UINT32                  AmlFileSize;
     UINT32                  i;
+    char                    *FileBasename;
 
+
+    /* Obtain the file basename (filename with no extension) */
+
+    FileBasename = FlGetFileBasename (AslGbl_Files [ASL_FILE_HEX_OUTPUT].Filename);
 
     /* Get AML size, seek back to start */
 
     AmlFileSize = FlGetFileSize (ASL_FILE_AML_OUTPUT);
     FlSeekFile (ASL_FILE_AML_OUTPUT, 0);
 
+    /* Finish the file header and emit the non-data symbols */
+
     FlPrintFile (ASL_FILE_HEX_OUTPUT, " * C source code output\n");
     FlPrintFile (ASL_FILE_HEX_OUTPUT, " * AML code block contains 0x%X bytes\n *\n */\n",
         AmlFileSize);
-    FlPrintFile (ASL_FILE_HEX_OUTPUT, "unsigned char AmlCode[] =\n{\n");
+
+    FlPrintFile (ASL_FILE_HEX_OUTPUT, "#ifndef __%s_HEX__\n", FileBasename);
+    FlPrintFile (ASL_FILE_HEX_OUTPUT, "#define __%s_HEX__\n\n", FileBasename);
+
+    AcpiUtStrlwr (FileBasename);
+    FlPrintFile (ASL_FILE_HEX_OUTPUT, "unsigned char %s_aml_code[] =\n{\n", FileBasename);
 
     while (Offset < AmlFileSize)
     {
@@ -195,7 +211,7 @@ HxDoHexOutputC (
         for (i = 0; i < LineLength; i++)
         {
             /*
-             * Print each hex byte.
+             * Output each hex byte in the form: "0xnn,"
              * Add a comma until the very last byte of the AML file
              * (Some C compilers complain about a trailing comma)
              */
@@ -229,7 +245,8 @@ HxDoHexOutputC (
         Offset += LineLength;
     }
 
-    FlPrintFile (ASL_FILE_HEX_OUTPUT, "};\n");
+    FlPrintFile (ASL_FILE_HEX_OUTPUT, "};\n\n");
+    FlPrintFile (ASL_FILE_HEX_OUTPUT, "#endif\n");
 }
 
 

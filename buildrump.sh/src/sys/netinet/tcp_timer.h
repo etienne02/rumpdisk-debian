@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_timer.h,v 1.28 2011/05/24 18:37:52 gdt Exp $	*/
+/*	$NetBSD: tcp_timer.h,v 1.30 2019/08/06 15:48:18 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2005 The NetBSD Foundation, Inc.
@@ -165,6 +165,12 @@ const char *tcptimers[] =
 #define	TCP_TIMER_ISARMED(tp, timer)					\
 	callout_active(&(tp)->t_timer[(timer)])
 
+#define	TCP_TIMER_MAXTICKS						      \
+	(INT_MAX / (hz / PR_SLOWHZ))
+
+#define	TCP_MAXMSL							      \
+	(TCP_TIMER_MAXTICKS / 2)
+
 /*
  * Force a time value to be in a certain range.
  */
@@ -190,6 +196,7 @@ extern int tcp_ttl;			/* time to live for TCP segs */
 extern const int tcp_backoff[];
 
 void	tcp_timer_init(void);
+void	tcp_slowtimo_init(void);
 #endif
 
 #endif /* !_NETINET_TCP_TIMER_H_ */

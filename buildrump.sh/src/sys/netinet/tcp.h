@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp.h,v 1.31 2015/02/14 12:57:53 he Exp $	*/
+/*	$NetBSD: tcp.h,v 1.37 2021/02/03 18:13:13 roy Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -61,21 +61,28 @@ struct tcphdr {
 		  th_x2:4;		/* (unused) */
 #endif
 	uint8_t  th_flags;
-#define	TH_FIN	  0x01
-#define	TH_SYN	  0x02
-#define	TH_RST	  0x04
-#define	TH_PUSH	  0x08
-#define	TH_ACK	  0x10
-#define	TH_URG	  0x20
-#define	TH_ECE	  0x40
-#define	TH_CWR	  0x80
+#define	TH_FIN	  0x01		/* Final: Set on the last segment */
+#define	TH_SYN	  0x02		/* Synchronization: New conn with dst port */
+#define	TH_RST	  0x04		/* Reset: Announce to peer conn terminated */
+#define	TH_PUSH	  0x08		/* Push: Immediately send, don't buffer seg */
+#define	TH_ACK	  0x10		/* Acknowledge: Part of connection establish */
+#define	TH_URG	  0x20		/* Urgent: send special marked segment now */
+#define	TH_ECE	  0x40		/* ECN Echo */
+#define	TH_CWR	  0x80		/* Congestion Window Reduced */
 	uint16_t th_win;			/* window */
 	uint16_t th_sum;			/* checksum */
 	uint16_t th_urp;			/* urgent pointer */
-} __packed;
+};
+#ifdef __CTASSERT
+__CTASSERT(sizeof(struct tcphdr) == 20);
+#endif
 
 #define	TCPOPT_EOL		0
+#define	   TCPOLEN_EOL			1
+#define	TCPOPT_PAD		0
+#define	   TCPOLEN_PAD			1
 #define	TCPOPT_NOP		1
+#define	   TCPOLEN_NOP			1
 #define	TCPOPT_MAXSEG		2
 #define	   TCPOLEN_MAXSEG		4
 #define	TCPOPT_WINDOW		3
@@ -156,7 +163,9 @@ struct tcp_info {
 	uint8_t		__tcpi_probes;
 	uint8_t		__tcpi_backoff;
 	uint8_t		tcpi_options;	       /* Options enabled on conn. */
+	/*LINTED: non-portable bitfield*/
 	uint8_t		tcpi_snd_wscale:4,	/* RFC1323 send shift value. */
+	/*LINTED: non-portable bitfield*/
 			tcpi_rcv_wscale:4; /* RFC1323 recv shift value. */
 
 	uint32_t	tcpi_rto;		/* Retransmission timeout (usec). */

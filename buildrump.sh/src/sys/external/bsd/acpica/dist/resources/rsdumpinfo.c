@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -72,7 +72,7 @@ ACPI_RSDUMP_INFO        AcpiRsDumpIrq[7] =
     {ACPI_RSD_UINT8 ,   ACPI_RSD_OFFSET (Irq.DescriptorLength),             "Descriptor Length",        NULL},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Irq.Triggering),                   "Triggering",               AcpiGbl_HeDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Irq.Polarity),                     "Polarity",                 AcpiGbl_LlDecode},
-    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Irq.Sharable),                     "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Irq.Shareable),                    "Sharing",                  AcpiGbl_ShrDecode},
     {ACPI_RSD_UINT8 ,   ACPI_RSD_OFFSET (Irq.InterruptCount),               "Interrupt Count",          NULL},
     {ACPI_RSD_SHORTLIST,ACPI_RSD_OFFSET (Irq.Interrupts[0]),                "Interrupt List",           NULL}
 };
@@ -216,7 +216,7 @@ ACPI_RSDUMP_INFO        AcpiRsDumpExtIrq[8] =
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (ExtendedIrq.ProducerConsumer),     "Type",                     AcpiGbl_ConsumeDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (ExtendedIrq.Triggering),           "Triggering",               AcpiGbl_HeDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (ExtendedIrq.Polarity),             "Polarity",                 AcpiGbl_LlDecode},
-    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (ExtendedIrq.Sharable),             "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (ExtendedIrq.Shareable),            "Sharing",                  AcpiGbl_ShrDecode},
     {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (ExtendedIrq.ResourceSource),       NULL,                       NULL},
     {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (ExtendedIrq.InterruptCount),       "Interrupt Count",          NULL},
     {ACPI_RSD_DWORDLIST,ACPI_RSD_OFFSET (ExtendedIrq.Interrupts[0]),        "Interrupt List",           NULL}
@@ -239,7 +239,7 @@ ACPI_RSDUMP_INFO        AcpiRsDumpGpio[16] =
     {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (Gpio.ConnectionType),              "ConnectionType",           AcpiGbl_CtDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Gpio.ProducerConsumer),            "ProducerConsumer",         AcpiGbl_ConsumeDecode},
     {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (Gpio.PinConfig),                   "PinConfig",                AcpiGbl_PpcDecode},
-    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Gpio.Sharable),                    "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Gpio.Shareable),                   "Sharing",                  AcpiGbl_ShrDecode},
     {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Gpio.IoRestriction),               "IoRestriction",            AcpiGbl_IorDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Gpio.Triggering),                  "Triggering",               AcpiGbl_HeDecode},
     {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Gpio.Polarity),                    "Polarity",                 AcpiGbl_LlDecode},
@@ -250,6 +250,74 @@ ACPI_RSDUMP_INFO        AcpiRsDumpGpio[16] =
     {ACPI_RSD_WORDLIST, ACPI_RSD_OFFSET (Gpio.PinTable),                    "PinTable",                 NULL},
     {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (Gpio.VendorLength),                "VendorLength",             NULL},
     {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (Gpio.VendorData),                 "VendorData",               NULL},
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpPinFunction[10] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinFunction),        "PinFunction",              NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinFunction.RevisionId),           "RevisionId",               NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinFunction.PinConfig),            "PinConfig",                AcpiGbl_PpcDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinFunction.Shareable),            "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinFunction.FunctionNumber),       "FunctionNumber",           NULL},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (PinFunction.ResourceSource),       "ResourceSource",           NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinFunction.PinTableLength),       "PinTableLength",           NULL},
+    {ACPI_RSD_WORDLIST, ACPI_RSD_OFFSET (PinFunction.PinTable),             "PinTable",                 NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinFunction.VendorLength),         "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinFunction.VendorData),          "VendorData",               NULL},
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpPinConfig[11] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinConfig),          "PinConfig",                NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinConfig.RevisionId),             "RevisionId",               NULL},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinConfig.ProducerConsumer),       "ProducerConsumer",         AcpiGbl_ConsumeDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinConfig.Shareable),              "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinConfig.PinConfigType),          "PinConfigType",            NULL},
+    {ACPI_RSD_UINT32,   ACPI_RSD_OFFSET (PinConfig.PinConfigValue),         "PinConfigValue",           NULL},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (PinConfig.ResourceSource),         "ResourceSource",           NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinConfig.PinTableLength),         "PinTableLength",           NULL},
+    {ACPI_RSD_WORDLIST, ACPI_RSD_OFFSET (PinConfig.PinTable),               "PinTable",                 NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinConfig.VendorLength),           "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinConfig.VendorData),            "VendorData",               NULL},
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpPinGroup[8] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinGroup),           "PinGroup",                 NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinGroup.RevisionId),              "RevisionId",               NULL},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinGroup.ProducerConsumer),        "ProducerConsumer",         AcpiGbl_ConsumeDecode},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinGroup.PinTableLength),          "PinTableLength",           NULL},
+    {ACPI_RSD_WORDLIST, ACPI_RSD_OFFSET (PinGroup.PinTable),                "PinTable",                 NULL},
+    {ACPI_RSD_LABEL,    ACPI_RSD_OFFSET (PinGroup.ResourceLabel),           "ResourceLabel",            NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinGroup.VendorLength),            "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinGroup.VendorData),             "VendorData",               NULL},
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpPinGroupFunction[9] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinGroupFunction),   "PinGroupFunction",         NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinGroupFunction.RevisionId),      "RevisionId",               NULL},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinGroupFunction.ProducerConsumer), "ProducerConsumer",        AcpiGbl_ConsumeDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinGroupFunction.Shareable),       "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinGroupFunction.FunctionNumber),  "FunctionNumber",           NULL},
+    {ACPI_RSD_SOURCE_LABEL, ACPI_RSD_OFFSET (PinGroupFunction.ResourceSourceLabel), "ResourceSourceLabel", NULL},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (PinGroupFunction.ResourceSource),  "ResourceSource",           NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinGroupFunction.VendorLength),    "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinGroupFunction.VendorData),     "VendorData",               NULL},
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpPinGroupConfig[10] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinGroupConfig),     "PinGroupConfig",           NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinGroupConfig.RevisionId),        "RevisionId",               NULL},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinGroupConfig.ProducerConsumer),  "ProducerConsumer",         AcpiGbl_ConsumeDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (PinGroupConfig.Shareable),         "Sharing",                  AcpiGbl_ShrDecode},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (PinGroupConfig.PinConfigType),     "PinConfigType",            NULL},
+    {ACPI_RSD_UINT32,   ACPI_RSD_OFFSET (PinGroupConfig.PinConfigValue),    "PinConfigValue",           NULL},
+    {ACPI_RSD_SOURCE_LABEL, ACPI_RSD_OFFSET (PinGroupConfig.ResourceSourceLabel), "ResourceSourceLabel", NULL},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (PinGroupConfig.ResourceSource),    "ResourceSource",           NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (PinGroupConfig.VendorLength),      "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinGroupConfig.VendorData),       "VendorData",               NULL},
 };
 
 ACPI_RSDUMP_INFO        AcpiRsDumpFixedDma[4] =
@@ -276,6 +344,21 @@ ACPI_RSDUMP_INFO        AcpiRsDumpCommonSerialBus[11] =
 {
     {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpCommonSerialBus),    "Common Serial Bus",        NULL},
     ACPI_RS_DUMP_COMMON_SERIAL_BUS
+};
+
+ACPI_RSDUMP_INFO        AcpiRsDumpCsi2SerialBus[11] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpCsi2SerialBus),      "Camera Serial Bus",        NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (Csi2SerialBus.RevisionId),         "RevisionId",               NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (Csi2SerialBus.Type),               "Type",                     AcpiGbl_SbtDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Csi2SerialBus.ProducerConsumer),   "ProducerConsumer",         AcpiGbl_ConsumeDecode},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Csi2SerialBus.SlaveMode),          "SlaveMode",                AcpiGbl_SmDecode},
+    {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Csi2SerialBus.PhyType),            "PhyType",                  AcpiGbl_PhyDecode},
+    {ACPI_RSD_6BITFLAG, ACPI_RSD_OFFSET (Csi2SerialBus.LocalPortInstance),  "LocalPortInstance",        NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (Csi2SerialBus.TypeRevisionId),     "TypeRevisionId",           NULL},
+    {ACPI_RSD_UINT16,   ACPI_RSD_OFFSET (Csi2SerialBus.VendorLength),       "VendorLength",             NULL},
+    {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (Csi2SerialBus.VendorData),        "VendorData",               NULL},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (Csi2SerialBus.ResourceSource),     "ResourceSource",           NULL},
 };
 
 ACPI_RSDUMP_INFO        AcpiRsDumpI2cSerialBus[14] =

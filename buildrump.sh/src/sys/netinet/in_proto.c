@@ -1,4 +1,4 @@
-/*	$NetBSD: in_proto.c,v 1.120 2016/04/26 08:44:44 ozaki-r Exp $	*/
+/*	$NetBSD: in_proto.c,v 1.130 2018/09/14 05:09:51 maxv Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in_proto.c,v 1.120 2016/04/26 08:44:44 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in_proto.c,v 1.130 2018/09/14 05:09:51 maxv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_mrouting.h"
@@ -72,6 +72,7 @@ __KERNEL_RCSID(0, "$NetBSD: in_proto.c,v 1.120 2016/04/26 08:44:44 ozaki-r Exp $
 #include "opt_dccp.h"
 #include "opt_sctp.h"
 #include "opt_compat_netbsd.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include <sys/param.h>
@@ -108,7 +109,6 @@ __KERNEL_RCSID(0, "$NetBSD: in_proto.c,v 1.120 2016/04/26 08:44:44 ozaki-r Exp $
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
-#include <netinet/tcpip.h>
 #include <netinet/tcp_debug.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
@@ -142,11 +142,6 @@ __KERNEL_RCSID(0, "$NetBSD: in_proto.c,v 1.120 2016/04/26 08:44:44 ozaki-r Exp $
 #if NPFSYNC > 0
 #include <net/pfvar.h>
 #include <net/if_pfsync.h>
-#endif
-
-#include "etherip.h"
-#if NETHERIP > 0
-#include <netinet/ip_etherip.h>
 #endif
 
 DOMAIN_DEFINE(inetdomain);	/* forward declare and add to link set */
@@ -185,14 +180,81 @@ PR_WRAP_CTLOUTPUT(sctp_ctloutput)
 #define sctp_ctloutput	sctp_ctloutput_wrapper
 #endif
 
-#if defined(IPSEC)
-PR_WRAP_CTLINPUT(ah4_ctlinput)
+#ifdef NET_MPSAFE
+PR_WRAP_INPUT(udp_input)
+PR_WRAP_INPUT(tcp_input)
+#ifdef DCCP
+PR_WRAP_INPUT(dccp_input)
+#endif
+#ifdef SCTP
+PR_WRAP_INPUT(sctp_input)
+#endif
+PR_WRAP_INPUT(rip_input)
+#if NPFSYNC > 0
+PR_WRAP_INPUT(pfsync_input)
+#endif
+PR_WRAP_INPUT(igmp_input)
+#ifdef PIM
+PR_WRAP_INPUT(pim_input)
+#endif
 
-#define	ah4_ctlinput	ah4_ctlinput_wrapper
+#define	udp_input		udp_input_wrapper
+#define	tcp_input		tcp_input_wrapper
+#define	dccp_input		dccp_input_wrapper
+#define	sctp_input		sctp_input_wrapper
+#define	rip_input		rip_input_wrapper
+#define	pfsync_input		pfsync_input_wrapper
+#define	igmp_input		igmp_input_wrapper
+#define	pim_input		pim_input_wrapper
+#endif
+
+#if defined(IPSEC)
+
+#ifdef IPSEC_RUMPKERNEL
+/*
+ * .pr_input = ipsec4_common_input won't be resolved on loading
+ * the ipsec shared library. We need a wrapper anyway.
+ */
+static void
+ipsec4_common_input_wrapper(struct mbuf *m, int off, int proto)
+{
+
+	if (ipsec_enabled) {
+		ipsec4_common_input(m, off, proto);
+	} else {
+		m_freem(m);
+	}
+}
+#define	ipsec4_common_input	ipsec4_common_input_wrapper
+
+/* The ctlinput functions may not be loaded */
+#define	IPSEC_WRAP_CTLINPUT(name)			\
+static void *						\
+name##_wrapper(int a, const struct sockaddr *b, void *c)\
+{							\
+	void *rv;					\
+	KERNEL_LOCK(1, NULL);				\
+	if (ipsec_enabled)				\
+		rv = name(a, b, c);			\
+	else						\
+		rv = NULL;				\
+	KERNEL_UNLOCK_ONE(NULL);			\
+	return rv;					\
+}
+IPSEC_WRAP_CTLINPUT(ah4_ctlinput)
+IPSEC_WRAP_CTLINPUT(esp4_ctlinput)
+
+#else /* !IPSEC_RUMPKERNEL */
+
+PR_WRAP_CTLINPUT(ah4_ctlinput)
 PR_WRAP_CTLINPUT(esp4_ctlinput)
 
+#endif /* !IPSEC_RUMPKERNEL */
+
+#define	ah4_ctlinput	ah4_ctlinput_wrapper
 #define	esp4_ctlinput	esp4_ctlinput_wrapper
-#endif
+
+#endif /* IPSEC */
 
 const struct protosw inetsw[] = {
 {	.pr_domain = &inetdomain,
@@ -200,6 +262,16 @@ const struct protosw inetsw[] = {
 	.pr_fasttimo = ip_fasttimo,
 	.pr_slowtimo = ip_slowtimo,
 	.pr_drain = ip_drainstub,
+},
+{	.pr_type = SOCK_RAW,
+	.pr_domain = &inetdomain,
+	.pr_protocol = IPPROTO_ICMP,
+	.pr_flags = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input = icmp_input,
+	.pr_ctlinput = rip_ctlinput,
+	.pr_ctloutput = rip_ctloutput,
+	.pr_usrreqs = &rip_usrreqs,
+	.pr_init = icmp_init,
 },
 {	.pr_type = SOCK_DGRAM,
 	.pr_domain = &inetdomain,
@@ -277,16 +349,6 @@ const struct protosw inetsw[] = {
 	.pr_ctloutput = rip_ctloutput,
 	.pr_usrreqs = &rip_usrreqs,
 },
-{	.pr_type = SOCK_RAW,
-	.pr_domain = &inetdomain,
-	.pr_protocol = IPPROTO_ICMP,
-	.pr_flags = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-	.pr_input = icmp_input,
-	.pr_ctlinput = rip_ctlinput,
-	.pr_ctloutput = rip_ctloutput,
-	.pr_usrreqs = &rip_usrreqs,
-	.pr_init = icmp_init,
-},
 #ifdef GATEWAY
 {	.pr_domain = &inetdomain,
 	.pr_protocol = IPPROTO_IP,
@@ -338,33 +400,32 @@ const struct protosw inetsw[] = {
 	.pr_init = encap_init,
 },
 #endif /* INET6 */
-#if NETHERIP > 0
-{	.pr_type = SOCK_RAW,
-	.pr_domain = &inetdomain,
-	.pr_protocol = IPPROTO_ETHERIP,
-	.pr_flags = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-	.pr_input = ip_etherip_input,
-	.pr_ctlinput = rip_ctlinput,
-	.pr_ctloutput = rip_ctloutput,
-	.pr_usrreqs = &rip_usrreqs,
-},
-#endif /* NETHERIP > 0 */
 #if NCARP > 0
 {	.pr_type = SOCK_RAW,
 	.pr_domain = &inetdomain,
 	.pr_protocol = IPPROTO_CARP,
-	.pr_flags = PR_ATOMIC|PR_ADDR,
+	.pr_flags = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
 	.pr_input = carp_proto_input,
 	.pr_ctloutput = rip_ctloutput,
 	.pr_usrreqs = &rip_usrreqs,
 	.pr_init = carp_init,
 },
 #endif /* NCARP > 0 */
+{	.pr_type = SOCK_RAW,
+	.pr_domain = &inetdomain,
+	.pr_protocol = IPPROTO_L2TP,
+	.pr_flags = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input = encap4_input,
+	.pr_ctlinput = rip_ctlinput,
+	.pr_ctloutput = rip_ctloutput,
+	.pr_usrreqs = &rip_usrreqs,	/*XXX*/
+	.pr_init = encap_init,
+},
 #if NPFSYNC > 0
 {	.pr_type = SOCK_RAW,
 	.pr_domain = &inetdomain,
 	.pr_protocol = IPPROTO_PFSYNC,
-	.pr_flags	 = PR_ATOMIC|PR_ADDR,
+	.pr_flags	 = PR_ATOMIC|PR_ADDR|PR_LASTHDR,
 	.pr_input	 = pfsync_input,
 	.pr_ctloutput = rip_ctloutput,
 	.pr_usrreqs	 = &rip_usrreqs,
@@ -433,12 +494,9 @@ struct domain inetdomain = {
 	.dom_sa_any = (const struct sockaddr *)&in_any,
 	.dom_sockaddr_const_addr = sockaddr_in_const_addr,
 	.dom_sockaddr_addr = sockaddr_in_addr,
-	.dom_rtcache = LIST_HEAD_INITIALIZER(inetdomain.dom_rtcache)
 };
 
 u_char	ip_protox[IPPROTO_MAX];
-
-int icmperrppslim = 100;			/* 100pps */
 
 static void
 sockaddr_in_addrlen(const struct sockaddr *sa, socklen_t *slenp)

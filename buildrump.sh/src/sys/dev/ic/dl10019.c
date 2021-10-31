@@ -1,4 +1,4 @@
-/*	$NetBSD: dl10019.c,v 1.12 2012/07/22 14:32:56 matt Exp $	*/
+/*	$NetBSD: dl10019.c,v 1.17 2021/07/01 20:39:15 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dl10019.c,v 1.12 2012/07/22 14:32:56 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dl10019.c,v 1.17 2021/07/01 20:39:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -59,8 +59,8 @@ __KERNEL_RCSID(0, "$NetBSD: dl10019.c,v 1.12 2012/07/22 14:32:56 matt Exp $");
 #include <dev/ic/dl10019reg.h>
 #include <dev/ic/dl10019var.h>
 
-int	dl10019_mii_readreg(device_t, int, int);
-void	dl10019_mii_writereg(device_t, int, int, int);
+int	dl10019_mii_readreg(device_t, int, int, uint16_t *);
+int	dl10019_mii_writereg(device_t, int, int, uint16_t);
 void	dl10019_mii_statchg(struct ifnet *);
 
 /*
@@ -113,35 +113,55 @@ dl10019_mii_reset(struct dp8390_softc *sc)
 	bus_space_write_1(sc->sc_regt, sc->sc_regh, NEDL_DL0_GPIO, 0x00);
 }
 
+static void
+dl10019_tick(void *arg)
+{
+	struct dp8390_softc *sc = arg;
+	int s;
+
+	s = splnet();
+	mii_tick(&sc->sc_mii);
+	splx(s);
+
+	callout_schedule(&sc->sc_tick_ch, hz);
+}
+
 void
 dl10019_media_init(struct dp8390_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ec.ec_if;
+	struct mii_data *mii = &sc->sc_mii;
 
-	sc->sc_mii.mii_ifp = ifp;
-	sc->sc_mii.mii_readreg = dl10019_mii_readreg;
-	sc->sc_mii.mii_writereg = dl10019_mii_writereg;
-	sc->sc_mii.mii_statchg = dl10019_mii_statchg;
-	ifmedia_init(&sc->sc_mii.mii_media, IFM_IMASK, dp8390_mediachange,
+	callout_setfunc(&sc->sc_tick_ch, dl10019_tick, sc);
+
+	sc->sc_ec.ec_mii = mii;
+
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = dl10019_mii_readreg;
+	mii->mii_writereg = dl10019_mii_writereg;
+	mii->mii_statchg = dl10019_mii_statchg;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, dp8390_mediachange,
 	    dp8390_mediastatus);
 
 	dl10019_mii_reset(sc);
 
-	mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(sc->sc_dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
 
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE, 0, NULL);
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE);
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
 	} else
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 }
 
 void
 dl10019_media_fini(struct dp8390_softc *sc)
 {
 
+	callout_stop(&sc->sc_tick_ch);
 	mii_detach(&sc->sc_mii, MII_PHY_ANY, MII_OFFSET_ANY);
+	/* dp8390_detach() will call ifmedia_fini(). */
 }
 
 int
@@ -169,12 +189,14 @@ dl10019_init_card(struct dp8390_softc *sc)
 
 	dl10019_mii_reset(sc);
 	mii_mediachg(&sc->sc_mii);
+	callout_schedule(&sc->sc_tick_ch, hz);
 }
 
 void
 dl10019_stop_card(struct dp8390_softc *sc)
 {
 
+	callout_stop(&sc->sc_tick_ch);
 	mii_down(&sc->sc_mii);
 }
 
@@ -201,22 +223,19 @@ dl10019_mii_bitbang_write(device_t self, u_int32_t val)
 }
 
 int
-dl10019_mii_readreg(device_t self, int phy, int reg)
+dl10019_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 {
 	struct ne2000_softc *nsc = device_private(self);
 	const struct mii_bitbang_ops *ops;
-	int val;
 
 	ops = (nsc->sc_type == NE2000_TYPE_DL10022) ?
 	    &dl10022_mii_bitbang_ops : &dl10019_mii_bitbang_ops;
 
-	val = mii_bitbang_readreg(self, ops, phy, reg);
-
-	return (val);
+	return mii_bitbang_readreg(self, ops, phy, reg, val);
 }
 
-void
-dl10019_mii_writereg(device_t self, int phy, int reg, int val)
+int
+dl10019_mii_writereg(device_t self, int phy, int reg, uint16_t val)
 {
 	struct ne2000_softc *nsc = device_private(self);
 	const struct mii_bitbang_ops *ops;
@@ -224,7 +243,7 @@ dl10019_mii_writereg(device_t self, int phy, int reg, int val)
 	ops = (nsc->sc_type == NE2000_TYPE_DL10022) ?
 	    &dl10022_mii_bitbang_ops : &dl10019_mii_bitbang_ops;
 
-	mii_bitbang_writereg(self, ops, phy, reg, val);
+	return mii_bitbang_writereg(self, ops, phy, reg, val);
 }
 
 void

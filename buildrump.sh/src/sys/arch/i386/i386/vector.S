@@ -1,4 +1,4 @@
-/*	$NetBSD: vector.S,v 1.64 2014/01/26 19:16:17 dsl Exp $	*/
+/*	$NetBSD: vector.S,v 1.87 2020/05/17 14:15:55 ad Exp $	*/
 
 /*
  * Copyright 2002 (c) Wasabi Systems, Inc.
@@ -65,12 +65,10 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: vector.S,v 1.64 2014/01/26 19:16:17 dsl Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vector.S,v 1.87 2020/05/17 14:15:55 ad Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
-#include "opt_ipkdb.h"
-#include "opt_vm86.h"
 #include "opt_xen.h"
 #include "opt_dtrace.h"
 
@@ -87,6 +85,9 @@ __KERNEL_RCSID(0, "$NetBSD: vector.S,v 1.64 2014/01/26 19:16:17 dsl Exp $");
 
 #include "ioapic.h"
 #include "lapic.h"
+#ifndef XENPV
+#include "hyperv.h"
+#endif
 
 #include "assym.h"
 
@@ -106,7 +107,6 @@ __KERNEL_RCSID(0, "$NetBSD: vector.S,v 1.64 2014/01/26 19:16:17 dsl Exp $");
  * If the interrupt frame is made more flexible,  INTR can push %eax first and
  * decide the ipending case with less overhead, e.g., by avoiding loading the
  * segment registers.
- *
  */
 
 /*
@@ -132,38 +132,50 @@ __KERNEL_RCSID(0, "$NetBSD: vector.S,v 1.64 2014/01/26 19:16:17 dsl Exp $");
 	.globl	dtrace_invop_jump_addr
 	.align	4
 	.type	dtrace_invop_jump_addr, @object
-        .size	dtrace_invop_jump_addr, 4
+	.size	dtrace_invop_jump_addr, 4
 dtrace_invop_jump_addr:
 	.zero	4
 	.globl	dtrace_invop_calltrap_addr
 	.align	4
 	.type	dtrace_invop_calltrap_addr, @object
-        .size	dtrace_invop_calltrap_addr, 4
+	.size	dtrace_invop_calltrap_addr, 4
 dtrace_invop_calltrap_addr:
 	.zero	8
 	.text
 #endif
 
-#ifndef XEN
+#ifndef XENPV
 #if NLAPIC > 0
 #ifdef MULTIPROCESSOR
 /*
  * General purpose IPI handler.
  */
 IDTVEC(recurse_lapic_ipi)
-	pushfl
-	pushl	%cs
-	pushl	%esi
-	pushl	$0		
+	INTR_RECURSE_HWFRAME
+	pushl	$0
 	pushl	$T_ASTFLT
-	INTRENTRY		
+	INTRENTRY
 	jmp	1f
 IDTVEC_END(recurse_lapic_ipi)
-IDTVEC(intr_lapic_ipi)
-	pushl	$0		
+IDTVEC(intr_x2apic_ipi)
+	pushl	$0
 	pushl	$T_ASTFLT
-	INTRENTRY		
-	movl	$0,_C_LABEL(local_apic)+LAPIC_EOI
+	INTRENTRY
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_EOI),%ecx
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	wrmsr
+	movl	CPUVAR(ILEVEL),%ebx
+	cmpl	$IPL_HIGH,%ebx
+	jae	2f
+	jmp	1f
+IDTVEC_END(intr_x2apic_ipi)
+IDTVEC(intr_lapic_ipi)
+	pushl	$0
+	pushl	$T_ASTFLT
+	INTRENTRY
+	movl	_C_LABEL(local_apic_va),%ebx
+	movl	$0,LAPIC_EOI(%ebx)
 	movl	CPUVAR(ILEVEL),%ebx
 	cmpl	$IPL_HIGH,%ebx
 	jae	2f
@@ -189,51 +201,110 @@ IDTVEC(intr_lapic_tlb)
 	pushl	$0
 	pushl	$T_ASTFLT
 	INTRENTRY
-	movl	$0, _C_LABEL(local_apic)+LAPIC_EOI
 	call	_C_LABEL(pmap_tlb_intr)
+	movl	_C_LABEL(local_apic_va),%eax
+	movl	$0,LAPIC_EOI(%eax)
 	INTRFASTEXIT
 IDTVEC_END(intr_lapic_tlb)
 
+IDTVEC(intr_x2apic_tlb)
+	pushl	$0
+	pushl	$T_ASTFLT
+	INTRENTRY
+	call	_C_LABEL(pmap_tlb_intr)
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_EOI),%ecx
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	wrmsr
+	INTRFASTEXIT
+IDTVEC_END(intr_x2apic_tlb)
+
 #if defined(DDB)
-IDTVEC(intrddbipi)
+/*
+ * No need to use INTRENTRY, since we were brought here through a task-gate
+ * which triggered a hardware context switch and saved the GPRs in the TSS.
+ */
+IDTVEC(intr_ddbipi)
 1:
 	str	%ax
 	GET_TSS
 	movzwl	(%eax),%eax
 	GET_TSS
 	pushl	%eax
-	movl	$0xff,_C_LABEL(lapic_tpr)
-	movl	$0,_C_LABEL(local_apic)+LAPIC_EOI
+	movl	_C_LABEL(local_apic_va),%ebx
+	movl	$0xff,LAPIC_TPRI(%ebx)
+	movl	_C_LABEL(local_apic_va),%ebx
+	movl	$0,LAPIC_EOI(%ebx)
 	sti
 	call	_C_LABEL(ddb_ipi_tss)
 	addl	$4,%esp
-	movl	$0,_C_LABEL(lapic_tpr)
+	movl	_C_LABEL(local_apic_va),%ebx
+	movl	$0,LAPIC_TPRI(%ebx)
 	iret
 	jmp	1b
-IDTVEC_END(intrddbipi)
+IDTVEC_END(intr_ddbipi)
+
+IDTVEC(intr_x2apic_ddbipi)
+1:
+	str	%ax
+	GET_TSS
+	movzwl	(%eax),%eax
+	GET_TSS
+	pushl	%eax
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_TPRI),%ecx
+	movl	0xff,%eax
+	xorl	%edx,%edx
+	wrmsr
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_EOI),%ecx
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	wrmsr
+	sti
+	call	_C_LABEL(ddb_ipi_tss)
+	addl	$4,%esp
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_TPRI),%ecx
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	wrmsr
+	iret
+	jmp	1b
+IDTVEC_END(intr_x2apic_ddbipi)
 #endif /* DDB */
 #endif /* MULTIPROCESSOR */
-	
+
 	/*
 	 * Interrupt from the local APIC timer.
 	 */
 IDTVEC(recurse_lapic_ltimer)
-	pushfl
-	pushl	%cs
-	pushl	%esi
-	pushl	$0		
+	INTR_RECURSE_HWFRAME
+	pushl	$0
 	pushl	$T_ASTFLT
-	INTRENTRY		
+	INTRENTRY
 	jmp	1f
 IDTVEC_END(recurse_lapic_ltimer)
-IDTVEC(intr_lapic_ltimer)
-	pushl	$0		
+IDTVEC(intr_x2apic_ltimer)
+	pushl	$0
 	pushl	$T_ASTFLT
-	INTRENTRY		
-	movl	$0,_C_LABEL(local_apic)+LAPIC_EOI
+	INTRENTRY
+	movl	$(MSR_X2APIC_BASE + MSR_X2APIC_EOI),%ecx
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	wrmsr
 	movl	CPUVAR(ILEVEL),%ebx
 	cmpl	$IPL_CLOCK,%ebx
 	jae	2f
+	jmp	1f
+IDTVEC_END(intr_x2apic_ltimer)
+IDTVEC(intr_lapic_ltimer)
+	pushl	$0
+	pushl	$T_ASTFLT
+	INTRENTRY
+	movl	_C_LABEL(local_apic_va),%ebx
+	movl	$0,LAPIC_EOI(%ebx)
+	movl	CPUVAR(ILEVEL),%ebx
+	cmpl	$IPL_CLOCK,%ebx
+	jae	2f
+IDTVEC_END(intr_lapic_ltimer)
 IDTVEC(resume_lapic_ltimer)
 1:
 	pushl	%ebx
@@ -242,13 +313,52 @@ IDTVEC(resume_lapic_ltimer)
 	sti
 	pushl	$0
 	call	_C_LABEL(lapic_clockintr)
-	addl	$4,%esp		
+	addl	$4,%esp
 	cli
 	jmp	_C_LABEL(Xdoreti)
 2:
 	orl	$(1 << LIR_TIMER),CPUVAR(IPENDING)
 	INTRFASTEXIT
-IDTVEC_END(intr_lapic_ltimer)
+IDTVEC_END(resume_lapic_ltimer)
+
+#if NHYPERV > 0
+	/*
+	 * Hyper-V event channel upcall interrupt handler.
+	 * Only used when the hypervisor supports direct vector callbacks.
+	 */
+IDTVEC(recurse_hyperv_hypercall)
+	INTR_RECURSE_HWFRAME
+	pushl	$0
+	pushl	$T_ASTFLT
+	INTRENTRY
+	jmp	1f
+IDTVEC_END(recurse_hyperv_hypercall)
+IDTVEC(intr_hyperv_hypercall)
+	pushl	$0
+	pushl	$T_ASTFLT
+	INTRENTRY
+	movl	CPUVAR(ILEVEL),%ebx
+	cmpl	$IPL_NET,%ebx
+	jae	2f
+	jmp	1f
+IDTVEC_END(intr_hyperv_hypercall)
+IDTVEC(resume_hyperv_hypercall)
+1:
+	pushl	%ebx
+	IDEPTH_INCR
+	movl	$IPL_NET,CPUVAR(ILEVEL)
+	sti
+	pushl	%esp
+	call	_C_LABEL(hyperv_hypercall_intr)
+	addl	$4,%esp
+	cli
+	jmp	_C_LABEL(Xdoreti)
+2:
+	orl	$(1 << LIR_HV),CPUVAR(IPENDING)
+	INTRFASTEXIT
+IDTVEC_END(resume_hyperv_hypercall)
+#endif	/* NHYPERV > 0 */
+
 #endif /* NLAPIC > 0 */
 
 
@@ -262,9 +372,7 @@ IDTVEC_END(intr_lapic_ltimer)
 
 #define	INTRSTUB(name, num, early_ack, late_ack, mask, unmask, level_mask) \
 IDTVEC(recurse_ ## name ## num)						;\
-	pushfl								;\
-	pushl	%cs							;\
-	pushl	%esi							;\
+	INTR_RECURSE_HWFRAME						;\
 	subl	$4,%esp							;\
 	pushl	$T_ASTFLT		/* trap # for doing ASTs */	;\
 	INTRENTRY							;\
@@ -272,7 +380,7 @@ IDTVEC_END(recurse_ ## name ## num)					;\
 IDTVEC(resume_ ## name ## num)						\
 	movl	$IREENT_MAGIC,TF_ERR(%esp)				;\
 	movl	%ebx,%esi						;\
-	movl	CPUVAR(ISOURCES) + (num) * 4, %ebp			;\
+	movl	CPUVAR(ISOURCES) + (num) * 4,%ebp			;\
 	movl	IS_MAXLEVEL(%ebp),%ebx					;\
 	jmp	1f							;\
 IDTVEC_END(resume_ ## name ## num)					;\
@@ -280,7 +388,7 @@ IDTVEC(intr_ ## name ## num)						;\
 	pushl	$0			/* dummy error code */		;\
 	pushl	$T_ASTFLT		/* trap # for doing ASTs */	;\
 	INTRENTRY							;\
-	movl	CPUVAR(ISOURCES) + (num) * 4, %ebp			;\
+	movl	CPUVAR(ISOURCES) + (num) * 4,%ebp			;\
 	mask(num)			/* mask it in hardware */	;\
 	early_ack(num)			/* and allow other intrs */	;\
 	testl	%ebp,%ebp						;\
@@ -300,6 +408,8 @@ IDTVEC(intr_ ## name ## num)						;\
 	IDEPTH_INCR							;\
 	sti								;\
 	movl	IS_HANDLERS(%ebp),%ebx					;\
+	cmpl	$0,IS_MASK_COUNT(%ebp)	/* source currently masked? */	;\
+	jne	12f			/* yes, hold it */		;\
 6:									\
 	movl	IH_LEVEL(%ebx),%edi					;\
 	cmpl	%esi,%edi						;\
@@ -312,18 +422,25 @@ IDTVEC(intr_ ## name ## num)						;\
 	addl	$4,%esp			/* toss the arg */		;\
 	testl	%ebx,%ebx						;\
 	jnz	6b							;\
+	cmpl	$0,IS_MASK_COUNT(%ebp)	/* source now masked? */	;\
+	jne	12f			/* yes, deal */			;\
 	cli								;\
 	unmask(num)			/* unmask it in hardware */	;\
 	late_ack(num)							;\
 	jmp	_C_LABEL(Xdoreti)	/* lower spl and do ASTs */	;\
 7:									\
 	cli								;\
-	orl     $(1 << num),CPUVAR(IPENDING)				;\
-	level_mask(num)							;\
+	orl	$(1 << num),CPUVAR(IPENDING)				;\
+8:	level_mask(num)							;\
 	late_ack(num)							;\
 	jmp	_C_LABEL(Xdoreti)	/* lower spl and do ASTs */	;\
+12:									\
+	cli								;\
+	orl	$(1 << num),CPUVAR(IMASKED)				;\
+	btrl	$(num),CPUVAR(IPENDING)					;\
+	jmp	8b							;\
 10:									\
-	orl     $(1 << num),CPUVAR(IPENDING)				;\
+	orl	$(1 << num),CPUVAR(IPENDING)				;\
 	level_mask(num)							;\
 	late_ack(num)							;\
 	INTRFASTEXIT							;\
@@ -441,10 +558,76 @@ INTRSTUB(ioapic_level,29,voidop,ioapic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
 INTRSTUB(ioapic_level,30,voidop,ioapic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
 INTRSTUB(ioapic_level,31,voidop,ioapic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
 
+INTRSTUB(x2apic_edge,0,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,1,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,2,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,3,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,4,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,5,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,6,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,7,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,8,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,9,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,10,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,11,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,12,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,13,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,14,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,15,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,16,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,17,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,18,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,19,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,20,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,21,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,22,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,23,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,24,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,25,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,26,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,27,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,28,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,29,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,30,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+INTRSTUB(x2apic_edge,31,voidop,x2apic_asm_ack,voidop,voidop,voidop)
+
+INTRSTUB(x2apic_level,0,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,1,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,2,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,3,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,4,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,5,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,6,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,7,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,8,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,9,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,10,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,11,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,12,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,13,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,14,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,15,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,16,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,17,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,18,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,19,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,20,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,21,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,22,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,23,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,24,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,25,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,26,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,27,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,28,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,29,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,30,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+INTRSTUB(x2apic_level,31,voidop,x2apic_asm_ack,voidop,ioapic_unmask,ioapic_mask)
+
 #endif
 
-	.type	_C_LABEL(i8259_stubs), @object
-LABEL(i8259_stubs)
+	.type	_C_LABEL(legacy_stubs), @object
+LABEL(legacy_stubs)
 	.long _C_LABEL(Xintr_legacy0), _C_LABEL(Xrecurse_legacy0)
 	.long _C_LABEL(Xresume_legacy0)
 	.long _C_LABEL(Xintr_legacy1), _C_LABEL(Xrecurse_legacy1)
@@ -477,7 +660,7 @@ LABEL(i8259_stubs)
 	.long _C_LABEL(Xresume_legacy14)
 	.long _C_LABEL(Xintr_legacy15), _C_LABEL(Xrecurse_legacy15)
 	.long _C_LABEL(Xresume_legacy15)
-END(i8259_stubs)
+END(legacy_stubs)
 
 #if NIOAPIC > 0
 	.type	_C_LABEL(ioapic_edge_stubs), @object
@@ -615,24 +798,159 @@ LABEL(ioapic_level_stubs)
 	.long _C_LABEL(Xintr_ioapic_level31), _C_LABEL(Xrecurse_ioapic_level31)
 	.long _C_LABEL(Xresume_ioapic_level31)
 END(ioapic_level_stubs)
+
+	.type	_C_LABEL(x2apic_edge_stubs), @object
+LABEL(x2apic_edge_stubs)
+	.long _C_LABEL(Xintr_x2apic_edge0), _C_LABEL(Xrecurse_x2apic_edge0)
+	.long _C_LABEL(Xresume_x2apic_edge0)
+	.long _C_LABEL(Xintr_x2apic_edge1), _C_LABEL(Xrecurse_x2apic_edge1)
+	.long _C_LABEL(Xresume_x2apic_edge1)
+	.long _C_LABEL(Xintr_x2apic_edge2), _C_LABEL(Xrecurse_x2apic_edge2)
+	.long _C_LABEL(Xresume_x2apic_edge2)
+	.long _C_LABEL(Xintr_x2apic_edge3), _C_LABEL(Xrecurse_x2apic_edge3)
+	.long _C_LABEL(Xresume_x2apic_edge3)
+	.long _C_LABEL(Xintr_x2apic_edge4), _C_LABEL(Xrecurse_x2apic_edge4)
+	.long _C_LABEL(Xresume_x2apic_edge4)
+	.long _C_LABEL(Xintr_x2apic_edge5), _C_LABEL(Xrecurse_x2apic_edge5)
+	.long _C_LABEL(Xresume_x2apic_edge5)
+	.long _C_LABEL(Xintr_x2apic_edge6), _C_LABEL(Xrecurse_x2apic_edge6)
+	.long _C_LABEL(Xresume_x2apic_edge6)
+	.long _C_LABEL(Xintr_x2apic_edge7), _C_LABEL(Xrecurse_x2apic_edge7)
+	.long _C_LABEL(Xresume_x2apic_edge7)
+	.long _C_LABEL(Xintr_x2apic_edge8), _C_LABEL(Xrecurse_x2apic_edge8)
+	.long _C_LABEL(Xresume_x2apic_edge8)
+	.long _C_LABEL(Xintr_x2apic_edge9), _C_LABEL(Xrecurse_x2apic_edge9)
+	.long _C_LABEL(Xresume_x2apic_edge9)
+	.long _C_LABEL(Xintr_x2apic_edge10), _C_LABEL(Xrecurse_x2apic_edge10)
+	.long _C_LABEL(Xresume_x2apic_edge10)
+	.long _C_LABEL(Xintr_x2apic_edge11), _C_LABEL(Xrecurse_x2apic_edge11)
+	.long _C_LABEL(Xresume_x2apic_edge11)
+	.long _C_LABEL(Xintr_x2apic_edge12), _C_LABEL(Xrecurse_x2apic_edge12)
+	.long _C_LABEL(Xresume_x2apic_edge12)
+	.long _C_LABEL(Xintr_x2apic_edge13), _C_LABEL(Xrecurse_x2apic_edge13)
+	.long _C_LABEL(Xresume_x2apic_edge13)
+	.long _C_LABEL(Xintr_x2apic_edge14), _C_LABEL(Xrecurse_x2apic_edge14)
+	.long _C_LABEL(Xresume_x2apic_edge14)
+	.long _C_LABEL(Xintr_x2apic_edge15), _C_LABEL(Xrecurse_x2apic_edge15)
+	.long _C_LABEL(Xresume_x2apic_edge15)
+	.long _C_LABEL(Xintr_x2apic_edge16), _C_LABEL(Xrecurse_x2apic_edge16)
+	.long _C_LABEL(Xresume_x2apic_edge16)
+	.long _C_LABEL(Xintr_x2apic_edge17), _C_LABEL(Xrecurse_x2apic_edge17)
+	.long _C_LABEL(Xresume_x2apic_edge17)
+	.long _C_LABEL(Xintr_x2apic_edge18), _C_LABEL(Xrecurse_x2apic_edge18)
+	.long _C_LABEL(Xresume_x2apic_edge18)
+	.long _C_LABEL(Xintr_x2apic_edge19), _C_LABEL(Xrecurse_x2apic_edge19)
+	.long _C_LABEL(Xresume_x2apic_edge19)
+	.long _C_LABEL(Xintr_x2apic_edge20), _C_LABEL(Xrecurse_x2apic_edge20)
+	.long _C_LABEL(Xresume_x2apic_edge20)
+	.long _C_LABEL(Xintr_x2apic_edge21), _C_LABEL(Xrecurse_x2apic_edge21)
+	.long _C_LABEL(Xresume_x2apic_edge21)
+	.long _C_LABEL(Xintr_x2apic_edge22), _C_LABEL(Xrecurse_x2apic_edge22)
+	.long _C_LABEL(Xresume_x2apic_edge22)
+	.long _C_LABEL(Xintr_x2apic_edge23), _C_LABEL(Xrecurse_x2apic_edge23)
+	.long _C_LABEL(Xresume_x2apic_edge23)
+	.long _C_LABEL(Xintr_x2apic_edge24), _C_LABEL(Xrecurse_x2apic_edge24)
+	.long _C_LABEL(Xresume_x2apic_edge24)
+	.long _C_LABEL(Xintr_x2apic_edge25), _C_LABEL(Xrecurse_x2apic_edge25)
+	.long _C_LABEL(Xresume_x2apic_edge25)
+	.long _C_LABEL(Xintr_x2apic_edge26), _C_LABEL(Xrecurse_x2apic_edge26)
+	.long _C_LABEL(Xresume_x2apic_edge26)
+	.long _C_LABEL(Xintr_x2apic_edge27), _C_LABEL(Xrecurse_x2apic_edge27)
+	.long _C_LABEL(Xresume_x2apic_edge27)
+	.long _C_LABEL(Xintr_x2apic_edge28), _C_LABEL(Xrecurse_x2apic_edge28)
+	.long _C_LABEL(Xresume_x2apic_edge28)
+	.long _C_LABEL(Xintr_x2apic_edge29), _C_LABEL(Xrecurse_x2apic_edge29)
+	.long _C_LABEL(Xresume_x2apic_edge29)
+	.long _C_LABEL(Xintr_x2apic_edge30), _C_LABEL(Xrecurse_x2apic_edge30)
+	.long _C_LABEL(Xresume_x2apic_edge30)
+	.long _C_LABEL(Xintr_x2apic_edge31), _C_LABEL(Xrecurse_x2apic_edge31)
+	.long _C_LABEL(Xresume_x2apic_edge31)
+END(x2apic_edge_stubs)
+
+	.type	_C_LABEL(x2apic_level_stubs), @object
+LABEL(x2apic_level_stubs)
+	.long _C_LABEL(Xintr_x2apic_level0), _C_LABEL(Xrecurse_x2apic_level0)
+	.long _C_LABEL(Xresume_x2apic_level0)
+	.long _C_LABEL(Xintr_x2apic_level1), _C_LABEL(Xrecurse_x2apic_level1)
+	.long _C_LABEL(Xresume_x2apic_level1)
+	.long _C_LABEL(Xintr_x2apic_level2), _C_LABEL(Xrecurse_x2apic_level2)
+	.long _C_LABEL(Xresume_x2apic_level2)
+	.long _C_LABEL(Xintr_x2apic_level3), _C_LABEL(Xrecurse_x2apic_level3)
+	.long _C_LABEL(Xresume_x2apic_level3)
+	.long _C_LABEL(Xintr_x2apic_level4), _C_LABEL(Xrecurse_x2apic_level4)
+	.long _C_LABEL(Xresume_x2apic_level4)
+	.long _C_LABEL(Xintr_x2apic_level5), _C_LABEL(Xrecurse_x2apic_level5)
+	.long _C_LABEL(Xresume_x2apic_level5)
+	.long _C_LABEL(Xintr_x2apic_level6), _C_LABEL(Xrecurse_x2apic_level6)
+	.long _C_LABEL(Xresume_x2apic_level6)
+	.long _C_LABEL(Xintr_x2apic_level7), _C_LABEL(Xrecurse_x2apic_level7)
+	.long _C_LABEL(Xresume_x2apic_level7)
+	.long _C_LABEL(Xintr_x2apic_level8), _C_LABEL(Xrecurse_x2apic_level8)
+	.long _C_LABEL(Xresume_x2apic_level8)
+	.long _C_LABEL(Xintr_x2apic_level9), _C_LABEL(Xrecurse_x2apic_level9)
+	.long _C_LABEL(Xresume_x2apic_level9)
+	.long _C_LABEL(Xintr_x2apic_level10), _C_LABEL(Xrecurse_x2apic_level10)
+	.long _C_LABEL(Xresume_x2apic_level10)
+	.long _C_LABEL(Xintr_x2apic_level11), _C_LABEL(Xrecurse_x2apic_level11)
+	.long _C_LABEL(Xresume_x2apic_level11)
+	.long _C_LABEL(Xintr_x2apic_level12), _C_LABEL(Xrecurse_x2apic_level12)
+	.long _C_LABEL(Xresume_x2apic_level12)
+	.long _C_LABEL(Xintr_x2apic_level13), _C_LABEL(Xrecurse_x2apic_level13)
+	.long _C_LABEL(Xresume_x2apic_level13)
+	.long _C_LABEL(Xintr_x2apic_level14), _C_LABEL(Xrecurse_x2apic_level14)
+	.long _C_LABEL(Xresume_x2apic_level14)
+	.long _C_LABEL(Xintr_x2apic_level15), _C_LABEL(Xrecurse_x2apic_level15)
+	.long _C_LABEL(Xresume_x2apic_level15)
+	.long _C_LABEL(Xintr_x2apic_level16), _C_LABEL(Xrecurse_x2apic_level16)
+	.long _C_LABEL(Xresume_x2apic_level16)
+	.long _C_LABEL(Xintr_x2apic_level17), _C_LABEL(Xrecurse_x2apic_level17)
+	.long _C_LABEL(Xresume_x2apic_level17)
+	.long _C_LABEL(Xintr_x2apic_level18), _C_LABEL(Xrecurse_x2apic_level18)
+	.long _C_LABEL(Xresume_x2apic_level18)
+	.long _C_LABEL(Xintr_x2apic_level19), _C_LABEL(Xrecurse_x2apic_level19)
+	.long _C_LABEL(Xresume_x2apic_level19)
+	.long _C_LABEL(Xintr_x2apic_level20), _C_LABEL(Xrecurse_x2apic_level20)
+	.long _C_LABEL(Xresume_x2apic_level20)
+	.long _C_LABEL(Xintr_x2apic_level21), _C_LABEL(Xrecurse_x2apic_level21)
+	.long _C_LABEL(Xresume_x2apic_level21)
+	.long _C_LABEL(Xintr_x2apic_level22), _C_LABEL(Xrecurse_x2apic_level22)
+	.long _C_LABEL(Xresume_x2apic_level22)
+	.long _C_LABEL(Xintr_x2apic_level23), _C_LABEL(Xrecurse_x2apic_level23)
+	.long _C_LABEL(Xresume_x2apic_level23)
+	.long _C_LABEL(Xintr_x2apic_level24), _C_LABEL(Xrecurse_x2apic_level24)
+	.long _C_LABEL(Xresume_x2apic_level24)
+	.long _C_LABEL(Xintr_x2apic_level25), _C_LABEL(Xrecurse_x2apic_level25)
+	.long _C_LABEL(Xresume_x2apic_level25)
+	.long _C_LABEL(Xintr_x2apic_level26), _C_LABEL(Xrecurse_x2apic_level26)
+	.long _C_LABEL(Xresume_x2apic_level26)
+	.long _C_LABEL(Xintr_x2apic_level27), _C_LABEL(Xrecurse_x2apic_level27)
+	.long _C_LABEL(Xresume_x2apic_level27)
+	.long _C_LABEL(Xintr_x2apic_level28), _C_LABEL(Xrecurse_x2apic_level28)
+	.long _C_LABEL(Xresume_x2apic_level28)
+	.long _C_LABEL(Xintr_x2apic_level29), _C_LABEL(Xrecurse_x2apic_level29)
+	.long _C_LABEL(Xresume_x2apic_level29)
+	.long _C_LABEL(Xintr_x2apic_level30), _C_LABEL(Xrecurse_x2apic_level30)
+	.long _C_LABEL(Xresume_x2apic_level30)
+	.long _C_LABEL(Xintr_x2apic_level31), _C_LABEL(Xrecurse_x2apic_level31)
+	.long _C_LABEL(Xresume_x2apic_level31)
+END(x2apic_level_stubs)
 #endif
-#else /* XEN */
+#endif /* XENPV */
+
+#if defined(XEN)
 #define voidop(num)
 
-#define	XENINTRSTUB(name, num, early_ack, late_ack, mask, unmask, level_mask) \
-IDTVEC(recurse_ ## name ## num)						;\
-	pushfl								;\
-	pushl	%cs							;\
-	pushl	%esi							;\
+#define	XENINTRSTUB(name, sir, level, unmask) \
+IDTVEC(recurse_ ## name ## sir)						;\
+	INTR_RECURSE_HWFRAME						;\
 	subl	$4,%esp							;\
 	pushl	$T_ASTFLT		/* trap # for doing ASTs */	;\
 	INTRENTRY							;\
-	movl	$_C_LABEL(Xdoreti), %esi; /* we now have a trap frame, so loop using doreti instead */ ;\
-IDTVEC(resume_ ## name ## num)						\
+IDTVEC(resume_ ## name ## sir)						\
 	movl	$IREENT_MAGIC,TF_ERR(%esp)				;\
 	pushl	%ebx							;\
-	movl	CPUVAR(ISOURCES) + (num) * 4, %ebp			;\
-	movl	$num,CPUVAR(ILEVEL)					;\
+	movl	CPUVAR(ISOURCES) + (sir) * 4,%ebp			;\
+	movl	$level,CPUVAR(ILEVEL)					;\
 	IDEPTH_INCR /* leaves old %esp on stack	*/			;\
 	STI(%eax)							;\
 	movl	IS_HANDLERS(%ebp),%ebx					;\
@@ -640,186 +958,85 @@ IDTVEC(resume_ ## name ## num)						\
 	pushl	IH_ARG(%ebx)						;\
 	call	*IH_FUN(%ebx)		/* call it */			;\
 	addl	$4,%esp			/* toss the arg */		;\
-	movl	IH_IPL_NEXT(%ebx),%ebx	/* next handler in chain */	;\
+	movl	IH_NEXT(%ebx),%ebx	/* next handler in chain */	;\
 	testl	%ebx,%ebx						;\
 	jnz	6b							;\
 									\
 	CLI(%eax)							;\
-	unmask(num)			/* unmask it in hardware */	;\
-	late_ack(num)							;\
-	IDEPTH_DECR							;\
-	popl	%ebx							;\
-	jmp	*%esi			/* lower spl and do ASTs */	;\
+	unmask(sir)			/* unmask it in hardware */	;\
+	jmp	_C_LABEL(Xdoreti)	/* lower spl and do ASTs */	;\
 
 /*
  * Just unmasking the event isn't enough, we also need to
  * reassert the event pending bit if needed. For now just call
  * the C function doing it, maybe rewrite in inline assembly ?
  */
-#define hypervisor_asm_unmask(num)			\
-	pushl $num					;\
-	call _C_LABEL(hypervisor_enable_ipl)		;\
+#define hypervisor_asm_unmask(sir)			\
+	pushl	$sir					;\
+	call	_C_LABEL(hypervisor_enable_sir)		;\
 	addl	$4,%esp
 
-XENINTRSTUB(xenev,0,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,1,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,2,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,3,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,4,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,5,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,6,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,7,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,8,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,9,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,10,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,11,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,12,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,13,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,14,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,15,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,16,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,17,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,18,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,19,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,20,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,21,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,22,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,23,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,24,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,25,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,26,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,27,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,28,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,29,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,30,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
-XENINTRSTUB(xenev,31,voidop,voidop,voidop,hypervisor_asm_unmask,voidop)
+XENINTRSTUB(xenev,SIR_XENIPL_VM,IPL_VM,hypervisor_asm_unmask)
+XENINTRSTUB(xenev,SIR_XENIPL_SCHED,IPL_SCHED,hypervisor_asm_unmask)
+XENINTRSTUB(xenev,SIR_XENIPL_HIGH,IPL_HIGH,hypervisor_asm_unmask)
+
+/* On Xen, the xenev_stubs are purely for spl entry, since there is no
+ * vector based mechanism. We however provide the entrypoint to ensure
+ * that native and Xen struct intrstub ; definitions are uniform.
+ */
+panicmsg:	.ascii "vector Xen event entry path entered."
+LABEL(entry_xenev)
+	pushl $panicmsg
+	call  _C_LABEL(panic)
+END(entry_xenev)
+
+#define XENINTRSTUB_ENTRY(name, sir) \
+	.long entry_xenev , _C_LABEL(Xrecurse_ ## name ## sir); \
+	.long _C_LABEL(Xresume_ ## name ## sir);
 
 	.type	_C_LABEL(xenev_stubs), @object
 LABEL(xenev_stubs)
-	.long _C_LABEL(Xrecurse_xenev0), _C_LABEL(Xresume_xenev0)
-	.long _C_LABEL(Xrecurse_xenev1) ,_C_LABEL(Xresume_xenev1)
-	.long _C_LABEL(Xrecurse_xenev2) ,_C_LABEL(Xresume_xenev2)
-	.long _C_LABEL(Xrecurse_xenev3) ,_C_LABEL(Xresume_xenev3)
-	.long _C_LABEL(Xrecurse_xenev4) ,_C_LABEL(Xresume_xenev4)
-	.long _C_LABEL(Xrecurse_xenev5) ,_C_LABEL(Xresume_xenev5)
-	.long _C_LABEL(Xrecurse_xenev6) ,_C_LABEL(Xresume_xenev6)
-	.long _C_LABEL(Xrecurse_xenev7) ,_C_LABEL(Xresume_xenev7)
-	.long _C_LABEL(Xrecurse_xenev8) ,_C_LABEL(Xresume_xenev8)
-	.long _C_LABEL(Xrecurse_xenev9) ,_C_LABEL(Xresume_xenev9)
-	.long _C_LABEL(Xrecurse_xenev10), _C_LABEL(Xresume_xenev10)
-	.long _C_LABEL(Xrecurse_xenev11), _C_LABEL(Xresume_xenev11)
-	.long _C_LABEL(Xrecurse_xenev12), _C_LABEL(Xresume_xenev12)
-	.long _C_LABEL(Xrecurse_xenev13), _C_LABEL(Xresume_xenev13)
-	.long _C_LABEL(Xrecurse_xenev14), _C_LABEL(Xresume_xenev14)
-	.long _C_LABEL(Xrecurse_xenev15), _C_LABEL(Xresume_xenev15)
-	.long _C_LABEL(Xrecurse_xenev16), _C_LABEL(Xresume_xenev16)
-	.long _C_LABEL(Xrecurse_xenev17), _C_LABEL(Xresume_xenev17)
-	.long _C_LABEL(Xrecurse_xenev18), _C_LABEL(Xresume_xenev18)
-	.long _C_LABEL(Xrecurse_xenev19), _C_LABEL(Xresume_xenev19)
-	.long _C_LABEL(Xrecurse_xenev20), _C_LABEL(Xresume_xenev20)
-	.long _C_LABEL(Xrecurse_xenev21), _C_LABEL(Xresume_xenev21)
-	.long _C_LABEL(Xrecurse_xenev22), _C_LABEL(Xresume_xenev22)
-	.long _C_LABEL(Xrecurse_xenev23), _C_LABEL(Xresume_xenev23)
-	.long _C_LABEL(Xrecurse_xenev24), _C_LABEL(Xresume_xenev24)
-	.long _C_LABEL(Xrecurse_xenev25), _C_LABEL(Xresume_xenev25)
-	.long _C_LABEL(Xrecurse_xenev26), _C_LABEL(Xresume_xenev26)
-	.long _C_LABEL(Xrecurse_xenev27), _C_LABEL(Xresume_xenev27)
-	.long _C_LABEL(Xrecurse_xenev28), _C_LABEL(Xresume_xenev28)
-	.long _C_LABEL(Xrecurse_xenev29), _C_LABEL(Xresume_xenev29)
-	.long _C_LABEL(Xrecurse_xenev30), _C_LABEL(Xresume_xenev30)
-	.long _C_LABEL(Xrecurse_xenev31), _C_LABEL(Xresume_xenev31)
+	XENINTRSTUB_ENTRY(xenev, SIR_XENIPL_VM) ;
+	XENINTRSTUB_ENTRY(xenev, SIR_XENIPL_SCHED) ;
+	XENINTRSTUB_ENTRY(xenev, SIR_XENIPL_HIGH) ;
 END(xenev_stubs)
 
 #endif /* XEN */
 
 #include "i386_trap.S"
-#ifdef IPKDB
-#include "i386_trap_ipkdb.S"
-#endif
 
 #ifdef XEN
 
-/*
- * A note on the "critical region" in our callback handler.
- * We want to avoid stacking callback handlers due to events occurring
- * during handling of the last event. To do this, we keep events disabled
- * until weve done all processing. HOWEVER, we must enable events before
- * popping the stack frame (cant be done atomically) and so it would still
- * be possible to get enough handler activations to overflow the stack.
- * Although unlikely, bugs of that kind are hard to track down, so wed
- * like to avoid the possibility.
- * So, on entry to the handler we detect whether we interrupted an
- * existing activation in its critical region -- if so, we pop the current
- * activation and restart the handler using the previous one.
- */
-NENTRY(hypervisor_callback)
-	pushl	$0			# dummy error code
+ENTRY(hypervisor_callback)
+IDTVEC(hypervisor_pvhvm_callback)	
+	pushl	$0			/* dummy error code */
 	pushl	$T_ASTFLT
 	INTRENTRY
-        movl TF_EIP(%esp),%eax
-        cmpl $scrit,%eax
-        jb   11f
-        cmpl $ecrit,%eax
-        jb   critical_region_fixup
-11:     pushl CPUVAR(ILEVEL)
-        push %esp
-        call do_hypervisor_callback
-        add  $8,%esp
-        xorl %eax,%eax
-        movb TF_CS(%esp),%cl
-        test $CHK_UPL,%cl		# slow return to ring 2 or 3
-        je   safesti
-        movl CPUVAR(ILEVEL),%ebx
-        jmp  doreti_checkast
-safesti:
-	movl CPUVAR(VCPU),%esi
-	XEN_UNBLOCK_EVENTS(%esi)	# reenable event callbacks
-scrit:  /**** START OF CRITICAL REGION ****/
-        XEN_TEST_PENDING(%esi)
-        jnz  14f			# process more events if necessary...
-        INTRFASTEXIT
-critiret:
-14:     XEN_BLOCK_EVENTS(%esi)
-        jmp  11b
-ecrit:  /**** END OF CRITICAL REGION ****/
-/*
- * [How we do the fixup]. We want to merge the current stack frame with the
- * just-interrupted frame. How we do this depends on where in the critical
- * region the interrupted handler was executing, and so how many saved
- * registers are in each frame. We do this quickly using the lookup table
- * 'critical_fixup_table'. For each byte offset in the critical region, it
- * provides the number of bytes which have already been popped from the
- * interrupted stack frame.
- */
-critical_region_fixup:
-        cmpl	$(critiret-1),%eax	    # eip points to iret?
-	jne	1f
-	movl	$(TF_PUSHSIZE+0x8),%eax
-	jmp	2f
-1:	xorl	%eax,%eax
-2:
-	/* %eax contains num bytes popped */
-        mov  %esp,%esi
-        add  %eax,%esi        # %esi points at end of src region
-        mov  %esp,%edi
-        add  $(TF_PUSHSIZE+0x8+0xC),%edi # %edi points at end of dst region
-        mov  %eax,%ecx
-        shr  $2,%ecx          # convert words to bytes
-        je   16f              # skip loop if nothing to copy
-15:     subl $4,%esi          # pre-decrementing copy loop
-        subl $4,%edi
-        movl (%esi),%eax
-        movl %eax,(%edi)
-        loop 15b
-16:     movl %edi,%esp        # final %edi is top of merged stack
-        jmp  11b
+	pushl	CPUVAR(ILEVEL)
+	IDEPTH_INCR
+	/* IDEPTH_INCR puts %esp on stack; we use it as argument to
+	 * do_hypervisor_callback. But don't restore the stack after,
+	 * Xdoreti needs it too.
+	 */
+	call	do_hypervisor_callback
+#ifndef XENPV
+	movzbl	_C_LABEL(xenhvm_use_percpu_callback),%eax
+	testl	%eax, %eax
+	jz	1f
+	movl	_C_LABEL(local_apic_va),%eax
+	movl	$0, LAPIC_EOI(%eax)
+1:
+#endif
+	jmp	_C_LABEL(Xdoreti)
+IDTVEC_END(hypervisor_pvhvm_callback)
 END(hypervisor_callback)
 
-
+#endif /* XEN */
+#ifdef XENPV	
 /*
  * Hypervisor uses this for application faults while it executes.
  */
-NENTRY(failsafe_callback)
+ENTRY(failsafe_callback)
 	pop	%ds
 	pop	%es
 	pop	%fs
@@ -828,4 +1045,4 @@ NENTRY(failsafe_callback)
 	iret
 END(failsafe_callback)
 
-#endif /* XEN */
+#endif /* XENPV */

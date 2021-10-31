@@ -1,4 +1,4 @@
-/*	$NetBSD: ofnet.c,v 1.55 2016/06/10 13:27:14 ozaki-r Exp $	*/
+/*	$NetBSD: ofnet.c,v 1.63 2020/01/29 06:18:17 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofnet.c,v 1.55 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofnet.c,v 1.63 2020/01/29 06:18:17 thorpej Exp $");
 
 #include "ofnet.h"
 #include "opt_inet.h"
@@ -49,29 +49,14 @@ __KERNEL_RCSID(0, "$NetBSD: ofnet.c,v 1.55 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #include <net/if.h>
 #include <net/if_ether.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
 #include <netinet/if_inarp.h>
 #endif
 
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
-
 #include <dev/ofw/openfirm.h>
-
-#if NIPKDB_OFN > 0
-#include <ipkdb/ipkdb.h>
-#include <machine/ipkdb.h>
-
-CFATTACH_DECL_NEW(ipkdb_ofn, 0,
-    ipkdb_probe, ipkdb_attach, NULL, NULL);
-
-static struct ipkdb_if *kifp;
-static struct ofnet_softc *ipkdb_of;
-
-static int ipkdbprobe (cfdata_t, void *);
-#endif
 
 struct ofnet_softc {
 	device_t sc_dev;
@@ -103,10 +88,6 @@ ofnet_match(device_t parent, cfdata_t match, void *aux)
 	char type[32];
 	int l;
 
-#if NIPKDB_OFN > 0
-	if (!parent)
-		return ipkdbprobe(match, aux);
-#endif
 	if (strcmp(oba->oba_busname, "ofw"))
 		return (0);
 	if ((l = OF_getprop(oba->oba_phandle, "device_type", type,
@@ -133,14 +114,7 @@ ofnet_attach(device_t parent, device_t self, void *aux)
 	of->sc_dev = self;
 
 	of->sc_phandle = oba->oba_phandle;
-#if NIPKDB_OFN > 0
-	if (kifp &&
-	    kifp->unit - 1 == device_unit(of->sc_dev) &&
-	    OF_instance_to_package(kifp->port) == oba->oba_phandle)  {
-		ipkdb_of = of;
-		of->sc_ihandle = kifp->port;
-	} else
-#endif
+
 	if ((l = OF_package_to_path(oba->oba_phandle, path,
 	    sizeof path - 1)) < 0 ||
 	    l >= sizeof path ||
@@ -158,7 +132,7 @@ ofnet_attach(device_t parent, device_t self, void *aux)
 	ifp->if_start = ofnet_start;
 	ifp->if_ioctl = ofnet_ioctl;
 	ifp->if_watchdog = ofnet_watchdog;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX;
 	IFQ_SET_READY(&ifp->if_snd);
 
 	if_attach(ifp);
@@ -176,15 +150,13 @@ ofnet_read(struct ofnet_softc *of)
 	char *bufp;
 
 	s = splnet();
-#if NIPKDB_OFN > 0
-	ipkdbrint(kifp, ifp);
-#endif
+
 	for (;;) {
 		len = OF_read(of->sc_ihandle, buf, sizeof buf);
 		if (len == -2 || len == 0)
 			break;
 		if (len < sizeof(struct ether_header)) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			continue;
 		}
 		bufp = buf;
@@ -203,7 +175,7 @@ ofnet_read(struct ofnet_softc *of)
 		/* Allocate a header mbuf */
 		MGETHDR(m, M_DONTWAIT, MT_DATA);
 		if (m == 0) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			continue;
 		}
 		m_set_rcvif(m, ifp);
@@ -217,7 +189,7 @@ ofnet_read(struct ofnet_softc *of)
 			if (head) {
 				MGET(m, M_DONTWAIT, MT_DATA);
 				if (m == 0) {
-					ifp->if_ierrors++;
+					if_statinc(ifp, if_ierrors);
 					m_freem(head);
 					head = 0;
 					break;
@@ -227,7 +199,7 @@ ofnet_read(struct ofnet_softc *of)
 			if (len >= MINCLSIZE) {
 				MCLGET(m, M_DONTWAIT);
 				if ((m->m_flags & M_EXT) == 0) {
-					ifp->if_ierrors++;
+					if_statinc(ifp, if_ierrors);
 					m_free(m);
 					m_freem(head);
 					head = 0;
@@ -251,7 +223,7 @@ ofnet_read(struct ofnet_softc *of)
 				m->m_data = newdata;
 			}
 
-			m->m_len = l = min(len, l);
+			m->m_len = l = uimin(len, l);
 			memcpy(mtod(m, char *), bufp, l);
 			bufp += l;
 			len -= l;
@@ -261,8 +233,6 @@ ofnet_read(struct ofnet_softc *of)
 		if (head == 0)
 			continue;
 
-		bpf_mtap(ifp, m);
-		ifp->if_ipackets++;
 		if_percpuq_enqueue(ifp->if_percpuq, head);
 	}
 	splx(s);
@@ -323,11 +293,11 @@ ofnet_start(struct ifnet *ifp)
 			panic("ofnet_start: no header mbuf");
 		len = m0->m_pkthdr.len;
 
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		if (len > ETHERMTU + sizeof(struct ether_header)) {
 			/* packet too large, toss it */
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			m_freem(m0);
 			continue;
 		}
@@ -335,7 +305,7 @@ ofnet_start(struct ifnet *ifp)
 		for (bufp = buf; (m = m0) != NULL;) {
 			memcpy(bufp, mtod(m, char *), m->m_len);
 			bufp += m->m_len;
-			MFREE(m, m0);
+			m0 = m_free(m);
 		}
 
 		/*
@@ -351,9 +321,9 @@ ofnet_start(struct ifnet *ifp)
 			len = bufp - buf;
 
 		if (OF_write(of->sc_ihandle, buf, len) != len)
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 		else
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 	}
 }
 
@@ -411,74 +381,7 @@ ofnet_watchdog(struct ifnet *ifp)
 	struct ofnet_softc *of = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(of->sc_dev));
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 	ofnet_stop(of);
 	ofnet_init(of);
 }
-
-#if NIPKDB_OFN > 0
-static void
-ipkdbofstart(struct ipkdb_if *kip)
-{
-	if (ipkdb_of)
-		ipkdbattach(kip, &ipkdb_of->sc_ethercom);
-}
-
-static void
-ipkdbofleave(struct ipkdb_if *kip)
-{
-}
-
-static int
-ipkdbofrcv(struct ipkdb_if *kip, u_char *buf, int poll)
-{
-	int l;
-
-	do {
-		l = OF_read(kip->port, buf, ETHERMTU);
-		if (l < 0)
-			l = 0;
-	} while (!poll && !l);
-	return l;
-}
-
-static void
-ipkdbofsend(struct ipkdb_if *kip, u_char *buf, int l)
-{
-	OF_write(kip->port, buf, l);
-}
-
-static int
-ipkdbprobe(cfdata_t match, void *aux)
-{
-	struct ipkdb_if *kip = aux;
-	static char name[256];
-	int len;
-	int phandle;
-
-	kip->unit = match->cf_unit + 1;
-
-	if (!(kip->port = OF_open("net")))
-		return -1;
-	if ((len = OF_instance_to_path(kip->port, name, sizeof name - 1)) < 0 ||
-	    len >= sizeof name)
-		return -1;
-	name[len] = 0;
-	if ((phandle = OF_instance_to_package(kip->port)) == -1)
-		return -1;
-	if (OF_getprop(phandle, "mac-address", kip->myenetaddr,
-	    sizeof kip->myenetaddr) < 0)
-		return -1;
-
-	kip->flags |= IPKDB_MYHW;
-	kip->name = name;
-	kip->start = ipkdbofstart;
-	kip->leave = ipkdbofleave;
-	kip->receive = ipkdbofrcv;
-	kip->send = ipkdbofsend;
-
-	kifp = kip;
-
-	return 0;
-}
-#endif

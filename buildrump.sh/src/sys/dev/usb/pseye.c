@@ -1,4 +1,4 @@
-/* $NetBSD: pseye.c,v 1.23 2016/07/07 06:55:42 msaitoh Exp $ */
+/* $NetBSD: pseye.c,v 1.28 2020/05/22 11:24:31 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2008 Jared D. McNeill <jmcneill@invisible.ca>
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pseye.c,v 1.23 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pseye.c,v 1.28 2020/05/22 11:24:31 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -134,6 +134,8 @@ static int		pseye_enum_format(void *, uint32_t,
 static int		pseye_get_format(void *, struct video_format *);
 static int		pseye_set_format(void *, struct video_format *);
 static int		pseye_try_format(void *, struct video_format *);
+static int		pseye_get_framerate(void *, struct video_fract *);
+static int		pseye_set_framerate(void *, struct video_fract *);
 static int		pseye_start_transfer(void *);
 static int		pseye_stop_transfer(void *);
 
@@ -150,6 +152,8 @@ static const struct video_hw_if pseye_hw_if = {
 	.get_format = pseye_get_format,
 	.set_format = pseye_set_format,
 	.try_format = pseye_try_format,
+	.get_framerate = pseye_get_framerate,
+	.set_framerate = pseye_set_framerate,
 	.start_transfer = pseye_start_transfer,
 	.stop_transfer = pseye_stop_transfer,
 	.control_iter_init = NULL,
@@ -245,7 +249,7 @@ pseye_attach(device_t parent, device_t self, void *opaque)
 	}
 
 	error = usbd_create_xfer(sc->sc_bulkin_pipe, sc->sc_bulkin_bufferlen,
-	    USBD_SHORT_XFER_OK, 0, &sc->sc_bulkin_xfer);
+	    0, 0, &sc->sc_bulkin_xfer);
 	if (error) {
 		aprint_error_dev(self, "couldn't create transfer\n");
 		pseye_close_pipes(sc);
@@ -669,7 +673,7 @@ pseye_submit_payload(struct pseye_softc *sc, uint32_t tlen)
 	uint32_t brem = (640*480*2);
 
 	while (brem > 0 && tlen > 0) {
-		len = min(tlen, PSEYE_BULKIN_BLKLEN);
+		len = uimin(tlen, PSEYE_BULKIN_BLKLEN);
 		if (len < UVIDEO_PAYLOAD_HEADER_SIZE) {
 			printf("pseye_submit_payload: len=%u\n", len);
 			return;
@@ -687,7 +691,7 @@ pseye_submit_payload(struct pseye_softc *sc, uint32_t tlen)
 			goto next;
 
 		payload.data = buf + uvchdr->bHeaderLength;
-		payload.size = min(brem, len - uvchdr->bHeaderLength);
+		payload.size = uimin(brem, len - uvchdr->bHeaderLength);
 		payload.frameno = UGETDW(&buf[2]);
 		payload.end_of_frame = uvchdr->bmHeaderInfo & UV_END_OF_FRAME;
 		video_submit_payload(sc->sc_videodev, &payload);
@@ -800,6 +804,23 @@ static int
 pseye_try_format(void *opaque, struct video_format *format)
 {
 	return pseye_get_format(opaque, format);
+}
+
+static int
+pseye_get_framerate(void *opaque, struct video_fract *fract)
+{
+	/* Driver only supports 60fps */
+	fract->numerator = 1;
+	fract->denominator = 60;
+
+	return 0;
+}
+
+static int
+pseye_set_framerate(void *opaque, struct video_fract *fract)
+{
+	/* Driver only supports one framerate. Return actual rate. */
+	return pseye_get_framerate(opaque, fract);
 }
 
 static int

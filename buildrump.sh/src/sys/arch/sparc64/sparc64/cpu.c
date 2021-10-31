@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.c,v 1.128 2016/04/17 14:32:03 martin Exp $ */
+/*	$NetBSD: cpu.c,v 1.140 2021/04/05 22:36:27 nakayama Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.128 2016/04/17 14:32:03 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.140 2021/04/05 22:36:27 nakayama Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -62,6 +62,8 @@ __KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.128 2016/04/17 14:32:03 martin Exp $");
 #include <sys/kernel.h>
 #include <sys/reboot.h>
 #include <sys/cpu.h>
+#include <sys/sysctl.h>
+#include <sys/kmem.h>
 
 #include <uvm/uvm.h>
 
@@ -93,6 +95,7 @@ struct cpu_bootargs *cpu_args;	/* allocated very early in pmap_bootstrap. */
 struct pool_cache *fpstate_cache;
 
 static struct cpu_info *alloc_cpuinfo(u_int);
+static void cpu_idle_sun4v(void);
 
 /* The following are used externally (sysctl_hw). */
 char	machine[] = MACHINE;		/* from <machine/param.h> */
@@ -158,7 +161,7 @@ static int
 cpu_cache_info_sun4v(const char *type, int level, const char *prop)
 {
 	int idx = 0;
-	uint64_t val = 0;;
+	uint64_t val = 0;
 	idx = mdesc_find_node_by_idx(idx, "cache");
 	while (idx != -1 && val == 0) {
 		const char *name = mdesc_name_by_idx(idx);
@@ -355,7 +358,7 @@ alloc_cpuinfo(u_int cpu_node)
 	cpi->ci_paddr = pa0;
 	cpi->ci_self = cpi;
 	if (CPU_ISSUN4V)
-		cpi->ci_mmfsa = pa0;
+		cpi->ci_mmufsa = pa0;
 	cpi->ci_node = cpu_node;
 	cpi->ci_idepth = -1;
 	memset(cpi->ci_intrpending, -1, sizeof(cpi->ci_intrpending));
@@ -412,6 +415,61 @@ cpu_reset_fpustate(void)
 	savefpstate(fpstate);
 }
 
+/* setup the hw.cpuN.* nodes for this cpu */
+static void
+cpu_setup_sysctl(struct cpu_info *ci, device_t dev)
+{
+	const struct sysctlnode *cpunode = NULL;
+
+	sysctl_createv(NULL, 0, NULL, &cpunode,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_NODE, device_xname(dev), NULL,
+		       NULL, 0, NULL, 0,
+		       CTL_HW,
+		       CTL_CREATE, CTL_EOL);
+
+	if (cpunode == NULL)
+		return;
+
+#define SETUPS(name, member)					\
+	sysctl_createv(NULL, 0, &cpunode, NULL,			\
+		       CTLFLAG_PERMANENT,			\
+		       CTLTYPE_STRING, name, NULL,		\
+		       NULL, 0, member, 0,			\
+		       CTL_CREATE, CTL_EOL);
+
+	SETUPS("name", __UNCONST(ci->ci_name))
+#undef SETUPS
+
+#define SETUPI(name, member)					\
+	sysctl_createv(NULL, 0, &cpunode, NULL,			\
+		       CTLFLAG_PERMANENT,			\
+		       CTLTYPE_INT, name, NULL,			\
+		       NULL, 0, member, 0,			\
+		       CTL_CREATE, CTL_EOL);
+
+	SETUPI("id", &ci->ci_cpuid);
+#undef SETUPI
+
+#define SETUPQ(name, member)					\
+	sysctl_createv(NULL, 0, &cpunode, NULL,			\
+		       CTLFLAG_PERMANENT,			\
+		       CTLTYPE_QUAD, name, NULL,			\
+		       NULL, 0, member, 0,			\
+		       CTL_CREATE, CTL_EOL);
+
+	SETUPQ("clock_frequency", &ci->ci_cpu_clockrate[0])
+	SETUPQ("ver", &ci->ci_ver)
+#undef SETUPI
+
+        sysctl_createv(NULL, 0, &cpunode, NULL, 
+                       CTLFLAG_PERMANENT,
+                       CTLTYPE_STRUCT, "cacheinfo", NULL,
+                       NULL, 0, &ci->ci_cacheinfo, sizeof(ci->ci_cacheinfo),
+		       CTL_CREATE, CTL_EOL);
+
+}
+
 /*
  * Attach the CPU.
  * Discover interesting goop about the virtual address cache
@@ -421,7 +479,7 @@ void
 cpu_attach(device_t parent, device_t dev, void *aux)
 {
 	int node;
-	long clk, sclk = 0;
+	uint64_t clk, sclk = 0;
 	struct mainbus_attach_args *ma = aux;
 	struct cpu_info *ci;
 	const char *sep;
@@ -446,7 +504,7 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 	 * For other cpus, we need to call mi_cpu_attach()
 	 * and complete setting up cpcb.
 	 */
-	if (ci->ci_flags & CPUF_PRIMARY) {
+	if (CPU_IS_PRIMARY(ci)) {
 		fpstate_cache = pool_cache_init(sizeof(struct fpstate64),
 					SPARC64_BLOCK_SIZE, 0, 0, "fpstate",
 					NULL, IPL_NONE, NULL, NULL, NULL);
@@ -465,7 +523,9 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 			     device_xname(dev), "timer");
 	mutex_init(&ci->ci_ctx_lock, MUTEX_SPIN, IPL_VM);
 
-	clk = prom_getpropint(node, "clock-frequency", 0);
+	clk = prom_getpropuint64(node, "clock-frequency64", 0);
+	if (clk == 0)
+	  clk = prom_getpropint(node, "clock-frequency", 0);
 	if (clk == 0) {
 		/*
 		 * Try to find it in the OpenPROM root...
@@ -483,19 +543,29 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 	ci->ci_system_clockrate[0] = sclk;
 	ci->ci_system_clockrate[1] = sclk / 1000000;
 
-	snprintf(buf, sizeof buf, "%s @ %s MHz",
-		prom_getpropstring(node, "name"), clockfreq(clk));
+	ci->ci_name = kmem_strdupsize(prom_getpropstring(node, "name"), NULL,
+				      KM_SLEEP);
+	snprintf(buf, sizeof buf, "%s @ %s MHz", ci->ci_name, clockfreq(clk));
 	cpu_setmodel("%s (%s)", machine_model, buf);
 
 	aprint_normal(": %s, CPU id %d\n", buf, ci->ci_cpuid);
 	aprint_naive("\n");
 	if (CPU_ISSUN4U || CPU_ISSUN4US) {
+		ci->ci_ver = getver();
 		aprint_normal_dev(dev, "manuf %x, impl %x, mask %x\n",
 		    (u_int)GETVER_CPU_MANUF(),
 		    (u_int)GETVER_CPU_IMPL(),
 		    (u_int)GETVER_CPU_MASK());
 	}
-
+#ifdef NUMA
+	if (CPU_IS_USIIIi()) {
+		uint64_t start = ci->ci_cpuid;
+		start <<= 36;
+		ci->ci_numa_id = ci->ci_cpuid;
+		printf("NUMA bucket %d %016lx\n", ci->ci_cpuid, start);
+		uvm_page_numa_load(start, 0x1000000000, ci->ci_cpuid);
+	}
+#endif
 	if (ci->ci_system_clockrate[0] != 0) {
 		aprint_normal_dev(dev, "system tick frequency %s MHz\n",
 		    clockfreq(ci->ci_system_clockrate[0]));
@@ -530,6 +600,8 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 		       (long)linesize);
 		sep = ", ";
 	}
+	ci->ci_cacheinfo.c_itotalsize = totalsize;
+	ci->ci_cacheinfo.c_ilinesize = linesize;
 
 	dcachesize = cpu_dcache_size(node);
 	if (dcachesize > dcache_size)
@@ -557,6 +629,8 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 		       (long)linesize);
 		sep = ", ";
 	}
+	ci->ci_cacheinfo.c_dtotalsize = totalsize;
+	ci->ci_cacheinfo.c_dlinesize = linesize;
 
 	linesize = l = cpu_ecache_line_size(node);
 	for (i = 0; (1 << i) < l && l; i++)
@@ -578,10 +652,14 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 		       (long)linesize);
 	}
 	aprint_normal("\n");
+	ci->ci_cacheinfo.c_etotalsize = totalsize;
+	ci->ci_cacheinfo.c_elinesize = linesize;
 
 	if (ecache_min_line_size == 0 ||
 	    linesize < ecache_min_line_size)
 		ecache_min_line_size = linesize;
+
+	cpu_setup_sysctl(ci, dev);
 
 	/*
 	 * Now that we know the size of the largest cache on this CPU,
@@ -618,7 +696,19 @@ cpu_attach(device_t parent, device_t dev, void *aux)
 		ci->ci_cpuset = pa;
 		pa += 64;
 	}
-	
+
+	/*
+	 * cpu_idle setup (currently only necessary for sun4v)
+	 */
+	if (CPU_ISSUN4V) {
+		ci->ci_idlespin = cpu_idle_sun4v;
+	}
+}
+
+static void
+cpu_idle_sun4v(void)
+{
+	hv_cpu_yield();
 }
 
 int
@@ -720,8 +810,9 @@ cpu_hatch(void)
 	char *v = (char*)CPUINFO_VA;
 	int i;
 
+	/* XXX - why flush the icache here? but should be harmless */
 	for (i = 0; i < 4*PAGE_SIZE; i += sizeof(long))
-		flush(v + i);
+		sparc_flush_icache(v + i);
 
 	cpu_pmap_init(curcpu());
 	CPUSET_ADD(cpus_active, cpu_number());

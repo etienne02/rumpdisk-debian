@@ -1,4 +1,4 @@
-/*	$NetBSD: if_tlp_eisa.c,v 1.27 2016/07/14 04:00:45 msaitoh Exp $	*/
+/*	$NetBSD: if_tlp_eisa.c,v 1.29 2021/07/24 18:50:07 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_tlp_eisa.c,v 1.27 2016/07/14 04:00:45 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_tlp_eisa.c,v 1.29 2021/07/24 18:50:07 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -109,29 +109,20 @@ CFATTACH_DECL_NEW(tlp_eisa, sizeof(struct tulip_eisa_softc),
 
 static const int tlp_eisa_irqs[] = { 5, 9, 10, 11 };
 
-static const struct tulip_eisa_product {
-	const char	*tep_eisaid;	/* EISA ID */
-	const char	*tep_name;	/* device name */
-	tulip_chip_t	tep_chip;	/* base Tulip chip type */
-} tlp_eisa_products[] = {
-	{ "DEC4250",			"DEC DE425",
-	  TULIP_CHIP_DE425 },
-
-	{ NULL,				NULL,
-	  TULIP_CHIP_INVALID },
+struct tulip_eisa_product {
+	const char	*name;	/* device name */
+	tulip_chip_t	chip;	/* base Tulip chip type */
 };
 
-static const struct tulip_eisa_product *
-tlp_eisa_lookup(const struct eisa_attach_args *ea)
-{
-	const struct tulip_eisa_product *tep;
+static const struct tulip_eisa_product dec4250 = {
+	.name = "DEC DE425",
+	.chip = TULIP_CHIP_DE425,
+};
 
-	for (tep = tlp_eisa_products;
-	     tep->tep_chip != TULIP_CHIP_INVALID; tep++)
-		if (strcmp(ea->ea_idstring, tep->tep_eisaid) == 0)
-			return (tep);
-	return (NULL);
-}
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "DEC4250",		.data = &dec4250 },
+	DEVICE_COMPAT_EOL
+};
 
 static int
 tlp_eisa_match(device_t parent, cfdata_t match,
@@ -139,10 +130,7 @@ tlp_eisa_match(device_t parent, cfdata_t match,
 {
 	struct eisa_attach_args *ea = aux;
 
-	if (tlp_eisa_lookup(ea) != NULL)
-		return (1);
-
-	return (0);
+	return (eisa_compatible_match(ea, compat_data));
 }
 
 static void
@@ -153,6 +141,7 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 	struct tulip_eisa_softc *esc = device_private(self);
 	struct tulip_softc *sc = &esc->sc_tulip;
 	struct eisa_attach_args *ea = aux;
+	const struct device_compatible_entry *dce;
 	eisa_chipset_tag_t ec = ea->ea_ec;
 	eisa_intr_handle_t ih;
 	bus_space_tag_t iot = ea->ea_iot;
@@ -161,7 +150,7 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 	const struct tulip_eisa_product *tep;
 	u_int8_t enaddr[ETHER_ADDR_LEN], tmpbuf[sizeof(testpat)];
 	u_int32_t val;
-	int irq, i, cnt;
+	int irq, ist, i, cnt;
 	char intrbuf[EISA_INTRSTR_LEN];
 
 	/*
@@ -177,12 +166,11 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 	sc->sc_st = iot;
 	sc->sc_sh = ioh;
 
-	tep = tlp_eisa_lookup(ea);
-	if (tep == NULL) {
-		aprint_normal("\n");
-		panic("tlp_eisa_attach: impossible");
-	}
-	sc->sc_chip = tep->tep_chip;
+	dce = eisa_compatible_lookup(ea, compat_data);
+	KASSERT(dce != NULL);
+	tep = dce->data;
+
+	sc->sc_chip = tep->chip;
 
 	/*
 	 * DE425's registers are 16 bytes long; the PCI configuration
@@ -210,7 +198,7 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 	sc->sc_rev = bus_space_read_4(iot, ioh, DE425_CFRV) & 0xff;
 
 	aprint_normal(": %s Ethernet, pass %d.%d\n",
-	    tep->tep_name, (sc->sc_rev >> 4) & 0xf, sc->sc_rev & 0xf);
+	    tep->name, (sc->sc_rev >> 4) & 0xf, sc->sc_rev & 0xf);
 
 	sc->sc_dmat = ea->ea_dmat;
 
@@ -256,6 +244,7 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 	 */
 	val = bus_space_read_4(iot, ioh, DE425_CFG0);
 	irq = tlp_eisa_irqs[(val >> 1) & 0x03];
+	ist = (val & 0x01) ? IST_EDGE : IST_LEVEL;
 
 	/*
 	 * Map and establish our interrupt.
@@ -265,8 +254,7 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = eisa_intr_string(ec, ih, intrbuf, sizeof(intrbuf));
-	esc->sc_ih = eisa_intr_establish(ec, ih,
-	    (val & 0x01) ? IST_EDGE : IST_LEVEL, IPL_NET, tlp_intr, sc);
+	esc->sc_ih = eisa_intr_establish(ec, ih, ist, IPL_NET, tlp_intr, sc);
 	if (esc->sc_ih == NULL) {
 		aprint_error_dev(self, "unable to establish interrupt");
 		if (intrstr != NULL)
@@ -274,8 +262,10 @@ tlp_eisa_attach(device_t parent, device_t self, void *aux)
 		aprint_error("\n");
 		return;
 	}
-	if (intrstr != NULL)
-		aprint_normal_dev(self, "interrupting at %s\n", intrstr);
+	if (intrstr != NULL) {
+		aprint_normal_dev(self, "interrupting at %s (%s trigger)\n",
+		    ist == IST_EDGE ? "edge" : "level", intrstr);
+	}
 
 	/*
 	 * Finish off the attach.

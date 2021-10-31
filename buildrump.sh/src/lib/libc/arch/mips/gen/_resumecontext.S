@@ -1,4 +1,4 @@
-/*	$NetBSD: _resumecontext.S,v 1.7 2012/09/12 02:00:52 manu Exp $	*/
+/*	$NetBSD: _resumecontext.S,v 1.13 2020/10/15 05:27:53 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,27 +35,47 @@
 #include "assym.h"
 
 #if defined(SYSLIBC_SCCS) && !defined(lint)
-	RCSID("$NetBSD: _resumecontext.S,v 1.7 2012/09/12 02:00:52 manu Exp $")
+	RCSID("$NetBSD: _resumecontext.S,v 1.13 2020/10/15 05:27:53 skrll Exp $")
 #endif /* SYSLIBC_SCCS && !lint */
 
 	.set	reorder
 	.hidden	_C_LABEL(__resumecontext)
-	
+
 LEAF_NOPROFILE(__resumecontext)
 	/*
 	 * We get here not by a call through $t9 but thru $ra after the
-	 * function passed to makecontext returns.
+	 * function passed to makecontext returns.  Therefore, we need
+	 * to recover gp from ra
 	 */
+#if defined(__mips_o32) || defined(__mips_o64)
+	.set push
+	.set noreorder
+	.cpload	ra
+	.set pop
+#endif
+#if defined(__mips_n32) || defined(__mips_n64)
+	.cpsetup ra, t3, __resumecontext
+#endif
+
 	PTR_SUBU	sp, sp, UCONTEXT_SIZE		# get space for ucontext
 	move		a0, sp				# arg0 for getcontext
-	PTR_S		zero, _OFFSETOF_UC_LINK(a0)	# make sure uc_link is 0
+	PTR_S		zero, _UC_LINK(a0)		# make sure uc_link is 0
 	SYSTRAP(getcontext)				# get context
-	PTR_L		a0, _OFFSETOF_UC_LINK(a0)	# linked context?
+
+#if defined(__mips_n32) || defined(__mips_n64)
+	REG_PROLOGUE
+	/* We saved gp in t2 above */
+	REG_S		t3, _UC_GREGS_GP(a0)
+	REG_EPILOGUE
+#endif
+
+	PTR_L		a0, _UC_LINK(a0)		# linked context?
+	NOP_L
 	beq		a0, zero, 1f			#   nope, exit process
 	nop
 	PIC_TAILCALL(setcontext)			#   yes, become it.
 	/* NOTREACHED (in theory) */
-	li		a0, -1				# failure, 
+	li		a0, -1				# failure,
 1:
 	SYSTRAP(exit)					# all hope is lost.
 	/* NOTREACHED */

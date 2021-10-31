@@ -1,4 +1,4 @@
-/*	$NetBSD: compat_16_machdep.c,v 1.17 2013/08/18 06:50:31 matt Exp $	*/
+/*	$NetBSD: compat_16_machdep.c,v 1.19 2021/02/01 19:31:34 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -42,7 +42,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.17 2013/08/18 06:50:31 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.19 2021/02/01 19:31:34 skrll Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -63,9 +63,7 @@ __KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.17 2013/08/18 06:50:31 matt 
 
 #include <machine/cpu.h>
 #include <machine/frame.h>
-#ifndef acorn26
 #include <arm/cpufunc.h>
-#endif
 
 /*
  * Send an interrupt to process.
@@ -178,10 +176,8 @@ sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
 	switch (ps->sa_sigdesc[sig].sd_vers) {
 	case 0:		/* legacy on-stack sigtramp */
 		tf->tf_usr_lr = (int)p->p_sigctx.ps_sigcode;
-#ifndef acorn26
 		/* XXX This should not be needed. */
 		cpu_icache_sync_all();
-#endif
 		break;
 	case 1:
 		tf->tf_usr_lr = (int)ps->sa_sigdesc[sig].sd_tramp;
@@ -237,7 +233,7 @@ compat_16_sys___sigreturn14(struct lwp *l, const struct compat_16_sys___sigretur
 	 * Make sure the processor mode has not been tampered with and
 	 * interrupts have not been disabled.
 	 */
-	if (!VALID_R15_PSR(context.sc_pc, context.sc_spsr))
+	if (!VALID_PSR(context.sc_spsr))
 		return EINVAL;
 
 	/* Restore register context. */

@@ -1,4 +1,4 @@
-/*	$NetBSD: bootconfig.h,v 1.7 2015/01/06 00:43:21 jmcneill Exp $	*/
+/*	$NetBSD: bootconfig.h,v 1.10 2020/10/18 16:28:57 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994 Mark Brinicombe.
@@ -36,6 +36,9 @@
  * SUCH DAMAGE.
  */
 
+#ifndef _ARM_BOOTCONFIG_H
+#define _ARM_BOOTCONFIG_H
+
 #ifdef _KERNEL
 #define BOOTOPT_TYPE_BOOLEAN		0
 #define BOOTOPT_TYPE_STRING		1
@@ -46,7 +49,7 @@
 #define BOOTOPT_TYPE_MASK		7
 
 struct boot_physmem {
-	paddr_t bp_start;		/* starting PFN (not address) */ 
+	paddr_t bp_start;		/* starting PFN (not address) */
 	psize_t bp_pages;		/* # of pages */
 	u_int bp_freelist;		/* VM_FREELIST_ * */
 	u_int bp_flags;
@@ -54,6 +57,10 @@ struct boot_physmem {
 };
 
 int get_bootconf_option(char *, const char *, int, void *);
+bool match_bootconf_option(char *, const char *, const char *);
+char *get_bootconf_string(char *, const char *);
 
 extern char *boot_args;
 #endif	/* _KERNEL */
+
+#endif

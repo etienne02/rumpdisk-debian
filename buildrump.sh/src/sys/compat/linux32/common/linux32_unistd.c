@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_unistd.c,v 1.39 2014/06/01 13:42:12 njoly Exp $ */
+/*	$NetBSD: linux32_unistd.c,v 1.42 2019/11/09 23:44:31 jdolecek Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -33,7 +33,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: linux32_unistd.c,v 1.39 2014/06/01 13:42:12 njoly Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux32_unistd.c,v 1.42 2019/11/09 23:44:31 jdolecek Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -165,7 +165,7 @@ linux32_select1(struct lwp *l, register_t *retval, int nfds,
 			return error;
 
 		uts.tv_sec = utv32.tv_sec;
-		uts.tv_nsec = utv32.tv_usec * 1000;
+		uts.tv_nsec = (long)((unsigned long)utv32.tv_usec * 1000);
 
 		if (itimespecfix(&uts)) {
 			/*
@@ -225,51 +225,44 @@ linux32_select1(struct lwp *l, register_t *retval, int nfds,
 	return 0;
 }
 
-static int
-linux32_pipe(struct lwp *l, int *fd, register_t *retval)
-{
-	/* {
-		syscallarg(netbsd32_intp) fd;
-	} */
-	int error;
-	int pfds[2];
-
-	pfds[0] = (int)retval[0];
-	pfds[1] = (int)retval[1];
-
-	if ((error = copyout(pfds, fd, 2 * sizeof(*fd))) != 0)
-		return error;
-
-	retval[0] = 0;
-	retval[1] = 0;
-
-	return 0;
-}
-
 int
 linux32_sys_pipe(struct lwp *l, const struct linux32_sys_pipe_args *uap,
     register_t *retval)
 {
-	int error;
-	if ((error = pipe1(l, retval, 0)))
+	/* {
+		syscallarg(netbsd32_intp) fd;
+	} */
+	int f[2], error;
+
+	if ((error = pipe1(l, f, 0)))
 		return error;
-	return linux32_pipe(l, SCARG_P32(uap, fd), retval);
+
+	if ((error = copyout(f, SCARG_P32(uap, fd), sizeof(f))) != 0)
+		return error;
+	retval[0] = 0;
+	return 0;
 }
 
 int
 linux32_sys_pipe2(struct lwp *l, const struct linux32_sys_pipe2_args *uap,
     register_t *retval)
 {
-	int flags, error;
+	/* {
+		syscallarg(netbsd32_intp) fd;
+	} */
+	int f[2], flags, error;
 
 	flags = linux_to_bsd_ioflags(SCARG(uap, flags));
 	if ((flags & ~(O_CLOEXEC|O_NONBLOCK)) != 0)
 		return EINVAL;
 
-	if ((error = pipe1(l, retval, flags)))
+	if ((error = pipe1(l, f, flags)))
 		return error;
 
-	return linux32_pipe(l, SCARG_P32(uap, fd), retval);
+	if ((error = copyout(f, SCARG_P32(uap, fd), sizeof(f))) != 0)
+		return error;
+	retval[0] = 0;
+	return 0;
 }
 
 int
@@ -742,3 +735,18 @@ linux32_sys_pwrite(struct lwp *l,
 	return sys_pwrite(l, &pra, retval);
 }
 
+/*
+ * fallocate(2)
+ */
+int
+linux32_sys_fallocate(struct lwp *l,
+    const struct linux32_sys_fallocate_args *uap, register_t *retval)
+{
+	/*
+	 * For now just return EOPNOTSUPP, this makes glibc posix_fallocate()
+	 * to fallback to emulation.
+	 * XXX Right now no filesystem actually implements fallocate support,
+	 * so no need for mapping.
+	 */
+	return EOPNOTSUPP;
+}

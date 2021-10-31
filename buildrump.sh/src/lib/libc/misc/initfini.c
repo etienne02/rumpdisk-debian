@@ -1,4 +1,4 @@
-/* 	$NetBSD: initfini.c,v 1.11 2013/08/19 22:14:37 matt Exp $	 */
+/* 	$NetBSD: initfini.c,v 1.15 2021/04/20 21:42:32 christos Exp $	 */
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: initfini.c,v 1.11 2013/08/19 22:14:37 matt Exp $");
+__RCSID("$NetBSD: initfini.c,v 1.15 2021/04/20 21:42:32 christos Exp $");
 
 #ifdef _LIBC
 #include "namespace.h"
@@ -40,6 +40,7 @@ __RCSID("$NetBSD: initfini.c,v 1.11 2013/08/19 22:14:37 matt Exp $");
 #include <sys/exec.h>
 #include <sys/tls.h>
 #include <stdbool.h>
+#include "csu-common.h"
 
 void	_libc_init(void) __attribute__((__constructor__, __used__));
 
@@ -58,6 +59,7 @@ __weak_alias(_dlauxinfo,___dlauxinfo)
 static void *__libc_dlauxinfo;
 
 void *___dlauxinfo(void) __pure;
+__weakref_visible void * real_dlauxinfo(void) __weak_reference(_dlauxinfo);
 
 void *
 ___dlauxinfo(void)
@@ -74,11 +76,31 @@ void _libc_init(void);
  * Declare as common symbol to allow new libc with older binaries to
  * not trigger an undefined reference.
  */
-struct ps_strings *__ps_strings;
+struct ps_strings *__ps_strings __common;
+char *__progname __common;
+char **environ __common;
 
 /*
- * _libc_init is called twice.  The first time explicitly by crt0.o
- * (for newer versions) and the second time as indirectly via _init().
+ * _libc_init is called twice.  One call comes explicitly from crt0.o
+ * (for newer versions) and the other is via global constructor handling.
+ *
+ * In static binaries the explicit call is first; in dynamically linked
+ * binaries the global constructors of libc are called from ld.elf_so
+ * before crt0.o is reached.
+ *
+ * Note that __ps_strings is set by crt0.o. So in the dynamic case, it
+ * hasn't been set yet when we get here, and __libc_dlauxinfo is not
+ * (ever) assigned. But this is ok because __libc_dlauxinfo is only
+ * used in static binaries, because it's there to substitute for the
+ * dynamic linker. In static binaries __ps_strings will have been set
+ * up when we get here and we get a valid __libc_dlauxinfo.
+ *
+ * This code causes problems for Emacs because Emacs's undump
+ * mechanism saves the __ps_strings value from the startup execution;
+ * then running the resulting binary it gets here before crt0 has
+ * assigned the current execution's value to __ps_strings, and in an
+ * environment with ASLR this can cause the assignment of
+ * __libc_dlauxinfo to receive SIGSEGV.
  */
 void __section(".text.startup")
 _libc_init(void)
@@ -89,7 +111,8 @@ _libc_init(void)
 
 	libc_initialised = 1;
 
-	if (__ps_strings != NULL)
+	/* Only initialize _dlauxinfo for static binaries. */
+	if (__ps_strings != NULL && real_dlauxinfo == ___dlauxinfo)
 		__libc_dlauxinfo = __ps_strings->ps_argvstr +
 		    __ps_strings->ps_nargvstr + __ps_strings->ps_nenvstr + 2;
 

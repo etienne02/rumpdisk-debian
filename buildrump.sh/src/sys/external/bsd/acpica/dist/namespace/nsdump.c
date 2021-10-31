@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -127,7 +127,7 @@ AcpiNsPrintPathname (
                 AcpiOsPrintf ("?");
         }
 
-        Pathname += ACPI_NAME_SIZE;
+        Pathname += ACPI_NAMESEG_SIZE;
         NumSegments--;
         if (NumSegments)
         {
@@ -183,6 +183,7 @@ AcpiNsDumpPathname (
     return_VOID;
 }
 #endif
+
 
 /*******************************************************************************
  *
@@ -242,6 +243,7 @@ AcpiNsDumpOneObject (
     }
 
     Type = ThisNode->Type;
+    Info->Count++;
 
     /* Check if the owner matches */
 
@@ -270,7 +272,7 @@ AcpiNsDumpOneObject (
 
     /* Now we can print out the pertinent information */
 
-    AcpiOsPrintf (" %-12s %p %2.2X ",
+    AcpiOsPrintf (" %-12s %p %3.3X ",
         AcpiUtGetTypeName (Type), ThisNode, ThisNode->OwnerId);
 
     DbgLevel = AcpiDbgLevel;
@@ -367,7 +369,7 @@ AcpiNsDumpOneObject (
                     AcpiOsPrintf (" =");
                     for (i = 0; (i < ObjDesc->Buffer.Length && i < 12); i++)
                     {
-                        AcpiOsPrintf (" %.2hX", ObjDesc->Buffer.Pointer[i]);
+                        AcpiOsPrintf (" %2.2X", ObjDesc->Buffer.Pointer[i]);
                     }
                 }
                 AcpiOsPrintf ("\n");
@@ -464,7 +466,7 @@ AcpiNsDumpOneObject (
         case ACPI_TYPE_LOCAL_BANK_FIELD:
         case ACPI_TYPE_LOCAL_INDEX_FIELD:
 
-            AcpiOsPrintf (" Off %.3X Len %.2X Acc %.2hd\n",
+            AcpiOsPrintf (" Off %.3X Len %.2X Acc %.2X\n",
                 (ObjDesc->CommonField.BaseByteOffset * 8)
                     + ObjDesc->CommonField.StartFieldBitOffset,
                 ObjDesc->CommonField.BitLength,
@@ -649,8 +651,6 @@ AcpiNsDumpOneObject (
 
             goto Cleanup;
         }
-
-        ObjType = ACPI_TYPE_INVALID;   /* Terminate loop after next pass */
     }
 
 Cleanup:
@@ -706,6 +706,7 @@ AcpiNsDumpObjects (
         return;
     }
 
+    Info.Count = 0;
     Info.DebugLevel = ACPI_LV_TABLES;
     Info.OwnerId = OwnerId;
     Info.DisplayType = DisplayType;
@@ -714,6 +715,7 @@ AcpiNsDumpObjects (
         ACPI_NS_WALK_NO_UNLOCK | ACPI_NS_WALK_TEMP_NODES,
         AcpiNsDumpOneObject, NULL, (void *) &Info, NULL);
 
+    AcpiOsPrintf ("\nNamespace node count: %u\n\n", Info.Count);
     (void) AcpiUtReleaseMutex (ACPI_MTX_NAMESPACE);
 }
 

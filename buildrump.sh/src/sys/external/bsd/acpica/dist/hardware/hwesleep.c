@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -113,7 +113,7 @@ AcpiHwExtendedSleep (
     UINT8                   SleepState)
 {
     ACPI_STATUS             Status;
-    UINT8                   SleepTypeValue;
+    UINT8                   SleepControl;
     UINT64                  SleepStatus;
 
 
@@ -139,10 +139,6 @@ AcpiHwExtendedSleep (
 
     AcpiGbl_SystemAwakeAndRunning = FALSE;
 
-    /* Flush caches, as per ACPI specification */
-
-    ACPI_FLUSH_CPU_CACHE ();
-
     /*
      * Set the SLP_TYP and SLP_EN bits.
      *
@@ -152,11 +148,24 @@ AcpiHwExtendedSleep (
     ACPI_DEBUG_PRINT ((ACPI_DB_INIT,
         "Entering sleep state [S%u]\n", SleepState));
 
-    SleepTypeValue = ((AcpiGbl_SleepTypeA << ACPI_X_SLEEP_TYPE_POSITION) &
-        ACPI_X_SLEEP_TYPE_MASK);
+    SleepControl = ((AcpiGbl_SleepTypeA << ACPI_X_SLEEP_TYPE_POSITION) &
+        ACPI_X_SLEEP_TYPE_MASK) | ACPI_X_SLEEP_ENABLE;
 
-    Status = AcpiWrite ((UINT64) (SleepTypeValue | ACPI_X_SLEEP_ENABLE),
-        &AcpiGbl_FADT.SleepControl);
+    /* Flush caches, as per ACPI specification */
+
+    ACPI_FLUSH_CPU_CACHE ();
+
+    Status = AcpiOsEnterSleep (SleepState, SleepControl, 0);
+    if (Status == AE_CTRL_TERMINATE)
+    {
+        return_ACPI_STATUS (AE_OK);
+    }
+    if (ACPI_FAILURE (Status))
+    {
+        return_ACPI_STATUS (Status);
+    }
+
+    Status = AcpiWrite ((UINT64) SleepControl, &AcpiGbl_FADT.SleepControl);
     if (ACPI_FAILURE (Status))
     {
         return_ACPI_STATUS (Status);

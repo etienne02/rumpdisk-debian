@@ -1,4 +1,4 @@
-/* $NetBSD: core_machdep.c,v 1.1 2014/08/10 05:47:37 matt Exp $ */
+/* $NetBSD: core_machdep.c,v 1.5 2019/11/20 19:37:51 pgoyette Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,17 +31,19 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: core_machdep.c,v 1.1 2014/08/10 05:47:37 matt Exp $");
+__KERNEL_RCSID(1, "$NetBSD: core_machdep.c,v 1.5 2019/11/20 19:37:51 pgoyette Exp $");
 
 #include <sys/types.h>
 #include <sys/cpu.h>
 #include <sys/exec.h>
 #include <sys/core.h>
 #include <sys/lwp.h>
+#include <sys/compat_stub.h>
 
-#include <aarch64/frame.h>
-#include <aarch64/locore.h>
 #include <aarch64/pcb.h>
+#include <aarch64/frame.h>
+#include <aarch64/machdep.h>
+#include <aarch64/armreg.h>
 
 /*
  * Write the machine-dependent part of a core dump.
@@ -56,20 +58,17 @@ cpu_coredump(struct lwp *l, struct coredump_iostate *iocookie,
 	int error;
 
 	if (iocookie == NULL) {
-		CORE_SETMAGIC(*chdr, COREMAGIC, MID_POWERPC, 0);
-		chdr->c_hdrsize = ALIGN(sizeof *chdr);
-		chdr->c_seghdrsize = ALIGN(sizeof cseg);
-		chdr->c_cpusize = sizeof md_core;
+		CORE_SETMAGIC(*chdr, COREMAGIC, MID_MACHINE, 0);
+		chdr->c_hdrsize = ALIGN(sizeof(*chdr));
+		chdr->c_seghdrsize = ALIGN(sizeof(cseg));
+		chdr->c_cpusize = sizeof(md_core);
 		chdr->c_nseg++;
 		return 0;
 	}
 
 	md_core.reg = l->l_md.md_utf->tf_regs;
-	if (l == curlwp) {
-		md_core.reg.r_tpidr = reg_tpidr_el0_read();
-	} else {
-		md_core.reg.r_tpidr = (uint64_t)(uintptr_t)l->l_private;
-	}
+	md_core.reg.r_tpidr = (uint64_t)(uintptr_t)l->l_private;
+
 	fpu_save(l);
 	if (fpu_used_p(l)) {
 		md_core.fpreg = pcb->pcb_fpregs;
@@ -81,11 +80,13 @@ cpu_coredump(struct lwp *l, struct coredump_iostate *iocookie,
 	cseg.c_addr = 0;
 	cseg.c_size = chdr->c_cpusize;
 
-	error = coredump_write(iocookie, UIO_SYSSPACE, &cseg,
-		    chdr->c_seghdrsize);
+	MODULE_HOOK_CALL(coredump_write_hook, (iocookie, UIO_SYSSPACE, &cseg,
+		    chdr->c_seghdrsize), ENOSYS, error);
 	if (error)
 		return error;
 
-	return coredump_write(iocookie, UIO_SYSSPACE, &md_core,
-	    sizeof(md_core));
+	MODULE_HOOK_CALL(coredump_write_hook, (iocookie, UIO_SYSSPACE, &md_core,
+	    sizeof(md_core)), ENOSYS, error);
+
+	return error;
 }

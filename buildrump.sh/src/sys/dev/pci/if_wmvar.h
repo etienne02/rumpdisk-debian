@@ -1,4 +1,4 @@
-/*	$NetBSD: if_wmvar.h,v 1.31 2016/05/06 08:56:20 msaitoh Exp $	*/
+/*	$NetBSD: if_wmvar.h,v 1.47 2020/10/30 06:29:47 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Wasabi Systems, Inc.
@@ -74,10 +74,7 @@
 /* sc_flags */
 #define	WM_F_HAS_MII		0x00000001 /* has MII */
 #define	WM_F_LOCK_EECD		0x00000002 /* Lock using with EECD register */
-#define	WM_F_LOCK_SWSM		0x00000004 /* Lock using with SWSM register */
-#define WM_F_LOCK_SWFW		0x00000008 /* Lock using with SWFW register */
-#define WM_F_LOCK_EXTCNF	0x00000010 /* Lock using with EXTCNF reg. */
-#define	WM_F_EEPROM_EERDEEWR	0x00000020 /* EEPROM access via EERD/EEWR */
+#define	WM_F_EEPROM_INVM	0x00000020 /* NVM is iNVM */
 #define	WM_F_EEPROM_SPI		0x00000040 /* EEPROM is SPI */
 #define	WM_F_EEPROM_FLASH	0x00000080 /* EEPROM is FLASH */
 #define	WM_F_EEPROM_FLASH_HW	0x00000100 /* EEPROM is FLASH */
@@ -96,9 +93,23 @@
 #define WM_F_WOL		0x00200000
 #define WM_F_EEE		0x00400000 /* Energy Efficiency Ethernet */
 #define WM_F_ATTACHED		0x00800000 /* attach() finished successfully */
-#define	WM_F_EEPROM_INVM	0x01000000 /* NVM is iNVM */
+#define WM_F_80003_MDIC_WA	0x01000000 /* 80003 MDIC workaround */
 #define	WM_F_PCS_DIS_AUTONEGO	0x02000000 /* PCS Disable Autonego */
 #define	WM_F_PLL_WA_I210	0x04000000 /* I21[01] PLL workaround */
+#define	WM_F_WA_I210_CLSEM	0x08000000 /* I21[01] Semaphore workaround */
+#define	WM_F_SFP		0x10000000 /* SFP */
+#define	WM_F_MAS		0x20000000 /* Media Auto Sense */
+#define	WM_F_CRC_STRIP		0x40000000 /* CRC strip */
+
+#define WM_FLAGS "\20" \
+	"\1" "HAS_MII"	"\2" "LOCK_EECD" "\3" "_B02"	"\4" "_B03"	\
+	"\5" "_B04"	"\6" "INVM"	"\7" "SPI"	"\10" "FLASH"	\
+	"\11" "FLASH_HW" "\12" "INVALID" "\13" "IOH_VALID" "\14" "BUS64" \
+	"\15" "PCIX"	"\16" "CSA"	"\17" "PCIE"	"\20" "SGMII"	\
+	"\21" "NEWQUEUE" "\22" "ASF_FIRM" "\23" "ARC_SUBSYS" "\24" "AMT" \
+	"\25" "MANAGE"	"\26" "WOL"	"\27" "EEE"	"\30" "ATTACHED" \
+	"\31" "MDIC_WA"	"\32" "PCS_DIS_AUTONEGO" "\33" "PLLWA" "\34" "CLSEMWA" \
+	"\35" "SFP"	"\36" "MAS"	"\37" "CRC_STRIP"
 
 /*
  * Variations of Intel gigabit Ethernet controller:
@@ -110,7 +121,7 @@
  *  |  |  |  |  +---------- 82571 - 82572 - 82573 - 82574 - 82583
  *  |  |  |  |  |  +--------- 82575 - 82576 - 82580 - I350 - I354 - I210 - I211
  *  |  |  |  |  |  |  +-- 80003
- *  |  |  |  |  |  |  |  +-- ICH8 - ICH9 - ICH10 - PCH - PCH2 - PCH_LPT
+ *  |  |  |  |  |  |  |  +-- ICH8 - 9 - 10 - PCH - 2 - LPT - SPT - CNP
  *  |  |  |  |  |  |  |  |
  * -+--+--+--+--+--+--+--+----------------------------------------------->
  */
@@ -150,22 +161,49 @@ typedef enum {
 	WM_T_PCH2,			/* PCH2 LAN */
 	WM_T_PCH_LPT,			/* PCH "Lynx Point" LAN (I217, I218) */
 	WM_T_PCH_SPT,			/* PCH "Sunrise Point" LAN (I219) */
+	WM_T_PCH_CNP,			/* (I219) */
 } wm_chip_type;
+
+/*
+ * Variations of internal or external PHYs
+ *
+ *  +- 82562 - 8254[17] - 8257[12] - 82566
+ *  |
+ * -+------------------------------------->
+ *
+ *
+ *	  +---------------------------- I347 ----- E1512 ---- E1543
+ *	  |					     |
+ *	  |	       +--------------------------- I210 - I211
+ *	  |	       |
+ *	  |	       |			+-------------+--- 82580 - I350
+ *	  |	       |			|	      |
+ *	  |	       |  +- 578 - 577 - 579 - I217 - I218 - I219
+ *	  |	       |  |
+ *   +- 56[34] -- 567 -- 573
+ *   |		(E1149) (E1111)
+ *   |
+ *  -+----------------------------------------------------------------------->
+ */
 
 typedef enum {
 	WMPHY_UNKNOWN = 0,
 	WMPHY_NONE,
-	WMPHY_M88,
-	WMPHY_IGP,
-	WMPHY_IGP_2,
-	WMPHY_GG82563,
-	WMPHY_IGP_3,
-	WMPHY_IFE,
-	WMPHY_BM,
-	WMPHY_82577,
-	WMPHY_82578,
-	WMPHY_82579,
-	WMPHY_82580
+	WMPHY_M88,	/* 88E1000: 8254[34], E1011: 8254[056], E1111: 82573 */
+	WMPHY_IGP,	/* 8254[17] */
+	WMPHY_IGP_2,	/* 8257[12] */
+	WMPHY_GG82563,	/* 8256[34]: 80003 */
+	WMPHY_IGP_3,	/* 82566: 82575, 82576, ICH8, ICH9 */
+	WMPHY_IFE,	/* 82562: ICH8 ICH9 */
+	WMPHY_BM,	/* 82567: ICH8 ICH9 ICH10 */
+	WMPHY_82578,	/* 82578: PCH */
+	WMPHY_82577,	/* 82577: PCH (NOTE: functionality newer than 82578) */
+	WMPHY_82579,	/* 82579: PCH2 */
+	WMPHY_I217,	/* I217:  _LPT, I218: _LPT, I219: _SPT _CNP */
+	WMPHY_82580,	/* 82580 */
+	WMPHY_I350,	/* I350 */
+	WMPHY_VF,
+	WMPHY_I210	/* I210: I210 I211 */
 } wm_phy_type;
 
 

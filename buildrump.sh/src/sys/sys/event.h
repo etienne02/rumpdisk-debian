@@ -1,4 +1,4 @@
-/*	$NetBSD: event.h,v 1.26 2016/01/31 04:40:01 christos Exp $	*/
+/*	$NetBSD: event.h,v 1.40 2020/10/31 14:55:52 christos Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -43,18 +43,23 @@
 #define	EVFILT_PROC		4U	/* attached to struct proc */
 #define	EVFILT_SIGNAL		5U	/* attached to struct proc */
 #define	EVFILT_TIMER		6U	/* arbitrary timer (in ms) */
-#define	EVFILT_SYSCOUNT		7U	/* number of filters */
+#define	EVFILT_FS		7U	/* filesystem events */
+#define	EVFILT_USER		8U	/* user events */
+#define	EVFILT_SYSCOUNT		9U	/* number of filters */
 
-#define	EV_SET(kevp, a, b, c, d, e, f)					\
-do {									\
-	(kevp)->ident = (a);						\
-	(kevp)->filter = (b);						\
-	(kevp)->flags = (c);						\
-	(kevp)->fflags = (d);						\
-	(kevp)->data = (e);						\
-	(kevp)->udata = (f);						\
-} while (/* CONSTCOND */ 0)
-
+#ifdef EVFILT_NAMES
+static const char *evfiltnames[] = {
+	"EVFILT_READ",
+	"EVFILT_WRITE",
+	"EVFILT_AIO",
+	"EVFILT_VNODE",
+	"EVFILT_PROC",
+	"EVFILT_SIGNAL",
+	"EVFILT_TIMER",
+	"EVFILT_FS",
+	"EVFILT_USER",
+};
+#endif
 
 struct kevent {
 	uintptr_t	ident;		/* identifier for this event */
@@ -62,8 +67,24 @@ struct kevent {
 	uint32_t	flags;		/* action flags for kqueue */
 	uint32_t	fflags;		/* filter flag value */
 	int64_t		data;		/* filter data value */
-	intptr_t	udata;		/* opaque user data identifier */
+	void		*udata;		/* opaque user data identifier */
 };
+
+static __inline void
+_EV_SET(struct kevent *_kevp, uintptr_t _ident, uint32_t _filter,
+    uint32_t _flags, uint32_t _fflags, int64_t _data, void *_udata)
+{
+	_kevp->ident = _ident;
+	_kevp->filter = _filter;
+	_kevp->flags = _flags;
+	_kevp->fflags = _fflags;
+	_kevp->data = _data;
+	_kevp->udata = _udata;
+}
+
+#define EV_SET(kevp, ident, filter, flags, fflags, data, udata)	\
+    _EV_SET((kevp), __CAST(uintptr_t, (ident)), (filter), (flags), \
+    (fflags), (data), __CAST(void *, (udata)))
 
 /* actions */
 #define	EV_ADD		0x0001U		/* add event to kq (implies ENABLE) */
@@ -84,6 +105,25 @@ struct kevent {
 #define	EV_EOF		0x8000U		/* EOF detected */
 #define	EV_ERROR	0x4000U		/* error, data contains errno */
 
+/*
+ * data/hint flags/masks for EVFILT_USER, shared with userspace
+ *
+ * On input, the top two bits of fflags specifies how the lower twenty four
+ * bits should be applied to the stored value of fflags.
+ *
+ * On output, the top two bits will always be set to NOTE_FFNOP and the
+ * remaining twenty four bits will contain the stored fflags value.
+ */
+#define	NOTE_FFNOP	0x00000000U		/* ignore input fflags */
+#define	NOTE_FFAND	0x40000000U		/* AND fflags */
+#define	NOTE_FFOR	0x80000000U		/* OR fflags */
+#define	NOTE_FFCOPY	0xc0000000U		/* copy fflags */
+
+#define	NOTE_FFCTRLMASK	0xc0000000U		/* masks for operations */
+#define	NOTE_FFLAGSMASK	0x00ffffffU
+
+#define	NOTE_TRIGGER	0x01000000U		/* Cause the event to be
+						   triggered for output. */
 /*
  * hint flag for in-kernel use - must not equal any existing note
  */
@@ -156,6 +196,16 @@ struct kfilter_mapping {
 #define	NOTE_SIGNAL	0x08000000U
 
 /*
+ * Hint values for the optional f_touch event filter.  If f_touch is not set
+ * to NULL and f_isfd is zero the f_touch filter will be called with the type
+ * argument set to EVENT_REGISTER during a kevent() system call.  It is also
+ * called under the same conditions with the type argument set to EVENT_PROCESS
+ * when the event has been triggered.
+ */
+#define	EVENT_REGISTER	1
+#define	EVENT_PROCESS	2
+
+/*
  * Callback methods for each filter type.
  */
 struct filterops {
@@ -166,6 +216,7 @@ struct filterops {
 					/* called when knote is DELETEd */
 	int	(*f_event)	(struct knote *, long);
 					/* called when event is triggered */
+	void	(*f_touch)	(struct knote *, struct kevent *, long);
 };
 
 /*
@@ -183,20 +234,31 @@ struct knote {
 	TAILQ_ENTRY(knote)	kn_tqe;		/* q: for struct kqueue */
 	struct kqueue		*kn_kq;		/* q: which queue we are on */
 	struct kevent		kn_kevent;
-	uint32_t		kn_status;
-	uint32_t		kn_sfflags;	/*   saved filter flags */
-	uintptr_t		kn_sdata;	/*   saved data field */
-	void			*kn_obj;	/*   pointer to monitored obj */
+	uint32_t		kn_status;	/* q: flags below */
+	uint32_t		kn_sfflags;	/*    saved filter flags */
+	uintptr_t		kn_sdata;	/*    saved data field */
+	void			*kn_obj;	/*    monitored obj */
 	const struct filterops	*kn_fop;
 	struct kfilter		*kn_kfilter;
 	void 			*kn_hook;
+	int			kn_hookid;
 
 #define	KN_ACTIVE	0x01U			/* event has been triggered */
 #define	KN_QUEUED	0x02U			/* event is on queue */
 #define	KN_DISABLED	0x04U			/* event is disabled */
 #define	KN_DETACHED	0x08U			/* knote is detached */
 #define	KN_MARKER	0x10U			/* is a marker */
-#define KN_BUSY		0x20U			/* is being scanned */
+#define	KN_BUSY		0x20U			/* is being scanned */
+/* Toggling KN_BUSY also requires kn_kq->kq_fdp->fd_lock. */
+#define __KN_FLAG_BITS \
+    "\20" \
+    "\1ACTIVE" \
+    "\2QUEUED" \
+    "\3DISABLED" \
+    "\4DETACHED" \
+    "\5MARKER" \
+    "\6BUSY"
+
 
 #define	kn_id		kn_kevent.ident
 #define	kn_filter	kn_kevent.filter
@@ -240,6 +302,8 @@ int	kfilter_unregister(const char *);
 
 int	filt_seltrue(struct knote *, long);
 extern const struct filterops seltrue_filtops;
+
+extern struct klist fs_klist;	/* EVFILT_FS */
 
 #else 	/* !_KERNEL */
 

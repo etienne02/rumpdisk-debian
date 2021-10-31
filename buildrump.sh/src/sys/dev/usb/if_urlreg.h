@@ -1,4 +1,4 @@
-/*	$NetBSD: if_urlreg.h,v 1.11 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: if_urlreg.h,v 1.16 2019/12/27 08:53:30 msaitoh Exp $	*/
 /*
  * Copyright (c) 2001, 2002
  *     Shingo WATANABE <nabe@nabechan.org>.  All rights reserved.
@@ -39,8 +39,6 @@
 
 #define	URL_TX_TIMEOUT		1000
 #define	URL_TIMEOUT		10000
-
-#define	ETHER_ALIGN		2
 
 
 /* Packet length */
@@ -84,7 +82,7 @@
 #define	 URL_TCR_TXRR1		(1<<7) /* TX Retry Count */
 #define	 URL_TCR_TXRR0		(1<<6) /* TX Retry Count */
 #define	 URL_TCR_IFG1		(1<<4) /* Interframe Gap Time */
-#define	 URL_TCR_IFG0		(1<<4) /* Interframe Gap Time */
+#define	 URL_TCR_IFG0		(1<<3) /* Interframe Gap Time */
 #define	 URL_TCR_NOCRC		(1<<0) /* no CRC Append */
 
 #define	URL_RCR			0x0130 /* Receive Configuration Register */
@@ -122,70 +120,9 @@
 #define	URL_ANLP		0x146 /* Auto-negotiation link partner ability register */
 
 
-typedef	uWord url_rxhdr_t;	/* Recive Header */
+typedef	uWord url_rxhdr_t;	/* Receive Header */
 #define	URL_RXHDR_BYTEC_MASK	(0x0fff) /* RX bytes count */
 #define	URL_RXHDR_VALID_MASK	(0x1000) /* Valid packet */
 #define	URL_RXHDR_RUNTPKT_MASK	(0x2000) /* Runt packet */
 #define	URL_RXHDR_PHYPKT_MASK	(0x4000) /* Physical match packet */
 #define	URL_RXHDR_MCASTPKT_MASK	(0x8000) /* Multicast packet */
-
-#define	GET_IFP(sc)		(&(sc)->sc_ec.ec_if)
-#define	GET_MII(sc)		(&(sc)->sc_mii)
-
-struct url_chain {
-	struct url_softc	*url_sc;
-	struct usbd_xfer	*url_xfer;
-	char			*url_buf;
-	struct mbuf		*url_mbuf;
-	int			url_idx;
-};
-
-struct url_cdata {
-	struct url_chain	url_tx_chain[URL_TX_LIST_CNT];
-	struct url_chain	url_rx_chain[URL_TX_LIST_CNT];
-#if 0
-	/* XXX: Interrupt Endpoint is not yet supported! */
-	struct url_intrpkg	url_ibuf;
-#endif
-	int			url_tx_prod;
-	int			url_tx_cons;
-	int			url_tx_cnt;
-	int			url_rx_prod;
-};
-
-struct url_softc {
-	device_t		sc_dev;	/* base device */
-	struct usbd_device *	sc_udev;
-
-	/* USB */
-	struct usbd_interface *	sc_ctl_iface;
-	/* int			sc_ctl_iface_no; */
-	int			sc_bulkin_no; /* bulk in endpoint */
-	int			sc_bulkout_no; /* bulk out endpoint */
-	int			sc_intrin_no; /* intr in endpoint */
-	struct usbd_pipe *	sc_pipe_rx;
-	struct usbd_pipe *	sc_pipe_tx;
-	struct usbd_pipe *	sc_pipe_intr;
-	struct callout		sc_stat_ch;
-	u_int			sc_rx_errs;
-	/* u_int		sc_intr_errs; */
-	struct timeval		sc_rx_notice;
-
-	/* Ethernet */
-	struct ethercom		sc_ec; /* ethernet common */
-	struct mii_data		sc_mii;
-	krwlock_t		sc_mii_rwlock;
-	int			sc_link;
-#define	sc_media url_mii.mii_media
-	krndsource_t	rnd_source;
-	struct url_cdata	sc_cdata;
-
-	int                     sc_attached;
-	int			sc_dying;
-	int                     sc_refcnt;
-
-	struct usb_task		sc_tick_task;
-	struct usb_task		sc_stop_task;
-
-	uint16_t		sc_flags;
-};

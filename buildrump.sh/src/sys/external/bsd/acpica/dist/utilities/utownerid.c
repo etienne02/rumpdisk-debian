@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -82,7 +82,7 @@ AcpiUtAllocateOwnerId (
     if (*OwnerId)
     {
         ACPI_ERROR ((AE_INFO,
-            "Owner ID [0x%2.2X] already exists", *OwnerId));
+            "Owner ID [0x%3.3X] already exists", *OwnerId));
         return_ACPI_STATUS (AE_ALREADY_EXISTS);
     }
 
@@ -117,14 +117,20 @@ AcpiUtAllocateOwnerId (
                 break;
             }
 
-            if (!(AcpiGbl_OwnerIdMask[j] & (1 << k)))
+            /*
+             * Note: the UINT32 cast ensures that 1 is stored as a unsigned
+             * integer. Omitting the cast may result in 1 being stored as an
+             * int. Some compilers or runtime error detection may flag this as
+             * an error.
+             */
+            if (!(AcpiGbl_OwnerIdMask[j] & ((UINT32) 1 << k)))
             {
                 /*
                  * Found a free ID. The actual ID is the bit index plus one,
                  * making zero an invalid Owner ID. Save this as the last ID
                  * allocated and update the global ID mask.
                  */
-                AcpiGbl_OwnerIdMask[j] |= (1 << k);
+                AcpiGbl_OwnerIdMask[j] |= ((UINT32) 1 << k);
 
                 AcpiGbl_LastOwnerIdIndex = (UINT8) j;
                 AcpiGbl_NextOwnerIdOffset = (UINT8) (k + 1);
@@ -132,13 +138,13 @@ AcpiUtAllocateOwnerId (
                 /*
                  * Construct encoded ID from the index and bit position
                  *
-                 * Note: Last [j].k (bit 255) is never used and is marked
+                 * Note: Last [j].k (bit 4095) is never used and is marked
                  * permanently allocated (prevents +1 overflow)
                  */
                 *OwnerId = (ACPI_OWNER_ID) ((k + 1) + ACPI_MUL_32 (j));
 
                 ACPI_DEBUG_PRINT ((ACPI_DB_VALUES,
-                    "Allocated OwnerId: %2.2X\n", (unsigned int) *OwnerId));
+                    "Allocated OwnerId: 0x%3.3X\n", (unsigned int) *OwnerId));
                 goto Exit;
             }
         }
@@ -158,7 +164,7 @@ AcpiUtAllocateOwnerId (
      */
     Status = AE_OWNER_ID_LIMIT;
     ACPI_ERROR ((AE_INFO,
-        "Could not allocate new OwnerId (255 max), AE_OWNER_ID_LIMIT"));
+        "Could not allocate new OwnerId (4095 max), AE_OWNER_ID_LIMIT"));
 
 Exit:
     (void) AcpiUtReleaseMutex (ACPI_MTX_CACHES);
@@ -201,7 +207,7 @@ AcpiUtReleaseOwnerId (
 
     if (OwnerId == 0)
     {
-        ACPI_ERROR ((AE_INFO, "Invalid OwnerId: 0x%2.2X", OwnerId));
+        ACPI_ERROR ((AE_INFO, "Invalid OwnerId: 0x%3.3X", OwnerId));
         return_VOID;
     }
 
@@ -220,7 +226,7 @@ AcpiUtReleaseOwnerId (
     /* Decode ID to index/offset pair */
 
     Index = ACPI_DIV_32 (OwnerId);
-    Bit = 1 << ACPI_MOD_32 (OwnerId);
+    Bit = (UINT32) 1 << ACPI_MOD_32 (OwnerId);
 
     /* Free the owner ID only if it is valid */
 
@@ -231,7 +237,7 @@ AcpiUtReleaseOwnerId (
     else
     {
         ACPI_ERROR ((AE_INFO,
-            "Release of non-allocated OwnerId: 0x%2.2X", OwnerId + 1));
+            "Attempted release of non-allocated OwnerId: 0x%3.3X", OwnerId + 1));
     }
 
     (void) AcpiUtReleaseMutex (ACPI_MTX_CACHES);

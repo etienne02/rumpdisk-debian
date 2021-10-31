@@ -1,4 +1,4 @@
-/* $NetBSD: wsevent.c,v 1.36 2015/08/24 22:50:33 pooka Exp $ */
+/* $NetBSD: wsevent.c,v 1.46 2020/12/18 01:41:23 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2006, 2008 The NetBSD Foundation, Inc.
@@ -104,7 +104,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wsevent.c,v 1.36 2015/08/24 22:50:33 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wsevent.c,v 1.46 2020/12/18 01:41:23 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -120,6 +120,8 @@ __KERNEL_RCSID(0, "$NetBSD: wsevent.c,v 1.36 2015/08/24 22:50:33 pooka Exp $");
 #include <sys/vnode.h>
 #include <sys/select.h>
 #include <sys/poll.h>
+#include <sys/compat_stub.h>
+#include <sys/sysctl.h>
 
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wseventvar.h>
@@ -136,6 +138,8 @@ __KERNEL_RCSID(0, "$NetBSD: wsevent.c,v 1.36 2015/08/24 22:50:33 pooka Exp $");
     sizeof(struct wscons_event) : \
     sizeof(struct owscons_event))
 #define EVARRAY(ev, idx) (&(ev)->q[(idx)])
+
+static int wsevent_default_version = WSEVENT_VERSION;
 
 /*
  * Priority of code managing wsevent queues.  PWSEVENT is set just above
@@ -160,8 +164,17 @@ wsevent_init(struct wseventvar *ev, struct proc *p)
 #endif
 		return;
 	}
-	/* For binary compat. New code must call WSxxxIO_SETVERSION */
-	ev->version = 0;
+	/*
+	 * For binary compat set default version and either build with
+	 * COMPAT_50 or load COMPAT_50 module to include the compatibility
+	 * code.
+	 */
+	if (wsevent_default_version >= 0 &&
+	    wsevent_default_version < WSEVENT_VERSION)
+		ev->version = wsevent_default_version;
+	else
+		ev->version = WSEVENT_VERSION;
+
 	ev->get = ev->put = 0;
 	ev->q = kmem_alloc(WSEVENT_QSIZE * sizeof(*ev->q), KM_SLEEP);
 	selinit(&ev->sel);
@@ -188,47 +201,19 @@ wsevent_fini(struct wseventvar *ev)
 	softint_disestablish(ev->sih);
 }
 
-#if defined(COMPAT_50) || defined(MODULAR)
-static int
-wsevent_copyout_events50(const struct wscons_event *events, int cnt,
-    struct uio *uio)
-{
-	int i;
-
-	for (i = 0; i < cnt; i++) {
-		const struct wscons_event *ev = &events[i];
-		struct owscons_event ev50;
-		int error;
-
-		ev50.type = ev->type;
-		ev50.value = ev->value;
-		timespec_to_timespec50(&ev->time, &ev50.time);
-
-		error = uiomove(&ev50, sizeof(ev50), uio);
-		if (error) {
-			return error;
-		}
-	}
-	return 0;
-}
-#else /* defined(COMPAT_50) || defined(MODULAR) */
-static int
-wsevent_copyout_events50(const struct wscons_event *events, int cnt,
-    struct uio *uio)
-{
-
-	return EINVAL;
-}
-#endif /* defined(COMPAT_50) || defined(MODULAR) */
-
 static int
 wsevent_copyout_events(const struct wscons_event *events, int cnt,
     struct uio *uio, int ver)
 {
+	int error;
 
 	switch (ver) {
 	case 0:
-		return wsevent_copyout_events50(events, cnt, uio);
+		MODULE_HOOK_CALL(wscons_copyout_events_50_hook,
+		    (events, cnt, uio), enosys(), error);
+		if (error == ENOSYS)
+			error = EINVAL;
+		return error;
 	case WSEVENT_VERSION:
 		return uiomove(__UNCONST(events), cnt * sizeof(*events), uio);
 	default:
@@ -318,7 +303,7 @@ filt_wseventrdetach(struct knote *kn)
 	int s;
 
 	s = splwsevent();
-	SLIST_REMOVE(&ev->sel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&ev->sel, kn);
 	splx(s);
 }
 
@@ -340,18 +325,20 @@ filt_wseventread(struct knote *kn, long hint)
 	return (1);
 }
 
-static const struct filterops wsevent_filtops =
-	{ 1, NULL, filt_wseventrdetach, filt_wseventread };
+static const struct filterops wsevent_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_wseventrdetach,
+	.f_event = filt_wseventread,
+};
 
 int
 wsevent_kqfilter(struct wseventvar *ev, struct knote *kn)
 {
-	struct klist *klist;
 	int s;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &ev->sel.sel_klist;
 		kn->kn_fop = &wsevent_filtops;
 		break;
 
@@ -362,7 +349,7 @@ wsevent_kqfilter(struct wseventvar *ev, struct knote *kn)
 	kn->kn_hook = ev;
 
 	s = splwsevent();
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(&ev->sel, kn);
 	splx(s);
 
 	return (0);
@@ -398,9 +385,9 @@ wsevent_intr(void *cookie)
 	ev = cookie;
 
 	if (ev->async) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		psignal(ev->io, SIGIO);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 }
 
@@ -467,4 +454,23 @@ wsevent_setversion(struct wseventvar *ev, int vers)
 	ev->get = ev->put = 0;
 	ev->version = vers;
 	return 0;
+}
+
+SYSCTL_SETUP(sysctl_wsevent_setup, "sysctl hw.wsevent subtree setup")
+{
+        const struct sysctlnode *node = NULL;
+ 
+        if (sysctl_createv(clog, 0, NULL, &node,
+            CTLFLAG_PERMANENT,
+            CTLTYPE_NODE, "wsevent", NULL, 
+            NULL, 0, NULL, 0,
+            CTL_HW, CTL_CREATE, CTL_EOL) != 0)
+                return;
+ 
+        sysctl_createv(clog, 0, &node, NULL,
+            CTLFLAG_READWRITE,
+            CTLTYPE_INT, "default_version",
+            SYSCTL_DESCR("Set default event version for compatibility"),
+            NULL, 0, &wsevent_default_version, 0,
+            CTL_CREATE, CTL_EOL);
 }

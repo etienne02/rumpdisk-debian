@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -83,8 +83,7 @@ AcpiNsConvertToInteger (
 
         /* String-to-Integer conversion */
 
-        Status = AcpiUtStrtoul64 (OriginalObject->String.Pointer,
-            ACPI_ANY_BASE, AcpiGbl_IntegerByteWidth, &Value);
+        Status = AcpiUtStrtoul64 (OriginalObject->String.Pointer, &Value);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -537,7 +536,8 @@ AcpiNsConvertToReference (
     {
         /* Check if we are resolving a named reference within a package */
 
-        ACPI_ERROR_NAMESPACE (OriginalObject->String.Pointer, Status);
+        ACPI_ERROR_NAMESPACE (&ScopeInfo,
+            OriginalObject->String.Pointer, Status);
         goto ErrorExit;
     }
 
@@ -562,5 +562,5 @@ AcpiNsConvertToReference (
 ErrorExit:
     ACPI_FREE (Name);
     *ReturnObject = NewObject;
-    return (AE_OK);
+    return (Status);
 }

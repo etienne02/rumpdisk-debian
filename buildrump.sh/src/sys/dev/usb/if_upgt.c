@@ -1,4 +1,4 @@
-/*	$NetBSD: if_upgt.c,v 1.16 2016/05/26 05:04:46 ozaki-r Exp $	*/
+/*	$NetBSD: if_upgt.c,v 1.32 2021/08/21 11:55:25 andvar Exp $	*/
 /*	$OpenBSD: if_upgt.c,v 1.49 2010/04/20 22:05:43 tedu Exp $ */
 
 /*
@@ -18,7 +18,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_upgt.c,v 1.16 2016/05/26 05:04:46 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_upgt.c,v 1.32 2021/08/21 11:55:25 andvar Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -235,6 +239,7 @@ upgt_attach(device_t parent, device_t self, void *aux)
 	 */
 	sc->sc_dev = self;
 	sc->sc_udev = uaa->uaa_device;
+	sc->sc_init_state = UPGT_INIT_NONE;
 
 	devinfop = usbd_devinfo_alloc(sc->sc_udev, 0);
 	aprint_normal_dev(sc->sc_dev, "%s\n", devinfop);
@@ -302,6 +307,7 @@ upgt_attach(device_t parent, device_t self, void *aux)
 	callout_setfunc(&sc->scan_to, upgt_next_scan, sc);
 	callout_init(&sc->led_to, 0);
 	callout_setfunc(&sc->led_to, upgt_set_led_blink, sc);
+	sc->sc_init_state = UPGT_INIT_INITED;
 
 	/*
 	 * Open TX and RX USB bulk pipes.
@@ -455,7 +461,11 @@ upgt_attach_hook(device_t arg)
 
 	sc->sc_newstate = ic->ic_newstate;
 	ic->ic_newstate = upgt_newstate;
-	ieee80211_media_init(ic, upgt_media_change, ieee80211_media_status);
+
+	/* XXX media locking needs revisiting */
+	mutex_init(&sc->sc_media_mtx, MUTEX_DEFAULT, IPL_SOFTUSB);
+	ieee80211_media_init_with_lock(ic,
+	    upgt_media_change, ieee80211_media_status, &sc->sc_media_mtx);
 
 	bpf_attach2(ifp, DLT_IEEE802_11_RADIO,
 	    sizeof(struct ieee80211_frame) + IEEE80211_RADIOTAP_HDRLEN,
@@ -494,14 +504,21 @@ upgt_detach(device_t self, int flags)
 
 	DPRINTF(1, "%s: %s\n", device_xname(sc->sc_dev), __func__);
 
+	if (sc->sc_init_state < UPGT_INIT_INITED)
+		return 0;
+
 	s = splnet();
 
 	if (ifp->if_flags & IFF_RUNNING)
 		upgt_stop(sc);
 
 	/* remove tasks and timeouts */
-	usb_rem_task(sc->sc_udev, &sc->sc_task_newstate);
-	usb_rem_task(sc->sc_udev, &sc->sc_task_tx);
+	callout_halt(&sc->scan_to, NULL);
+	callout_halt(&sc->led_to, NULL);
+	usb_rem_task_wait(sc->sc_udev, &sc->sc_task_newstate, USB_TASKQ_DRIVER,
+	    NULL);
+	usb_rem_task_wait(sc->sc_udev, &sc->sc_task_tx, USB_TASKQ_DRIVER,
+	    NULL);
 	callout_destroy(&sc->scan_to);
 	callout_destroy(&sc->led_to);
 
@@ -1004,7 +1021,11 @@ upgt_eeprom_read(struct upgt_softc *sc)
 			    "could not transmit EEPROM data URB\n");
 			return EIO;
 		}
-		if (tsleep(sc, 0, "eeprom_request", UPGT_USB_TIMEOUT)) {
+
+		mutex_enter(&sc->sc_mtx);
+		int res = cv_timedwait(&sc->sc_cv, &sc->sc_mtx, UPGT_USB_TIMEOUT);
+		mutex_exit(&sc->sc_mtx);
+		if (res) {
 			aprint_error_dev(sc->sc_dev,
 			    "timeout while waiting for EEPROM data\n");
 			return EIO;
@@ -1151,7 +1172,7 @@ upgt_eeprom_parse_freq3(struct upgt_softc *sc, uint8_t *data, int len)
 
 		sc->sc_eeprom_freq3[channel] = freq3[i];
 
-		DPRINTF(2, "%s: frequence=%d, channel=%d\n",
+		DPRINTF(2, "%s: frequency=%d, channel=%d\n",
 		    device_xname(sc->sc_dev),
 		    le16toh(sc->sc_eeprom_freq3[channel].freq), channel);
 	}
@@ -1191,7 +1212,7 @@ upgt_eeprom_parse_freq4(struct upgt_softc *sc, uint8_t *data, int len)
 			sc->sc_eeprom_freq4[channel][j].pad = 0;
 		}
 
-		DPRINTF(2, "%s: frequence=%d, channel=%d\n",
+		DPRINTF(2, "%s: frequency=%d, channel=%d\n",
 		    device_xname(sc->sc_dev),
 		    le16toh(freq4_1[i].freq), channel);
 	}
@@ -1215,7 +1236,7 @@ upgt_eeprom_parse_freq6(struct upgt_softc *sc, uint8_t *data, int len)
 
 		sc->sc_eeprom_freq6[channel] = freq6[i];
 
-		DPRINTF(2, "%s: frequence=%d, channel=%d\n",
+		DPRINTF(2, "%s: frequency=%d, channel=%d\n",
 		    device_xname(sc->sc_dev),
 		    le16toh(sc->sc_eeprom_freq6[channel].freq), channel);
 	}
@@ -1342,6 +1363,11 @@ upgt_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 {
 	struct upgt_softc *sc = ic->ic_ifp->if_softc;
 
+	/*
+	 * XXXSMP: This does not wait for the task, if it is in flight,
+	 * to complete.  If this code works at all, it must rely on the
+	 * kernel lock to serialize with the USB task thread.
+	 */
 	usb_rem_task(sc->sc_udev, &sc->sc_task_newstate);
 	callout_stop(&sc->scan_to);
 
@@ -1463,13 +1489,13 @@ upgt_start(struct ifnet *ifp)
 			ni = M_GETCTX(m, struct ieee80211_node *);
 			M_CLEARCTX(m);
 
-			bpf_mtap3(ic->ic_rawbpf, m);
+			bpf_mtap3(ic->ic_rawbpf, m, BPF_D_OUT);
 
 			if ((data_tx->addr = upgt_mem_alloc(sc)) == 0) {
 				aprint_error_dev(sc->sc_dev,
 				    "no free prism memory\n");
 				m_freem(m);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 			data_tx->ni = ni;
@@ -1496,7 +1522,7 @@ upgt_start(struct ifnet *ifp)
 				continue;
 			}
 
-			bpf_mtap(ifp, m);
+			bpf_mtap(ifp, m, BPF_D_OUT);
 
 			m = ieee80211_encap(ic, m, ni);
 			if (m == NULL) {
@@ -1504,14 +1530,14 @@ upgt_start(struct ifnet *ifp)
 				continue;
 			}
 
-			bpf_mtap3(ic->ic_rawbpf, m);
+			bpf_mtap3(ic->ic_rawbpf, m, BPF_D_OUT);
 
 			if ((data_tx->addr = upgt_mem_alloc(sc)) == 0) {
 				aprint_error_dev(sc->sc_dev,
 				    "no free prism memory\n");
 				m_freem(m);
 				ieee80211_free_node(ni);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 			data_tx->ni = ni;
@@ -1589,7 +1615,7 @@ upgt_tx_task(void *arg)
 				data_tx->m = NULL;
 				ieee80211_free_node(data_tx->ni);
 				data_tx->ni = NULL;
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 
@@ -1635,7 +1661,8 @@ upgt_tx_task(void *arg)
 			tap->wt_chan_freq = htole16(ic->ic_curchan->ic_freq);
 			tap->wt_chan_flags = htole16(ic->ic_curchan->ic_flags);
 
-			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m);
+			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m,
+			    BPF_D_OUT);
 		}
 
 		/* copy frame below our TX descriptor header */
@@ -1673,7 +1700,7 @@ upgt_tx_task(void *arg)
 		    error != USBD_IN_PROGRESS) {
 			aprint_error_dev(sc->sc_dev,
 			    "could not transmit TX data URB\n");
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 		}
 
@@ -1712,7 +1739,7 @@ upgt_tx_done(struct upgt_softc *sc, uint8_t *data)
 			data_tx->addr = 0;
 
 			sc->tx_queued--;
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 
 			DPRINTF(2, "%s: TX done: ", device_xname(sc->sc_dev));
 			DPRINTF(2, "memaddr=0x%08x, status=0x%04x, rssi=%d, ",
@@ -1773,12 +1800,15 @@ upgt_rx_cb(struct usbd_xfer *xfer, void * priv, usbd_status status)
 		DPRINTF(2, "%s: received EEPROM block (offset=%d, len=%d)\n",
 			device_xname(sc->sc_dev), eeprom_offset, eeprom_len);
 
+		mutex_enter(&sc->sc_mtx);
 		memcpy(sc->sc_eeprom + eeprom_offset,
 		    data_rx->buf + sizeof(struct upgt_lmac_eeprom) + 4,
 		    eeprom_len);
 
-		/* EEPROM data has arrived in time, wakeup tsleep() */
-		wakeup(sc);
+		/* EEPROM data has arrived in time, wakeup upgt_eeprom_read */
+		/* Note eeprom data arrived */
+		cv_broadcast(&sc->sc_cv);
+		mutex_exit(&sc->sc_mtx);
 	} else
 	if (h1_type == UPGT_H1_TYPE_CTRL &&
 	    h2_type == UPGT_H2_TYPE_TX_DONE) {
@@ -1827,12 +1857,11 @@ upgt_rx(struct upgt_softc *sc, uint8_t *data, int pkglen)
 	rxdesc = (struct upgt_lmac_rx_desc *)data;
 
 	/* create mbuf which is suitable for strict alignment archs */
-#define ETHER_ALIGN	0
-	m = m_devget(rxdesc->data, pkglen, ETHER_ALIGN, ifp, NULL);
+	m = m_devget(rxdesc->data, pkglen, 0, ifp);
 	if (m == NULL) {
 		DPRINTF(1, "%s: could not create RX mbuf\n",
 		   device_xname(sc->sc_dev));
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
@@ -1847,7 +1876,7 @@ upgt_rx(struct upgt_softc *sc, uint8_t *data, int pkglen)
 		tap->wr_chan_flags = htole16(ic->ic_curchan->ic_flags);
 		tap->wr_antsignal = rxdesc->rssi;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m, BPF_D_IN);
 	}
 
 	/* trim FCS */
@@ -2255,8 +2284,8 @@ upgt_alloc_tx(struct upgt_softc *sc)
 
 		data_tx->sc = sc;
 
-		int err = usbd_create_xfer(sc->sc_tx_pipeh, MCLBYTES, 0, 0,
-		    &data_tx->xfer);
+		int err = usbd_create_xfer(sc->sc_tx_pipeh, MCLBYTES,
+		    USBD_FORCE_SHORT_XFER, 0, &data_tx->xfer);
 		if (err) {
 			aprint_error_dev(sc->sc_dev,
 			    "could not allocate TX xfer\n");
@@ -2277,7 +2306,7 @@ upgt_alloc_rx(struct upgt_softc *sc)
 	data_rx->sc = sc;
 
 	int err = usbd_create_xfer(sc->sc_rx_pipeh, MCLBYTES,
-	    USBD_SHORT_XFER_OK, 0, &data_rx->xfer);
+	    0, 0, &data_rx->xfer);
 	if (err) {
 		aprint_error_dev(sc->sc_dev, "could not allocate RX xfer\n");
 		return err;
@@ -2304,6 +2333,7 @@ upgt_alloc_cmd(struct upgt_softc *sc)
 
 	data_cmd->buf = usbd_get_buffer(data_cmd->xfer);
 
+	cv_init(&sc->sc_cv, "upgteeprom");
 	mutex_init(&sc->sc_mtx, MUTEX_DEFAULT, IPL_NONE);
 
 	return 0;
@@ -2350,6 +2380,7 @@ upgt_free_cmd(struct upgt_softc *sc)
 	}
 
 	mutex_destroy(&sc->sc_mtx);
+	cv_destroy(&sc->sc_cv);
 }
 
 static int
@@ -2401,7 +2432,7 @@ upgt_crc32_le(const void *buf, size_t size)
 
 /*
  * The firmware awaits a checksum for each frame we send to it.
- * The algorithm used therefor is uncommon but somehow similar to CRC32.
+ * The algorithm used is uncommon but somehow similar to CRC32.
  */
 static uint32_t
 upgt_chksum_le(const uint32_t *buf, size_t size)

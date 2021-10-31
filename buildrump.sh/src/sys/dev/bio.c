@@ -1,4 +1,4 @@
-/*	$NetBSD: bio.c,v 1.13 2015/08/20 14:40:17 christos Exp $ */
+/*	$NetBSD: bio.c,v 1.17 2020/12/19 01:12:21 thorpej Exp $ */
 /*	$OpenBSD: bio.c,v 1.9 2007/03/20 02:35:55 marco Exp $	*/
 
 /*
@@ -28,7 +28,7 @@
 /* A device controller ioctl tunnelling device.  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bio.c,v 1.13 2015/08/20 14:40:17 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bio.c,v 1.17 2020/12/19 01:12:21 thorpej Exp $");
 
 #include "opt_compat_netbsd.h"
 
@@ -37,12 +37,13 @@ __KERNEL_RCSID(0, "$NetBSD: bio.c,v 1.13 2015/08/20 14:40:17 christos Exp $");
 #include <sys/device.h>
 #include <sys/event.h>
 #include <sys/ioctl.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/kauth.h>
+#include <sys/compat_stub.h>
 
 #include <dev/biovar.h>
 #include <dev/sysmon/sysmonvar.h>
@@ -127,10 +128,8 @@ bioioctl(dev_t dev, u_long cmd, void *addr, int flag, struct  lwp *l)
 	case BIOCDISK:
 	case BIOCDISK_NOVOL:
 	case BIOCVOL:
-#ifdef COMPAT_30
 	case OBIOCDISK:
 	case OBIOCVOL:
-#endif
 		error = kauth_authorize_device_passthru(l->l_cred, dev,
 		    KAUTH_REQ_DEVICE_RAWIO_PASSTHRU_READCONF, addr);
 		if (error)
@@ -190,43 +189,12 @@ bioioctl(dev_t dev, u_long cmd, void *addr, int flag, struct  lwp *l)
 			return ENOENT;
 		}
 		mutex_exit(&bio_lock);
-#ifdef COMPAT_30
-		switch (cmd) {
-		case OBIOCDISK: {
-			struct bioc_disk *bd =
-			    malloc(sizeof(*bd), M_DEVBUF, M_WAITOK|M_ZERO);
-
-			(void)memcpy(bd, addr, sizeof(struct obioc_disk));
-			error = bio_delegate_ioctl(common->bc_cookie,
-			    BIOCDISK, bd);
-			if (error) {
-				free(bd, M_DEVBUF);
-				return error;
-			}
-
-			(void)memcpy(addr, bd, sizeof(struct obioc_disk));
-			free(bd, M_DEVBUF);
-			return 0;
-		}
-		case OBIOCVOL: {
-			struct bioc_vol *bv =
-			    malloc(sizeof(*bv), M_DEVBUF, M_WAITOK|M_ZERO);
-
-			(void)memcpy(bv, addr, sizeof(struct obioc_vol));
-			error = bio_delegate_ioctl(common->bc_cookie,
-			    BIOCVOL, bv);
-			if (error) {
-				free(bv, M_DEVBUF);
-				return error;
-			}
-
-			(void)memcpy(addr, bv, sizeof(struct obioc_vol));
-			free(bv, M_DEVBUF);
-			return 0;
-		}
-		}
-#endif
-		error = bio_delegate_ioctl(common->bc_cookie, cmd, addr);
+		MODULE_HOOK_CALL(compat_bio_30_hook,
+		    (common->bc_cookie, cmd, addr, bio_delegate_ioctl),
+		    enosys(), error);
+		if (error == ENOSYS)
+			error = bio_delegate_ioctl(common->bc_cookie, cmd,
+			    addr);
 		return error;
 	}
 	return 0;
@@ -240,9 +208,7 @@ bio_register(device_t dev, int (*ioctl)(device_t, u_long, void *))
 	if (!bio_lock_initialized)
 		bio_initialize();
 
-	bm = malloc(sizeof(*bm), M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (bm == NULL)
-		return ENOMEM;
+	bm = kmem_zalloc(sizeof(*bm), KM_SLEEP);
 	bm->bm_dev = dev;
 	bm->bm_ioctl = ioctl;
 	mutex_enter(&bio_lock);
@@ -262,7 +228,7 @@ bio_unregister(device_t dev)
 
 		if (dev == bm->bm_dev) {
 			LIST_REMOVE(bm, bm_link);
-			free(bm, M_DEVBUF);
+			kmem_free(bm, sizeof(*bm));
 		}
 	}
 	mutex_exit(&bio_lock);

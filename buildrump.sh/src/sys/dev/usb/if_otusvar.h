@@ -1,4 +1,4 @@
-/*	$NetBSD: if_otusvar.h,v 1.8 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: if_otusvar.h,v 1.12 2020/03/15 23:04:50 thorpej Exp $	*/
 /*	$OpenBSD: if_otusreg.h,v 1.6 2009/04/06 18:17:01 damien Exp $	*/
 
 /*-
@@ -86,7 +86,7 @@ struct otus_rx_radiotap_header {
 	uint16_t	wr_chan_freq;
 	uint16_t	wr_chan_flags;
 	uint8_t		wr_antsignal;
-} __packed;
+};
 
 #define OTUS_RX_RADIOTAP_PRESENT			\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -100,7 +100,7 @@ struct otus_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-} __packed;
+};
 
 #define OTUS_TX_RADIOTAP_PRESENT			\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -184,7 +184,7 @@ struct otus_softc {
 	uint8_t 			*sc_ibuf;
 	size_t				sc_ibuf_size;
 
-	int				sc_if_flags;
+	unsigned short			sc_if_flags;
 	int				sc_tx_timer;
 	int				sc_fixed_ridx;
 	int				sc_bb_reset;
@@ -199,10 +199,13 @@ struct otus_softc {
 	unsigned int			sc_write_idx;
 	uint32_t			sc_led_state;
 
+	kcondvar_t			sc_task_cv;
+	kcondvar_t			sc_cmd_cv;
 	kmutex_t			sc_cmd_mtx;
 	kmutex_t			sc_task_mtx;
 	kmutex_t			sc_write_mtx;
 	kmutex_t			sc_tx_mtx;
+	kmutex_t			sc_media_mtx;	/* XXX */
 
 	const uint32_t			*sc_phy_vals;
 

@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -44,10 +44,10 @@
 
 #include "aslcompiler.h"
 #include "aslcompiler.y.h"
+#include "acconvert.h"
 
 #include <stdlib.h>
 #include <string.h>
-YYSTYPE AslCompilerlval;
 
 /*
  * Generation:  Use the following command line:
@@ -66,10 +66,10 @@ YYSTYPE AslCompilerlval;
 static void
 AslDoLineDirective (void);
 
-static char
+static BOOLEAN
 AslDoComment (void);
 
-static char
+static BOOLEAN
 AslDoCommentType2 (void);
 
 static char
@@ -86,6 +86,8 @@ count (int type);
 
 LeadNameChar                [A-Za-z_]
 DigitChar                   [0-9]
+ErrorCode                   [(][ ]*[1-9][0-9][0-9][0-9][ ]*[)]
+OctalChar                   [0-7]
 HexDigitChar                [A-Fa-f0-9]
 RootChar                    [\\]
 Nothing                     []
@@ -156,16 +158,21 @@ NamePathTail                [.]{NameSeg}
 "^="                        { count (3); return (PARSEOP_EXP_XOR_EQ); }
 "|="                        { count (3); return (PARSEOP_EXP_OR_EQ); }
 
-"["                         { count (3); return(PARSEOP_EXP_INDEX_LEFT); }
-"]"                         { count (0); return(PARSEOP_EXP_INDEX_RIGHT); }
+"["                         { count (3); return (PARSEOP_EXP_INDEX_LEFT); }
+"]"                         { count (0); return (PARSEOP_EXP_INDEX_RIGHT); }
+"("                         { count (0); return (PARSEOP_OPEN_PAREN); }
+")"                         { count (0); return (PARSEOP_CLOSE_PAREN); }
+
+"{"                         { count (0); return ('{'); }
+"}"                         { count (0); return ('}'); }
+","                         { count (0); return (','); }
 
 
     /*
      * Begin standard ASL grammar
      */
-0[xX]{HexDigitChar}+ |
-{DigitChar}+                { AslCompilerlval.i = UtDoConstant ((char *) AslCompilertext);
-                                count (1); return (PARSEOP_INTEGER); }
+[0-9][a-zA-Z0-9]*            { count (1); AslCompilerlval.i = UtDoConstant ((char *) AslCompilertext);
+                                 return (PARSEOP_INTEGER); }
 
 "Include"                   { count (1); return (PARSEOP_INCLUDE); }
 "External"                  { count (1); return (PARSEOP_EXTERNAL); }
@@ -319,6 +326,7 @@ NamePathTail                [.]{NameSeg}
 "ResourceTemplate"          { count (1); return (PARSEOP_RESOURCETEMPLATE); }
 "RawDataBuffer"             { count (1); return (PARSEOP_DATABUFFER); }
 
+"Csi2Bus"                   { count (1); return (PARSEOP_CSI2_SERIALBUS); }
 "DMA"                       { count (1); return (PARSEOP_DMA); }
 "DWordIO"                   { count (1); return (PARSEOP_DWORDIO); }
 "DWordMemory"               { count (1); return (PARSEOP_DWORDMEMORY); }
@@ -340,6 +348,11 @@ NamePathTail                [.]{NameSeg}
 "Memory24"                  { count (1); return (PARSEOP_MEMORY24); }
 "Memory32"                  { count (1); return (PARSEOP_MEMORY32); }
 "Memory32Fixed"             { count (1); return (PARSEOP_MEMORY32FIXED); }
+"PinConfig"                 { count (1); return (PARSEOP_PINCONFIG); }
+"PinFunction"               { count (1); return (PARSEOP_PINFUNCTION); }
+"PinGroup"                  { count (1); return (PARSEOP_PINGROUP); }
+"PinGroupConfig"            { count (1); return (PARSEOP_PINGROUPCONFIG); }
+"PinGroupFunction"          { count (1); return (PARSEOP_PINGROUPFUNCTION); }
 "QWordIO"                   { count (1); return (PARSEOP_QWORDIO); }
 "QWordMemory"               { count (1); return (PARSEOP_QWORDMEMORY); }
 "QWordSpace"                { count (1); return (PARSEOP_QWORDSPACE); }
@@ -446,7 +459,7 @@ NamePathTail                [.]{NameSeg}
 
     /* ExtendedAttribKeyword: Bus attributes, AccessAs operator (ACPI 5.0) */
 
-"AttribBytes"               { count (0); return (PARSEOP_ACCESSATTRIB_MULTIBYTE); }
+"AttribBytes"               { count (0); return (PARSEOP_ACCESSATTRIB_BYTES); }
 "AttribRawBytes"            { count (0); return (PARSEOP_ACCESSATTRIB_RAW_BYTES); }
 "AttribRawProcessBytes"     { count (0); return (PARSEOP_ACCESSATTRIB_RAW_PROCESS); }
 
@@ -573,6 +586,7 @@ NamePathTail                [.]{NameSeg}
 "GeneralPurposeIo"          { count (0); return (PARSEOP_REGIONSPACE_GPIO); }       /* ACPI 5.0 */
 "GenericSerialBus"          { count (0); return (PARSEOP_REGIONSPACE_GSBUS); }      /* ACPI 5.0 */
 "PCC"                       { count (0); return (PARSEOP_REGIONSPACE_PCC); }        /* ACPI 5.0 */
+"PlatformRtMechanism"       { count (0); return (PARSEOP_REGIONSPACE_PRM); }
 "FFixedHW"                  { count (0); return (PARSEOP_REGIONSPACE_FFIXEDHW); }
 
     /* ResourceTypeKeyword: Resource Usage - Resource Descriptors */
@@ -689,21 +703,37 @@ NamePathTail                [.]{NameSeg}
 "__FILE__"                  { count (0); return (PARSEOP___FILE__); }
 "__LINE__"                  { count (0); return (PARSEOP___LINE__); }
 "__PATH__"                  { count (0); return (PARSEOP___PATH__); }
+"__METHOD__"                { count (0); return (PARSEOP___METHOD__); }
+"__EXPECT__"{ErrorCode}     { char *s;
+                                unsigned int index = 0;
+                                count (0);
+                                while (!isdigit ((int) AslCompilertext[index]))
+                                {
+                                    index++;
+                                }
 
-
-"{"                         { count (0); return('{'); }
-"}"                         { count (0); return('}'); }
-","                         { count (0); return(','); }
-"("                         { count (0); return('('); }
-")"                         { count (0); return(')'); }
+                                /*
+                                 * The error code is contained inside the
+                                 * {ErrorCode} pattern. Extract it and log it
+                                 * as the expected error code.
+                                 */
+                                s = UtLocalCacheCalloc (ASL_ERROR_CODE_LENGTH + 1);
+                                memcpy (s, AslCompilertext + index, ASL_ERROR_CODE_LENGTH);
+                                AslLogExpectedExceptionByLine (s); }
 
 {NameSeg}                   { char *s;
                                 count (0);
-                                s=UtStringCacheCalloc (ACPI_NAME_SIZE + 1);
+                                s=UtLocalCacheCalloc (ACPI_NAMESEG_SIZE + 1);
                                 if (strcmp (AslCompilertext, "\\"))
                                 {
+                                    /*
+                                     * According to the ACPI specification,
+                                     * NameSegments must have length of 4. If
+                                     * the NameSegment has length less than 4,
+                                     * they are padded with underscores to meet
+                                     * the required length.
+                                     */
                                     strcpy (s, "____");
-                                    AcpiUtStrupr (AslCompilertext);
                                 }
                                 memcpy (s, AslCompilertext, strlen (AslCompilertext));
                                 AslCompilerlval.s = s;
@@ -712,8 +742,7 @@ NamePathTail                [.]{NameSeg}
 
 {NameString}                { char *s;
                                 count (0);
-                                s=UtStringCacheCalloc (strlen (AslCompilertext)+1);
-                                AcpiUtStrupr (AslCompilertext);
+                                s=UtLocalCacheCalloc (strlen (AslCompilertext)+1);
                                 strcpy (s, AslCompilertext);
                                 AslCompilerlval.s = s;
                                 DbgPrint (ASL_PARSE_OUTPUT, "NameString: %s\n", s);
@@ -722,17 +751,17 @@ NamePathTail                [.]{NameSeg}
 .                           { count (1);
                                 if (isprint ((unsigned int) *AslCompilertext))
                                 {
-                                    snprintf (MsgBuffer, sizeof(MsgBuffer),
+                                    snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer),
                                         "Invalid character (%c), expecting ASL keyword or name",
                                         *AslCompilertext);
                                 }
                                 else
                                 {
-                                    snprintf (MsgBuffer, sizeof(MsgBuffer),
+                                    snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer),
                                         "Invalid character (0x%2.2X), expecting ASL keyword or name",
                                         *AslCompilertext);
                                 }
-                                AslCompilererror (MsgBuffer);}
+                                AslCompilererror (AslGbl_MsgBuffer);}
 
 <<EOF>>                     { if (AslPopInputFileStack ())
                                 {yyterminate();}

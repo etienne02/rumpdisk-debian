@@ -1,4 +1,4 @@
-/* $NetBSD: ibmhawk.c,v 1.4 2016/07/14 04:01:32 msaitoh Exp $ */
+/* $NetBSD: ibmhawk.c,v 1.9 2020/05/15 19:28:09 maxv Exp $ */
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -99,11 +99,18 @@ ibmhawk_match(device_t parent, cfdata_t match, void *aux)
 	ibmhawk_response_t resp;
 	static struct ibmhawk_softc sc;
 
+	/* There is an expected address for this device: */
+	if (ia->ia_addr != 0x37)
+		return 0;
+
+	/* XXX Probe is potentially destructive. */
+
 	sc.sc_tag = ia->ia_tag;
 	sc.sc_addr = ia->ia_addr;
 	if (ibmhawk_request(&sc, IHR_EQUIP, &resp))
 		return 0;
-	return 1;
+
+	return I2C_MATCH_ADDRESS_AND_PROBE;
 }
 
 static void
@@ -129,8 +136,8 @@ ibmhawk_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(sc->sc_dev, "equip query failed\n");
 		return;
 	}
-	sc->sc_numcpus = min(resp.ihr_numcpus, IBMHAWK_MAX_CPU);
-	sc->sc_numfans = min(resp.ihr_numfans, IBMHAWK_MAX_FAN);
+	sc->sc_numcpus = uimin(resp.ihr_numcpus, IBMHAWK_MAX_CPU);
+	sc->sc_numfans = uimin(resp.ihr_numfans, IBMHAWK_MAX_FAN);
 #if IBMHAWK_DEBUG > 0
 	aprint_normal_dev(sc->sc_dev, "monitoring %d/%d cpu(s) %d/%d fan(s)\n",
 	    sc->sc_numcpus, resp.ihr_numcpus, sc->sc_numfans, resp.ihr_numfans);
@@ -204,7 +211,7 @@ static int
 ibmhawk_request(struct ibmhawk_softc *sc, uint8_t request,
     ibmhawk_response_t *response)
 {
-	int i, error, retries;;
+	int i, error, retries;
 	uint8_t buf[sizeof(ibmhawk_response_t)+3], dummy;
 
 	error = EIO;	/* Fail until we have a valid response. */
@@ -251,7 +258,7 @@ again:
 
 bad:
 #if IBMHAWK_DEBUG > 1
-	for (i = 0; i < min(buf[0]+1, sizeof buf); i++)
+	for (i = 0; i < uimin(buf[0]+1, sizeof buf); i++)
 		printf(" %02x", buf[i]);
 	printf(" ] => %d\n", error);
 #endif
@@ -358,13 +365,13 @@ ibmhawk_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 	struct ibmhawk_softc *sc = sme->sme_cookie;
 
 	/* No more than two refreshes per second. */
-	if (hardclock_ticks-sc->sc_refresh < hz/2)
+	if (getticks() - sc->sc_refresh < hz/2)
 		return;
 #if IBMHAWK_DEBUG > 1
 	aprint_normal_dev(sc->sc_dev, "refresh \"%s\" delta %d\n",
-	    edata->desc, hardclock_ticks-sc->sc_refresh);
+	    edata->desc, getticks() - sc->sc_refresh);
 #endif
-	sc->sc_refresh = hardclock_ticks;
+	sc->sc_refresh = getticks();
 	ibmhawk_refreshall(sc, false);
 }
 

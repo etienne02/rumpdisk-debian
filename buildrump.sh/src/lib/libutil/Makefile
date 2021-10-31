@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.79 2016/04/10 19:05:50 roy Exp $
+#	$NetBSD: Makefile,v 1.85 2019/10/13 07:28:11 mrg Exp $
 #	@(#)Makefile	8.1 (Berkeley) 6/4/93
 
 USE_SHLIBDIR=	yes
@@ -35,6 +35,13 @@ MAN=	efun.3 \
 	snprintb.3 sockaddr_snprintf.3 stat_flags.3 strpct.3 ttyaction.3 \
 	ttymsg.3 util.3
 
+CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_UTIL_H
+CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_NETATALK_AT_H
+CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_NET_IF_DL_H
+
+COPTS.logwtmp.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.logwtmpx.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+
 YPREFIX=__pd
 .PATH:	${NETBSDSRCDIR}/lib/libc/gen
 
@@ -56,6 +63,7 @@ MLINKS+=login_cap.3 login_close.3
 MLINKS+=login_cap.3 setclasscontext.3
 MLINKS+=login_cap.3 setusercontext.3
 MLINKS+=loginx.3 logoutx.3 loginx.3 logwtmpx.3
+MLINKS+=opendisk.3 opendisk1.3
 MLINKS+=openpty.3 login_tty.3
 MLINKS+=openpty.3 forkpty.3
 MLINKS+=pidfile.3 pidfile_clean.3
@@ -93,5 +101,8 @@ MLINKS+=stat_flags.3 flags_to_string.3
 MLINKS+=snprintb.3 snprintb_m.3
 MLINKS+=util.3 libutil.3
 MLINKS+=strpct.3 strspct.3
+MLINKS+=getmntopts.3 getmntoptstr.3
+MLINKS+=getmntopts.3 getmntoptnum.3
+MLINKS+=getmntopts.3 freemntopts.3
 
 .include <bsd.lib.mk>

@@ -1,4 +1,4 @@
-/*	$NetBSD: sig_machdep.c,v 1.44 2014/12/14 23:49:17 chs Exp $	*/
+/*	$NetBSD: sig_machdep.c,v 1.52 2020/07/06 09:34:18 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,10 +32,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.44 2014/12/14 23:49:17 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.52 2020/07/06 09:34:18 rin Exp $");
 
-#include "opt_ppcarch.h"
+#ifdef _KERNEL_OPT
 #include "opt_altivec.h"
+#include "opt_ppcarch.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -89,10 +91,12 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	sp &= ~(CALLFRAMELEN-1);
 
 	/* Save register context. */
+	memset(&uc, 0, sizeof(uc));
 	uc.uc_flags = _UC_SIGMASK;
+	uc.uc_flags |= (ss->ss_flags & SS_ONSTACK) ?
+	    _UC_SETSTACK : _UC_CLRSTACK;
 	uc.uc_sigmask = *mask;
 	uc.uc_link = l->l_ctxlink;
-	memset(&uc.uc_stack, 0, sizeof(uc.uc_stack));
 	sendsig_reset(l, ksi->ksi_signo);
 	mutex_exit(p->p_lock);
 	cpu_getmcontext(l, &uc.uc_mcontext, &uc.uc_flags);
@@ -199,6 +203,7 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 {
 	struct trapframe * const tf = l->l_md.md_utf;
 	const __greg_t * const gr = mcp->__gregs;
+	struct proc * const p = l->l_proc;
 	int error;
 
 	/* Restore GPR context, if any. */
@@ -216,10 +221,17 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		pcb->pcb_flags |= gr[_REG_MSR] & (PCB_FE0|PCB_FE1);
 #endif
 
+		/*
+		 * R2 is the TLS register so avoid updating it here.
+		 */
+
+		__greg_t save_r2 = tf->tf_fixreg[_REG_R2];
 		(void)memcpy(&tf->tf_fixreg, gr, 32 * sizeof (gr[0]));
+		tf->tf_fixreg[_REG_R2] = save_r2;
 		tf->tf_cr   = gr[_REG_CR];
 		tf->tf_lr   = gr[_REG_LR];
 		tf->tf_srr0 = gr[_REG_PC];
+
 		/*
 		 * Accept all user-settable bits without complaint;
 		 * userland should not need to know the machine-specific
@@ -232,6 +244,9 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		tf->tf_mq = gr[_REG_MQ];
 #endif
 	}
+
+	if (flags & _UC_TLSBASE)
+		lwp_setprivate(l, (void *)(uintptr_t)gr[_REG_R2]);
 
 #ifdef PPC_HAVE_FPU
 	/* Restore FPU context, if any. */
@@ -251,6 +266,13 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		vec_restore_from_mcontext(l, mcp);
 #endif
 
+	mutex_enter(p->p_lock);
+	if (flags & _UC_SETSTACK)
+		l->l_sigstk.ss_flags |= SS_ONSTACK;
+	if (flags & _UC_CLRSTACK)
+		l->l_sigstk.ss_flags &= ~SS_ONSTACK;
+	mutex_exit(p->p_lock);
+
 	return (0);
 }
 
@@ -260,5 +282,6 @@ cpu_lwp_setprivate(lwp_t *l, void *addr)
 	struct trapframe * const tf = l->l_md.md_utf;
 
 	tf->tf_fixreg[_REG_R2] = (register_t)addr;
+
 	return 0;
 }

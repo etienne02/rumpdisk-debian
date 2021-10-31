@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs_ras.S,v 1.7 2016/07/27 09:32:35 skrll Exp $	*/
+/*	$NetBSD: lock_stubs_ras.S,v 1.11 2020/09/26 08:21:27 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -37,7 +37,7 @@
 
 #include <machine/asm.h>
 
-RCSID("$NetBSD: lock_stubs_ras.S,v 1.7 2016/07/27 09:32:35 skrll Exp $")
+RCSID("$NetBSD: lock_stubs_ras.S,v 1.11 2020/09/26 08:21:27 simonb Exp $")
 
 #include "assym.h"
 
@@ -103,7 +103,7 @@ RCSID("$NetBSD: lock_stubs_ras.S,v 1.7 2016/07/27 09:32:35 skrll Exp $")
 	.p2align LOG2_MIPS_LOCK_RAS_SIZE
 
 EXPORT(_lock_ras_start)
-STATIC_LEAF(ras_atomic_cas_noupdate)
+STATIC_LEAF_NOPROFILE(ras_atomic_cas_noupdate)
 	J_RA
 	 move	v0, t0
 END(ras_atomic_cas_noupdate)
@@ -145,44 +145,47 @@ _atomic_cas_uint_ras_end:
 END(ras_atomic_cas_uint)
 
 /*
- * int _ucas_ulong_ras(volatile u_long *val, u_long old, u_long new,
- *     u_long *retp);
+ * int _ucas_32_ras(volatile uint32_t *val, uint32_t old, uint32_t new,
+ *     uint32_t *retp);
  */
 	nop
 	.if ((. - _lock_ras_start) & 15) != 12
 	.error	"bas ras offset"
 	.endif
-STATIC_LEAF_NOPROFILE(_ucas_ulong_ras)
-	LONG_L	t0, (a0)	/* <- critical section start */
-_ucas_ulong_ras_start:
+STATIC_LEAF_NOPROFILE(_ucas_32_ras)
+	lw	t0, (a0)	/* <- critical section start */
+_ucas_32_ras_start:
 	 nop
-	bne	t0, a1, _ucas_ulong_ras_end
+	bne	t0, a1, _ucas_32_ras_end
  	 nop
-	LONG_S	a2, (a0)	/* <- critical section end */
-_ucas_ulong_ras_end:
+	sw	a2, (a0)	/* <- critical section end */
+_ucas_32_ras_end:
 	PTR_S	zero, PCB_ONFAULT(v1)
 	J_RA
-	 LONG_S	t0, 0(a3)
-END(_ucas_ulong_ras)
+	 sw	t0, 0(a3)
+END(_ucas_32_ras)
 
+#ifdef _LP64
 /*
- * int _ucas_uint_ras(volatile u_int *val, u_int old, u_int new, u_int *retp);
+ * int _ucas_64_ras(volatile uint64_t *val, uint64_t old, uint64_t new,
+ *     uint64_t *retp);
  */
 	.if ((. - _lock_ras_start) & 15) != 12
 	.error	"bad ras offset"
 	.endif
-STATIC_LEAF_NOPROFILE(_ucas_uint_ras)
-	INT_L	t0, (a0)	/* <- critical section start */
-_ucas_uint_ras_start:
+STATIC_LEAF_NOPROFILE(_ucas_64_ras)
+	ld	t0, (a0)	/* <- critical section start */
+_ucas_64_ras_start:
 	 nop
-	bne	t0, a1, _ucas_uint_ras_end
+	bne	t0, a1, _ucas_64_ras_end
  	 nop
-	INT_S	a2, (a0)	/* <- critical section end */
-_ucas_uint_ras_end:
+	sd	a2, (a0)	/* <- critical section end */
+_ucas_64_ras_end:
 	PTR_S	zero, PCB_ONFAULT(v1)
 	J_RA
-	 INT_S	t0, 0(a3)
-END(_ucas_uint_ras)
+	 sd	t0, 0(a3)
+END(_ucas_64_ras)
+#endif /* _LP64 */
 
 #ifndef LOCKDEBUG
 /*
@@ -196,7 +199,7 @@ STATIC_LEAF_NOPROFILE(ras_mutex_enter)
 _mutex_enter_ras_start:
 	 nop
 	bnez	t0, ras_mutex_vector_enter
-	 nop			
+	 nop
 	PTR_S	MIPS_CURLWP, (a0)/* <- critical section end */
 _mutex_enter_ras_end:
 	J_RA
@@ -215,7 +218,7 @@ STATIC_LEAF_NOPROFILE(ras_mutex_exit)
 _mutex_exit_ras_start:
 	 nop
 	bne	t0, MIPS_CURLWP, ras_mutex_vector_exit
-	 nop			
+	 nop
 	PTR_S	zero, (a0)	/* <- critical section end */
 _mutex_exit_ras_exit:
 	J_RA
@@ -280,10 +283,16 @@ loongson_return:
 #define	MUTEX_RAS_MASK	0
 #endif
 
+#ifdef _LP64
+#define	UCAS_64_MASK	RAS_MKMASK(_ucas_64_ras_start)
+#else
+#define	UCAS_64_MASK	0
+#endif
+
 #define	RAS_MASK	(RAS_MKMASK(_atomic_cas_ulong_ras_start) \
 			|RAS_MKMASK(_atomic_cas_uint_ras_start) \
-			|RAS_MKMASK(_ucas_ulong_ras_start) \
-			|RAS_MKMASK(_ucas_uint_ras_start) \
+			|RAS_MKMASK(_ucas_32_ras_start) \
+			|UCAS_64_MASK \
 			|MUTEX_RAS_MASK)
 
 /*
@@ -299,7 +308,7 @@ LEAF_NOPROFILE(_restart_lock_ras)
 	andi	t1, RAS_MASK	/* was the PC in a RAS? */
 	bnez	t1, 1f		/* yes, adjust PC */
 	 and	t0, k1, 15	/* get offset in RAS */
-	
+
 	j	ra
 	 nop
 1:
@@ -309,30 +318,34 @@ LEAF_NOPROFILE(_restart_lock_ras)
 END(_restart_lock_ras)
 
 /*
- * int ras_ucas_uint(volatile u_int *ptr, u_int old, u_int new, u_int *retp);
+ * int ras_ucas_32(volatile uint32_t *ptr, uint32_t old, uint32_t new,
+ *     uint32_t *retp);
  */
-STATIC_LEAF(ras_ucas_uint)
+STATIC_LEAF(ras_ucas_32)
 	PTR_L	v1, L_PCB(MIPS_CURLWP)
 	PTR_LA	v0, _C_LABEL(ras_ucaserr)
 	PTR_S	v0, PCB_ONFAULT(v1)
 	bltz	a0, _C_LABEL(ras_ucaserr)
 	 nop
-	b	_C_LABEL(_ucas_uint_ras)
+	b	_C_LABEL(_ucas_32_ras)
 	 move	v0, zero			# assume success
-END(ras_ucas_uint)
+END(ras_ucas_32)
 
+#ifdef _LP64
 /*
- * int ras_ucas_ulong(volatile u_long *ptr, u_long old, u_long new, u_long *retp);
+ * int ras_ucas_64(volatile uint64_t *ptr, uint64_t old, uint64_t new,
+ *     uint64_t *retp);
  */
-STATIC_LEAF(ras_ucas_ulong)
+STATIC_LEAF(ras_ucas_64)
 	PTR_L	v1, L_PCB(MIPS_CURLWP)
 	PTR_LA	v0, _C_LABEL(ras_ucaserr)
 	PTR_S	v0, PCB_ONFAULT(v1)
 	bltz	a0, _C_LABEL(ras_ucaserr)
 	 nop
-	b	_C_LABEL(_ucas_ulong_ras)
+	b	_C_LABEL(_ucas_64_ras)
 	 move	v0, zero			# assume success
-END(ras_ucas_ulong)
+END(ras_ucas_64)
+#endif /* _LP64 */
 
 /*
  *
@@ -469,11 +482,15 @@ END(ras_mutex_spin_exit)
 #endif	/* !LOCKDEBUG */
 
 	.data
-EXPORT(mips_locore_atomicvec)
+EXPORT_OBJECT(mips_locore_atomicvec)
 	PTR_WORD 	ras_atomic_cas_uint
 	PTR_WORD 	ras_atomic_cas_ulong
-	PTR_WORD	ras_ucas_uint
-	PTR_WORD	ras_ucas_ulong
+	PTR_WORD	ras_ucas_32
+#ifdef _LP64
+	PTR_WORD	ras_ucas_64
+#else
+	PTR_WORD	0
+#endif /* _LP64 */
 #ifdef LOCKDEBUG
 	PTR_WORD	mutex_enter
 	PTR_WORD	mutex_exit

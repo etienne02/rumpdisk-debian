@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.399 2016/07/18 19:51:06 palle Exp $	*/
+/*	$NetBSD: locore.s,v 1.427 2021/04/03 17:01:24 palle Exp $	*/
 
 /*
  * Copyright (c) 2006-2010 Matthew R. Green
@@ -213,8 +213,8 @@
 	/* Misc. sun4v macros */
 	
 	.macro	GET_MMFSA reg
-	sethi	%hi(CPUINFO_VA + CI_MMFSA), \reg
-	LDPTR	[\reg + %lo(CPUINFO_VA + CI_MMFSA)], \reg
+	sethi	%hi(CPUINFO_VA + CI_MMUFSA), \reg
+	LDPTR	[\reg + %lo(CPUINFO_VA + CI_MMUFSA)], \reg
 	.endm
 
 	.macro	GET_CTXBUSY reg
@@ -227,6 +227,18 @@
 	LDPTR	[\reg + %lo(CPUINFO_VA + CI_TSB_DMMU)], \reg
 	.endm
 
+	.macro sun4v_tl1_uspill_normal
+	ba,a,pt	%xcc, spill_normal_to_user_stack
+	 nop
+	.align 128
+	.endm
+
+	.macro sun4v_tl1_uspill_other
+	ba,a,pt	%xcc, pcbspill_other
+	 nop
+	.align 128
+	.endm
+	
 #endif
 		
 #if 1
@@ -751,7 +763,8 @@ ufast_DMMU_protection:			! 06c = fast data access MMU protection
 #endif
 	nop
 	TA32
-	UTRAP(0x070)			! Implementation dependent traps
+	TRAP(0x070)			! 0x070 fast_ECC_error
+					! Implementation dependent traps
 	UTRAP(0x071); UTRAP(0x072); UTRAP(0x073); UTRAP(0x074); UTRAP(0x075); UTRAP(0x076)
 	UTRAP(0x077); UTRAP(0x078); UTRAP(0x079); UTRAP(0x07a); UTRAP(0x07b); UTRAP(0x07c)
 	UTRAP(0x07d); UTRAP(0x07e); UTRAP(0x07f)
@@ -961,7 +974,8 @@ kfast_DMMU_protection:			! 06c = fast data access MMU protection
 #endif
 	nop
 	TA32
-	UTRAP(0x070)			! Implementation dependent traps
+	TRAP(0x070)			! 0x070 fast_ECC_error
+					! Implementation dependent traps
 	UTRAP(0x071); UTRAP(0x072); UTRAP(0x073); UTRAP(0x074); UTRAP(0x075); UTRAP(0x076)
 	UTRAP(0x077); UTRAP(0x078); UTRAP(0x079); UTRAP(0x07a); UTRAP(0x07b); UTRAP(0x07c)
 	UTRAP(0x07d); UTRAP(0x07e); UTRAP(0x07f)
@@ -1076,11 +1090,16 @@ _C_LABEL(trapbase_sun4v):
 	!
 	! trap level 0
 	!
-	sun4v_trap_entry 36					! 0x000-0x023
+	sun4v_trap_entry 8					! 0x000-0x007
+	VTRAP(T_INST_EXCEPT, sun4v_tl0_itsb_miss)		! 0x008 - inst except
+	VTRAP(T_TEXTFAULT, sun4v_tl0_itsb_miss)			! 0x009 - inst MMU miss
+	sun4v_trap_entry 26					! 0x00a-0x023
 	CLEANWIN0						! 0x24-0x27 = clean window
 	sun4v_trap_entry 9					! 0x028-0x030			
 	VTRAP(T_DATA_MMU_MISS, sun4v_dtsb_miss)			! 0x031 = data MMU miss
-	sun4v_trap_entry 15					! 0x032-0x040
+	sun4v_trap_entry 2					! 0x032-0x033
+	TRAP(T_ALIGN)						! 0x034 = address alignment error
+	sun4v_trap_entry 12					! 0x035-0x040
 	HARDINT4V(1)						! 0x041 = level 1 interrupt
 	HARDINT4V(2)						! 0x042 = level 2 interrupt
 	HARDINT4V(3)						! 0x043 = level 3 interrupt
@@ -1097,7 +1116,7 @@ _C_LABEL(trapbase_sun4v):
 	HARDINT4V(14)						! 0x04e = level 14 interrupt
 	HARDINT4V(15)						! 0x04f = level 15 interrupt
 	sun4v_trap_entry 28					! 0x050-0x06b
-	VTRAP(T_FDMMU_PROT, sun4v_tl0_dtsb_prot)		! 0x6c
+	VTRAP(T_FDMMU_PROT, sun4v_tl0_dtsb_prot)		! 0x06c
 	sun4v_trap_entry 15					! 0x06d-0x07b
 	VTRAP(T_CPU_MONDO, sun4v_cpu_mondo)			! 0x07c = cpu mondo
 	VTRAP(T_DEV_MONDO, sun4v_dev_mondo)			! 0x07d = dev mondo
@@ -1134,28 +1153,33 @@ _C_LABEL(trapbase_sun4v):
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0f4 fill_5_other
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0f8 fill_6_other
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0fc fill_7_other
-	sun4v_trap_entry 1					! 0x100
+	SYSCALL							! 0x100 = syscall
 	BPT							! 0x101 = pseudo breakpoint instruction
 	sun4v_trap_entry 254					! 0x102-0x1ff
 	!
 	! trap level 1
 	!
-	sun4v_trap_entry_fail 36				! 0x000-0x023
+	sun4v_trap_entry 36					! 0x000-0x023
 	CLEANWIN1						! 0x24-0x27 = clean window
-	sun4v_trap_entry_fail 9					! 0x028-0x030			
-	VTRAP(T_DATA_MMU_MISS, sun4v_dtsb_miss)			! 0x031 = data MMU miss
-	sun4v_trap_entry_fail 78				! 0x032-0x07f
-	SPILL64(uspill8_sun4vt1,ASI_AIUS)			! 0x080 spill_0_normal -- save user windows
-	SPILL32(uspill4_sun4vt1,ASI_AIUS)			! 0x084 spill_1_normal
-	SPILLBOTH(uspill8_sun4vt1,uspill4_sun4vt1,ASI_AIUS)	! 0x088 spill_2_normal
+	sun4v_trap_entry 8					! 0x028-0x02F
+	VTRAP(T_DATAFAULT, sun4v_tl1_ptbl_miss)			! 0x030 = ???
+	VTRAP(T_DATA_MMU_MISS, sun4v_tl1_dtsb_miss)		! 0x031 = data MMU miss
+	VTRAP(T_DATA_ERROR, sun4v_tl1_ptbl_miss)		! 0x032 = ???
+	VTRAP(T_DATA_PROT, sun4v_tl1_ptbl_miss)			! 0x033 = ???
+	sun4v_trap_entry 56					! 0x034-0x06b
+	VTRAP(T_FDMMU_PROT, sun4v_tl1_dtsb_prot)		! 0x06c
+	sun4v_trap_entry 19					! 0x06d-0x07f
+	sun4v_tl1_uspill_normal					! 0x080 spill_0_normal -- save user windows
+	sun4v_tl1_uspill_normal					! 0x084 spill_1_normal
+	sun4v_tl1_uspill_normal					! 0x088 spill_2_normal
 	sun4v_trap_entry_spill_fill_fail 1			! 0x08c spill_3_normal
 	SPILL64(kspill8_sun4vt1,ASI_N)				! 0x090 spill_4_normal -- save supervisor windows
 	SPILL32(kspill4_sun4vt1,ASI_N)				! 0x094 spill_5_normal
 	SPILLBOTH(kspill8_sun4vt1,kspill4_sun4vt1,ASI_N)	! 0x098 spill_6_normal
 	sun4v_trap_entry_spill_fill_fail 1			! 0x09c spill_7_normal
-	SPILL64(uspillk8_sun4vt1,ASI_AIUS)			! 0x0a0 spill_0_other -- save user windows in nucleus mode
-	SPILL32(uspillk4_sun4vt1,ASI_AIUS)			! 0x0a4 spill_1_other
-	SPILLBOTH(uspillk8_sun4vt1,uspillk4_sun4vt1,ASI_AIUS)	! 0x0a8 spill_2_other
+	sun4v_tl1_uspill_other					! 0x0a0 spill_0_other -- save user windows in nucleus mode
+	sun4v_tl1_uspill_other					! 0x0a4 spill_1_other
+	sun4v_tl1_uspill_other					! 0x0a8 spill_2_other
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0ac spill_3_other
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0b0 spill_4_other
 	sun4v_trap_entry_spill_fill_fail 1			! 0x0b4 spill_5_other
@@ -1461,7 +1485,7 @@ intr_setup_msg:
 	wrpr	%g0, %g5, %otherwin; \
 	wrpr	%g0, WSTATE_KERN, %wstate;			/* Enable kernel mode window traps -- now we can trap again */ \
 \
-	stxa	%g0, [%g7] ASI_DMMU; 				/* Switch MMU to kernel primary context */ \
+	SET_MMU_CONTEXTID %g0, %g7,%g5; 			/* Switch MMU to kernel primary context */ \
 	sethi	%hi(KERNBASE), %g5; \
 	flush	%g5;						/* Some convenient address that won't trap */ \
 1:
@@ -1577,7 +1601,7 @@ intr_setup_msg:
 	wrpr	%g0, %g5, %otherwin; \
 	wrpr	%g0, WSTATE_KERN, %wstate;			/* Enable kernel mode window traps -- now we can trap again */ \
 	\
-	stxa	%g0, [%g7] ASI_DMMU; 				/* Switch MMU to kernel primary context */ \
+	SET_MMU_CONTEXTID %g0, %g7, %g5;			/* Switch MMU to kernel primary context */ \
 	sethi	%hi(KERNBASE), %g5; \
 	flush	%g5;						/* Some convenient address that won't trap */ \
 1:
@@ -2819,7 +2843,7 @@ sun4v_dtsb_miss:
 	btst	SUN4V_TLB_ACCESS, %g4		! Need to update access bit?
 	bne,pt	%xcc, 2f
 	 nop
-	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7	!  and write it out
+	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7	! and write it out
 	cmp	%g4, %g7
 	bne,pn	%xcc, 1b
 	 or	%g4, SUN4V_TLB_ACCESS, %g4	! Update the access bit
@@ -2845,21 +2869,86 @@ sun4v_dtsb_miss:
 
 	membar	#StoreStore
 
-	STPTR	%g4, [%g2 + 8]		! store TTE data
-	STPTR	%g1, [%g2]		! store TTE tag
+	STPTR	%g4, [%g2 + 8]			! store TTE data
+	STPTR	%g1, [%g2]			! store TTE tag
 
 	retry
 	NOTREACHED
 
-sun4v_datatrap:			! branch further based on trap level
-	rdpr	%tl, %g1
-	dec	%g1
-	beq	sun4v_datatrap_tl0
-	 nop
-	ba	sun4v_datatrap_tl1
-	 nop
+sun4v_tl1_dtsb_miss:
+	GET_MMFSA %g1				! MMU Fault status area
+	add	%g1, 0x48, %g3
+	LDPTRA	[%g3] ASI_PHYS_CACHED, %g3	! Data fault address
+	add	%g1, 0x50, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Data fault context
 
-sun4v_datatrap_tl0:
+	GET_CTXBUSY %g4
+	sllx	%g6, 3, %g6			! Make it into an offset into ctxbusy
+	LDPTR	[%g4 + %g6], %g4		! Load up our page table.
+
+	srax	%g3, HOLESHIFT, %g5		! Check for valid address
+	brz,pt	%g5, 0f				! Should be zero or -1
+	 inc	%g5				! Make -1 -> 0
+	brnz,pn	%g5, sun4v_tl1_ptbl_miss	! Error! In hole!
+0:
+	srlx	%g3, STSHIFT, %g6
+	and	%g6, STMASK, %g6		! Index into pm_segs
+	sll	%g6, 3, %g6
+	add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page directory pointer
+	srlx	%g3, PDSHIFT, %g6
+	and	%g6, PDMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_tl1_ptbl_miss	! NULL entry? check somewhere else
+	 add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page table pointer
+
+	srlx	%g3, PTSHIFT, %g6		! Convert to ptab offset
+	and	%g6, PTMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_tl1_ptbl_miss	! NULL entry? check somewhere else
+	 add	%g4, %g6, %g6
+1:
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g4	! Fetch TTE
+	brgez,pn %g4, sun4v_tl1_ptbl_miss	! Entry invalid?  Punt
+	 or	%g4, SUN4V_TLB_ACCESS, %g7	! Update the access bit
+
+	btst	SUN4V_TLB_ACCESS, %g4		! Need to update access bit?
+	bne,pt	%xcc, 2f
+	 nop
+	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7	! and write it out
+	cmp	%g4, %g7
+	bne,pn	%xcc, 1b
+	 or	%g4, SUN4V_TLB_ACCESS, %g4	! Update the access bit
+2:
+	GET_TSB_DMMU %g2
+
+	/* Construct TSB tag word. */
+	add	%g1, 0x50, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Data fault context
+	mov	%g3, %g1			! Data fault address
+	srlx	%g1, 22, %g1			! 63..22 of virt addr
+	sllx	%g6, 48, %g6			! context_id in 63..48
+	or	%g1, %g6, %g1			! construct TTE tag
+	srlx	%g3, PTSHIFT, %g3
+	sethi	%hi(_C_LABEL(tsbsize)), %g5
+	mov	512, %g6
+	ld	[%g5 + %lo(_C_LABEL(tsbsize))], %g5
+	sllx	%g6, %g5, %g5			! %g5 = 512 << tsbsize = TSBENTS
+	sub	%g5, 1, %g5			! TSBENTS -> offset
+	and	%g3, %g5, %g3			! mask out TTE index
+	sllx	%g3, 4, %g3			! TTE size is 16 bytes
+	add	%g2, %g3, %g2			! location of TTE in ci_tsb_dmmu
+
+	membar	#StoreStore
+
+	STPTR	%g4, [%g2 + 8]			! store TTE data
+	STPTR	%g1, [%g2]			! store TTE tag
+
+	retry
+	NOTREACHED
+	
+sun4v_datatrap:
 	GET_MMFSA %g3				! MMU Fault status area
 	add	%g3, 0x48, %g1
 	LDPTRA	[%g1] ASI_PHYS_CACHED, %g1	! Data fault address
@@ -2918,10 +3007,6 @@ sun4v_datatrap_tl0:
 	 nop
 	NOTREACHED
 	
-sun4v_datatrap_tl1:
-	/* XXX missing implementaion */
-	sir
-
 sun4v_tl0_dtsb_prot:
 	GET_MMFSA %g1				! MMU Fault status area
 	add	%g1, 0x48, %g3
@@ -2959,12 +3044,11 @@ sun4v_tl0_dtsb_prot:
 1:
 	LDPTRA	[%g6] ASI_PHYS_CACHED, %g4	! Fetch TTE
 	brgez,pn %g4, sun4v_datatrap		! Entry invalid?  Punt
-	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g7
-	! Update the modified bit
+	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g7 ! Update the modified bit
 
 #	btst	SUN4V_TLB_REAL_W|SUN4V_TLB_W, %g4	! Is it a ref fault?
 	mov	1, %g2
-	sllx	%g2, 61, %g2
+	sllx	%g2, 61, %g2			! %g2 is now SUN4V_TLB_REAL_W
 	or	%g2, SUN4V_TLB_W, %g2
 	btst	%g2, %g4
 	bz,pn	%xcc, sun4v_datatrap			! No -- really fault
@@ -2972,8 +3056,7 @@ sun4v_tl0_dtsb_prot:
 	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7		!  and write it out
 	cmp	%g4, %g7
 	bne,pn	%xcc, 1b
-	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g4
-		! Update the modified bit
+	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g4 ! Update the modified bit
 2:
 	GET_TSB_DMMU %g2
 
@@ -3019,6 +3102,511 @@ sun4v_tl0_dtsb_prot:
 
 	retry
 	NOTREACHED
+
+sun4v_tl0_itsb_miss:
+	GET_MMFSA %g1				! MMU Fault status area
+	add	%g1, 0x8, %g3
+	LDPTRA	[%g3] ASI_PHYS_CACHED, %g3	! Instruction fault address
+	add	%g1, 0x10, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Data fault context
+	
+	GET_CTXBUSY %g4
+	sllx	%g6, 3, %g6			! Make it into an offset into ctxbusy
+	LDPTR	[%g4 + %g6], %g4		! Load up our page table.
+
+	srax	%g3, HOLESHIFT, %g5		! Check for valid address
+	brz,pt	%g5, 0f				! Should be zero or -1
+	 inc	%g5				! Make -1 -> 0
+	brnz,pn	%g5, sun4v_texttrap		! Error! In hole!
+0:
+	srlx	%g3, STSHIFT, %g6
+	and	%g6, STMASK, %g6		! Index into pm_segs
+	sll	%g6, 3, %g6
+	add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page directory pointer
+
+	srlx	%g3, PDSHIFT, %g6
+	and	%g6, PDMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_texttrap		! NULL entry? check somewhere else
+	 add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page table pointer
+
+	srlx	%g3, PTSHIFT, %g6		! Convert to ptab offset
+	and	%g6, PTMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_texttrap		! NULL entry? check somewhere else
+	 add	%g4, %g6, %g6
+1:
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g4	! Fetch TTE
+	brgez,pn %g4, sun4v_texttrap		! Entry invalid?  Punt
+	 or	%g4, SUN4V_TLB_ACCESS, %g7	! Update the access bit
+
+	btst	SUN4V_TLB_EXEC, %g4		! Need to update exec bit?
+	bz,pn	%xcc, sun4v_texttrap
+	 nop
+	btst	SUN4V_TLB_ACCESS, %g4		! Need to update access bit?
+	bne,pt	%xcc, 2f
+	 nop
+	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7	! and write it out
+	cmp	%g4, %g7
+	bne,pn	%xcc, 1b
+	 or	%g4, SUN4V_TLB_ACCESS, %g4	! Update the modified bit
+2:
+	GET_TSB_DMMU %g2
+
+	mov	%g1, %g7
+	/* Construct TSB tag word. */
+	add	%g1, 0x10, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Instruction fault context
+	mov	%g3, %g1			! Instruction fault address
+	srlx	%g1, 22, %g1			! 63..22 of virt addr
+	sllx	%g6, 48, %g6			! context_id in 63..48
+	or	%g1, %g6, %g1			! construct TTE tag
+
+	srlx	%g3, PTSHIFT, %g3
+	sethi	%hi(_C_LABEL(tsbsize)), %g5
+	mov	512, %g6
+	ld	[%g5 + %lo(_C_LABEL(tsbsize))], %g5
+	sllx	%g6, %g5, %g5			! %g5 = 512 << tsbsize = TSBENTS
+	sub	%g5, 1, %g5			! TSBENTS -> offset
+	and	%g3, %g5, %g3			! mask out TTE index
+	sllx	%g3, 4, %g3			! TTE size is 16 bytes
+	add	%g2, %g3, %g2			! location of TTE in ci_tsb_dmmu (FIXME ci_tsb_immu?)
+	
+	membar	#StoreStore
+	STPTR	%g4, [%g2 + 8]			! store TTE data
+	stx	%g1, [%g2]			! store TTE tag
+
+	retry
+	NOTREACHED
+
+sun4v_texttrap:
+	GET_MMFSA %g3				! MMU Fault status area
+	add	%g3, 0x08, %g1
+	LDPTRA	[%g1] ASI_PHYS_CACHED, %g1	! Instruction fault address
+	add	%g3, 0x10, %g2
+	LDPTRA	[%g2] ASI_PHYS_CACHED, %g2	! Instruction fault context
+
+	TRAP_SETUP(-CC64FSZ-TF_SIZE)
+
+	or	%g1, %g2, %o2
+	clr	%o3
+
+	rdpr	%tt, %g4
+	rdpr	%tstate, %g1
+	rdpr	%tpc, %g2
+	rdpr	%tnpc, %g3
+
+	stx	%g1, [%sp + CC64FSZ + BIAS + TF_TSTATE]
+	mov	%g4, %o1		! (type)
+	stx	%g2, [%sp + CC64FSZ + BIAS + TF_PC]
+	rd	%y, %g5
+	stx	%g3, [%sp + CC64FSZ + BIAS + TF_NPC]
+	st	%g5, [%sp + CC64FSZ + BIAS + TF_Y]
+	sth	%o1, [%sp + CC64FSZ + BIAS + TF_TT]! debug
+
+	! Get back to normal globals
+	wrpr	%g0, PSTATE_KERN, %pstate		
+	NORMAL_GLOBALS_SUN4V
+
+	stx	%g1, [%sp + CC64FSZ + BIAS + TF_G + (1*8)]
+	stx	%g2, [%sp + CC64FSZ + BIAS + TF_G + (2*8)]
+	add	%sp, CC64FSZ + BIAS, %o0		! (&tf)
+	stx	%g3, [%sp + CC64FSZ + BIAS + TF_G + (3*8)]
+	stx	%g4, [%sp + CC64FSZ + BIAS + TF_G + (4*8)]
+	stx	%g5, [%sp + CC64FSZ + BIAS + TF_G + (5*8)]
+	rdpr	%pil, %g5
+	stx	%g6, [%sp + CC64FSZ + BIAS + TF_G + (6*8)]
+	stx	%g7, [%sp + CC64FSZ + BIAS + TF_G + (7*8)]
+	stb	%g5, [%sp + CC64FSZ + BIAS + TF_PIL]
+	stb	%g5, [%sp + CC64FSZ + BIAS + TF_OLDPIL]
+
+	/*
+	 * Phew, ready to enable traps and call C code.
+	 */
+	wrpr	%g0, 0, %tl
+
+	wr	%g0, ASI_PRIMARY_NOFAULT, %asi	! Restore default ASI
+	wrpr	%g0, PSTATE_INTR, %pstate	! traps on again
+	call	_C_LABEL(text_access_fault)	! text_access_fault(tf, type, ...)
+	 nop
+
+	ba,a,pt	%icc, return_from_trap
+	 nop
+	NOTREACHED
+
+sun4v_tl1_dtsb_prot:
+	GET_MMFSA %g1				! MMU Fault status area
+	add	%g1, 0x48, %g3
+	LDPTRA	[%g3] ASI_PHYS_CACHED, %g3	! Data fault address
+	add	%g1, 0x50, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Data fault context
+	
+	GET_CTXBUSY %g4
+	sllx	%g6, 3, %g6			! Make it into an offset into ctxbusy
+	LDPTR	[%g4 + %g6], %g4		! Load up our page table.
+
+	srax	%g3, HOLESHIFT, %g5		! Check for valid address
+	brz,pt	%g5, 0f				! Should be zero or -1
+	 inc	%g5				! Make -1 -> 0
+	brnz,pn	%g5, sun4v_tl1_ptbl_miss	! Error! In hole!
+0:
+	srlx	%g3, STSHIFT, %g6
+	and	%g6, STMASK, %g6		! Index into pm_segs
+	sll	%g6, 3, %g6
+	add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page directory pointer
+
+	srlx	%g3, PDSHIFT, %g6
+	and	%g6, PDMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_tl1_ptbl_miss	! NULL entry? check somewhere else
+	 add	%g4, %g6, %g4
+	LDPTRA	[%g4] ASI_PHYS_CACHED, %g4	! Load page table pointer
+
+	srlx	%g3, PTSHIFT, %g6		! Convert to ptab offset
+	and	%g6, PTMASK, %g6
+	sll	%g6, 3, %g6
+	brz,pn	%g4, sun4v_tl1_ptbl_miss	! NULL entry? check somewhere else
+	 add	%g4, %g6, %g6
+1:
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g4	! Fetch TTE
+	brgez,pn %g4, sun4v_tl1_ptbl_miss	! Entry invalid?  Punt
+	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g7 ! Update the modified bit
+
+#	btst	SUN4V_TLB_REAL_W|SUN4V_TLB_W, %g4	! Is it a ref fault?
+	mov	1, %g2
+	sllx	%g2, 61, %g2			! %g2 is now SUN4V_TLB_REAL_W
+	or	%g2, SUN4V_TLB_W, %g2
+	btst	%g2, %g4
+	bz,pn	%xcc, sun4v_tl1_ptbl_miss		! No -- really fault
+	 nop
+	casxa	[%g6] ASI_PHYS_CACHED, %g4, %g7		!  and write it out
+	cmp	%g4, %g7
+	bne,pn	%xcc, 1b
+	 or	%g4, SUN4V_TLB_MODIFY|SUN4V_TLB_ACCESS|SUN4V_TLB_W, %g4 ! Update the modified bit
+2:
+	GET_TSB_DMMU %g2
+
+	mov	%g1, %g7			! save MMFSA
+
+	/* Construct TSB tag word. */
+	add	%g1, 0x50, %g6
+	LDPTRA	[%g6] ASI_PHYS_CACHED, %g6	! Data fault context
+	mov	%g3, %g1			! Data fault address
+	srlx	%g1, 22, %g1			! 63..22 of virt addr
+	sllx	%g6, 48, %g6			! context_id in 63..48
+	or	%g1, %g6, %g1			! construct TTE tag
+
+	srlx	%g3, PTSHIFT, %g3
+	sethi	%hi(_C_LABEL(tsbsize)), %g5
+	mov	512, %g6
+	ld	[%g5 + %lo(_C_LABEL(tsbsize))], %g5
+	sllx	%g6, %g5, %g5			! %g5 = 512 << tsbsize = TSBENTS
+	sub	%g5, 1, %g5			! TSBENTS -> offset
+	and	%g3, %g5, %g3			! mask out TTE index
+	sllx	%g3, 4, %g3			! TTE size is 16 bytes
+	add	%g2, %g3, %g2			! location of TTE in ci_tsb_dmmu
+
+	membar	#StoreStore
+
+	STPTR	%g4, [%g2 + 8]		! store TTE data
+	STPTR	%g1, [%g2]		! store TTE tag
+
+	mov	%o0, %g1
+	mov	%o1, %g2
+	mov	%o2, %g3
+
+	add	%g7, 0x48, %o0
+	ldxa	[%o0] ASI_PHYS_CACHED, %o0	! Data fault address
+	add	%g7, 0x50, %o1
+	ldxa	[%o1] ASI_PHYS_CACHED, %o1	! Data fault context
+	mov	MAP_DTLB, %o2
+	ta	ST_MMU_UNMAP_ADDR
+
+	mov	%g1, %o0
+	mov	%g2, %o1
+	mov	%g3, %o2
+
+	retry
+	NOTREACHED
+
+sun4v_tl1_ptbl_miss:
+	rdpr	%tpc, %g1
+
+	set	rft_user_fault_start, %g2
+	cmp	%g1, %g2
+	blu,pt	%xcc, 1f
+	 set	rft_user_fault_end, %g2
+	cmp	%g1, %g2
+	bgeu,pt	%xcc, 1f
+	 nop
+
+	/* We had a miss inside rtf_user_fault_start/rtf_user_fault_end block (FILL)
+	
+	/* Fixup %cwp. */
+	rdpr	%cwp, %g1
+	inc	%g1
+	wrpr	%g1, %cwp
+
+	rdpr	%tt, %g1
+	wrpr	1, %tl
+	wrpr	%g1, %tt
+	rdpr	%cwp, %g1
+	set	TSTATE_KERN, %g2
+	wrpr	%g1, %g2, %tstate
+	set	return_from_trap, %g1
+	wrpr	%g1, %tpc
+	add	%g1, 4, %g1
+	wrpr	%g1, %tnpc
+	wrpr	%g0, 1, %gl
+
+	ba,pt %xcc, sun4v_datatrap
+	 wrpr	WSTATE_KERN, %wstate
+
+1:
+	rdpr	%tstate, %g3
+	rdpr	%tt, %g4
+
+	rdpr	%tl, %g1
+	dec	%g1
+	wrpr	%g1, %tl
+	rdpr	%tt, %g2
+	inc	%g1
+	wrpr	%g1, %tl
+
+	wrpr	%g0, %g3, %tstate
+	wrpr	%g0, %g4, %tt
+
+	andn	%g2, 0x00f, %g3
+	cmp	%g3, 0x080
+	be,pn	%icc, flush_normals
+	 nop
+	cmp	%g3, 0x0a0
+	be,pn	%icc, flush_others
+	 nop
+	cmp	%g3, 0x0c0
+	be,pn	%icc, ufill_trap
+	 nop
+
+	Debugger()
+	NOTREACHED
+
+flush_others:
+	set	pcbspill_others, %g1
+	wrpr	%g1, %tnpc
+	done
+	NOTREACHED
+
+flush_normals:
+ufill_trap:
+
+	/*
+	 * Rearrange our trap state such that it appears as if we got
+	 * this trap directly from user mode.  Then process it at TL = 1.
+	 * We'll take the spill/fill trap again once we return to user mode.
+	 */
+	rdpr	%tt, %g1
+	rdpr	%tstate, %g3
+	wrpr	%g0, 1, %tl
+	wrpr	%g0, %g1, %tt
+	rdpr	%tstate, %g2
+	wrpr	%g0, 2, %tl
+	and	%g2, TSTATE_CWP, %g2
+	andn	%g3, TSTATE_CWP, %g3
+	wrpr	%g2, %g3, %tstate
+	set	sun4v_datatrap, %g4
+	wrpr	%g0, %g4, %tnpc
+	done
+
+/*
+ * Spill user windows into the PCB.
+ */
+pcbspill_normals:
+	ba,pt	%xcc, pcbspill
+	 wrpr	0x80, %tt
+
+pcbspill_others:
+	wrpr	0xa0, %tt
+
+pcbspill:
+	set	CPUINFO_VA, %g6
+	ldx	[%g6 + CI_CPCB], %g6
+	
+	GET_CTXBUSY %g1
+
+	ldx	[%g1], %g1				! kernel pmap is ctx 0
+
+	srlx	%g6, STSHIFT, %g7
+	and	%g7, STMASK, %g7
+	sll	%g7, 3, %g7				! byte offset into ctxbusy
+	add	%g7, %g1, %g1
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1		! Load pointer to directory
+
+	srlx	%g6, PDSHIFT, %g7			! Do page directory
+	and	%g7, PDMASK, %g7
+	sll	%g7, 3, %g7
+	brz,pn	%g1, pcbspill_fail
+	 add	%g7, %g1, %g1
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1
+	srlx	%g6, PTSHIFT, %g7			! Convert to ptab offset
+	and	%g7, PTMASK, %g7
+	brz	%g1, pcbspill_fail
+	 sll	%g7, 3, %g7
+	add	%g1, %g7, %g7
+	ldxa	[%g7] ASI_PHYS_CACHED, %g7		! This one is not
+	brgez	%g7, pcbspill_fail
+	 srlx	%g7, PGSHIFT, %g7			! Isolate PA part
+	sll	%g6, 32-PGSHIFT, %g6			! And offset
+	sllx	%g7, PGSHIFT+8, %g7			! There are 8 bits to the left of the PA in the TTE
+	srl	%g6, 32-PGSHIFT, %g6
+	srax	%g7, 8, %g7
+	or	%g7, %g6, %g6				! Then combine them to form PA
+
+	wr	%g0, ASI_PHYS_CACHED, %asi		! Use ASI_PHYS_CACHED to prevent possible page faults
+
+	lduba	[%g6 + PCB_NSAVED] %asi, %g7		! Fetch current nsaved from the pcb
+	sllx	%g7, 7, %g5				! 8+8 registers each 8 bytes = 128 bytes (2^7)
+	add	%g6, %g5, %g5				! Offset into pcb_rw
+	SPILL	stxa, %g5 + PCB_RW, 8, %asi		! Store the locals and ins 
+	saved
+
+	sllx	%g7, 3, %g5
+	add	%g6, %g5, %g5
+
+	inc	%g7
+	stba	%g7, [%g6 + PCB_NSAVED] %asi
+
+	retry
+	NOTREACHED
+
+pcbspill_fail:
+	Debugger()
+	NOTREACHED
+
+
+pcbspill_other:
+	
+	set	CPUINFO_VA, %g6
+	ldx	[%g6 + CI_CPCB], %g6
+	
+	GET_CTXBUSY %g1
+
+	ldx	[%g1], %g1				! kernel pmap is ctx 0
+	
+	srlx	%g6, STSHIFT, %g7
+	and	%g7, STMASK, %g7
+	sll	%g7, 3, %g7				! byte offset into ctxbusy
+	add	%g7, %g1, %g1
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1		! Load pointer to directory
+
+	srlx	%g6, PDSHIFT, %g7			! Do page directory
+	and	%g7, PDMASK, %g7
+	sll	%g7, 3, %g7
+	brz,pn	%g1, pcbspill_other_fail
+	 add	%g7, %g1, %g1
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1
+	srlx	%g6, PTSHIFT, %g7			! Convert to ptab offset
+	and	%g7, PTMASK, %g7
+	brz	%g1, pcbspill_other_fail
+	 sll	%g7, 3, %g7
+	add	%g1, %g7, %g7
+	ldxa	[%g7] ASI_PHYS_CACHED, %g7		! This one is not
+	brgez	%g7, pcbspill_other_fail
+	 srlx	%g7, PGSHIFT, %g7			! Isolate PA part
+	sll	%g6, 32-PGSHIFT, %g6			! And offset
+	sllx	%g7, PGSHIFT+8, %g7			! There are 8 bits to the left of the PA in the TTE
+	srl	%g6, 32-PGSHIFT, %g6
+	srax	%g7, 8, %g7
+	or	%g7, %g6, %g6				! Then combine them to form PA
+
+	wr	%g0, ASI_PHYS_CACHED, %asi		! Use ASI_PHYS_CACHED to prevent possible page faults
+
+	lduba	[%g6 + PCB_NSAVED] %asi, %g7		! Fetch current nsaved from the pcb
+	sllx	%g7, 7, %g5				! 8+8 registers each 8 bytes = 128 bytes (2^7)
+	add	%g6, %g5, %g5				! Offset into pcb_rw
+1:	
+	SPILL	stxa, %g5 + PCB_RW, 8, %asi		! Store the locals and ins
+
+	add	%g5, 16*8, %g5				! Next location for saved register windows
+
+	stxa	%o6, [%g5 + PCB_RW + (14*8)] %asi	! Save %sp so we can write these all out
+	
+	saved						! Increments %cansave and decrements %otherwin
+	
+	rdpr	%cwp, %g1				! shift register window forward
+	inc	%g1
+	wrpr	%g1, %cwp
+
+
+	inc	%g7					! increment number of saved register windows
+
+	rdpr	%otherwin, %g1				! Check to see if done spill'ing otherwin
+	brnz,pt	%g1, 1b
+	 nop
+	
+	stba	%g7, [%g6 + PCB_NSAVED] %asi
+
+	retry
+	NOTREACHED
+
+pcbspill_other_fail:
+	Debugger()
+	NOTREACHED
+
+
+spill_normal_to_user_stack:
+	mov	%sp, %g6						! calculate virtual address of destination stack
+	add	%g6, BIAS, %g6
+
+	mov	CTX_SECONDARY, %g2				! Is this context ok or should it be CTX_PRIMARY? XXX
+	GET_MMU_CONTEXTID %g3, %g2, %g1
+	sllx	%g3, 3, %g3					! Make it into an offset into ctxbusy (see below)
+	
+	GET_CTXBUSY %g1
+	ldx	[%g1 + %g3], %g1				! Fetch pmap for current context id
+
+	! Start of code to extract PA	
+	srlx	%g6, STSHIFT, %g7
+	and	%g7, STMASK, %g7
+	sll	%g7, 3, %g7						! byte offset into ctxbusy
+	add	%g7, %g1, %g1
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1	! Load pointer to directory
+	srlx	%g6, PDSHIFT, %g7			! Do page directory
+	and	%g7, PDMASK, %g7
+	sll	%g7, 3, %g7
+	brz,pn	%g1, spill_normal_to_user_stack_fail
+	 add	%g7, %g1, %g1
+
+	ldxa	[%g1] ASI_PHYS_CACHED, %g1
+	srlx	%g6, PTSHIFT, %g7			! Convert to ptab offset
+	and	%g7, PTMASK, %g7
+	brz	%g1, spill_normal_to_user_stack_fail
+	 sll	%g7, 3, %g7
+	
+	add	%g1, %g7, %g7
+	ldxa	[%g7] ASI_PHYS_CACHED, %g7	! This one is not
+	brgez	%g7, spill_normal_to_user_stack_fail
+	 srlx	%g7, PGSHIFT, %g7			! Isolate PA part
+	
+	sll	%g6, 32-PGSHIFT, %g6			! And offset
+	sllx	%g7, PGSHIFT+8, %g7			! There are 8 bits to the left of the PA in the TTE
+	srl	%g6, 32-PGSHIFT, %g6
+	srax	%g7, 8, %g7
+	or	%g7, %g6, %g6					! Then combine them to form PA
+	! End of code to extract PA
+
+	wr	%g0, ASI_PHYS_CACHED, %asi		! Use ASI_PHYS_CACHED to prevent possible page faults
+	SPILL	stxa, %g6, 8, %asi			! Store the locals and ins
+	saved
+
+	retry
+	NOTREACHED
+
+spill_normal_to_user_stack_fail:
+	sir
+	 nop
 	
 /*
  * End of traps for sun4v.
@@ -3163,7 +3751,20 @@ Lslowtrap_reenter:
 	mov	%g2, %o2		! (pc)
 	sth	%o1, [%sp + CC64FSZ + STKB + TF_TT]! debug
 
-	wrpr	%g0, PSTATE_KERN, %pstate		! Get back to normal globals
+	! Get back to normal globals
+#ifdef SUN4V
+	sethi	%hi(cputyp), %g5
+	ld	[%g5 + %lo(cputyp)], %g5
+	cmp	%g5, CPU_SUN4V
+	bne,pt	%icc, 1f
+	 nop
+	NORMAL_GLOBALS_SUN4V
+	ba	2f
+	 nop
+1:	
+#endif	
+	NORMAL_GLOBALS_SUN4U
+2:
 	stx	%g1, [%sp + CC64FSZ + STKB + TF_G + (1*8)]
 	stx	%g2, [%sp + CC64FSZ + STKB + TF_G + (2*8)]
 	add	%sp, CC64FSZ + STKB, %o0		! (&tf)
@@ -3539,7 +4140,21 @@ syscall_setup:
 	sth	%o1, [%sp + CC64FSZ + STKB + TF_TT]! debug
 #endif
 
-	wrpr	%g0, PSTATE_KERN, %pstate	! Get back to normal globals
+	! Get back to normal globals
+#ifdef SUN4V
+	sethi	%hi(cputyp), %g5
+	ld	[%g5 + %lo(cputyp)], %g5
+	cmp	%g5, CPU_SUN4V
+	bne,pt	%icc, 1f
+	 nop
+	NORMAL_GLOBALS_SUN4V
+	ba	2f
+	 nop
+1:	
+#endif	
+	NORMAL_GLOBALS_SUN4U
+2:
+	
 	stx	%g1, [%sp + CC64FSZ + STKB + TF_G + ( 1*8)]
 	mov	%g1, %o1			! code
 	rdpr	%tpc, %o2			! (pc)
@@ -4536,9 +5151,8 @@ rft_user:
 	bgu,pt	%xcc, 3b				! Next one?
 	 dec	8*16, %g5
 
-	rdpr	%ver, %g5
 	stb	%g0, [%g6 + PCB_NSAVED]			! Clear them out so we won't do this again
-	and	%g5, CWP, %g5
+	GET_MAXCWP %g5
 	add	%g5, %g7, %g4
 	dec	1, %g5					! NWINDOWS-1-1
 	wrpr	%g5, 0, %cansave
@@ -4594,6 +5208,38 @@ rft_user:
 	wrpr	%g2, 0, %tpc
 	wrpr	%g3, 0, %tnpc
 	wrpr	%g1, %g0, %tstate
+
+	/*
+	 * The restore instruction further down may cause the trap level
+	 * to exceede the maximum trap level on sun4v, so a manual fill
+	 * may be necessary.
+	*/
+
+#ifdef SUN4V
+	sethi	%hi(cputyp), %g5
+	ld	[%g5 + %lo(cputyp)], %g5
+	cmp	%g5, CPU_SUN4V
+	bne,pt	%icc, 1f
+	 nop
+
+	! Only manual fill if the restore instruction will cause a fill trap
+	rdpr	%canrestore, %g5
+	brnz	%g5, 1f
+	 nop
+
+	! Do a manual fill
+	wr	%g0, ASI_AIUS, %asi
+	rdpr	%cwp, %g4
+	dec	%g4
+	wrpr	%g4, 0, %cwp
+rft_user_fault_start:
+	FILL	ldxa, %sp+BIAS, 8, %asi
+rft_user_fault_end:
+	restored
+	inc	%g4
+	wrpr	%g4, 0, %cwp
+1:	
+#endif
 	restore
 6:
 	rdpr	%canrestore, %g5
@@ -4688,9 +5334,6 @@ _C_LABEL(endtrapcode):
 	.align	8
 start:
 dostart:
-	mov	1, %g1
-	sllx	%g1, 63, %g1
-	wr	%g1, TICK_CMPR	! XXXXXXX clear and disable %tick_cmpr for now
 	/*
 	 * Startup.
 	 *
@@ -5976,11 +6619,19 @@ ENTRY(getfp)
 	 mov %fp, %o0
 
 /*
- * nothing MD to do in the idle loop
+ * Call optional cpu_idle handler if provided
  */
 ENTRY(cpu_idle)
-	retl
+	set	CPUINFO_VA, %o0
+	LDPTR	[%o0 + CI_IDLESPIN], %o1
+	tst	%o1
+	bz	1f
 	 nop
+	jmp	%o1
+	 nop
+1:
+	retl
+	nop
 
 /*
  * cpu_switchto() switches to an lwp to run and runs it, saving the
@@ -6018,8 +6669,7 @@ ENTRY(cpu_switchto)
 	wrpr	%g0, PSTATE_KERN, %pstate	! make sure we're on normal globals
 						! with traps turned off
 
-	brz,pn	%i0, 1f
-	 sethi	%hi(CPCB), %l6
+	sethi	%hi(CPCB), %l6
 
 	rdpr	%pstate, %o1			! oldpstate = %pstate;
 	LDPTR	[%i0 + L_PCB], %l5
@@ -6031,7 +6681,6 @@ ENTRY(cpu_switchto)
 	rdpr	%cwp, %o2		! Useless
 	stb	%o2, [%l5 + PCB_CWP]
 
-1:
 	sethi	%hi(CURLWP), %l7
 
 	LDPTR   [%i1 + L_PCB], %l1	! newpcb = l->l_pcb;
@@ -6072,12 +6721,12 @@ ENTRY(cpu_switchto)
 	brz,pt	%o1, Lsw_noras		! no, skip RAS check
 	 LDPTR	[%i1 + L_TF], %l3	! pointer to trap frame
 	call	_C_LABEL(ras_lookup)
-	 LDPTR	[%l3 + TF_PC], %o1
+	 ldx	[%l3 + TF_PC], %o1
 	cmp	%o0, -1
-	be,pt	%xcc, Lsw_noras
+	be,pt	CCCR, Lsw_noras
 	 add	%o0, 4, %o1
-	STPTR	%o0, [%l3 + TF_PC]	! store rewound %pc
-	STPTR	%o1, [%l3 + TF_NPC]	! and %npc
+	stx	%o0, [%l3 + TF_PC]	! store rewound %pc
+	stx	%o1, [%l3 + TF_NPC]	! and %npc
 
 Lsw_noras:
 
@@ -6175,7 +6824,6 @@ softint_fastintr_ret:
 	ld	[%l0 + CI_MTX_COUNT], %o1
 	inc	%o1				! ci_mtx_count++
 	st	%o1, [%l0 + CI_MTX_COUNT]
-	st	%g0, [%o0 + L_CTXSWTCH]		! prev->l_ctxswtch = 0
 
 	STPTR	%l6, [%l0 + CI_EINTSTACK]	! restore ci_eintstack
 	wrpr	%g0, %l7, %pil			! restore ipl
@@ -6948,8 +7596,8 @@ ENTRY(next_stick)
 	sllx	%o3, 63, %o3
 	andn	%o1, %o3, %o1
 	andn	%o2, %o3, %o2
-	cmp	%o1, %o2	! Did we wrap?  (tick < tick_cmpr)
-	bgt,pt	%icc, 1f
+	cmp	%o1, %o2	! Did we wrap?  (stick < stick_cmpr)
+	bgt,pt	%xcc, 1f
 	 add	%o1, 1000, %o1	! Need some slack so we don't lose intrs.
 
 	/*
@@ -6990,6 +7638,24 @@ Lstick_ovflw:
 	 mov	%o4, %o2
 	retl
 	 wr	%o2, STICK_CMPR
+
+/*
+ * next_stick_init()
+ *
+ * Sets the %stick_cmpr register to the value retrieved from %stick so
+ * next_stick() does not spend too much time in the function when called
+ * for the first time.
+ * This has been observed on (at least) a SPARC-T5 (sun4v) system where
+ * the %stick_cmpr ends up being less than the %stick value and then
+ * the stickitr() interrupt is never triggered.
+ */
+ENTRY(next_stick_init)
+	rd	STICK, %o0
+	mov	1, %o1		! Mask off high bits of the register
+	sllx	%o1, 63, %o1
+	andn	%o0, %o1, %o0
+	retl
+	 wr	%o0, STICK_CMPR
 
 ENTRY(setjmp)
 	save	%sp, -CC64FSZ, %sp	! Need a frame to return to.

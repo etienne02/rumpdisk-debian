@@ -1,4 +1,4 @@
-/*	$NetBSD: artsata.c,v 1.26 2014/03/29 19:28:24 christos Exp $	*/
+/*	$NetBSD: artsata.c,v 1.29 2018/12/09 11:14:01 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -30,13 +30,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: artsata.c,v 1.26 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: artsata.c,v 1.29 2018/12/09 11:14:01 jdolecek Exp $");
 
 #include "opt_pciide.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
@@ -140,8 +139,9 @@ artisea_mapregs(const struct pci_attach_args *pa, struct pciide_channel *cp,
 		}
 		intrstr = pci_intr_string(pa->pa_pc, intrhandle,
 		    intrbuf, sizeof(intrbuf));
-		sc->sc_pci_ih = pci_intr_establish(pa->pa_pc,
-		    intrhandle, IPL_BIO, pci_intr, sc);
+		sc->sc_pci_ih = pci_intr_establish_xname(pa->pa_pc,
+		    intrhandle, IPL_BIO, pci_intr, sc,
+		    device_xname(sc->sc_wdcdev.sc_atac.atac_dev));
 		if (sc->sc_pci_ih != NULL) {
 			aprint_normal_dev(sc->sc_wdcdev.sc_atac.atac_dev,
 			    "using %s for native-PCI interrupt\n", intrstr);
@@ -232,14 +232,7 @@ artisea_chansetup(struct pciide_softc *sc, int channel,
 	cp->name = PCIIDE_CHANNEL_NAME(channel);
 	cp->ata_channel.ch_channel = channel;
 	cp->ata_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-	cp->ata_channel.ch_queue =
-	    malloc(sizeof(struct ata_queue), M_DEVBUF, M_NOWAIT);
-	if (cp->ata_channel.ch_queue == NULL) {
-		aprint_error("%s %s channel: "
-		    "can't allocate memory for command queue",
-		device_xname(sc->sc_wdcdev.sc_atac.atac_dev), cp->name);
-		return 0;
-	}
+
 	return 1;
 }
 

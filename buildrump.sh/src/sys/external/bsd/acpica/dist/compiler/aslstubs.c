@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -47,6 +47,7 @@
 #include "acevents.h"
 #include "acinterp.h"
 #include "acnamesp.h"
+#include "acparser.h"
 
 #define _COMPONENT          ACPI_COMPILER
         ACPI_MODULE_NAME    ("aslstubs")
@@ -57,15 +58,16 @@
  * Things like Events, Global Lock, etc. are not used
  * by the compiler, so they are stubbed out here.
  */
-void
-AcpiNsExecModuleCodeList (
-    void)
-{
-}
-
 ACPI_STATUS
 AcpiNsInitializeObjects (
     void)
+{
+    return (AE_OK);
+}
+
+ACPI_STATUS
+AcpiPsExecuteTable (
+    ACPI_EVALUATE_INFO      *Info)
 {
     return (AE_OK);
 }
@@ -156,6 +158,13 @@ AcpiEvDeleteGpeBlock (
     return (AE_OK);
 }
 
+void
+AcpiEvUpdateGpes (
+    ACPI_OWNER_ID           TableOwnerId)
+{
+    return;
+}
+
 ACPI_STATUS
 AcpiEvAcquireGlobalLock (
     UINT16                  Timeout)
@@ -173,8 +182,7 @@ AcpiEvReleaseGlobalLock (
 
 ACPI_STATUS
 AcpiEvInitializeRegion (
-    ACPI_OPERAND_OBJECT     *RegionObj,
-    BOOLEAN                 AcpiNsLocked)
+    ACPI_OPERAND_OBJECT     *RegionObj)
 {
     return (AE_OK);
 }

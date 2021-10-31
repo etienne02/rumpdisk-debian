@@ -1,4 +1,4 @@
-/* $NetBSD: isp.c,v 1.125 2013/09/14 13:09:55 joerg Exp $ */
+/* $NetBSD: isp.c,v 1.127 2018/02/08 09:05:19 dholland Exp $ */
 /*
  * Machine and OS Independent (well, as best as possible)
  * code for the Qlogic ISP SCSI adapters.
@@ -43,7 +43,7 @@
  */
 #ifdef	__NetBSD__
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: isp.c,v 1.125 2013/09/14 13:09:55 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: isp.c,v 1.127 2018/02/08 09:05:19 dholland Exp $");
 #include <dev/ic/isp_netbsd.h>
 #endif
 #ifdef	__FreeBSD__
@@ -2903,7 +2903,7 @@ isp_scan_loop(ispsoftc_t *isp, int chan)
 	 * Check our connection topology.
 	 *
 	 * If we're a public or private loop, we scan 0..125 as handle values.
-	 * The firmware has (typically) peformed a PLOGI for us. We skip this
+	 * The firmware has (typically) performed a PLOGI for us. We skip this
 	 * step if we're a ISP_24XX in NP-IV mode.
 	 *
 	 * If we're a N-port connection, we treat this is a short loop (0..1).
@@ -5114,7 +5114,7 @@ again:
 			 * If somebody updated the output pointer, then reset
 			 * optr to be one more than the updated amount.
 			 */
-			while (tsto != oop) {
+			if (tsto != oop) {
 				optr = ISP_NXT_QENTRY(tsto,
 				    RESULT_QUEUE_LEN(isp));
 			}
@@ -5714,7 +5714,7 @@ isp_parse_async_fc(ispsoftc_t *isp, uint16_t mbox)
 			}
 #endif
 			/*
-			 * We've had problems with data corruption occuring on
+			 * We've had problems with data corruption occurring on
 			 * commands that complete (with no apparent error) after
 			 * we receive a LIP. This has been observed mostly on
 			 * Local Loop topologies. To be safe, let's just mark

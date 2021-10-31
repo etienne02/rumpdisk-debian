@@ -1,4 +1,4 @@
-/*	$NetBSD: types.h,v 1.64 2016/07/11 16:15:35 matt Exp $	*/
+/*	$NetBSD: types.h,v 1.76 2021/05/15 02:37:07 simonb Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -34,23 +34,25 @@
  *	@(#)types.h	8.3 (Berkeley) 1/5/94
  */
 
-#ifndef	_MACHTYPES_H_
-#define	_MACHTYPES_H_
+#ifndef	_MIPS_TYPES_H_
+#define	_MIPS_TYPES_H_
 
 #include <sys/cdefs.h>
 #include <sys/featuretest.h>
 #include <mips/int_types.h>
 
-typedef	unsigned int	__cpu_simple_lock_nv_t;
+typedef __int32_t		__register32_t;
+typedef __int64_t		__register64_t;
+typedef __uint32_t		__fpregister32_t;
+typedef __uint64_t		__fpregister64_t;
+
+typedef	unsigned int		__cpu_simple_lock_nv_t;
 #if defined(__mips_o32)
-typedef __int32_t	__register_t;
+typedef __register32_t		__register_t;
+typedef __fpregister32_t	__fpregister_t;
 #else
-typedef __int64_t	__register_t;
-#endif
-#if defined(__mips_o64) || defined(__mips_o32)
-typedef	__uint32_t	__fpregister_t;
-#else
-typedef	__uint64_t	__fpregister_t;
+typedef __register64_t		__register_t;
+typedef __fpregister64_t	__fpregister_t;
 #endif
 
 /*
@@ -59,6 +61,11 @@ typedef	__uint64_t	__fpregister_t;
  * the rest of the operating system as possible.
  */
 
+#ifdef _LP64
+typedef __uint64_t	__vaddr_t;
+#else
+typedef __uint32_t	__vaddr_t;
+#endif
 
 #if defined(_KERNEL) || defined(_KMEMUSER) || defined(_KERNTYPES) || defined(_STANDALONE)
 #if defined(_MIPS_PADDR_T_64BIT) || defined(_LP64)
@@ -88,6 +95,9 @@ typedef __uint32_t	vsize_t;
 #define	PRIdVSIZE	PRId32
 #endif
 
+typedef	vaddr_t	vm_offset_t;	/* deprecated (cddl/FreeBSD compat) */
+typedef	vsize_t	vm_size_t;	/* deprecated (cddl/FreeBSD compat) */
+
 
 typedef int		mips_prid_t;
 /* Make sure this is signed; we need pointers to be sign-extended. */
@@ -110,9 +120,17 @@ typedef __uint64_t	uregister32_t;
 #define	PRIxUREGISTER	PRIx64
 #endif /* __mips_o32 */
 
+#if defined(_KMEMUSER)
+typedef struct mips_label_t {
+	register_t val[14];
+} mips_label_t;
+#else
 typedef struct label_t {
 	register_t val[14];
 } label_t;
+typedef label_t mips_label_t;
+#endif
+
 #define	_L_S0		0
 #define	_L_S1		1
 #define	_L_S2		2
@@ -137,22 +155,28 @@ typedef __uint32_t tlb_asid_t;
 #define	PCU_UNIT_COUNT	2
 #endif
 
-
 #define	__SIMPLELOCK_LOCKED	1
 #define	__SIMPLELOCK_UNLOCKED	0
 
-#define	__HAVE_FAST_SOFTINTS
-#define	__HAVE_AST_PERPROC
-#define	__HAVE_SYSCALL_INTERN
-#define	__HAVE_CPU_LWP_SETPRIVATE
-#define	__HAVE_CPU_DATA_FIRST
-#define	__HAVE_MD_CPU_OFFLINE
-#define	__HAVE_CPU_COUNTER
-#define	__HAVE_CPU_UAREA_ROUTINES
 #define	__HAVE_COMMON___TLS_GET_ADDR
+#define	__HAVE_CPU_COUNTER
+#define	__HAVE_CPU_DATA_FIRST
+#define	__HAVE_CPU_LWP_SETPRIVATE
+#define	__HAVE_CPU_UAREA_ROUTINES
+#define	__HAVE_FAST_SOFTINTS
+#define	__HAVE_MD_CPU_OFFLINE
+#define	__HAVE_MM_MD_DIRECT_MAPPED_PHYS
+#define	__HAVE_MM_MD_KERNACC
+#define	__HAVE_MM_MD_CACHE_ALIASING
+#define	__HAVE_SYSCALL_INTERN
+#define	__HAVE_TLS_VARIANT_I
+#define	__HAVE_UCAS_FULL
 #define	__HAVE___LWP_GETTCB_FAST
 #define	__HAVE___LWP_SETTCB
-#define	__HAVE_TLS_VARIANT_I
+#define	__HAVE_BUS_SPACE_8
+
+/* XXX temporary */
+#define	__HAVE_UNLOCKED_PMAP
 
 #if !defined(__mips_o32)
 #define	__HAVE_ATOMIC64_OPS
@@ -165,8 +189,5 @@ typedef __uint32_t tlb_asid_t;
 #endif
 #endif /* _KERNEL */
 
-#define	__HAVE_MM_MD_DIRECT_MAPPED_PHYS
-#define	__HAVE_MM_MD_KERNACC
-#define	__HAVE_MM_MD_CACHE_ALIASING
 
-#endif	/* _MACHTYPES_H_ */
+#endif	/* _MIPS_TYPES_H_ */

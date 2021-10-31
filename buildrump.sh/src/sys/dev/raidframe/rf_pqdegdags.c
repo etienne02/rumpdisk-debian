@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_pqdegdags.c,v 1.13 2011/08/01 12:28:53 mbalmer Exp $	*/
+/*	$NetBSD: rf_pqdegdags.c,v 1.16 2021/08/07 16:19:15 thorpej Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -33,7 +33,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_pqdegdags.c,v 1.13 2011/08/01 12:28:53 mbalmer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_pqdegdags.c,v 1.16 2021/08/07 16:19:15 thorpej Exp $");
 
 #include "rf_archs.h"
 
@@ -287,7 +287,7 @@ rf_PQWriteDoubleRecoveryFunc(RF_DagNode_t *node)
 	 * & Q to recover the second failed data unit in P. Zero fill Q, then
 	 * apply the recovered data to p. Then apply the data being written to
 	 * the failed drive. Then walk through the surviving drives, applying
-	 * new data when it exists, othewise the recovery data. Quite a mess.
+	 * new data when it exists, otherwise the recovery data. Quite a mess.
 	 *
 	 *
 	 * The params
@@ -379,7 +379,7 @@ RF_CREATE_DAG_FUNC_DECL(rf_PQ_DDLargeWrite)
        failed data units will do the correct thing. So in this case,
        the dag looks like
 
-            full stripe read of surviving data units (not being overwriten)
+            full stripe read of surviving data units (not being overwritten)
 	    write new data (ignoring failed units)   compute P&Q
 	                                             write P&Q
 

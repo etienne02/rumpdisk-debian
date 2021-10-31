@@ -1,40 +1,42 @@
-/******************************************************************************
+/* $NetBSD: ixgbe_osdep.h,v 1.30 2021/08/25 09:06:02 msaitoh Exp $ */
 
-  Copyright (c) 2001-2013, Intel Corporation 
+/******************************************************************************
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright (c) 2001-2017, Intel Corporation
   All rights reserved.
-  
-  Redistribution and use in source and binary forms, with or without 
+
+  Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
-  
-   1. Redistributions of source code must retain the above copyright notice, 
+
+   1. Redistributions of source code must retain the above copyright notice,
       this list of conditions and the following disclaimer.
-  
-   2. Redistributions in binary form must reproduce the above copyright 
-      notice, this list of conditions and the following disclaimer in the 
+
+   2. Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
       documentation and/or other materials provided with the distribution.
-  
-   3. Neither the name of the Intel Corporation nor the names of its 
-      contributors may be used to endorse or promote products derived from 
+
+   3. Neither the name of the Intel Corporation nor the names of its
+      contributors may be used to endorse or promote products derived from
       this software without specific prior written permission.
-  
+
   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
-  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD: head/sys/dev/ixgbe/ixgbe_osdep.h 251964 2013-06-18 21:28:19Z jfv $*/
-/*$NetBSD: ixgbe_osdep.h,v 1.10 2015/08/13 04:56:43 msaitoh Exp $*/
+/*$FreeBSD: head/sys/dev/ixgbe/ixgbe_osdep.h 327031 2017-12-20 18:15:06Z erj $*/
 
-#ifndef _IXGBE_OS_H_
-#define _IXGBE_OS_H_
+#ifndef _IXGBE_OSDEP_H_
+#define _IXGBE_OSDEP_H_
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -52,12 +54,21 @@
 #include <net/if.h>
 #include <net/if_ether.h>
 
-#define ASSERT(x) if(!(x)) panic("IXGBE: x")
-#define EWARN(H, W, S) printf(W)
+#define ASSERT(x) if (!(x)) panic("IXGBE: x")
+#define EWARN(H, W) printf(W)
 
-/* The happy-fun DELAY macro is defined in /usr/src/sys/i386/include/clock.h */
-#define usec_delay(x) DELAY(x)
-#define msec_delay(x) DELAY(1000*(x))
+enum {
+	IXGBE_ERROR_SOFTWARE,
+	IXGBE_ERROR_POLLING,
+	IXGBE_ERROR_INVALID_STATE,
+	IXGBE_ERROR_UNSUPPORTED,
+	IXGBE_ERROR_ARGUMENT,
+	IXGBE_ERROR_CAUTION,
+};
+
+#define usec_delay(x) ixgbe_delay(x)
+#define msec_delay(x) ixgbe_delay((x) * 1000)
+void ixgbe_delay(unsigned int);
 
 #define DBG 0
 #define MSGOUT(S, A, B)     printf(S "\n", A, B)
@@ -71,9 +82,23 @@
 	#define DEBUGOUT5(S,A,B,C,D,E)  printf(S "\n",A,B,C,D,E)
 	#define DEBUGOUT6(S,A,B,C,D,E,F)  printf(S "\n",A,B,C,D,E,F)
 	#define DEBUGOUT7(S,A,B,C,D,E,F,G)  printf(S "\n",A,B,C,D,E,F,G)
-	#define ERROR_REPORT1(S,A)      printf(S A "\n")
-	#define ERROR_REPORT2(S,A,B)    printf(S A "\n",B)
-	#define ERROR_REPORT3(S,A,B,C)  printf(S A "\n",B,C)
+	#define ERROR_REPORT1 ERROR_REPORT
+	#define ERROR_REPORT2 ERROR_REPORT
+	#define ERROR_REPORT3 ERROR_REPORT
+	#define ERROR_REPORT(level, format, arg...) do { \
+		switch (level) { \
+		case IXGBE_ERROR_SOFTWARE: \
+		case IXGBE_ERROR_CAUTION: \
+		case IXGBE_ERROR_POLLING: \
+		case IXGBE_ERROR_INVALID_STATE: \
+		case IXGBE_ERROR_UNSUPPORTED: \
+		case IXGBE_ERROR_ARGUMENT: \
+			device_printf(ixgbe_dev_from_hw(hw), format, ## arg); \
+			break; \
+		default: \
+			break; \
+		} \
+	} while (0)
 #else
 	#define DEBUGOUT(S)		do { } while (/*CONSTCOND*/false)
 	#define DEBUGOUT1(S,A)		do { } while (/*CONSTCOND*/false)
@@ -107,13 +132,17 @@
 #define UNREFERENCED_3PARAMETER(_p, _q, _r)
 #define UNREFERENCED_4PARAMETER(_p, _q, _r, _s)
 
-
 #define IXGBE_NTOHL(_i)	ntohl(_i)
 #define IXGBE_NTOHS(_i)	ntohs(_i)
 
 /* XXX these need to be revisited */
-#define IXGBE_CPU_TO_LE32 le32toh
-#define IXGBE_LE32_TO_CPUS le32dec
+#define IXGBE_CPU_TO_LE16 htole16
+#define IXGBE_CPU_TO_LE32 htole32
+#define IXGBE_LE32_TO_CPU le32toh
+#define IXGBE_LE32_TO_CPUS(x) (*(x) = le32toh(*(x)))
+#define IXGBE_CPU_TO_BE16 htobe16
+#define IXGBE_CPU_TO_BE32 htobe32
+#define IXGBE_BE32_TO_CPU be32toh
 
 typedef uint8_t		u8;
 typedef int8_t		s8;
@@ -123,33 +152,10 @@ typedef uint32_t	u32;
 typedef int32_t		s32;
 typedef uint64_t	u64;
 
-#define le16_to_cpu 
+#define le16_to_cpu
 
-#ifdef __HAVE_PCI_MSI_MSIX
-#define NETBSD_MSI_OR_MSIX
-/*
- * This device driver divides interrupt to TX, RX and link state.
- * Each MSI-X vector indexes are below.
- */
-#define IXG_MSIX_NINTR		2
-#define IXG_MSIX_TXRXINTR_IDX	0
-#define IXG_MSIX_LINKINTR_IDX	1
-#define IXG_MAX_NINTR		IXG_MSIX_NINTR
-#else
-#define IXG_MAX_NINTR		1
-#endif
-
-#if __FreeBSD_version < 800000
-#if defined(__i386__) || defined(__amd64__)
-#define mb()	__asm volatile("mfence" ::: "memory")
-#define wmb()	__asm volatile("sfence" ::: "memory")
-#define rmb()	__asm volatile("lfence" ::: "memory")
-#else
-#define mb()
-#define rmb()
-#define wmb()
-#endif
-#endif
+/* This device driver's max interrupt numbers. */
+#define IXG_MAX_NINTR		64
 
 #if defined(__i386__) || defined(__amd64__)
 static __inline
@@ -161,25 +167,6 @@ void prefetch(void *x)
 #define prefetch(x)
 #endif
 
-/*
- * Optimized bcopy thanks to Luigi Rizzo's investigative work.  Assumes
- * non-overlapping regions and 32-byte padding on both src and dst.
- */
-static __inline int
-ixgbe_bcopy(void *_src, void *_dst, int l)
-{
-	uint64_t *src = _src;
-	uint64_t *dst = _dst;
-
-	for (; l > 0; l -= 32) {
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-		*dst++ = *src++;
-	}
-	return (0);
-}
-
 struct ixgbe_osdep
 {
 	struct ethercom    ec;
@@ -189,15 +176,18 @@ struct ixgbe_osdep
 	bus_space_handle_t mem_bus_space_handle;
 	bus_size_t         mem_size;
 	bus_dma_tag_t      dmat;
-	device_t           dev;
 	pci_intr_handle_t  *intrs;
 	int		   nintrs;
 	void               *ihs[IXG_MAX_NINTR];
 	bool		   attached;
+	bool		   detaching;
 };
 
+/* These routines need struct ixgbe_hw declared */
+struct ixgbe_hw;
+device_t ixgbe_dev_from_hw(struct ixgbe_hw *hw);
+
 /* These routines are needed by the shared code */
-struct ixgbe_hw; 
 extern u16 ixgbe_read_pci_cfg(struct ixgbe_hw *, u32);
 #define IXGBE_READ_PCIE_WORD ixgbe_read_pci_cfg
 
@@ -206,26 +196,22 @@ extern void ixgbe_write_pci_cfg(struct ixgbe_hw *, u32, u16);
 
 #define IXGBE_WRITE_FLUSH(a) IXGBE_READ_REG(a, IXGBE_STATUS)
 
-#define IXGBE_READ_REG(a, reg) (\
-   bus_space_read_4( ((a)->back)->mem_bus_space_tag, \
-                     ((a)->back)->mem_bus_space_handle, \
-                     reg))
+extern u32 ixgbe_read_reg(struct ixgbe_hw *, u32);
+#define IXGBE_READ_REG(a, reg) ixgbe_read_reg(a, reg)
 
-#define IXGBE_WRITE_REG(a, reg, value) (\
-   bus_space_write_4( ((a)->back)->mem_bus_space_tag, \
-                     ((a)->back)->mem_bus_space_handle, \
-                     reg, value))
+extern void ixgbe_write_reg(struct ixgbe_hw *, u32, u32);
+#define IXGBE_WRITE_REG(a, reg, val) ixgbe_write_reg(a, reg, val)
 
+extern u32 ixgbe_read_reg_array(struct ixgbe_hw *, u32, u32);
+#define IXGBE_READ_REG_ARRAY(a, reg, offset) \
+    ixgbe_read_reg_array(a, reg, offset)
 
-#define IXGBE_READ_REG_ARRAY(a, reg, offset) (\
-   bus_space_read_4( ((a)->back)->mem_bus_space_tag, \
-                     ((a)->back)->mem_bus_space_handle, \
-                     (reg + ((offset) << 2))))
+extern void ixgbe_write_reg_array(struct ixgbe_hw *, u32, u32, u32);
+#define IXGBE_WRITE_REG_ARRAY(a, reg, offset, val) \
+    ixgbe_write_reg_array(a, reg, offset, val)
 
-#define IXGBE_WRITE_REG_ARRAY(a, reg, offset, value) (\
-      bus_space_write_4( ((a)->back)->mem_bus_space_tag, \
-                      ((a)->back)->mem_bus_space_handle, \
-                      (reg + ((offset) << 2)), value))
+extern void ixgbe_write_barrier(struct ixgbe_hw *);
+#define IXGBE_WRITE_BARRIER(a) \
+    ixgbe_write_barrier(a)
 
-
-#endif /* _IXGBE_OS_H_ */
+#endif /* _IXGBE_OSDEP_H_ */

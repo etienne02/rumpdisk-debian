@@ -130,7 +130,7 @@ mvspi_attach(struct device *parent, struct device *self, void *aux)
 	ctl &= MVSPI_DIRHS_MASK;
 	ctl &= MVSPI_1BYTE_MASK;
 
-	PUTREG(sc, MVSPI_INTCONF_REG, ctl),
+	PUTREG(sc, MVSPI_INTCONF_REG, ctl);
 
 	/*
 	 * Initialize SPI controller.
@@ -148,8 +148,9 @@ mvspi_attach(struct device *parent, struct device *self, void *aux)
 	/*
 	 * Initialize and attach bus attach.
 	 */
+	memset(&sba, 0, sizeof(sba));
 	sba.sba_controller = &sc->sc_spi;
-	(void) config_found_ia(self, "spibus", &sba, spibus_print);
+	config_found(self, &sba, spibus_print, CFARGS_NONE);
 }
     
 int

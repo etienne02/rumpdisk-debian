@@ -1,4 +1,4 @@
-/*	$NetBSD: sunos32_misc.c,v 1.77 2016/02/28 23:24:35 khorben Exp $	*/
+/*	$NetBSD: sunos32_misc.c,v 1.84 2020/06/24 10:28:17 jdolecek Exp $	*/
 /* from :NetBSD: sunos_misc.c,v 1.107 2000/12/01 19:25:10 jdolecek Exp	*/
 
 /*
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunos32_misc.c,v 1.77 2016/02/28 23:24:35 khorben Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunos32_misc.c,v 1.84 2020/06/24 10:28:17 jdolecek Exp $");
 
 #define COMPAT_SUNOS 1
 
@@ -294,72 +294,19 @@ sunos32_sys_lstat(struct lwp *l, const struct sunos32_sys_lstat_args *uap, regis
 		syscallarg(const netbsd32_charp) path;
 		syscallarg(netbsd32_stat43p_t) ub;
 	} */
-	struct vnode *vp, *dvp;
-	struct stat sb, sb1;
+	struct stat sb;
 	struct netbsd32_stat43 sb32;
 	int error;
-	struct pathbuf *pb;
-	struct nameidata nd;
-	int ndflags;
-	const char *path;
 
-	path = SCARG_P32(uap, path);
-
-	ndflags = NOFOLLOW | LOCKLEAF | LOCKPARENT | TRYEMULROOT;
-again:
-	error = pathbuf_copyin(path, &pb);
-	if (error) {
+	error = do_sys_stat(SCARG_P32(uap, path), NOFOLLOW, &sb);
+	if (error)
 		return error;
-	}
 
-	NDINIT(&nd, LOOKUP, ndflags, pb);
-	if ((error = namei(&nd))) {
-		pathbuf_destroy(pb);
-		if (error == EISDIR && (ndflags & LOCKPARENT) != 0) {
-			/*
-			 * Should only happen on '/'. Retry without LOCKPARENT;
-			 * this is safe since the vnode won't be a VLNK.
-			 */
-			ndflags &= ~LOCKPARENT;
-			goto again;
-		}
-		return (error);
-	}
 	/*
-	 * For symbolic links, always return the attributes of its
+	 * For symbolic links, SunOS returned the attributes of its
 	 * containing directory, except for mode, size, and links.
+	 * This is no longer emulated, the parent directory is not consulted.
 	 */
-	vp = nd.ni_vp;
-	dvp = nd.ni_dvp;
-	pathbuf_destroy(pb);
-	if (vp->v_type != VLNK) {
-		if ((ndflags & LOCKPARENT) != 0) {
-			if (dvp == vp)
-				vrele(dvp);
-			else
-				vput(dvp);
-		}
-		error = vn_stat(vp, &sb);
-		vput(vp);
-		if (error)
-			return (error);
-	} else {
-		error = vn_stat(dvp, &sb);
-		vput(dvp);
-		if (error) {
-			vput(vp);
-			return (error);
-		}
-		error = vn_stat(vp, &sb1);
-		vput(vp);
-		if (error)
-			return (error);
-		sb.st_mode &= ~S_IFDIR;
-		sb.st_mode |= S_IFLNK;
-		sb.st_nlink = sb1.st_nlink;
-		sb.st_size = sb1.st_size;
-		sb.st_blocks = sb1.st_blocks;
-	}
 	sunos32_from___stat13(&sb, &sb32);
 	error = copyout((void *)&sb32, SCARG_P32(uap, ub), sizeof (sb32));
 	return (error);
@@ -388,7 +335,7 @@ sunos32_sys_execv(struct lwp *l, const struct sunos32_sys_execv_args *uap, regis
 	} */
 	const char *path = SCARG_P32(uap, path);
 
-	return execve1(l, path, SCARG_P32(uap, argp), NULL,
+	return execve1(l, true, path, -1, SCARG_P32(uap, argp), NULL,
 	    sunos32_execve_fetch_element);
 }
 
@@ -402,9 +349,8 @@ sunos32_sys_execve(struct lwp *l, const struct sunos32_sys_execve_args *uap, reg
 	} */
 	const char *path = SCARG_P32(uap, path);
 
-	return execve1(l, path, SCARG_P32(uap, argp),
-	    SCARG_P32(uap, envp),
-	    sunos32_execve_fetch_element);
+	return execve1(l, true, path, -1, SCARG_P32(uap, argp),
+	    SCARG_P32(uap, envp), sunos32_execve_fetch_element);
 }
 
 int
@@ -628,7 +574,7 @@ sunos32_sys_getdents(struct lwp *l, const struct sunos32_sys_getdents_args *uap,
 		goto out1;
 	}
 
-	buflen = min(MAXBSIZE, SCARG(uap, nbytes));
+	buflen = uimin(MAXBSIZE, SCARG(uap, nbytes));
 	sbuf = malloc(buflen, M_TEMP, M_WAITOK);
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	off = fp->f_offset;
@@ -659,8 +605,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic("sunos_getdents");
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if (cookie && (*cookie >> 32) != 0) {
 			compat_offseterr(vp, "sunos_getdents");
 			error = EINVAL;
@@ -837,7 +785,7 @@ sunos32_sys_setsockopt(struct lwp *l, const struct sunos32_sys_setsockopt_args *
 			name = ipoptxlat[name - SUNOS_IP_MULTICAST_IF];
 		}
 	}
-	if (SCARG(uap, valsize) > MLEN) {
+	if ((unsigned)SCARG(uap, valsize) > MLEN) {
 		error = EINVAL;
 		goto out;
 	}
@@ -925,15 +873,13 @@ sunos32_sys_uname(struct lwp *l, const struct sunos32_sys_uname_args *uap, regis
 
 	memset(&sut, 0, sizeof(sut));
 
-	memcpy(sut.sysname, ostype, sizeof(sut.sysname) - 1);
-	memcpy(sut.nodename, hostname, sizeof(sut.nodename));
-	sut.nodename[sizeof(sut.nodename)-1] = '\0';
-	memcpy(sut.release, osrelease, sizeof(sut.release) - 1);
-	memcpy(sut.version, "1", sizeof(sut.version) - 1);
-	memcpy(sut.machine, machine, sizeof(sut.machine) - 1);
+	strlcpy(sut.sysname, ostype, sizeof(sut.sysname));
+	strlcpy(sut.nodename, hostname, sizeof(sut.nodename));
+	strlcpy(sut.release, osrelease, sizeof(sut.release));
+	strlcpy(sut.version, "1", sizeof(sut.version));
+	strlcpy(sut.machine, machine, sizeof(sut.machine));
 
-	return copyout((void *)&sut, SCARG_P32(uap, name),
-	    sizeof(struct sunos_utsname));
+	return copyout(&sut, SCARG_P32(uap, name), sizeof(sut));
 }
 
 int
@@ -1080,25 +1026,15 @@ sunos32_sys_statfs(struct lwp *l, const struct sunos32_sys_statfs_args *uap, reg
 		syscallarg(const netbsd32_charp) path;
 		syscallarg(sunos32_statfsp_t) buf;
 	} */
-	struct mount *mp;
 	struct statvfs *sp;
 	int error;
-	struct vnode *vp;
-	struct sys_statvfs1_args ua;
 
-	SUNOS32TOP_UAP(path, const char);
-
-	error = namei_simple_user(SCARG(&ua, path),
-				NSM_FOLLOW_TRYEMULROOT, &vp);
-	if (error != 0)
-		return (error);
-	mp = vp->v_mount;
-	sp = &mp->mnt_stat;
-	vrele(vp);
-	if ((error = VFS_STATVFS(mp, sp)) != 0)
-		return (error);
-	sp->f_flag = mp->mnt_flag & MNT_VISFLAGMASK;
-	return sunstatfs(sp, SCARG_P32(uap, buf));
+	sp = STATVFSBUF_GET();
+	error = do_sys_pstatvfs(l, SCARG_P32(uap, path), 0, sp);
+	if (error == 0)
+		error = sunstatfs(sp, SCARG_P32(uap, buf));
+	STATVFSBUF_PUT(sp);
+	return error;
 }
 
 int
@@ -1108,23 +1044,15 @@ sunos32_sys_fstatfs(struct lwp *l, const struct sunos32_sys_fstatfs_args *uap, r
 		syscallarg(int) fd;
 		syscallarg(sunos32_statfsp_t) buf;
 	} */
-	file_t *fp;
-	struct mount *mp;
 	struct statvfs *sp;
 	int error;
 
-	/* fd_getvnode() will use the descriptor for us */
-	if ((error = fd_getvnode(SCARG(uap, fd), &fp)) != 0)
-		return (error);
-	mp = fp->f_vnode->v_mount;
-	sp = &mp->mnt_stat;
-	if ((error = VFS_STATVFS(mp, sp)) != 0)
-		goto out;
-	sp->f_flag = mp->mnt_flag & MNT_VISFLAGMASK;
-	error = sunstatfs(sp, SCARG_P32(uap, buf));
- out:
- 	fd_putfile(SCARG(uap, fd));
-	return (error);
+	sp = STATVFSBUF_GET();
+	error = do_sys_fstatvfs(l, SCARG(uap, fd), 0, sp);
+	if (error == 0)
+		error = sunstatfs(sp, SCARG_P32(uap, buf));
+	STATVFSBUF_PUT(sp);
+	return error;
 }
 
 int
@@ -1257,7 +1185,7 @@ static const int sreq2breq[] = {
 	PT_KILL,        -1,             PT_ATTACH,      PT_DETACH,
 	PT_GETREGS,     PT_SETREGS,     PT_GETFPREGS,   PT_SETFPREGS
 };
-static const int nreqs = sizeof(sreq2breq) / sizeof(sreq2breq[0]);
+static const size_t nreqs = __arraycount(sreq2breq);
 
 int
 sunos32_sys_ptrace(struct lwp *l, const struct sunos32_sys_ptrace_args *uap, register_t *retval)

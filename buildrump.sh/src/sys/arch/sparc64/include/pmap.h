@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.60 2015/09/06 23:48:39 nakayama Exp $	*/
+/*	$NetBSD: pmap.h,v 1.64 2020/09/06 10:48:21 mrg Exp $	*/
 
 /*-
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -37,6 +37,9 @@
 #ifndef _LOCORE
 #include <machine/pte.h>
 #include <sys/queue.h>
+struct vm_page;
+#include <uvm/uvm_prot.h>
+#include <uvm/uvm_pmap.h>
 #include <uvm/uvm_object.h>
 #ifdef _KERNEL
 #include <machine/cpuset.h>
@@ -126,10 +129,8 @@ extern struct page_size_map page_size_map[];
 #endif
 
 struct pmap {
-	struct uvm_object pm_obj;
-	kmutex_t pm_obj_lock;
-#define pm_lock pm_obj.vmobjlock
-#define pm_refs pm_obj.uo_refs
+	unsigned int pm_refs;
+	TAILQ_HEAD(, vm_page) pm_ptps;
 	LIST_ENTRY(pmap) pm_list[PMAP_LIST_MAXNUMCPU];	/* per cpu ctx used list */
 
 	struct pmap_statistics pm_stats;
@@ -164,7 +165,7 @@ struct prom_map {
 	uint64_t	tte;
 };
 
-#define PMAP_NC		0x001	/* Set the E bit in the page */
+#define PMAP_NC		0x001	/* Don't cache, set the E bit in the page */
 #define PMAP_NVC	0x002	/* Don't enable the virtual cache */
 #define PMAP_LITTLE	0x004	/* Map in little endian mode */
 /* Large page size hints --
@@ -177,6 +178,7 @@ struct prom_map {
 /* If these bits are different in va's to the same PA
    then there is an aliasing in the d$ */
 #define VA_ALIAS_MASK   (1 << 13)
+#define PMAP_WC		0x20	/* allow write combinimg */
 
 #ifdef	_KERNEL
 #ifdef PMAP_COUNT_DEBUG
@@ -267,6 +269,13 @@ do {									\
 	(pg)->mdpage.mdpg_pvh.pv_pmap = NULL;				\
 	(pg)->mdpage.mdpg_pvh.pv_va = 0;				\
 } while (/*CONSTCOND*/0)
+
+#ifdef MULTIPROCESSOR
+#define pmap_ctx_cpu(PM, C)	((PM)->pm_ctx[(C)])
+#define pmap_ctx(PM)		pmap_ctx_cpu((PM), cpu_number())
+#else
+#define pmap_ctx(PM)		((PM)->pm_ctx[0])
+#endif
 
 #endif	/* _KERNEL */
 

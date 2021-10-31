@@ -1,4 +1,4 @@
-/*      $NetBSD: if_qe.c,v 1.75 2016/06/10 13:27:15 ozaki-r Exp $ */
+/*      $NetBSD: if_qe.c,v 1.81 2019/05/28 07:41:49 msaitoh Exp $ */
 /*
  * Copyright (c) 1999 Ludd, University of Lule}, Sweden. All rights reserved.
  *
@@ -10,12 +10,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *      This product includes software developed at Ludd, University of
- *      Lule}, Sweden and its contributors.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -38,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_qe.c,v 1.75 2016/06/10 13:27:15 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_qe.c,v 1.81 2019/05/28 07:41:49 msaitoh Exp $");
 
 #include "opt_inet.h"
 
@@ -52,12 +46,10 @@ __KERNEL_RCSID(0, "$NetBSD: if_qe.c,v 1.75 2016/06/10 13:27:15 ozaki-r Exp $");
 #include <net/if.h>
 #include <net/if_ether.h>
 #include <net/if_dl.h>
+#include <net/bpf.h>
 
 #include <netinet/in.h>
 #include <netinet/if_inarp.h>
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/bus.h>
 
@@ -75,7 +67,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_qe.c,v 1.75 2016/06/10 13:27:15 ozaki-r Exp $");
 struct qe_cdata {
 	struct qe_ring	qc_recv[RXDESCS+1];	/* Receive descriptors */
 	struct qe_ring	qc_xmit[TXDESCS+1];	/* Transmit descriptors */
-	u_int8_t	qc_setup[128];		/* Setup packet layout */
+	uint8_t	qc_setup[128];		/* Setup packet layout */
 };
 
 struct	qe_softc {
@@ -144,7 +136,7 @@ qematch(device_t parent, cfdata_t cf, void *aux)
 	struct	qe_ring *rp;
 	int error, match;
 
-	ring = malloc(PROBESIZE, M_TEMP, M_WAITOK|M_ZERO);
+	ring = malloc(PROBESIZE, M_TEMP, M_WAITOK | M_ZERO);
 	memset(sc, 0, sizeof(*sc));
 	sc->sc_iot = ua->ua_iot;
 	sc->sc_ioh = ua->ua_ioh;
@@ -187,7 +179,7 @@ qematch(device_t parent, cfdata_t cf, void *aux)
 	/*
 	 * Start the interface and wait for the packet.
 	 */
-	QE_WCSR(QE_CSR_CSR, QE_INT_ENABLE|QE_XMIT_INT|QE_RCV_INT);
+	QE_WCSR(QE_CSR_CSR, QE_INT_ENABLE | QE_XMIT_INT | QE_RCV_INT);
 	QE_WCSR(QE_CSR_RCLL, LOWORD(&rp[2]));
 	QE_WCSR(QE_CSR_RCLH, HIWORD(&rp[2]));
 	QE_WCSR(QE_CSR_XMTL, LOWORD(rp));
@@ -216,7 +208,7 @@ qeattach(device_t parent, device_t self, void *aux)
 	struct qe_softc *sc = device_private(self);
 	struct ifnet *ifp = &sc->sc_if;
 	struct qe_ring *rp;
-	u_int8_t enaddr[ETHER_ADDR_LEN];
+	uint8_t enaddr[ETHER_ADDR_LEN];
 	int i, error;
 	char *nullbuf;
 
@@ -251,7 +243,7 @@ qeattach(device_t parent, device_t self, void *aux)
 	 */
 	for (i = 0; i < TXDESCS; i++) {
 		if ((error = bus_dmamap_create(sc->sc_dmat, MCLBYTES,
-		    1, MCLBYTES, 0, BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW,
+		    1, MCLBYTES, 0, BUS_DMA_NOWAIT | BUS_DMA_ALLOCNOW,
 		    &sc->sc_xmtmap[i]))) {
 			aprint_error(
 			    ": unable to create tx DMA map %d, error = %d\n",
@@ -431,7 +423,7 @@ qeinit(struct qe_softc *sc)
 	 * Write the descriptor addresses to the device.
 	 * Receiving packets will be enabled in the interrupt routine.
 	 */
-	QE_WCSR(QE_CSR_CSR, QE_INT_ENABLE|QE_XMIT_INT|QE_RCV_INT);
+	QE_WCSR(QE_CSR_CSR, QE_INT_ENABLE | QE_XMIT_INT | QE_RCV_INT);
 	QE_WCSR(QE_CSR_RCLL, LOWORD(sc->sc_pqedata->qc_recv));
 	QE_WCSR(QE_CSR_RCLH, HIWORD(sc->sc_pqedata->qc_recv));
 
@@ -496,7 +488,7 @@ qestart(struct ifnet *ifp)
 
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 		/*
 		 * m now points to a mbuf chain that can be loaded.
 		 * Loop around and set it.
@@ -595,14 +587,13 @@ qeintr(void *arg)
 			m->m_pkthdr.len = m->m_len = len;
 			if (++sc->sc_nextrx == RXDESCS)
 				sc->sc_nextrx = 0;
-			bpf_mtap(ifp, m);
 			if ((status1 & QE_ESETUP) == 0)
 				if_percpuq_enqueue(ifp->if_percpuq, m);
 			else
 				m_freem(m);
 		}
 
-	if (csr & (QE_XMIT_INT|QE_XL_INVALID)) {
+	if (csr & (QE_XMIT_INT | QE_XL_INVALID)) {
 		while (qc->qc_xmit[sc->sc_lastack].qe_status1 != QE_NOTYET) {
 			int idx = sc->sc_lastack;
 
@@ -657,7 +648,7 @@ qeioctl(struct ifnet *ifp, u_long cmd, void *data)
 
 	case SIOCINITIFADDR:
 		ifp->if_flags |= IFF_UP;
-		switch(ifa->ifa_addr->sa_family) {
+		switch (ifa->ifa_addr->sa_family) {
 #ifdef INET
 		case AF_INET:
 			qeinit(sc);
@@ -671,7 +662,7 @@ qeioctl(struct ifnet *ifp, u_long cmd, void *data)
 		if ((error = ifioctl_common(ifp, cmd, data)) != 0)
 			break;
 		/* XXX re-use ether_ioctl() */
-		switch (ifp->if_flags & (IFF_UP|IFF_RUNNING)) {
+		switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 		case IFF_RUNNING:
 			/*
 			 * If interface is marked down and it is running,
@@ -688,7 +679,7 @@ qeioctl(struct ifnet *ifp, u_long cmd, void *data)
 			 */
 			qeinit(sc);
 			break;
-		case IFF_UP|IFF_RUNNING:
+		case IFF_UP | IFF_RUNNING:
 			/*
 			 * Send a new setup packet to match any new changes.
 			 * (Like IFF_PROMISC etc)
@@ -720,7 +711,7 @@ qeioctl(struct ifnet *ifp, u_long cmd, void *data)
 		error = ether_ioctl(ifp, cmd, data);
 	}
 	splx(s);
-	return (error);
+	return error;
 }
 
 /*
@@ -736,12 +727,12 @@ qe_add_rxbuf(struct qe_softc *sc, int i)
 
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL)
-		return (ENOBUFS);
+		return ENOBUFS;
 
 	MCLGET(m, M_DONTWAIT);
 	if ((m->m_flags & M_EXT) == 0) {
 		m_freem(m);
-		return (ENOBUFS);
+		return ENOBUFS;
 	}
 
 	if (sc->sc_rxmbuf[i] != NULL)
@@ -767,9 +758,9 @@ qe_add_rxbuf(struct qe_softc *sc, int i)
 	rp->qe_flag = rp->qe_status1 = QE_NOTYET;
 	rp->qe_addr_lo = LOWORD(addr);
 	rp->qe_addr_hi = HIWORD(addr) | QE_VALID;
-	rp->qe_buf_len = -(m->m_ext.ext_size - 2)/2;
+	rp->qe_buf_len = -(m->m_ext.ext_size - 2) / 2;
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -778,11 +769,12 @@ qe_add_rxbuf(struct qe_softc *sc, int i)
 void
 qe_setup(struct qe_softc *sc)
 {
+	struct ethercom *ec = &sc->sc_ec;
 	struct ether_multi *enm;
 	struct ether_multistep step;
 	struct qe_cdata *qc = sc->sc_qedata;
 	struct ifnet *ifp = &sc->sc_if;
-	u_int8_t enaddr[ETHER_ADDR_LEN];
+	uint8_t enaddr[ETHER_ADDR_LEN];
 	int i, j, k, idx, s;
 
 	s = splnet();
@@ -806,7 +798,8 @@ qe_setup(struct qe_softc *sc)
 	 */
 	j = 3; k = 0;
 	ifp->if_flags &= ~IFF_ALLMULTI;
-	ETHER_FIRST_MULTI(step, &sc->sc_ec, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi, 6)) {
 			ifp->if_flags |= IFF_ALLMULTI;
@@ -824,6 +817,7 @@ qe_setup(struct qe_softc *sc)
 		}
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 	idx = sc->sc_nexttx;
 	qc->qc_xmit[idx].qe_buf_len = -64;
 

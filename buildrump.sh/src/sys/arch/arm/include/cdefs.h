@@ -1,4 +1,4 @@
-/*	$NetBSD: cdefs.h,v 1.15 2014/06/23 03:40:57 christos Exp $	*/
+/*	$NetBSD: cdefs.h,v 1.19 2020/12/01 02:43:14 rin Exp $	*/
 
 #ifndef	_ARM_CDEFS_H_
 #define	_ARM_CDEFS_H_
@@ -9,8 +9,11 @@
 #endif
 #endif
 
-#if defined (__ARM_ARCH_8A__)
-#define _ARM_ARCH_8		/* ARMv8 64-bit in AARCH32 */
+
+#if defined (__ARM_ARCH_8A__) || defined (__ARM_ARCH_8A) || \
+    __ARM_ARCH == 8
+	/* __ARM_ARCH_8A__ is a typo */
+#define _ARM_ARCH_8
 #endif
 
 #if defined (_ARM_ARCH_8) || defined (__ARM_ARCH_7__) || \
@@ -25,7 +28,8 @@
 #endif
 
 #if defined (_ARM_ARCH_T2) || defined (__ARM_ARCH_6__) || \
-    defined (__ARM_ARCH_6J__) || defined (__ARM_ARCH_6K__) || \
+    defined (__ARM_ARCH_6J__) || \
+    defined (__ARM_ARCH_6K__) || defined (__ARM_ARCH_6KZ__) || \
     defined (__ARM_ARCH_6Z__) || defined (__ARM_ARCH_6ZK__) || \
     defined (__ARM_ARCH_6ZM__)
 #define _ARM_ARCH_6
@@ -49,6 +53,10 @@
      (defined (_ARM_ARCH_6) || defined (__ARM_ARCH_5TE__) || \
       defined (__ARM_ARCH_5TEJ__)))
 #define	_ARM_ARCH_DWORD_OK
+#endif
+
+#if defined (__ARMEB__) && defined (_ARM_ARCH_6)
+#define	_ARM_ARCH_BE8
 #endif
 
 #if defined(__ARM_PCS_AAPCS64)

@@ -1,4 +1,4 @@
-/*	$NetBSD: rump.h,v 1.68 2016/01/31 23:14:34 pooka Exp $	*/
+/*	$NetBSD: rump.h,v 1.73 2020/11/04 22:06:38 christos Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -46,9 +46,12 @@ struct lwp;
 struct modinfo;
 struct uio;
 
-#if (!defined(_KERNEL)) && (defined(__sun__) || defined(__ANDROID__)) && !defined(RUMP_REGISTER_T)
-#define RUMP_REGISTER_T long
+#if !defined(RUMP_REGISTER_T)
+# define RUMP_REGISTER_T long
+# if !defined(_KERNEL) && !defined(_KMEMUSER) &&  \
+    !defined(_KERNTYPES) && !defined(_STANDALONE)
 typedef RUMP_REGISTER_T register_t;
+# endif
 #endif
 
 #include <rump/rumpdefs.h>
@@ -83,9 +86,8 @@ enum rump_etfs_type {
 	RUMP_ETFS_DIR_SUBDIRS	/* dir + subdirectories (recursive) */
 };
 
-/* um, what's the point ?-) */
-#ifdef _BEGIN_DECLS
-_BEGIN_DECLS
+#if defined(__cplusplus)
+extern "C" {
 #endif
 
 int	rump_getversion(void);
@@ -116,6 +118,7 @@ void	rump_unschedule(void);
 void	rump_printevcnts(void);
 
 int	rump_daemonize_begin(void);
+int	rump_init_callback(void (*)(void));
 int	rump_init(void);
 int	rump_init_server(const char *);
 int	rump_daemonize_done(int);
@@ -127,15 +130,8 @@ int	rump_daemonize_done(int);
 #include <rump/rumpnet_if_pub.h>
 #endif
 
-#ifdef _END_DECLS
-_END_DECLS
+#if defined(__cplusplus)
+}
 #endif
-
-/*
- * Include macros prehistorically provided by this header.
- * The inclusion might go away some year.  Include the header directly
- * if you want it to keep working for you.
- */
-#include <rump/rump_syscallshotgun.h>
 
 #endif /* _RUMP_RUMP_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: lpt_puc.c,v 1.17 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: lpt_puc.c,v 1.19 2018/11/30 16:26:59 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 1998 Christopher G. Demetriou.  All rights reserved.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lpt_puc.c,v 1.17 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lpt_puc.c,v 1.19 2018/11/30 16:26:59 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,12 +76,18 @@ lpt_puc_attach(device_t parent, device_t self, void *aux)
 	sc->sc_iot = aa->t;
 	sc->sc_ioh = aa->h;
 
+	if (aa->poll) {
+		aprint_error(": polling not supported\n");
+		return;
+	}
+
 	aprint_naive(": Parallel port");
 	aprint_normal(": ");
 
-	intrstr = pci_intr_string(aa->pc, aa->intrhandle, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(aa->pc, aa->intrhandle, IPL_TTY,
-	    lptintr, sc);
+	intrstr = pci_intr_string(aa->pc, aa->intrhandle, intrbuf,
+	    sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish_xname(aa->pc, aa->intrhandle, IPL_TTY,
+	    lptintr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error("couldn't establish interrupt");
 		if (intrstr != NULL)

@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs.h,v 1.75 2015/04/20 13:12:24 riastradh Exp $	*/
+/*	$NetBSD: nfs.h,v 1.79 2021/06/04 10:44:58 hannken Exp $	*/
 /*
  * Copyright (c) 1989, 1993, 1995
  *	The Regents of the University of California.  All rights reserved.
@@ -41,6 +41,7 @@
 #include <sys/fstypes.h>
 #include <sys/mbuf.h>
 #include <sys/mutex.h>
+#include <sys/rbtree.h>
 #endif
 
 /*
@@ -284,19 +285,13 @@ struct nfsstats {
 #define	NFSSVC_AUTHINFAIL 0x080
 #define	NFSSVC_MNTD	0x100
 #define	NFSSVC_SETEXPORTSLIST	0x200
+#define	NFSSVC_REPLACEEXPORTSLIST	0x400
 
 /*
  * fs.nfs sysctl(3) identifiers
  */
 #define NFS_NFSSTATS	1		/* struct: struct nfsstats */
 #define NFS_IOTHREADS	2		/* number of io threads */
-#define	NFS_MAXID	3
-
-#define NFS_NAMES { \
-	{ 0, 0 }, \
-	{ "nfsstats", CTLTYPE_STRUCT }, \
-	{ "iothreads", CTLTYPE_INT }, \
-}
 
 /*
  * The set of signals the interrupt an I/O in progress for NFSMNT_INT mounts.
@@ -341,6 +336,7 @@ struct nfsreq {
  * Queue head for nfsreq's
  */
 extern TAILQ_HEAD(nfsreqhead, nfsreq) nfs_reqq;
+extern kmutex_t nfs_reqq_lock;
 
 /* Flag values for r_flags */
 #define R_TIMING	0x01		/* timing request (in mntp) */
@@ -485,7 +481,7 @@ extern int nfssvc_sockhead_flag;
  * One of these structures is allocated for each nfsd.
  */
 struct nfsd {
-	TAILQ_ENTRY(nfsd) nfsd_chain;	/* List of all nfsd's */
+	struct rb_node	nfsd_node;	/* Tree of all nfsd's */
 	SLIST_ENTRY(nfsd) nfsd_idle;	/* List of idle nfsd's */
 	kcondvar_t	nfsd_cv;
 	int		nfsd_flag;	/* NFSD_ flags */
@@ -496,6 +492,7 @@ struct nfsd {
 	u_char		nfsd_verfstr[RPCVERF_MAXSIZ];
 	struct proc	*nfsd_procp;	/* Proc ptr */
 	struct nfsrv_descript *nfsd_nd;	/* Associated nfsrv_descript */
+	uint32_t	nfsd_cookie;	/* Userland cookie, fits 32bit ptr */
 };
 
 /* Bits for "nfsd_flag" */
@@ -556,7 +553,6 @@ struct nfsrv_descript {
 
 extern kmutex_t nfsd_lock;
 extern kcondvar_t nfsd_initcv;
-extern TAILQ_HEAD(nfsdhead, nfsd) nfsd_head;
 extern SLIST_HEAD(nfsdidlehead, nfsd) nfsd_idle_head;
 extern int nfsd_head_flag;
 #define	NFSD_CHECKSLP	0x01

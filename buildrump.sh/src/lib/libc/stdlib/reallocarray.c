@@ -1,4 +1,4 @@
-/*	$NetBSD: reallocarray.c,v 1.7 2016/04/06 11:07:58 roy Exp $	*/
+/*	$NetBSD: reallocarray.c,v 1.11 2021/02/26 19:25:12 christos Exp $	*/
 /*	$OpenBSD: reallocarray.c,v 1.1 2014/05/08 21:43:49 deraadt Exp $	*/
 
 /*-
@@ -30,8 +30,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef HAVE_NBTOOL_CONFIG_H
+#include "nbtool_config.h"
+#endif /* HAVE_NBTOOL_CONFIG_H */
+
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: reallocarray.c,v 1.7 2016/04/06 11:07:58 roy Exp $");
+__RCSID("$NetBSD: reallocarray.c,v 1.11 2021/02/26 19:25:12 christos Exp $");
+
+#include "namespace.h"
 
 #define _OPENBSD_SOURCE
 #include <errno.h>

@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_clntsubs.c,v 1.2 2011/06/12 03:35:59 rmind Exp $	*/
+/*	$NetBSD: nfs_clntsubs.c,v 1.4 2020/02/23 15:46:41 ad Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_clntsubs.c,v 1.2 2011/06/12 03:35:59 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_clntsubs.c,v 1.4 2020/02/23 15:46:41 ad Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs.h"
@@ -285,7 +285,7 @@ nfs_loadattrcache(struct vnode **vpp, struct nfs_fattr *fp, struct vattr *vaper,
 					np->n_flag |= NTRUNCDELAYED;
 				} else {
 					genfs_node_wrlock(vp);
-					mutex_enter(vp->v_interlock);
+					rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 					(void)VOP_PUTPAGES(vp, 0,
 					    0, PGO_SYNCIO | PGO_CLEANIT |
 					    PGO_FREE | PGO_ALLPAGES);
@@ -359,7 +359,7 @@ nfs_delayedtruncate(struct vnode *vp)
 	if (np->n_flag & NTRUNCDELAYED) {
 		np->n_flag &= ~NTRUNCDELAYED;
 		genfs_node_wrlock(vp);
-		mutex_enter(vp->v_interlock);
+		rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 		(void)VOP_PUTPAGES(vp, 0,
 		    0, PGO_SYNCIO | PGO_CLEANIT | PGO_FREE | PGO_ALLPAGES);
 		uvm_vnp_setsize(vp, np->n_size);
@@ -540,7 +540,7 @@ nfs_attrtimeo(struct nfsmount *nmp, struct nfsnode *np)
 		return NFS_MINATTRTIMO;
 
 	timeo = (time_second - np->n_mtime.tv_sec) / 10;
-	timeo = max(timeo, NFS_MINATTRTIMO);
-	timeo = min(timeo, NFS_MAXATTRTIMO);
+	timeo = uimax(timeo, NFS_MINATTRTIMO);
+	timeo = uimin(timeo, NFS_MAXATTRTIMO);
 	return timeo;
 }

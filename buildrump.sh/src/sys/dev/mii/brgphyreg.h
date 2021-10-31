@@ -1,4 +1,4 @@
-/*	$NetBSD: brgphyreg.h,v 1.9 2014/06/17 21:37:20 msaitoh Exp $	*/
+/*	$NetBSD: brgphyreg.h,v 1.12 2020/05/25 19:48:38 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2000
@@ -40,14 +40,6 @@
 /*
  * Broadcom BCM5400 registers
  */
-
-#define BRGPHY_MII_1000CTL	0x09	/* 1000baseT control */
-#define	BRGPHY_1000CTL_TST	0xE000	/* Test modes */
-#define	BRGPHY_1000CTL_MSE	0x1000	/* Master/Slave enable */
-#define	BRGPHY_1000CTL_MSC	0x0800	/* Master/Slave configuration */
-#define	BRGPHY_1000CTL_RD	0x0400	/* Repeater/DTE */
-#define	BRGPHY_1000CTL_AFD	0x0200	/* Advertise full duplex */
-#define	BRGPHY_1000CTL_AHD	0x0100	/* Advertise half duplex */
 
 #define BRGPHY_MII_PHY_EXTCTL	0x10	/* PHY extended control */
 #define BRGPHY_PHY_EXTCTL_MAC_PHY	0x8000	/* 10BIT/GMI-interface */
@@ -200,6 +192,17 @@
 /* Begin: PHY register values for the 5706 PHY         */
 /*******************************************************/
 
+/*
+ * Aux control shadow register, bits 0-2 select function (0x00 to
+ * 0x07).
+ */
+#define BRGPHY_AUXCTL_SHADOW_MISC	0x07
+#define BRGPHY_AUXCTL_MISC_DATA_MASK	0x7ff8
+#define BRGPHY_AUXCTL_MISC_READ_SHIFT	12
+#define BRGPHY_AUXCTL_MISC_WRITE_EN	0x8000
+#define BRGPHY_AUXCTL_MISC_RGMII_SKEW_EN 0x0200
+#define BRGPHY_AUXCTL_MISC_WIRESPEED_EN	0x0010
+
 /* 
  * Shadow register 0x1C, bit 15 is write enable,
  * bits 14-10 select function (0x00 to 0x1F).
@@ -207,6 +210,11 @@
 #define BRGPHY_MII_SHADOW_1C		0x1C
 #define BRGPHY_SHADOW_1C_WRITE_EN	0x8000
 #define BRGPHY_SHADOW_1C_SELECT_MASK	0x7C00
+#define BRGPHY_SHADOW_1C_DATA_MASK	0x03FF
+
+/* Shadow 0x1C Clock Alignment Control Register (select value 0x03) */
+#define BRGPHY_SHADOW_1C_CLK_CTRL	(0x03 << 10)
+#define BRGPHY_SHADOW_1C_GTXCLK_EN	0x0200
 
 /* Shadow 0x1C Mode Control Register (select value 0x1F) */
 #define BRGPHY_SHADOW_1C_MODE_CTRL	(0x1F << 10)
@@ -331,6 +339,6 @@
 /*******************************************************/
 
 #define BRGPHY_INTRS	\
-	~(BRGPHY_IMR_LNK_CHG|BRGPHY_IMR_LSP_CHG|BRGPHY_IMR_DUP_CHG)
+	~(BRGPHY_IMR_LNK_CHG | BRGPHY_IMR_LSP_CHG | BRGPHY_IMR_DUP_CHG)
 
 #endif /* _DEV_BRGPHY_MIIREG_H_ */

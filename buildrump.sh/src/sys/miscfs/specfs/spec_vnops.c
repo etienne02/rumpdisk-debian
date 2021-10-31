@@ -1,4 +1,4 @@
-/*	$NetBSD: spec_vnops.c,v 1.162 2016/04/04 08:03:53 hannken Exp $	*/
+/*	$NetBSD: spec_vnops.c,v 1.183 2021/07/18 23:57:14 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spec_vnops.c,v 1.162 2016/04/04 08:03:53 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spec_vnops.c,v 1.183 2021/07/18 23:57:14 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -68,13 +68,14 @@ __KERNEL_RCSID(0, "$NetBSD: spec_vnops.c,v 1.162 2016/04/04 08:03:53 hannken Exp
 #include <sys/buf.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
+#include <sys/vnode_impl.h>
 #include <sys/stat.h>
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <sys/file.h>
 #include <sys/disklabel.h>
+#include <sys/disk.h>
 #include <sys/lockf.h>
 #include <sys/tty.h>
 #include <sys/kauth.h>
@@ -114,48 +115,50 @@ extern struct mount *dead_rootmount;
 int (**spec_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc spec_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, spec_lookup },		/* lookup */
-	{ &vop_create_desc, spec_create },		/* create */
-	{ &vop_mknod_desc, spec_mknod },		/* mknod */
+	{ &vop_create_desc, genfs_badop },		/* create */
+	{ &vop_mknod_desc, genfs_badop },		/* mknod */
 	{ &vop_open_desc, spec_open },			/* open */
 	{ &vop_close_desc, spec_close },		/* close */
-	{ &vop_access_desc, spec_access },		/* access */
-	{ &vop_getattr_desc, spec_getattr },		/* getattr */
-	{ &vop_setattr_desc, spec_setattr },		/* setattr */
+	{ &vop_access_desc, genfs_ebadf },		/* access */
+	{ &vop_accessx_desc, genfs_ebadf },		/* accessx */
+	{ &vop_getattr_desc, genfs_ebadf },		/* getattr */
+	{ &vop_setattr_desc, genfs_ebadf },		/* setattr */
 	{ &vop_read_desc, spec_read },			/* read */
 	{ &vop_write_desc, spec_write },		/* write */
-	{ &vop_fallocate_desc, spec_fallocate },	/* fallocate */
+	{ &vop_fallocate_desc, genfs_eopnotsupp },	/* fallocate */
 	{ &vop_fdiscard_desc, spec_fdiscard },		/* fdiscard */
-	{ &vop_fcntl_desc, spec_fcntl },		/* fcntl */
+	{ &vop_fcntl_desc, genfs_fcntl },		/* fcntl */
 	{ &vop_ioctl_desc, spec_ioctl },		/* ioctl */
 	{ &vop_poll_desc, spec_poll },			/* poll */
 	{ &vop_kqfilter_desc, spec_kqfilter },		/* kqfilter */
-	{ &vop_revoke_desc, spec_revoke },		/* revoke */
+	{ &vop_revoke_desc, genfs_revoke },		/* revoke */
 	{ &vop_mmap_desc, spec_mmap },			/* mmap */
 	{ &vop_fsync_desc, spec_fsync },		/* fsync */
 	{ &vop_seek_desc, spec_seek },			/* seek */
-	{ &vop_remove_desc, spec_remove },		/* remove */
-	{ &vop_link_desc, spec_link },			/* link */
-	{ &vop_rename_desc, spec_rename },		/* rename */
-	{ &vop_mkdir_desc, spec_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, spec_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, spec_symlink },		/* symlink */
-	{ &vop_readdir_desc, spec_readdir },		/* readdir */
-	{ &vop_readlink_desc, spec_readlink },		/* readlink */
-	{ &vop_abortop_desc, spec_abortop },		/* abortop */
+	{ &vop_remove_desc, genfs_badop },		/* remove */
+	{ &vop_link_desc, genfs_badop },		/* link */
+	{ &vop_rename_desc, genfs_badop },		/* rename */
+	{ &vop_mkdir_desc, genfs_badop },		/* mkdir */
+	{ &vop_rmdir_desc, genfs_badop },		/* rmdir */
+	{ &vop_symlink_desc, genfs_badop },		/* symlink */
+	{ &vop_readdir_desc, genfs_badop },		/* readdir */
+	{ &vop_readlink_desc, genfs_badop },		/* readlink */
+	{ &vop_abortop_desc, genfs_badop },		/* abortop */
 	{ &vop_inactive_desc, spec_inactive },		/* inactive */
 	{ &vop_reclaim_desc, spec_reclaim },		/* reclaim */
-	{ &vop_lock_desc, spec_lock },			/* lock */
-	{ &vop_unlock_desc, spec_unlock },		/* unlock */
+	{ &vop_lock_desc, genfs_nolock },		/* lock */
+	{ &vop_unlock_desc, genfs_nounlock },		/* unlock */
 	{ &vop_bmap_desc, spec_bmap },			/* bmap */
 	{ &vop_strategy_desc, spec_strategy },		/* strategy */
 	{ &vop_print_desc, spec_print },		/* print */
-	{ &vop_islocked_desc, spec_islocked },		/* islocked */
+	{ &vop_islocked_desc, genfs_noislocked },	/* islocked */
 	{ &vop_pathconf_desc, spec_pathconf },		/* pathconf */
 	{ &vop_advlock_desc, spec_advlock },		/* advlock */
-	{ &vop_bwrite_desc, spec_bwrite },		/* bwrite */
-	{ &vop_getpages_desc, spec_getpages },		/* getpages */
-	{ &vop_putpages_desc, spec_putpages },		/* putpages */
+	{ &vop_bwrite_desc, vn_bwrite },		/* bwrite */
+	{ &vop_getpages_desc, genfs_getpages },		/* getpages */
+	{ &vop_putpages_desc, genfs_putpages },		/* putpages */
 	{ NULL, NULL }
 };
 const struct vnodeopv_desc spec_vnodeop_opv_desc =
@@ -230,15 +233,7 @@ spec_node_init(vnode_t *vp, dev_t rdev)
 	 * the vnode to the hash table.
 	 */
 	sn = kmem_alloc(sizeof(*sn), KM_SLEEP);
-	if (sn == NULL) {
-		/* XXX */
-		panic("spec_node_init: unable to allocate memory");
-	}
 	sd = kmem_alloc(sizeof(*sd), KM_SLEEP);
-	if (sd == NULL) {
-		/* XXX */
-		panic("spec_node_init: unable to allocate memory");
-	}
 	mutex_enter(&device_lock);
 	vpp = &specfs_hash[SPECHASH(rdev)];
 	for (vp2 = *vpp; vp2 != NULL; vp2 = vp2->v_specnext) {
@@ -310,7 +305,7 @@ spec_node_lookup_by_dev(enum vtype type, dev_t dev, vnode_t **vpp)
 		mutex_enter(vp->v_interlock);
 	}
 	mutex_exit(&device_lock);
-	error = vget(vp, 0, true /* wait */);
+	error = vcache_vget(vp);
 	if (error != 0)
 		return error;
 	*vpp = vp;
@@ -345,7 +340,7 @@ spec_node_lookup_by_mount(struct mount *mp, vnode_t **vpp)
 	}
 	mutex_enter(vq->v_interlock);
 	mutex_exit(&device_lock);
-	error = vget(vq, 0, true /* wait */);
+	error = vcache_vget(vq);
 	if (error != 0)
 		return error;
 	*vpp = vq;
@@ -374,10 +369,19 @@ spec_node_getmountedfs(vnode_t *devvp)
 void
 spec_node_setmountedfs(vnode_t *devvp, struct mount *mp)
 {
+	struct dkwedge_info dkw;
 
 	KASSERT(devvp->v_type == VBLK);
 	KASSERT(devvp->v_specnode->sn_dev->sd_mountpoint == NULL || mp == NULL);
 	devvp->v_specnode->sn_dev->sd_mountpoint = mp;
+	if (mp == NULL)
+		return;
+
+	if (bdev_ioctl(devvp->v_rdev, DIOCGWEDGEINFO, &dkw, FREAD, curlwp) != 0)
+		return;
+
+	strlcpy(mp->mnt_stat.f_mntfromlabel, dkw.dkw_wname,
+	    sizeof(mp->mnt_stat.f_mntfromlabel));
 }
 
 /*
@@ -588,13 +592,16 @@ spec_open(void *v)
 		 * For block devices, permit only one open.  The buffer
 		 * cache cannot remain self-consistent with multiple
 		 * vnodes holding a block device open.
+		 *
+		 * Treat zero opencnt with non-NULL mountpoint as open.
+		 * This may happen after forced detach of a mounted device.
 		 */
 		mutex_enter(&device_lock);
 		if (sn->sn_gone) {
 			mutex_exit(&device_lock);
 			return (EBADF);
 		}
-		if (sd->sd_opencnt != 0) {
+		if (sd->sd_opencnt != 0 || sd->sd_mountpoint != NULL) {
 			mutex_exit(&device_lock);
 			return EBUSY;
 		}
@@ -689,6 +696,10 @@ spec_read(void *v)
 	struct partinfo pi;
 	int n, on;
 	int error = 0;
+	int i, nra;
+	daddr_t lastbn, *rablks;
+	int *rasizes;
+	int nrablks, ratogo;
 
 	KASSERT(uio->uio_rw == UIO_READ);
 	KASSERTMSG(VMSPACE_IS_KERNEL_P(uio->uio_vmspace) ||
@@ -712,23 +723,50 @@ spec_read(void *v)
 			return (EINVAL);
 
 		if (bdev_ioctl(vp->v_rdev, DIOCGPARTINFO, &pi, FREAD, l) == 0)
-			bsize = pi.pi_bsize;
+			bsize = imin(imax(pi.pi_bsize, DEV_BSIZE), MAXBSIZE);
 		else
 			bsize = BLKDEV_IOSIZE;
 
 		bscale = bsize >> DEV_BSHIFT;
+
+		nra = uimax(16 * MAXPHYS / bsize - 1, 511);
+		rablks = kmem_alloc(nra * sizeof(*rablks), KM_SLEEP);
+		rasizes = kmem_alloc(nra * sizeof(*rasizes), KM_SLEEP);
+		lastbn = ((uio->uio_offset + uio->uio_resid - 1) >> DEV_BSHIFT)
+		    &~ (bscale - 1);
+		nrablks = ratogo = 0;
 		do {
 			bn = (uio->uio_offset >> DEV_BSHIFT) &~ (bscale - 1);
 			on = uio->uio_offset % bsize;
-			n = min((unsigned)(bsize - on), uio->uio_resid);
-			error = bread(vp, bn, bsize, 0, &bp);
-			if (error) {
-				return (error);
+			n = uimin((unsigned)(bsize - on), uio->uio_resid);
+
+			if (ratogo == 0) {
+				nrablks = uimin((lastbn - bn) / bscale, nra);
+				ratogo = nrablks;
+
+				for (i = 0; i < nrablks; ++i) {
+					rablks[i] = bn + (i+1) * bscale;
+					rasizes[i] = bsize;
+				}
+
+				error = breadn(vp, bn, bsize,
+					       rablks, rasizes, nrablks,
+					       0, &bp);
+			} else {
+				if (ratogo > 0)
+					--ratogo;
+				error = bread(vp, bn, bsize, 0, &bp);
 			}
-			n = min(n, bsize - bp->b_resid);
+			if (error)
+				break;
+			n = uimin(n, bsize - bp->b_resid);
 			error = uiomove((char *)bp->b_data + on, n, uio);
 			brelse(bp, 0);
 		} while (error == 0 && uio->uio_resid > 0 && n != 0);
+
+		kmem_free(rablks, nra * sizeof(*rablks));
+		kmem_free(rasizes, nra * sizeof(*rasizes));
+
 		return (error);
 
 	default:
@@ -781,7 +819,7 @@ spec_write(void *v)
 			return (EINVAL);
 
 		if (bdev_ioctl(vp->v_rdev, DIOCGPARTINFO, &pi, FREAD, l) == 0)
-			bsize = pi.pi_bsize;
+			bsize = imin(imax(pi.pi_bsize, DEV_BSIZE), MAXBSIZE);
 		else
 			bsize = BLKDEV_IOSIZE;
 
@@ -789,7 +827,7 @@ spec_write(void *v)
 		do {
 			bn = (uio->uio_offset >> DEV_BSHIFT) &~ (bscale - 1);
 			on = uio->uio_offset % bsize;
-			n = min((unsigned)(bsize - on), uio->uio_resid);
+			n = uimin((unsigned)(bsize - on), uio->uio_resid);
 			if (n == bsize)
 				bp = getblk(vp, bn, bsize, 0, 0);
 			else
@@ -797,7 +835,7 @@ spec_write(void *v)
 			if (error) {
 				return (error);
 			}
-			n = min(n, bsize - bp->b_resid);
+			n = uimin(n, bsize - bp->b_resid);
 			error = uiomove((char *)bp->b_data + on, n, uio);
 			if (error)
 				brelse(bp, 0);
@@ -1053,6 +1091,16 @@ spec_strategy(void *v)
 	bp->b_dev = dev;
 
 	if (!(bp->b_flags & B_READ)) {
+#ifdef DIAGNOSTIC
+		if (bp->b_vp && bp->b_vp->v_type == VBLK) {
+			struct mount *mp = spec_node_getmountedfs(bp->b_vp);
+
+			if (mp && (mp->mnt_flag & MNT_RDONLY)) {
+				printf("%s blk %"PRId64" written while ro!\n",
+				    mp->mnt_stat.f_mntonname, bp->b_blkno);
+			}
+		}
+#endif /* DIAGNOSTIC */
 		error = fscow_run(bp, false);
 		if (error)
 			goto out;
@@ -1072,28 +1120,28 @@ out:
 int
 spec_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		struct bool *a_recycle;
 	} */ *ap = v;
-	struct vnode *vp = ap->a_vp;
 
-	KASSERT(vp->v_mount == dead_rootmount);
+	KASSERT(ap->a_vp->v_mount == dead_rootmount);
 	*ap->a_recycle = true;
-	VOP_UNLOCK(vp);
+
 	return 0;
 }
 
 int
 spec_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 
+	VOP_UNLOCK(vp);
+
 	KASSERT(vp->v_mount == dead_rootmount);
-	vcache_remove(vp->v_mount, &vp->v_interlock, sizeof(vp->v_interlock));
 	return 0;
 }
 
@@ -1166,7 +1214,7 @@ spec_close(void *v)
 		 *
 		 * XXX V. fishy.
 		 */
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		sess = curlwp->l_proc->p_session;
 		if (sn->sn_opencnt == 1 && vp == sess->s_ttyvp) {
 			mutex_spin_enter(&tty_lock);
@@ -1181,11 +1229,11 @@ spec_close(void *v)
 				mutex_spin_exit(&tty_lock);
 				if (sess->s_ttyp->t_pgrp != NULL)
 					panic("spec_close: spurious pgrp ref");
-				mutex_exit(proc_lock);
+				mutex_exit(&proc_lock);
 			}
 			vrele(vp);
 		} else
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 
 		/*
 		 * If the vnode is locked, then we are in the midst
@@ -1228,7 +1276,7 @@ spec_close(void *v)
 		sd->sd_bdevvp = NULL;
 	mutex_exit(&device_lock);
 
-	if (count != 0)
+	if (count != 0 && (vp->v_type != VCHR || !(cdev_flags(dev) & D_MCLOSE)))
 		return 0;
 
 	/*
@@ -1300,7 +1348,7 @@ spec_pathconf(void *v)
 		*ap->a_retval = 1;
 		return (0);
 	default:
-		return (EINVAL);
+		return genfs_pathconf(ap);
 	}
 	/* NOTREACHED */
 }

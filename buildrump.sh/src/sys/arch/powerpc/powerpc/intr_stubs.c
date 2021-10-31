@@ -37,8 +37,7 @@
 #define	__INTR_NOINLINE
 
 #include <sys/cdefs.h>
-
-__KERNEL_RCSID(0, "$NetBSD: intr_stubs.c,v 1.4 2014/03/29 19:28:29 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: intr_stubs.c,v 1.7 2020/07/06 09:34:18 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -67,12 +66,24 @@ const struct intrsw *powerpc_intrsw = &null_intrsw;
 
 #define	__stub	__section(".stub") __noprofile
 
-void *intr_establish(int, int, int, int (*)(void *), void *) __stub;
+void *intr_establish(int, int, int, int (*)(void *), void *) __noprofile;
 
 void *
 intr_establish(int irq, int ipl, int ist, int (*func)(void *), void *arg)
 {
-	return (*powerpc_intrsw->intrsw_establish)(irq, ipl, ist, func, arg);
+	return (*powerpc_intrsw->intrsw_establish)(irq, ipl, ist, func, arg,
+	    NULL);
+}
+
+void *intr_establish_xname(int, int, int, int (*)(void *), void *,
+    const char *) __stub;
+
+void *
+intr_establish_xname(int irq, int ipl, int ist, int (*func)(void *), void *arg,
+    const char *xname)
+{
+	return (*powerpc_intrsw->intrsw_establish)(irq, ipl, ist, func, arg,
+	    xname);
 }
 
 void intr_disestablish(void *) __stub;
@@ -125,6 +136,7 @@ splx(int ipl)
 	return (*powerpc_intrsw->intrsw_splx)(ipl);
 }
 
+#ifdef __HAVE_FAST_SOFTINTS
 void softint_init_md(struct lwp *, u_int, uintptr_t *) __stub;
 
 void
@@ -140,6 +152,7 @@ softint_trigger(uintptr_t machdep)
 {
 	(*powerpc_intrsw->intrsw_softint_trigger)(machdep);
 }
+#endif
 
 void intr_cpu_attach(struct cpu_info *) __stub;
 

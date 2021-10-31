@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -78,8 +78,10 @@ AcpiUtDumpBuffer (
     UINT32                  j;
     UINT32                  Temp32;
     UINT8                   BufChar;
+    UINT32                  DisplayDataOnly = Display & DB_DISPLAY_DATA_ONLY;
 
 
+    Display &= ~DB_DISPLAY_DATA_ONLY;
     if (!Buffer)
     {
         AcpiOsPrintf ("Null Buffer Pointer in DumpBuffer!\n");
@@ -97,7 +99,10 @@ AcpiUtDumpBuffer (
     {
         /* Print current offset */
 
-        AcpiOsPrintf ("%6.4X: ", (BaseOffset + i));
+        if (!DisplayDataOnly)
+        {
+            AcpiOsPrintf ("%8.4X: ", (BaseOffset + i));
+        }
 
         /* Print 16 hex chars */
 
@@ -149,38 +154,41 @@ AcpiUtDumpBuffer (
          * Print the ASCII equivalent characters but watch out for the bad
          * unprintable ones (printable chars are 0x20 through 0x7E)
          */
-        AcpiOsPrintf (" ");
-        for (j = 0; j < 16; j++)
+        if (!DisplayDataOnly)
         {
-            if (i + j >= Count)
+            AcpiOsPrintf (" ");
+            for (j = 0; j < 16; j++)
             {
-                AcpiOsPrintf ("\n");
-                return;
+                if (i + j >= Count)
+                {
+                    AcpiOsPrintf ("\n");
+                    return;
+                }
+
+                /*
+                 * Add comment characters so rest of line is ignored when
+                 * compiled
+                 */
+                if (j == 0)
+                {
+                    AcpiOsPrintf ("// ");
+                }
+
+                BufChar = Buffer[(ACPI_SIZE) i + j];
+                if (isprint (BufChar))
+                {
+                    AcpiOsPrintf ("%c", BufChar);
+                }
+                else
+                {
+                    AcpiOsPrintf (".");
+                }
             }
 
-            /*
-             * Add comment characters so rest of line is ignored when
-             * compiled
-             */
-            if (j == 0)
-            {
-                AcpiOsPrintf ("// ");
-            }
+            /* Done with that line. */
 
-            BufChar = Buffer[(ACPI_SIZE) i + j];
-            if (isprint (BufChar))
-            {
-                AcpiOsPrintf ("%c", BufChar);
-            }
-            else
-            {
-                AcpiOsPrintf (".");
-            }
+            AcpiOsPrintf ("\n");
         }
-
-        /* Done with that line. */
-
-        AcpiOsPrintf ("\n");
         i += 16;
     }
 
@@ -264,7 +272,7 @@ AcpiUtDumpBufferToFile (
 
     if (!Buffer)
     {
-        AcpiUtFilePrintf (File, "Null Buffer Pointer in DumpBuffer!\n");
+        fprintf (File, "Null Buffer Pointer in DumpBuffer!\n");
         return;
     }
 
@@ -279,7 +287,7 @@ AcpiUtDumpBufferToFile (
     {
         /* Print current offset */
 
-        AcpiUtFilePrintf (File, "%6.4X: ", (BaseOffset + i));
+        fprintf (File, "%8.4X: ", (BaseOffset + i));
 
         /* Print 16 hex chars */
 
@@ -289,7 +297,7 @@ AcpiUtDumpBufferToFile (
             {
                 /* Dump fill spaces */
 
-                AcpiUtFilePrintf (File, "%*s", ((Display * 2) + 1), " ");
+                fprintf (File, "%*s", ((Display * 2) + 1), " ");
                 j += Display;
                 continue;
             }
@@ -299,28 +307,28 @@ AcpiUtDumpBufferToFile (
             case DB_BYTE_DISPLAY:
             default:    /* Default is BYTE display */
 
-                AcpiUtFilePrintf (File, "%02X ", Buffer[(ACPI_SIZE) i + j]);
+                fprintf (File, "%02X ", Buffer[(ACPI_SIZE) i + j]);
                 break;
 
             case DB_WORD_DISPLAY:
 
                 ACPI_MOVE_16_TO_32 (&Temp32, &Buffer[(ACPI_SIZE) i + j]);
-                AcpiUtFilePrintf (File, "%04X ", Temp32);
+                fprintf (File, "%04X ", Temp32);
                 break;
 
             case DB_DWORD_DISPLAY:
 
                 ACPI_MOVE_32_TO_32 (&Temp32, &Buffer[(ACPI_SIZE) i + j]);
-                AcpiUtFilePrintf (File, "%08X ", Temp32);
+                fprintf (File, "%08X ", Temp32);
                 break;
 
             case DB_QWORD_DISPLAY:
 
                 ACPI_MOVE_32_TO_32 (&Temp32, &Buffer[(ACPI_SIZE) i + j]);
-                AcpiUtFilePrintf (File, "%08X", Temp32);
+                fprintf (File, "%08X", Temp32);
 
                 ACPI_MOVE_32_TO_32 (&Temp32, &Buffer[(ACPI_SIZE) i + j + 4]);
-                AcpiUtFilePrintf (File, "%08X ", Temp32);
+                fprintf (File, "%08X ", Temp32);
                 break;
             }
 
@@ -331,29 +339,29 @@ AcpiUtDumpBufferToFile (
          * Print the ASCII equivalent characters but watch out for the bad
          * unprintable ones (printable chars are 0x20 through 0x7E)
          */
-        AcpiUtFilePrintf (File, " ");
+        fprintf (File, " ");
         for (j = 0; j < 16; j++)
         {
             if (i + j >= Count)
             {
-                AcpiUtFilePrintf (File, "\n");
+                fprintf (File, "\n");
                 return;
             }
 
             BufChar = Buffer[(ACPI_SIZE) i + j];
             if (isprint (BufChar))
             {
-                AcpiUtFilePrintf (File, "%c", BufChar);
+                fprintf (File, "%c", BufChar);
             }
             else
             {
-                AcpiUtFilePrintf (File, ".");
+                fprintf (File, ".");
             }
         }
 
         /* Done with that line. */
 
-        AcpiUtFilePrintf (File, "\n");
+        fprintf (File, "\n");
         i += 16;
     }
 

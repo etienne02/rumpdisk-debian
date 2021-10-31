@@ -1,4 +1,4 @@
-/*	$NetBSD: fifo_vnops.c,v 1.77 2014/08/09 05:33:01 rtr Exp $	*/
+/*	$NetBSD: fifo_vnops.c,v 1.83 2021/06/29 22:34:08 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fifo_vnops.c,v 1.77 2014/08/09 05:33:01 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fifo_vnops.c,v 1.83 2021/06/29 22:34:08 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -360,12 +360,11 @@ fifo_poll(void *v)
 static int
 fifo_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode	*a_vp;
 		struct lwp	*a_l;
-	} */ *ap = v;
+	} */ *ap __unused = v;
 
-	VOP_UNLOCK(ap->a_vp);
 	return (0);
 }
 
@@ -505,7 +504,7 @@ fifo_pathconf(void *v)
 		*ap->a_retval = 1;
 		return (0);
 	default:
-		return (EINVAL);
+		return genfs_pathconf(ap);
 	}
 	/* NOTREACHED */
 }
@@ -517,9 +516,9 @@ filt_fifordetach(struct knote *kn)
 
 	so = (struct socket *)kn->kn_hook;
 	solock(so);
-	SLIST_REMOVE(&so->so_rcv.sb_sel.sel_klist, kn, knote, kn_selnext);
-	if (SLIST_EMPTY(&so->so_rcv.sb_sel.sel_klist))
-		so->so_rcv.sb_flags &= ~SB_KNOTE;
+	selremove_knote(&so->so_rcv.sb_sel, kn);
+	if (SLIST_EMPTY(&so->so_rcv.sb_sel.sel_klist))	/* XXX select/kqueue */
+		so->so_rcv.sb_flags &= ~SB_KNOTE;	/* XXX internals */
 	sounlock(so);
 }
 
@@ -552,9 +551,9 @@ filt_fifowdetach(struct knote *kn)
 
 	so = (struct socket *)kn->kn_hook;
 	solock(so);
-	SLIST_REMOVE(&so->so_snd.sb_sel.sel_klist, kn, knote, kn_selnext);
-	if (SLIST_EMPTY(&so->so_snd.sb_sel.sel_klist))
-		so->so_snd.sb_flags &= ~SB_KNOTE;
+	selremove_knote(&so->so_snd.sb_sel, kn);
+	if (SLIST_EMPTY(&so->so_snd.sb_sel.sel_klist))	/* XXX select/kqueue */
+		so->so_snd.sb_flags &= ~SB_KNOTE;	/* XXX internals */
 	sounlock(so);
 }
 
@@ -580,10 +579,19 @@ filt_fifowrite(struct knote *kn, long hint)
 	return rv;
 }
 
-static const struct filterops fiforead_filtops =
-	{ 1, NULL, filt_fifordetach, filt_fiforead };
-static const struct filterops fifowrite_filtops =
-	{ 1, NULL, filt_fifowdetach, filt_fifowrite };
+static const struct filterops fiforead_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_fifordetach,
+	.f_event = filt_fiforead,
+};
+
+static const struct filterops fifowrite_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_fifowdetach,
+	.f_event = filt_fifowrite,
+};
 
 /* ARGSUSED */
 static int
@@ -613,7 +621,7 @@ fifo_kqfilter(void *v)
 	ap->a_kn->kn_hook = so;
 
 	solock(so);
-	SLIST_INSERT_HEAD(&sb->sb_sel.sel_klist, ap->a_kn, kn_selnext);
+	selrecord_knote(&sb->sb_sel, ap->a_kn);
 	sb->sb_flags |= SB_KNOTE;
 	sounlock(so);
 
@@ -623,12 +631,14 @@ fifo_kqfilter(void *v)
 int (**fifo_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, fifo_lookup },		/* lookup */
 	{ &vop_create_desc, genfs_badop },		/* create */
 	{ &vop_mknod_desc, genfs_badop },		/* mknod */
 	{ &vop_open_desc, fifo_open },			/* open */
 	{ &vop_close_desc, fifo_close },		/* close */
 	{ &vop_access_desc, genfs_ebadf },		/* access */
+	{ &vop_accessx_desc, genfs_accessx },		/* accessx */
 	{ &vop_getattr_desc, genfs_ebadf },		/* getattr */
 	{ &vop_setattr_desc, genfs_ebadf },		/* setattr */
 	{ &vop_read_desc, fifo_read },			/* read */

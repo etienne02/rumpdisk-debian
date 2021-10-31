@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,7 +42,6 @@
  */
 
 #include "aslcompiler.h"
-#include "dtcompiler.h"
 #include "actables.h"
 
 #define _COMPONENT          DT_COMPILER
@@ -79,10 +78,20 @@ DtError (
     DT_FIELD                *FieldObject,
     char                    *ExtraMessage)
 {
+    UINT32                  Line = 0;
+
+
+    /* Field object could be NULL */
+
+    if (FieldObject)
+    {
+        Line = FieldObject->Line;
+    }
 
     /* Check if user wants to ignore this exception */
 
-    if (AslIsExceptionDisabled (Level, MessageId))
+    if (AslIsExceptionIgnored (AslGbl_Files[ASL_FILE_INPUT].Filename,
+        Line, Level, MessageId))
     {
         return;
     }
@@ -94,7 +103,7 @@ DtError (
             FieldObject->Line,
             FieldObject->ByteOffset,
             FieldObject->Column,
-            Gbl_Files[ASL_FILE_INPUT].Filename, ExtraMessage);
+            AslGbl_Files[ASL_FILE_INPUT].Filename, ExtraMessage);
     }
     else
     {
@@ -132,7 +141,7 @@ DtNameError (
     case ASL_WARNING2:
     case ASL_WARNING3:
 
-        if (Gbl_WarningLevel < Level)
+        if (AslGbl_WarningLevel < Level)
         {
             return;
         }
@@ -150,7 +159,7 @@ DtNameError (
             FieldObject->Line,
             FieldObject->ByteOffset,
             FieldObject->NameColumn,
-            Gbl_Files[ASL_FILE_INPUT].Filename, ExtraMessage);
+            AslGbl_Files[ASL_FILE_INPUT].Filename, ExtraMessage);
     }
     else
     {
@@ -195,92 +204,37 @@ DtFatal (
 }
 
 
-/******************************************************************************
+/*******************************************************************************
  *
- * FUNCTION:    DtStrtoul64
+ * FUNCTION:    DtDoConstant
  *
- * PARAMETERS:  String              - Null terminated string
- *              ReturnInteger       - Where the converted integer is returned
+ * PARAMETERS:  String              - Only hex constants are supported,
+ *                                    regardless of whether the 0x prefix
+ *                                    is used
  *
- * RETURN:      Status
+ * RETURN:      Converted Integer
  *
- * DESCRIPTION: Simple conversion of a string hex integer constant to unsigned
- *              value. Assumes no leading "0x" for the constant.
+ * DESCRIPTION: Convert a string to an integer, with overflow/error checking.
  *
- * Portability note: The reason this function exists is because a 64-bit
- * sscanf is not available in all environments.
- *
- *****************************************************************************/
+ ******************************************************************************/
 
-ACPI_STATUS
-DtStrtoul64 (
-    char                    *String,
-    UINT64                  *ReturnInteger)
+UINT64
+DtDoConstant (
+    char                    *String)
 {
-    char                    *ThisChar = String;
-    UINT32                  ThisDigit;
-    UINT64                  ReturnValue = 0;
-    int                     DigitCount = 0;
+    UINT64                  ConvertedInteger;
 
 
-    /* Skip over any white space in the buffer */
-
-    while ((*ThisChar == ' ') || (*ThisChar == '\t'))
-    {
-        ThisChar++;
-    }
-
-    /* Skip leading zeros */
-
-    while ((*ThisChar) == '0')
-    {
-        ThisChar++;
-    }
-
-    /* Convert character-by-character */
-
-    while (*ThisChar)
-    {
-        if (isdigit ((int) *ThisChar))
-        {
-            /* Convert ASCII 0-9 to Decimal value */
-
-            ThisDigit = ((UINT8) *ThisChar) - '0';
-        }
-        else /* Letter */
-        {
-            ThisDigit = (UINT32) toupper ((int) *ThisChar);
-            if (!isxdigit ((int) ThisDigit))
-            {
-                /* Not A-F */
-
-                return (AE_BAD_CHARACTER);
-            }
-
-            /* Convert ASCII Hex char (A-F) to value */
-
-            ThisDigit = (ThisDigit - 'A') + 10;
-        }
-
-        /* Insert the 4-bit hex digit */
-
-        ReturnValue <<= 4;
-        ReturnValue += ThisDigit;
-
-        ThisChar++;
-        DigitCount++;
-        if (DigitCount > 16)
-        {
-            /* Value is too large (> 64 bits/8 bytes/16 hex digits) */
-
-            return (AE_LIMIT);
-        }
-    }
-
-    *ReturnInteger = ReturnValue;
-    return (AE_OK);
+    /*
+     * TBD: The ImplicitStrtoul64 function does not report overflow
+     * conditions. The input string is simply truncated. If it is
+     * desired to report overflow to the table compiler, this should
+     * somehow be added here. Note: integers that are prefixed with 0x
+     * or not are both hex integers.
+     */
+    ConvertedInteger = AcpiUtImplicitStrtoul64 (String);
+    return (ConvertedInteger);
 }
-
 
 /******************************************************************************
  *
@@ -350,6 +304,11 @@ DtGetFieldType (
     case ACPI_DMT_FLAGS1:
     case ACPI_DMT_FLAGS2:
     case ACPI_DMT_FLAGS4:
+    case ACPI_DMT_FLAGS4_0:
+    case ACPI_DMT_FLAGS4_4:
+    case ACPI_DMT_FLAGS4_8:
+    case ACPI_DMT_FLAGS4_12:
+    case ACPI_DMT_FLAGS16_16:
 
         Type = DT_FIELD_TYPE_FLAG;
         break;
@@ -359,6 +318,7 @@ DtGetFieldType (
     case ACPI_DMT_NAME6:
     case ACPI_DMT_NAME8:
     case ACPI_DMT_STRING:
+    case ACPI_DMT_IVRS_UNTERMINATED_STRING:
 
         Type = DT_FIELD_TYPE_STRING;
         break;
@@ -367,9 +327,11 @@ DtGetFieldType (
     case ACPI_DMT_RAW_BUFFER:
     case ACPI_DMT_BUF7:
     case ACPI_DMT_BUF10:
+    case ACPI_DMT_BUF12:
     case ACPI_DMT_BUF16:
     case ACPI_DMT_BUF128:
     case ACPI_DMT_PCI_PATH:
+    case ACPI_DMT_PMTT_VENDOR:
 
         Type = DT_FIELD_TYPE_BUFFER;
         break;
@@ -490,6 +452,11 @@ DtGetFieldLength (
     case ACPI_DMT_FLAGS1:
     case ACPI_DMT_FLAGS2:
     case ACPI_DMT_FLAGS4:
+    case ACPI_DMT_FLAGS4_0:
+    case ACPI_DMT_FLAGS4_4:
+    case ACPI_DMT_FLAGS4_8:
+    case ACPI_DMT_FLAGS4_12:
+    case ACPI_DMT_FLAGS16_16:
     case ACPI_DMT_LABEL:
     case ACPI_DMT_EXTRA_TEXT:
 
@@ -500,11 +467,16 @@ DtGetFieldLength (
     case ACPI_DMT_CHKSUM:
     case ACPI_DMT_SPACEID:
     case ACPI_DMT_ACCWIDTH:
+    case ACPI_DMT_CEDT:
     case ACPI_DMT_IVRS:
+    case ACPI_DMT_IVRS_DE:
     case ACPI_DMT_GTDT:
     case ACPI_DMT_MADT:
     case ACPI_DMT_PCCT:
     case ACPI_DMT_PMTT:
+    case ACPI_DMT_PPTT:
+    case ACPI_DMT_RGRT:
+    case ACPI_DMT_SDEV:
     case ACPI_DMT_SRAT:
     case ACPI_DMT_ASF:
     case ACPI_DMT_HESTNTYP:
@@ -514,6 +486,7 @@ DtGetFieldLength (
     case ACPI_DMT_ERSTACT:
     case ACPI_DMT_ERSTINST:
     case ACPI_DMT_DMAR_SCOPE:
+    case ACPI_DMT_VIOT:
 
         ByteLength = 1;
         break;
@@ -521,8 +494,10 @@ DtGetFieldLength (
     case ACPI_DMT_UINT16:
     case ACPI_DMT_DMAR:
     case ACPI_DMT_HEST:
+    case ACPI_DMT_HMAT:
     case ACPI_DMT_NFIT:
     case ACPI_DMT_PCI_PATH:
+    case ACPI_DMT_PHAT:
 
         ByteLength = 2;
         break;
@@ -536,6 +511,7 @@ DtGetFieldLength (
     case ACPI_DMT_NAME4:
     case ACPI_DMT_SIG:
     case ACPI_DMT_LPIT:
+    case ACPI_DMT_TPM2:
 
         ByteLength = 4;
         break;
@@ -573,8 +549,24 @@ DtGetFieldLength (
         else
         {   /* At this point, this is a fatal error */
 
-            snprintf (MsgBuffer, sizeof(MsgBuffer), "Expected \"%s\"", Info->Name);
-            DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, MsgBuffer);
+            snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "Expected \"%s\"", Info->Name);
+            DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, AslGbl_MsgBuffer);
+            return (0);
+        }
+        break;
+
+    case ACPI_DMT_IVRS_UNTERMINATED_STRING:
+
+        Value = DtGetFieldValue (Field);
+        if (Value)
+        {
+            ByteLength = strlen (Value);
+        }
+        else
+        {   /* At this point, this is a fatal error */
+
+            sprintf (AslGbl_MsgBuffer, "Expected \"%s\"", Info->Name);
+            DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, AslGbl_MsgBuffer);
             return (0);
         }
         break;
@@ -596,6 +588,7 @@ DtGetFieldLength (
 
     case ACPI_DMT_BUFFER:
     case ACPI_DMT_RAW_BUFFER:
+    case ACPI_DMT_PMTT_VENDOR:
 
         Value = DtGetFieldValue (Field);
         if (Value)
@@ -605,8 +598,8 @@ DtGetFieldLength (
         else
         {   /* At this point, this is a fatal error */
 
-            snprintf (MsgBuffer, sizeof(MsgBuffer), "Expected \"%s\"", Info->Name);
-            DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, MsgBuffer);
+            snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "Expected \"%s\"", Info->Name);
+            DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, AslGbl_MsgBuffer);
             return (0);
         }
         break;
@@ -614,6 +607,11 @@ DtGetFieldLength (
     case ACPI_DMT_BUF10:
 
         ByteLength = 10;
+        break;
+
+    case ACPI_DMT_BUF12:
+
+        ByteLength = 12;
         break;
 
     case ACPI_DMT_BUF16:
@@ -696,7 +694,7 @@ DtSetTableChecksum (
     UINT8                   OldSum;
 
 
-    DtWalkTableTree (Gbl_RootTable, DtSum, NULL, &Checksum);
+    DtWalkTableTree (AslGbl_RootTable, DtSum, NULL, &Checksum);
 
     OldSum = *ChecksumPointer;
     Checksum = (UINT8) (Checksum - OldSum);
@@ -728,7 +726,7 @@ DtSetTableLength (
     DT_SUBTABLE             *ChildTable;
 
 
-    ParentTable = Gbl_RootTable;
+    ParentTable = AslGbl_RootTable;
     ChildTable = NULL;
 
     if (!ParentTable)
@@ -766,7 +764,7 @@ DtSetTableLength (
         {
             ChildTable = ParentTable;
 
-            if (ChildTable == Gbl_RootTable)
+            if (ChildTable == AslGbl_RootTable)
             {
                 break;
             }
@@ -835,7 +833,7 @@ DtWalkTableTree (
         else
         {
             ChildTable = ParentTable;
-            if (ChildTable == Gbl_RootTable)
+            if (ChildTable == AslGbl_RootTable)
             {
                 break;
             }
@@ -848,154 +846,4 @@ DtWalkTableTree (
             }
         }
     }
-}
-
-
-/*******************************************************************************
- *
- * FUNCTION:    UtSubtableCacheCalloc
- *
- * PARAMETERS:  None
- *
- * RETURN:      Pointer to the buffer. Aborts on allocation failure
- *
- * DESCRIPTION: Allocate a subtable object buffer. Bypass the local
- *              dynamic memory manager for performance reasons (This has a
- *              major impact on the speed of the compiler.)
- *
- ******************************************************************************/
-
-DT_SUBTABLE *
-UtSubtableCacheCalloc (
-    void)
-{
-    ASL_CACHE_INFO          *Cache;
-
-
-    if (Gbl_SubtableCacheNext >= Gbl_SubtableCacheLast)
-    {
-        /* Allocate a new buffer */
-
-        Cache = UtLocalCalloc (sizeof (Cache->Next) +
-            (sizeof (DT_SUBTABLE) * ASL_SUBTABLE_CACHE_SIZE));
-
-        /* Link new cache buffer to head of list */
-
-        Cache->Next = Gbl_SubtableCacheList;
-        Gbl_SubtableCacheList = Cache;
-
-        /* Setup cache management pointers */
-
-        Gbl_SubtableCacheNext = ACPI_CAST_PTR (DT_SUBTABLE, Cache->Buffer);
-        Gbl_SubtableCacheLast = Gbl_SubtableCacheNext + ASL_SUBTABLE_CACHE_SIZE;
-    }
-
-    Gbl_SubtableCount++;
-    return (Gbl_SubtableCacheNext++);
-}
-
-
-/*******************************************************************************
- *
- * FUNCTION:    UtFieldCacheCalloc
- *
- * PARAMETERS:  None
- *
- * RETURN:      Pointer to the buffer. Aborts on allocation failure
- *
- * DESCRIPTION: Allocate a field object buffer. Bypass the local
- *              dynamic memory manager for performance reasons (This has a
- *              major impact on the speed of the compiler.)
- *
- ******************************************************************************/
-
-DT_FIELD *
-UtFieldCacheCalloc (
-    void)
-{
-    ASL_CACHE_INFO          *Cache;
-
-
-    if (Gbl_FieldCacheNext >= Gbl_FieldCacheLast)
-    {
-        /* Allocate a new buffer */
-
-        Cache = UtLocalCalloc (sizeof (Cache->Next) +
-            (sizeof (DT_FIELD) * ASL_FIELD_CACHE_SIZE));
-
-        /* Link new cache buffer to head of list */
-
-        Cache->Next = Gbl_FieldCacheList;
-        Gbl_FieldCacheList = Cache;
-
-        /* Setup cache management pointers */
-
-        Gbl_FieldCacheNext = ACPI_CAST_PTR (DT_FIELD, Cache->Buffer);
-        Gbl_FieldCacheLast = Gbl_FieldCacheNext + ASL_FIELD_CACHE_SIZE;
-    }
-
-    Gbl_FieldCount++;
-    return (Gbl_FieldCacheNext++);
-}
-
-
-/*******************************************************************************
- *
- * FUNCTION:    DtDeleteCaches
- *
- * PARAMETERS:  None
- *
- * RETURN:      None
- *
- * DESCRIPTION: Delete all local cache buffer blocks
- *
- ******************************************************************************/
-
-void
-DtDeleteCaches (
-    void)
-{
-    UINT32                  BufferCount;
-    ASL_CACHE_INFO          *Next;
-
-
-    /* Field cache */
-
-    BufferCount = 0;
-    while (Gbl_FieldCacheList)
-    {
-        Next = Gbl_FieldCacheList->Next;
-        ACPI_FREE (Gbl_FieldCacheList);
-        Gbl_FieldCacheList = Next;
-        BufferCount++;
-    }
-
-    DbgPrint (ASL_DEBUG_OUTPUT,
-        "%u Fields, Buffer size: %u fields (%u bytes), %u Buffers\n",
-        Gbl_FieldCount, ASL_FIELD_CACHE_SIZE,
-        (sizeof (DT_FIELD) * ASL_FIELD_CACHE_SIZE), BufferCount);
-
-    Gbl_FieldCount = 0;
-    Gbl_FieldCacheNext = NULL;
-    Gbl_FieldCacheLast = NULL;
-
-    /* Subtable cache */
-
-    BufferCount = 0;
-    while (Gbl_SubtableCacheList)
-    {
-        Next = Gbl_SubtableCacheList->Next;
-        ACPI_FREE (Gbl_SubtableCacheList);
-        Gbl_SubtableCacheList = Next;
-        BufferCount++;
-    }
-
-    DbgPrint (ASL_DEBUG_OUTPUT,
-        "%u Subtables, Buffer size: %u subtables (%u bytes), %u Buffers\n",
-        Gbl_SubtableCount, ASL_SUBTABLE_CACHE_SIZE,
-        (sizeof (DT_SUBTABLE) * ASL_SUBTABLE_CACHE_SIZE), BufferCount);
-
-    Gbl_SubtableCount = 0;
-    Gbl_SubtableCacheNext = NULL;
-    Gbl_SubtableCacheLast = NULL;
 }

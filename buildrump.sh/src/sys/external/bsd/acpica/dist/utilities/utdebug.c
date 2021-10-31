@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -182,7 +182,9 @@ AcpiDebugPrint (
 {
     ACPI_THREAD_ID          ThreadId;
     va_list                 args;
-
+#ifdef ACPI_APPLICATION
+    int                     FillCount;
+#endif
 
     /* Check if debug output enabled */
 
@@ -212,7 +214,7 @@ AcpiDebugPrint (
      * Display the module name, current line number, thread ID (if requested),
      * current procedure nesting level, and the current procedure name
      */
-    AcpiOsPrintf ("%9s-%04ld ", ModuleName, LineNumber);
+    AcpiOsPrintf ("%9s-%04d ", ModuleName, LineNumber);
 
 #ifdef ACPI_APPLICATION
     /*
@@ -226,10 +228,21 @@ AcpiDebugPrint (
         AcpiOsPrintf ("[%u] ", (UINT32) ThreadId);
     }
 
-    AcpiOsPrintf ("[%02ld] ", AcpiGbl_NestingLevel);
-#endif
+    FillCount = 48 - AcpiGbl_NestingLevel -
+        strlen (AcpiUtTrimFunctionName (FunctionName));
+    if (FillCount < 0)
+    {
+        FillCount = 0;
+    }
 
+    AcpiOsPrintf ("[%02d] %*s",
+        AcpiGbl_NestingLevel, AcpiGbl_NestingLevel + 1, " ");
+    AcpiOsPrintf ("%s%*s: ",
+        AcpiUtTrimFunctionName (FunctionName), FillCount, " ");
+
+#else
     AcpiOsPrintf ("%-22.22s: ", AcpiUtTrimFunctionName (FunctionName));
+#endif
 
     va_start (args, Format);
     AcpiOsVprintf (Format, args);
@@ -707,34 +720,5 @@ AcpiTracePoint (
 
 ACPI_EXPORT_SYMBOL (AcpiTracePoint)
 
-#endif
 
-
-#ifdef ACPI_APPLICATION
-/*******************************************************************************
- *
- * FUNCTION:    AcpiLogError
- *
- * PARAMETERS:  Format              - Printf format field
- *              ...                 - Optional printf arguments
- *
- * RETURN:      None
- *
- * DESCRIPTION: Print error message to the console, used by applications.
- *
- ******************************************************************************/
-
-void  ACPI_INTERNAL_VAR_XFACE
-AcpiLogError (
-    const char              *Format,
-    ...)
-{
-    va_list                 Args;
-
-    va_start (Args, Format);
-    (void) AcpiUtFileVprintf (ACPI_FILE_ERR, Format, Args);
-    va_end (Args);
-}
-
-ACPI_EXPORT_SYMBOL (AcpiLogError)
 #endif

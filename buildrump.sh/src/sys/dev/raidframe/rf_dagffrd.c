@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_dagffrd.c,v 1.19 2013/09/15 12:23:06 martin Exp $	*/
+/*	$NetBSD: rf_dagffrd.c,v 1.22 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_dagffrd.c,v 1.19 2013/09/15 12:23:06 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_dagffrd.c,v 1.22 2021/07/23 00:54:45 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -132,12 +132,16 @@ rf_CreateNonredundantDAG(RF_Raid_t *raidPtr,
 	RF_DagNode_t *diskNodes, *blockNode, *commitNode, *termNode;
 	RF_DagNode_t *tmpNode, *tmpdiskNode;
 	RF_PhysDiskAddr_t *pda = asmap->physInfo;
-	int     (*doFunc) (RF_DagNode_t *), (*undoFunc) (RF_DagNode_t *);
+	void     (*doFunc) (RF_DagNode_t *), (*undoFunc) (RF_DagNode_t *);
 	int     i, n;
 	const char   *name;
 
 	n = asmap->numStripeUnitsAccessed;
 	dag_h->creator = "NonredundantDAG";
+
+	doFunc = rf_NullNodeFunc;
+	undoFunc = rf_NullNodeUndoFunc;
+	name = NULL;
 
 	RF_ASSERT(RF_IO_IS_R_OR_W(type));
 	switch (type) {
@@ -181,21 +185,21 @@ rf_CreateNonredundantDAG(RF_Raid_t *raidPtr,
 	RF_ASSERT(n > 0);
 
 	for (i = 0; i < n; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	diskNodes = dag_h->nodes;
 
-	blockNode = rf_AllocDAGNode();
+	blockNode = rf_AllocDAGNode(raidPtr);
 	blockNode->list_next = dag_h->nodes;
 	dag_h->nodes = blockNode;
 
-	commitNode = rf_AllocDAGNode();
+	commitNode = rf_AllocDAGNode(raidPtr);
 	commitNode->list_next = dag_h->nodes;
 	dag_h->nodes = commitNode;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 
@@ -319,7 +323,7 @@ static void
 CreateMirrorReadDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
     RF_DagHeader_t *dag_h, void *bp,
     RF_RaidAccessFlags_t flags, RF_AllocListElem_t *allocList,
-    int (*readfunc) (RF_DagNode_t * node))
+    void (*readfunc) (RF_DagNode_t * node))
 {
 	RF_DagNode_t *readNodes, *blockNode, *commitNode, *termNode;
 	RF_DagNode_t *tmpNode, *tmpreadNode;
@@ -352,21 +356,21 @@ CreateMirrorReadDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 	RF_ASSERT(n > 0);
 
 	for (i = 0; i < n; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	readNodes = dag_h->nodes;
 
-	blockNode = rf_AllocDAGNode();
+	blockNode = rf_AllocDAGNode(raidPtr);
 	blockNode->list_next = dag_h->nodes;
 	dag_h->nodes = blockNode;
 
-	commitNode = rf_AllocDAGNode();
+	commitNode = rf_AllocDAGNode(raidPtr);
 	commitNode->list_next = dag_h->nodes;
 	dag_h->nodes = commitNode;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 

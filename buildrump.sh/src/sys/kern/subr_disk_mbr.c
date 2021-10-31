@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_disk_mbr.c,v 1.46 2013/06/26 18:47:26 matt Exp $	*/
+/*	$NetBSD: subr_disk_mbr.c,v 1.57 2021/05/17 08:50:36 mrg Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1988 Regents of the University of California.
@@ -54,7 +54,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_disk_mbr.c,v 1.46 2013/06/26 18:47:26 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_disk_mbr.c,v 1.57 2021/05/17 08:50:36 mrg Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_mbr.h"
+#include "opt_disklabel.h"
+#endif /* _KERNEL_OPT */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -71,10 +76,6 @@ __KERNEL_RCSID(0, "$NetBSD: subr_disk_mbr.c,v 1.46 2013/06/26 18:47:26 matt Exp 
 #include <fs/udf/ecma167-udf.h>
 
 #include <sys/kauth.h>
-
-#ifdef _KERNEL_OPT
-#include "opt_mbr.h"
-#endif /* _KERNEL_OPT */
 
 typedef struct mbr_partition mbr_partition_t;
 
@@ -564,13 +565,31 @@ look_netbsd_part(mbr_args_t *a, mbr_partition_t *dp, int slot, uint ext_base)
 	return SCAN_CONTINUE;
 }
 
+__noubsan
+static bool
+check_label_magic(const struct disklabel *dlp, uint32_t diskmagic)
+{
+	return memcmp(&dlp->d_magic, &diskmagic, sizeof(diskmagic)) == 0 &&
+	    memcmp(&dlp->d_magic2, &diskmagic, sizeof(diskmagic)) == 0;
+}
 
+#ifdef DISKLABEL_EI
+/*
+ * - For read, convert a label to the native byte order.
+ * - For update or write, if a label already exists, keep its byte order.
+ *   Otherwise, write a new label in the native byte order.
+ */
+#endif
 static int
 validate_label(mbr_args_t *a, uint label_sector)
 {
 	struct disklabel *dlp;
 	char *dlp_lim, *dlp_byte;
 	int error;
+#ifdef DISKLABEL_EI
+	int swapped = 0;
+	uint16_t npartitions;
+#endif
 
 	/* Next, dig out disk label */
 	if (read_sector(a, label_sector, SCANBLOCKS)) {
@@ -589,7 +608,7 @@ validate_label(mbr_args_t *a, uint label_sector)
 	 */
 	dlp = (void *)a->bp->b_data;
 	dlp_lim = (char *)a->bp->b_data + a->bp->b_bcount - sizeof *dlp;
-	for (;; dlp = (void *)((char *)dlp + sizeof(long))) {
+	for (;; dlp = (void *)((char *)dlp + sizeof(uint32_t))) {
 		if ((char *)dlp > dlp_lim) {
 			if (a->action != WRITE_LABEL)
 				return SCAN_CONTINUE;
@@ -602,9 +621,31 @@ validate_label(mbr_args_t *a, uint label_sector)
 			dlp = (void *)dlp_byte;
 			break;
 		}
-		if (dlp->d_magic != DISKMAGIC || dlp->d_magic2 != DISKMAGIC)
+		if (!check_label_magic(dlp, DISKMAGIC))
+#ifdef DISKLABEL_EI
+		{
+			if (!check_label_magic(dlp, bswap32(DISKMAGIC)))
+				continue;
+
+			/*
+			 * The label is in the other byte order. We need to
+			 * checksum before swapping the byte order.
+			 */
+			npartitions = bswap16(dlp->d_npartitions);
+			if (npartitions > MAXPARTITIONS ||
+			    dkcksum_sized(dlp, npartitions) != 0)
+				goto corrupted;
+
+			swapped = 1;
+		}
+#else
 			continue;
-		if (dlp->d_npartitions > MAXPARTITIONS || dkcksum(dlp) != 0) {
+#endif
+		else if (dlp->d_npartitions > MAXPARTITIONS ||
+			 dkcksum(dlp) != 0) {
+#ifdef DISKLABEL_EI
+corrupted:
+#endif
 			a->msg = "disk label corrupted";
 			continue;
 		}
@@ -613,7 +654,14 @@ validate_label(mbr_args_t *a, uint label_sector)
 
 	switch (a->action) {
 	case READ_LABEL:
+#ifdef DISKLABEL_EI
+		if (swapped)
+			disklabel_swap(a->lp, dlp);
+		else
+			*a->lp = *dlp;
+#else
 		*a->lp = *dlp;
+#endif
 		if ((a->msg = convertdisklabel(a->lp, a->strat, a->bp,
 		                              a->secperunit)) != NULL)
 			return SCAN_ERROR;
@@ -621,7 +669,15 @@ validate_label(mbr_args_t *a, uint label_sector)
 		return SCAN_FOUND;
 	case UPDATE_LABEL:
 	case WRITE_LABEL:
+#ifdef DISKLABEL_EI
+		/* DO NOT swap a->lp itself for later references. */
+		if (swapped)
+			disklabel_swap(dlp, a->lp);
+		else
+			*dlp = *a->lp;
+#else
 		*dlp = *a->lp;
+#endif
 		a->bp->b_oflags &= ~BO_DONE;
 		a->bp->b_flags &= ~B_READ;
 		a->bp->b_flags |= B_WRITE;
@@ -639,59 +695,6 @@ validate_label(mbr_args_t *a, uint label_sector)
 		return SCAN_ERROR;
 	}
 }
-
-/*
- * Check new disk label for sensibility
- * before setting it.
- */
-int
-setdisklabel(struct disklabel *olp, struct disklabel *nlp, u_long openmask,
-    struct cpu_disklabel *osdep)
-{
-	int i;
-	struct partition *opp, *npp;
-
-	/* sanity clause */
-	if (nlp->d_secpercyl == 0 || nlp->d_secsize == 0
-		|| (nlp->d_secsize % DEV_BSIZE) != 0)
-			return (EINVAL);
-
-	/* special case to allow disklabel to be invalidated */
-	if (nlp->d_magic == 0xffffffff) {
-		*olp = *nlp;
-		return (0);
-	}
-
-	if (nlp->d_magic != DISKMAGIC || nlp->d_magic2 != DISKMAGIC ||
-	    dkcksum(nlp) != 0)
-		return (EINVAL);
-
-	/* XXX missing check if other dos partitions will be overwritten */
-
-	while (openmask != 0) {
-		i = ffs(openmask) - 1;
-		openmask &= ~(1 << i);
-		if (i > nlp->d_npartitions)
-			return (EBUSY);
-		opp = &olp->d_partitions[i];
-		npp = &nlp->d_partitions[i];
-		/*
-		 * Copy internally-set partition information
-		 * if new label doesn't include it.		XXX
-		 */
-		if (npp->p_fstype == FS_UNUSED && opp->p_fstype != FS_UNUSED) {
-			*npp = *opp;
-			continue;
-		}
-		if (npp->p_offset != opp->p_offset || npp->p_size < opp->p_size)
-			return (EBUSY);
-	}
- 	nlp->d_checksum = 0;
- 	nlp->d_checksum = dkcksum(nlp);
-	*olp = *nlp;
-	return (0);
-}
-
 
 /*
  * Write disk label back to device after modification.

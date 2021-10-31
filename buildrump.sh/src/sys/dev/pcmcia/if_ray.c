@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ray.c,v 1.84 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: if_ray.c,v 1.98 2020/02/04 05:46:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2000 Christian E. Hopps
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ray.c,v 1.84 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ray.c,v 1.98 2020/02/04 05:46:32 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -80,6 +80,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_ray.c,v 1.84 2016/07/07 06:55:42 msaitoh Exp $");
 #include <net80211/ieee80211.h>
 #include <net80211/ieee80211_ioctl.h>
 #include <net/if_media.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -88,9 +89,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ray.c,v 1.84 2016/07/07 06:55:42 msaitoh Exp $");
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/cpu.h>
 #include <sys/bus.h>
@@ -172,23 +170,23 @@ struct ray_softc {
 		struct ray_startup_params_tail_4	u_params_4;
 	} sc_u;
 
-	u_int8_t	sc_ccsinuse[64];	/* ccs in use -- not for tx */
+	uint8_t	sc_ccsinuse[64];	/* ccs in use -- not for tx */
 	u_int		sc_txfree;	/* a free count for efficiency */
 
-	u_int8_t	sc_bssid[ETHER_ADDR_LEN];	/* current net values */
-	u_int8_t	sc_authid[ETHER_ADDR_LEN];	/* ID of authenticating
+	uint8_t	sc_bssid[ETHER_ADDR_LEN];	/* current net values */
+	uint8_t	sc_authid[ETHER_ADDR_LEN];	/* ID of authenticating
 							   station */
 	struct ieee80211_nwid	sc_cnwid;	/* last nwid */
 	struct ieee80211_nwid	sc_dnwid;	/* desired nwid */
-	u_int8_t	sc_omode;	/* old operating mode SC_MODE_xx */
-	u_int8_t	sc_mode;	/* current operating mode SC_MODE_xx */
-	u_int8_t	sc_countrycode;	/* current country code */
-	u_int8_t	sc_dcountrycode; /* desired country code */
+	uint8_t	sc_omode;	/* old operating mode SC_MODE_xx */
+	uint8_t	sc_mode;	/* current operating mode SC_MODE_xx */
+	uint8_t	sc_countrycode;	/* current country code */
+	uint8_t	sc_dcountrycode; /* desired country code */
 	int		sc_havenet;	/* true if we have acquired a network */
 	bus_size_t	sc_txpad;	/* tib size plus "phy" size */
-	u_int8_t	sc_deftxrate;	/* default transfer rate */
-	u_int8_t	sc_encrypt;
-	u_int8_t	sc_authstate;	/* authentication state */
+	uint8_t	sc_deftxrate;	/* default transfer rate */
+	uint8_t	sc_encrypt;
+	uint8_t	sc_authstate;	/* authentication state */
 
 	int		sc_promisc;	/* current set value */
 	int		sc_running;	/* things we are doing */
@@ -199,10 +197,10 @@ struct ray_softc {
 	u_int		sc_startcmd;	/* cmd (start | join) */
 
 	int		sc_checkcounters;
-	u_int64_t	sc_rxoverflow;
-	u_int64_t	sc_rxcksum;
-	u_int64_t	sc_rxhcksum;
-	u_int8_t	sc_rxnoise;
+	uint64_t	sc_rxoverflow;
+	uint64_t	sc_rxcksum;
+	uint64_t	sc_rxhcksum;
+	uint8_t	sc_rxnoise;
 
 	/* use to return values to the user */
 	struct ray_param_req	*sc_repreq;
@@ -291,7 +289,7 @@ static void ray_disable(struct ray_softc *);
 static void ray_download_params(struct ray_softc *);
 static int ray_enable(struct ray_softc *);
 static u_int ray_find_free_tx_ccs(struct ray_softc *, u_int);
-static u_int8_t ray_free_ccs(struct ray_softc *, bus_size_t);
+static uint8_t ray_free_ccs(struct ray_softc *, bus_size_t);
 static void ray_free_ccs_chain(struct ray_softc *, u_int);
 static void ray_if_start(struct ifnet *);
 static void ray_if_stop(struct ifnet *, int);
@@ -304,13 +302,13 @@ static int ray_match(device_t, cfdata_t, void *);
 static int ray_media_change(struct ifnet *);
 static void ray_media_status(struct ifnet *, struct ifmediareq *);
 static ray_cmd_func_t ray_rccs_intr(struct ray_softc *, bus_size_t);
-static void ray_read_region(struct ray_softc *, bus_size_t,void *,size_t);
+static void ray_read_region(struct ray_softc *, bus_size_t, void *, size_t);
 static void ray_recv(struct ray_softc *, bus_size_t);
 static void ray_recv_auth(struct ray_softc *, struct ieee80211_frame *);
 static void ray_report_params(struct ray_softc *);
 static void ray_reset(struct ray_softc *);
 static void ray_reset_resetloop(void *);
-static int ray_send_auth(struct ray_softc *, u_int8_t *, u_int8_t);
+static int ray_send_auth(struct ray_softc *, uint8_t *, uint8_t);
 static void ray_set_pending(struct ray_softc *, u_int);
 static int ray_simple_cmd(struct ray_softc *, u_int, u_int);
 static void ray_start_assoc(struct ray_softc *);
@@ -330,10 +328,10 @@ static int ray_user_report_params(struct ray_softc *,
     struct ray_param_req *);
 static int ray_user_update_params(struct ray_softc *,
     struct ray_param_req *);
-static void ray_write_region(struct ray_softc *,bus_size_t,void *,size_t);
+static void ray_write_region(struct ray_softc *, bus_size_t, void *, size_t);
 
 #ifdef RAY_DO_SIGLEV
-static void ray_update_siglev(struct ray_softc *, u_int8_t *, u_int8_t);
+static void ray_update_siglev(struct ray_softc *, uint8_t *, uint8_t);
 #endif
 
 #ifdef RAY_DEBUG
@@ -368,10 +366,6 @@ static struct timeval rtv, tv1, tv2, *ttp, *ltp;
 	printf x ;				\
 	} } while (0)
 
-#define	HEXDF_NOCOMPRESS	0x1
-#define	HEXDF_NOOFFSET		0x2
-#define HEXDF_NOASCII		0x4
-void hexdump(const u_int8_t *, int, int, int, int);
 static void ray_dump_mbuf(struct ray_softc *, struct mbuf *);
 
 #else	/* !RAY_DEBUG */
@@ -393,13 +387,13 @@ static void ray_dump_mbuf(struct ray_softc *, struct mbuf *);
 	bus_space_read_1((sc)->sc_ccrt, (sc)->sc_ccrh, ((sc)->sc_ccroff + (off)))
 
 #define	SRAM_READ_1(sc, off) \
-	((u_int8_t)bus_space_read_1((sc)->sc_memt, (sc)->sc_memh, (off)))
+	((uint8_t)bus_space_read_1((sc)->sc_memt, (sc)->sc_memh, (off)))
 
 #define	SRAM_READ_FIELD_1(sc, off, s, f) \
 	SRAM_READ_1(sc, (off) + offsetof(struct s, f))
 
 #define	SRAM_READ_FIELD_2(sc, off, s, f)			\
-	((((u_int16_t)SRAM_READ_1(sc, (off) + offsetof(struct s, f)) << 8) \
+	((((uint16_t)SRAM_READ_1(sc, (off) + offsetof(struct s, f)) << 8) \
 	|(SRAM_READ_1(sc, (off) + 1 + offsetof(struct s, f)))))
 
 #define	SRAM_READ_FIELD_N(sc, off, s, f, p, n)	\
@@ -437,7 +431,7 @@ static void ray_dump_mbuf(struct ray_softc *, struct mbuf *);
  * Globals
  */
 
-static u_int8_t llc_snapid[6] = { LLC_SNAP_LSAP, LLC_SNAP_LSAP, LLC_UI, };
+static uint8_t llc_snapid[6] = { LLC_SNAP_LSAP, LLC_SNAP_LSAP, LLC_UI, };
 
 /* based on bit index in SCP_xx */
 static ray_cmd_func_t ray_cmdtab[] = {
@@ -553,10 +547,7 @@ ray_attach(device_t parent, device_t self, void *aux)
 	 */
 	memset(&sc->sc_dnwid, 0, sizeof(sc->sc_dnwid));
 	sc->sc_dnwid.i_len = strlen(RAY_DEF_NWID);
-	if (sc->sc_dnwid.i_len > IEEE80211_NWID_LEN)
-		sc->sc_dnwid.i_len = IEEE80211_NWID_LEN;
-	if (sc->sc_dnwid.i_len > 0)
-		memcpy(sc->sc_dnwid.i_nwid, RAY_DEF_NWID, sc->sc_dnwid.i_len);
+	memcpy(sc->sc_dnwid.i_nwid, RAY_DEF_NWID, sc->sc_dnwid.i_len);
 	memcpy(&sc->sc_cnwid, &sc->sc_dnwid, sizeof(sc->sc_cnwid));
 	sc->sc_omode = sc->sc_mode = RAY_MODE_DEFAULT;
 	sc->sc_countrycode = sc->sc_dcountrycode =
@@ -583,7 +574,7 @@ ray_attach(device_t parent, device_t self, void *aux)
 	ifp->if_stop = ray_if_stop;
 	ifp->if_ioctl = ray_ioctl;
 	ifp->if_mtu = ETHERMTU;
-	ifp->if_flags = IFF_BROADCAST|IFF_SIMPLEX|IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	IFQ_SET_READY(&ifp->if_snd);
 
 	if_attach(ifp);
@@ -644,16 +635,16 @@ ray_detach(device_t self, int flags)
 	RAY_DPRINTF(("%s: detach\n", device_xname(sc->sc_dev)));
 
 	if (!sc->sc_attached)
-                return (0);
+		return (0);
 
 	pmf_device_deregister(self);
 
 	if (sc->sc_if.if_flags & IFF_UP)
 		ray_disable(sc);
 
-	ifmedia_delete_instance(&sc->sc_media, IFM_INST_ANY);
 	ether_ifdetach(ifp);
 	if_detach(ifp);
+	ifmedia_fini(&sc->sc_media);
 
 	pcmcia_function_unconfigure(sc->sc_pf);
 
@@ -904,6 +895,7 @@ ray_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		break;
 	case SIOCADDMULTI:
 		RAY_DPRINTF(("%s: ioctl: cmd SIOCADDMULTI\n", ifp->if_xname));
+		/* FALLTHROUGH */
 	case SIOCDELMULTI:
 		if (cmd == SIOCDELMULTI)
 			RAY_DPRINTF(("%s: ioctl: cmd SIOCDELMULTI\n",
@@ -916,6 +908,7 @@ ray_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		break;
 	case SIOCSIFMEDIA:
 		RAY_DPRINTF(("%s: ioctl: cmd SIOCSIFMEDIA\n", ifp->if_xname));
+		/* FALLTHROUGH */
 	case SIOCGIFMEDIA:
 		if (cmd == SIOCGIFMEDIA)
 			RAY_DPRINTF(("%s: ioctl: cmd SIOCGIFMEDIA\n",
@@ -1064,8 +1057,8 @@ ray_intr_start(struct ray_softc *sc)
 	struct mbuf *m0, *m;
 	struct ifnet *ifp;
 	u_int firsti, hinti, previ, i, pcount;
-	u_int16_t et;
-	u_int8_t *d;
+	uint16_t et;
+	uint8_t *d;
 
 	ifp = &sc->sc_if;
 
@@ -1120,7 +1113,7 @@ ray_intr_start(struct ray_softc *sc)
 			RAY_DPRINTF((
 			    "%s: mbuf too long %ld\n", ifp->if_xname,
 			    (u_long)pktlen));
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			m_freem(m0);
 			continue;
 		}
@@ -1132,7 +1125,7 @@ ray_intr_start(struct ray_softc *sc)
 		if (!m0) {
 			RAY_DPRINTF(( "%s: couldn\'t pullup ether header\n",
 			    ifp->if_xname));
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 		RAY_DPRINTF(("%s: got pulled up mbuf 0x%lx\n", ifp->if_xname,
@@ -1145,7 +1138,7 @@ ray_intr_start(struct ray_softc *sc)
 			/* don't support llc for windows compat operation */
 			if (et <= ETHERMTU) {
 				m_freem(m0);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				continue;
 			}
 			tmplen = sizeof(struct ieee80211_frame);
@@ -1163,12 +1156,12 @@ ray_intr_start(struct ray_softc *sc)
 		if (!m0) {
 			RAY_DPRINTF(("%s: couldn\'t prepend header\n",
 			    ifp->if_xname));
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 		/* copy the frame into the mbuf for tapping */
 		iframe = mtod(m0, struct ieee80211_frame *);
-		eh = (struct ether_header *)((u_int8_t *)iframe + tmplen);
+		eh = (struct ether_header *)((uint8_t *)iframe + tmplen);
 		iframe->i_fc[0] =
 		    (IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA);
 		if (sc->sc_mode == SC_MODE_ADHOC) {
@@ -1178,7 +1171,7 @@ ray_intr_start(struct ray_softc *sc)
 			memcpy(iframe->i_addr3, sc->sc_bssid, ETHER_ADDR_LEN);
 		} else {
 			iframe->i_fc[1] = IEEE80211_FC1_DIR_TODS;
-			memcpy(iframe->i_addr1, sc->sc_bssid,ETHER_ADDR_LEN);
+			memcpy(iframe->i_addr1, sc->sc_bssid, ETHER_ADDR_LEN);
 			memcpy(iframe->i_addr2, eh->ether_shost,ETHER_ADDR_LEN);
 			memmove(iframe->i_addr3,eh->ether_dhost,ETHER_ADDR_LEN);
 		}
@@ -1209,7 +1202,7 @@ ray_intr_start(struct ray_softc *sc)
 			RAY_DPRINTF((
 			    "%s: copying mbuf 0x%lx bufp 0x%lx len %d\n",
 			    ifp->if_xname, (long)m, (long)bufp, (int)len));
-			d = mtod(m, u_int8_t *);
+			d = mtod(m, uint8_t *);
 			ebufp = bufp + len;
 			if (ebufp <= RAY_TX_END)
 				ray_write_region(sc, bufp, d, len);
@@ -1231,7 +1224,7 @@ ray_intr_start(struct ray_softc *sc)
 				m0->m_len -=  sizeof(struct ieee80211_frame);
 				m0->m_pkthdr.len -=  sizeof(struct ieee80211_frame);
 			}
-			bpf_mtap(ifp, m0);
+			bpf_mtap(ifp, m0, BPF_D_OUT);
 			if (ifp->if_flags & IFF_LINK0) {
 				m0->m_data -= sizeof(struct ieee80211_frame);
 				m0->m_len +=  sizeof(struct ieee80211_frame);
@@ -1263,7 +1256,7 @@ ray_intr_start(struct ray_softc *sc)
 		printf("%s: dropping tx packets device busy\n",
 		    device_xname(sc->sc_dev));
 		ray_free_ccs_chain(sc, firsti);
-		ifp->if_oerrors += pcount;
+		if_statadd(ifp, if_oerrors, pcount);
 		return;
 	}
 
@@ -1273,7 +1266,7 @@ ray_intr_start(struct ray_softc *sc)
 	SRAM_WRITE_1(sc, RAY_SCB_CCSI, firsti);
 	RAY_ECF_START_CMD(sc);
 
-	ifp->if_opackets += pcount;
+	if_statadd(ifp, if_opackets, pcount);
 }
 
 /*
@@ -1288,17 +1281,18 @@ ray_recv(struct ray_softc *sc, bus_size_t ccs)
 	size_t pktlen, fudge, len, lenread = 0;
 	bus_size_t bufp, ebufp, tmp;
 	struct ifnet *ifp;
-	u_int8_t *src, *d;
+	uint8_t *src, *d;
 	u_int frag = 0, ni, i, issnap, first;
-	u_int8_t fc0;
+	uint8_t fc0;
 #ifdef RAY_DO_SIGLEV
-	u_int8_t siglev;
+	uint8_t siglev;
 #endif
 
 #ifdef RAY_DEBUG
 	/* have a look if you want to see how the card rx works :) */
 	if (ray_debug && ray_debug_dump_desc)
-		hexdump((char *)sc->sc_memh + RAY_RCS_BASE, 0x400, 16, 4, 0);
+		hexdump(printf, __func__, (char *)sc->sc_memh + RAY_RCS_BASE,
+		    0x400);
 #endif
 
 	m = 0;
@@ -1330,13 +1324,13 @@ ray_recv(struct ray_softc *sc, bus_size_t ccs)
 	if (pktlen > MCLBYTES || pktlen < sizeof(*frame)) {
 		RAY_DPRINTF(("%s: PKTLEN TOO BIG OR TOO SMALL\n",
 		    device_xname(sc->sc_dev)));
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto done;
 	}
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (!m) {
 		RAY_DPRINTF(("%s: MGETHDR FAILED\n", device_xname(sc->sc_dev)));
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto done;
 	}
 	if ((pktlen + fudge) > MHLEN) {
@@ -1345,7 +1339,7 @@ ray_recv(struct ray_softc *sc, bus_size_t ccs)
 		if ((m->m_flags & M_EXT) == 0) {
 			RAY_DPRINTF(("%s: MCLGET FAILED\n",
 			    device_xname(sc->sc_dev)));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			m_freem(m);
 			m = 0;
 			goto done;
@@ -1355,7 +1349,7 @@ ray_recv(struct ray_softc *sc, bus_size_t ccs)
 	m->m_pkthdr.len = pktlen;
 	m->m_len = pktlen;
 	m->m_data += fudge;
-	d = mtod(m, u_int8_t *);
+	d = mtod(m, uint8_t *);
 
 	RAY_DPRINTF(("%s: recv ccs index %d\n", device_xname(sc->sc_dev),
 	    first));
@@ -1379,7 +1373,7 @@ ray_recv(struct ray_softc *sc, bus_size_t ccs)
 			RAY_DPRINTF(("%s: BAD LEN current 0x%lx pktlen 0x%lx\n",
 			    device_xname(sc->sc_dev), (u_long)(len + lenread),
 			    (u_long)pktlen));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			m_freem(m);
 			m = 0;
 			goto done;
@@ -1429,7 +1423,7 @@ done:
 	/* receivce the packet */
 	frame = mtod(m, struct ieee80211_frame *);
 	fc0 = frame->i_fc[0]
-	   & (IEEE80211_FC0_VERSION_MASK|IEEE80211_FC0_TYPE_MASK);
+	   & (IEEE80211_FC0_VERSION_MASK | IEEE80211_FC0_TYPE_MASK);
 	if ((fc0 & IEEE80211_FC0_VERSION_MASK) != IEEE80211_FC0_VERSION_0) {
 		RAY_DPRINTF(("%s: pkt not version 0 fc 0x%x\n",
 		    device_xname(sc->sc_dev), fc0));
@@ -1451,7 +1445,7 @@ done:
 			RAY_DPRINTF(("%s: mgt packet not supported\n",
 			    device_xname(sc->sc_dev)));
 #ifdef RAY_DEBUG
-			hexdump((const u_int8_t*)frame, pktlen, 16, 4, 0);
+			hexdump(printf, __func__, frame, pktlen);
 #endif
 			RAY_DPRINTF(("\n"));
 			break;
@@ -1522,9 +1516,8 @@ done:
 		eh = (struct ether_header *)(frame + 1);
 	}
 	m_adj(m, (char *)eh - (char *)frame);
-	bpf_mtap(ifp, m);
+	bpf_mtap(ifp, m, BPF_D_IN);
 	/* XXX doesn't appear to be included m->m_flags |= M_HASFCS; */
-	ifp->if_ipackets++;
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
@@ -1534,13 +1527,13 @@ done:
 static void
 ray_recv_auth(struct ray_softc *sc, struct ieee80211_frame *frame)
 {
-	u_int8_t *var = (u_int8_t *)(frame + 1);
+	uint8_t *var = (uint8_t *)(frame + 1);
 
 	if (sc->sc_mode == SC_MODE_ADHOC) {
 		RAY_DPRINTF(("%s: recv auth packet:\n",
 		    device_xname(sc->sc_dev)));
 #ifdef RAY_DEBUG
-		hexdump((const u_int8_t *)frame, sizeof(*frame) + 6, 16, 4, 0);
+		hexdump(printf, __func__, frame, sizeof(*frame) + 6);
 #endif
 		RAY_DPRINTF(("\n"));
 
@@ -1565,9 +1558,9 @@ ray_recv_auth(struct ray_softc *sc, struct ieee80211_frame *frame)
  * send an auth packet
  */
 static int
-ray_send_auth(struct ray_softc *sc, u_int8_t *dest, u_int8_t auth_type)
+ray_send_auth(struct ray_softc *sc, uint8_t *dest, uint8_t auth_type)
 {
-	u_int8_t packet[sizeof(struct ieee80211_frame) + ETHER_ADDR_LEN], *var;
+	uint8_t packet[sizeof(struct ieee80211_frame) + ETHER_ADDR_LEN], *var;
 	struct ieee80211_frame *frame;
 	bus_size_t bufp;
 	int ccsindex;
@@ -1589,7 +1582,7 @@ ray_send_auth(struct ray_softc *sc, u_int8_t *dest, u_int8_t auth_type)
 	    ETHER_ADDR_LEN);
 	memcpy(frame->i_addr3, sc->sc_bssid, ETHER_ADDR_LEN);
 
-	var = (u_int8_t *)(frame + 1);
+	var = (uint8_t *)(frame + 1);
 	memset(var, 0, ETHER_ADDR_LEN);
 	var[2] = auth_type;
 
@@ -2076,10 +2069,10 @@ ray_free_ccs_chain(struct ray_softc *sc, u_int ni)
  * free up a cmd and return the old status
  * this routine is only used for commands
  */
-static u_int8_t
+static uint8_t
 ray_free_ccs(struct ray_softc *sc, bus_size_t ccs)
 {
-	u_int8_t stat;
+	uint8_t stat;
 
 	RAY_DPRINTF(("%s: free_ccs idx %llu\n", device_xname(sc->sc_dev),
 	    (unsigned long long)RAY_GET_INDEX(ccs)));
@@ -2681,7 +2674,8 @@ ray_start_join_net_done(struct ray_softc *sc, u_int cmd, bus_size_t ccs,
 		/* see if our nwid is up to date */
 		if (!memcmp(&sc->sc_cnwid, &sc->sc_dnwid, sizeof(sc->sc_cnwid))
 		    && sc->sc_omode == sc->sc_mode)
-			SRAM_WRITE_FIELD_1(sc,ccs, ray_cmd_net, c_upd_param, 0);
+			SRAM_WRITE_FIELD_1(sc, ccs, ray_cmd_net, c_upd_param,
+			    0);
 		else {
 			memset(&np, 0, sizeof(np));
 			np.p_net_type = sc->sc_mode;
@@ -2689,7 +2683,8 @@ ray_start_join_net_done(struct ray_softc *sc, u_int cmd, bus_size_t ccs,
 			    sizeof(np.p_ssid));
 			ray_write_region(sc, RAY_HOST_TO_ECF_BASE, &np,
 			    sizeof(np));
-			SRAM_WRITE_FIELD_1(sc,ccs, ray_cmd_net, c_upd_param, 1);
+			SRAM_WRITE_FIELD_1(sc,ccs, ray_cmd_net, c_upd_param,
+			    1);
 		}
 
 		if (sc->sc_mode == SC_MODE_ADHOC)
@@ -2739,7 +2734,7 @@ ray_start_join_net_done(struct ray_softc *sc, u_int cmd, bus_size_t ccs,
 	    SRAM_READ_FIELD_1(sc, ccs, ray_cmd_net, c_inited)));
 
 	/* network is now active */
-	ray_cmd_schedule(sc, SCP_UPD_MCAST|SCP_UPD_PROMISC);
+	ray_cmd_schedule(sc, SCP_UPD_MCAST | SCP_UPD_PROMISC);
 	if (cmd == RAY_CMD_JOIN_NET)
 		return (ray_start_assoc);
 	else {
@@ -2829,6 +2824,7 @@ ray_update_mcast(struct ray_softc *sc)
 	ec = &sc->sc_ec;
 	ray_cmd_cancel(sc, SCP_UPD_MCAST);
 
+	ETHER_LOCK(ec);
 	/* see if we have any ranges */
 	if ((count = sc->sc_ec.ec_multicnt) < 17) {
 		ETHER_FIRST_MULTI(step, ec, enm);
@@ -2842,6 +2838,7 @@ ray_update_mcast(struct ray_softc *sc)
 			ETHER_NEXT_MULTI(step, enm);
 		}
 	}
+	ETHER_UNLOCK(ec);
 
 	/* track this stuff even when not running */
 	if (count > 16) {
@@ -2862,12 +2859,14 @@ ray_update_mcast(struct ray_softc *sc)
 		return;
 	SRAM_WRITE_FIELD_1(sc, ccs, ray_cmd_update_mcast, c_nmcast, count);
 	bufp = RAY_HOST_TO_ECF_BASE;
+	ETHER_LOCK(ec);
 	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm) {
 		ray_write_region(sc, bufp, enm->enm_addrlo, ETHER_ADDR_LEN);
 		bufp += ETHER_ADDR_LEN;
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 	(void)ray_issue_cmd(sc, ccs, SCP_UPD_MCAST);
 }
 
@@ -2967,7 +2966,7 @@ ray_read_region(struct ray_softc *sc, bus_size_t off, void *vp, size_t c)
 {
 #ifdef RAY_USE_OPTIMIZED_COPY
 	u_int n2, n4, tmp;
-	u_int8_t *p;
+	uint8_t *p;
 
 	p = vp;
 
@@ -2984,13 +2983,13 @@ ray_read_region(struct ray_softc *sc, bus_size_t off, void *vp, size_t c)
 		}
 		switch (c) {
 		case 3:
-			*p = bus_space_read_1(sc->sc_memt,sc->sc_memh, off);
+			*p = bus_space_read_1(sc->sc_memt, sc->sc_memh, off);
 			p++, off++;
 		case 2:
-			*p = bus_space_read_1(sc->sc_memt,sc->sc_memh, off);
+			*p = bus_space_read_1(sc->sc_memt, sc->sc_memh, off);
 			p++, off++;
 		case 1:
-			*p = bus_space_read_1(sc->sc_memt,sc->sc_memh, off);
+			*p = bus_space_read_1(sc->sc_memt, sc->sc_memh, off);
 		}
 		break;
 	case 2:
@@ -3023,7 +3022,7 @@ ray_write_region(struct ray_softc *sc, bus_size_t off, void *vp, size_t c)
 {
 #ifdef RAY_USE_OPTIMIZED_COPY
 	size_t n2, n4, tmp;
-	u_int8_t *p;
+	uint8_t *p;
 
 	p = vp;
 	/* XXX we may be making poor assumptions here but lets hope */
@@ -3039,13 +3038,13 @@ ray_write_region(struct ray_softc *sc, bus_size_t off, void *vp, size_t c)
 		}
 		switch (c) {
 		case 3:
-			bus_space_write_1(sc->sc_memt,sc->sc_memh, off, *p);
+			bus_space_write_1(sc->sc_memt, sc->sc_memh, off, *p);
 			p++, off++;
 		case 2:
-			bus_space_write_1(sc->sc_memt,sc->sc_memh, off, *p);
+			bus_space_write_1(sc->sc_memt, sc->sc_memh, off, *p);
 			p++, off++;
 		case 1:
-			bus_space_write_1(sc->sc_memt,sc->sc_memh, off, *p);
+			bus_space_write_1(sc->sc_memt, sc->sc_memh, off, *p);
 		}
 		break;
 	case 2:
@@ -3070,114 +3069,19 @@ ray_write_region(struct ray_softc *sc, bus_size_t off, void *vp, size_t c)
 
 #ifdef RAY_DEBUG
 
-#define PRINTABLE(c) ((c) >= 0x20 && (c) <= 0x7f)
-
-void
-hexdump(const u_int8_t *d, int len, int br, int div, int fl)
-{
-	int i, j, offw, first, tlen, ni, nj, sp;
-
-	sp = br / div;
-	offw = 0;
-	if (len && (fl & HEXDF_NOOFFSET) == 0) {
-		tlen = len;
-		do {
-			offw++;
-		} while (tlen /= br);
-	}
-	if (offw)
-		printf("%0*x: ", offw, 0);
-	for (i = 0; i < len; i++, d++) {
-		if (i && (i % br) == 0) {
-			if ((fl & HEXDF_NOASCII) == 0) {
-				printf("   ");
-				d -= br;
-				for (j = 0; j < br; d++, j++) {
-					if (j && (j % sp) == 0)
-						printf(" ");
-					if (PRINTABLE(*d))
-						printf("%c", (int)*d);
-					else
-						printf(".");
-				}
-			}
-			if (offw)
-				printf("\n%0*x: ", offw, i);
-			else
-				printf("\n");
-			if ((fl & HEXDF_NOCOMPRESS) == 0) {
-				first = 1;
-				while (len - i >= br) {
-					if (memcmp(d, d - br, br))
-						break;
-					d += br;
-					i += br;
-					if (first) {
-						printf("*");
-						first = 0;
-					}
-				}
-				if (len == i) {
-					printf("\n%0*x", offw, i);
-					return;
-				}
-			}
-		} else if (i && (i % sp) == 0)
-			printf(" ");
-		printf("%02x ", *d);
-	}
-	if (len && (((i - 1) % br) || i == 1)) {
-		if ((fl & HEXDF_NOASCII) == 0) {
-			i = i % br ? i % br : br;
-			ni = (br - i) % br;
-			j = (i - 1) / sp;
-			nj = (div - j - 1) % div;
-			j = 3 * ni + nj + 3;
-			printf("%*s", j, "");
-			d -= i;
-			for (j = 0; j < i; d++, j++) {
-				if (j && (j % sp) == 0)
-					printf(" ");
-				if (PRINTABLE(*d))
-					printf("%c", (int)*d);
-				else
-					printf(".");
-			}
-		}
-		printf("\n");
-	}
-}
-
-
-
 static void
 ray_dump_mbuf(struct ray_softc *sc, struct mbuf *m)
 {
-	u_int8_t *d, *ed;
-	u_int i;
-
 	printf("%s: pkt dump:", device_xname(sc->sc_dev));
-	i = 0;
 	for (; m; m = m->m_next) {
-		d = mtod(m, u_int8_t *);
-		ed = d + m->m_len;
-
-		for (; d < ed; i++, d++) {
-			if ((i % 16) == 0)
-				printf("\n\t");
-			else if ((i % 8) == 0)
-				printf("  ");
-			printf(" %02x", *d);
-		}
+		hexdump(printf, NULL, mtod(m, void *), m->m_len);
 	}
-	if ((i - 1) % 16)
-		printf("\n");
 }
 #endif	/* RAY_DEBUG */
 
 #ifdef RAY_DO_SIGLEV
 static void
-ray_update_siglev(struct ray_softc *sc, u_int8_t *src, u_int8_t siglev)
+ray_update_siglev(struct ray_softc *sc, uint8_t *src, uint8_t siglev)
 {
 	int i, mini;
 	struct timeval mint;

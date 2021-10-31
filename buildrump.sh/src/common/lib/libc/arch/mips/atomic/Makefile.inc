@@ -1,9 +1,9 @@
-#	$NetBSD: Makefile.inc,v 1.13 2014/10/13 13:00:55 martin Exp $
+#	$NetBSD: Makefile.inc,v 1.15 2021/04/25 22:45:16 christos Exp $
 
 .if defined(LIB) && (${LIB} == "kern" || ${LIB} == "c" || ${LIB} == "pthread" \
 	|| ${LIB} == "rump")
 
-.if ${MACHINE_ARCH:Mmips64*} == ""
+.if !${MACHINE_MIPS64}
 SRCS+=	atomic_add_32_cas.c atomic_add_32_nv_cas.c \
 	atomic_and_32_cas.c atomic_and_32_nv_cas.c \
 	atomic_dec_32_cas.c atomic_dec_32_nv_cas.c \
@@ -30,7 +30,7 @@ SRCS+=	membar_ops.S
 
 .if defined(LIB) && (${LIB} == "c" || ${LIB} == "pthread")
 
-.if ${MACHINE_ARCH:Mmips64*} == ""
+.if !${MACHINE_MIPS64}
 SRCS+=	atomic_init_testset.c atomic_cas_up.S
 .else
 SRCS+=	atomic_cas.S atomic_init_cas.c atomic_cas_by_cas32.c
@@ -44,6 +44,7 @@ SRCS+=	atomic_xor_32_cas.c atomic_xor_16_cas.c atomic_xor_8_cas.c	\
 	atomic_nand_32_cas.c atomic_nand_16_cas.c atomic_nand_8_cas.c	\
 	atomic_or_16_cas.c atomic_or_8_cas.c				\
 	atomic_and_16_cas.c atomic_and_8_cas.c				\
+	atomic_and_16_nv_cas.c atomic_and_8_nv_cas.c			\
 	atomic_add_16_cas.c atomic_add_8_cas.c				\
 	atomic_swap_16_cas.c atomic_swap_8_cas.c			\
 	atomic_cas_32_cas.c atomic_cas_16_cas.c atomic_cas_8_cas.c	\

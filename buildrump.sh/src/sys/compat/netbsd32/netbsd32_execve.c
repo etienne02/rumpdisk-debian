@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_execve.c,v 1.38 2014/02/02 14:48:57 martin Exp $	*/
+/*	$NetBSD: netbsd32_execve.c,v 1.43 2021/04/13 05:28:16 mrg Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_execve.c,v 1.38 2014/02/02 14:48:57 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_execve.c,v 1.43 2021/04/13 05:28:16 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -71,9 +71,8 @@ netbsd32_execve(struct lwp *l, const struct netbsd32_execve_args *uap, register_
 		syscallarg(netbsd32_charpp) argp;
 		syscallarg(netbsd32_charpp) envp;
 	} */
-	const char *path = SCARG_P32(uap, path);
 
-	return execve1(l, path, SCARG_P32(uap, argp),
+	return execve1(l, true, SCARG_P32(uap, path), -1, SCARG_P32(uap, argp),
 	    SCARG_P32(uap, envp), netbsd32_execve_fetch_element);
 }
 
@@ -86,13 +85,9 @@ netbsd32_fexecve(struct lwp *l, const struct netbsd32_fexecve_args *uap,
 		syscallarg(netbsd32_charpp) argp;
 		syscallarg(netbsd32_charpp) envp;
 	} */
-	struct sys_fexecve_args ua;
 
-	NETBSD32TO64_UAP(fd);
-	NETBSD32TOP_UAP(argp, char * const);
-	NETBSD32TOP_UAP(envp, char * const);
-
-	return sys_fexecve(l, &ua, retval);
+	return execve1(l, false, NULL, SCARG(uap, fd), SCARG_P32(uap, argp),
+	    SCARG_P32(uap, envp), netbsd32_execve_fetch_element);
 }
 
 static int
@@ -135,7 +130,7 @@ netbsd32_posix_spawn_fa_alloc(struct posix_spawn_file_actions **fap,
 	for (; i < fa->len; i++) {
 		fae = &fa->fae[i];
 		f32 = &fae32[i];
-		fae->fae_action = f32->fae_action;
+		fae->fae_action = (unsigned)f32->fae_action;
 		fae->fae_fildes = f32->fae_fildes;
 		if (fae->fae_action == FAE_DUP2)
 			fae->fae_data.dup2.newfildes =
@@ -187,6 +182,7 @@ netbsd32_posix_spawn(struct lwp *l,
 	rlim_t max_fileactions;
 	proc_t *p = l->l_proc;
 
+	/* check_posix_spawn() increments nprocs for us. */
 	error = check_posix_spawn(l);
 	if (error) {
 		*retval = error;
@@ -195,7 +191,7 @@ netbsd32_posix_spawn(struct lwp *l,
 
 	/* copy in file_actions struct */
 	if (SCARG_P32(uap, file_actions) != NULL) {
-		max_fileactions = 2 * min(p->p_rlimit[RLIMIT_NOFILE].rlim_cur,
+		max_fileactions = 2 * uimin(p->p_rlimit[RLIMIT_NOFILE].rlim_cur,
 		    maxfiles);
 		error = netbsd32_posix_spawn_fa_alloc(&fa,
 		    SCARG_P32(uap, file_actions), max_fileactions);

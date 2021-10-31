@@ -1,4 +1,4 @@
-/*	$NetBSD: if_pcn.c,v 1.62 2016/06/10 13:27:14 ozaki-r Exp $	*/
+/*	$NetBSD: if_pcn.c,v 1.76 2020/03/16 01:54:23 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.62 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.76 2020/03/16 01:54:23 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -267,7 +267,6 @@ struct pcn_softc {
 
 #ifdef PCN_EVENT_COUNTERS
 	/* Event counters. */
-	struct evcnt sc_ev_txsstall;	/* Tx stalled due to no txs */
 	struct evcnt sc_ev_txdstall;	/* Tx stalled due to no txd */
 	struct evcnt sc_ev_txintr;	/* Tx interrupts */
 	struct evcnt sc_ev_rxintr;	/* Rx interrupts */
@@ -375,9 +374,9 @@ do {									\
 		__rmd->rmd0 =						\
 		    htole32(__rxs->rxs_dmamap->dm_segs[0].ds_addr + 2);	\
 	}								\
-	__rmd->rmd1 = htole32(LE_R1_OWN|LE_R1_ONES| 			\
+	__rmd->rmd1 = htole32(LE_R1_OWN | LE_R1_ONES |			\
 	    (LE_BCNT(MCLBYTES - 2) & LE_R1_BCNT_MASK));			\
-	PCN_CDRXSYNC((sc), (x), BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);\
+	PCN_CDRXSYNC((sc), (x), BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);\
 } while(/*CONSTCOND*/0)
 
 static void	pcn_start(struct ifnet *);
@@ -401,8 +400,8 @@ static int	pcn_intr(void *);
 static void	pcn_txintr(struct pcn_softc *);
 static int	pcn_rxintr(struct pcn_softc *);
 
-static int	pcn_mii_readreg(device_t, int, int);
-static void	pcn_mii_writereg(device_t, int, int, int);
+static int	pcn_mii_readreg(device_t, int, int, uint16_t *);
+static int	pcn_mii_writereg(device_t, int, int, uint16_t);
 static void	pcn_mii_statchg(struct ifnet *);
 
 static void	pcn_79c970_mediainit(struct pcn_softc *);
@@ -466,7 +465,7 @@ pcn_csr_read(struct pcn_softc *sc, int reg)
 {
 
 	bus_space_write_4(sc->sc_st, sc->sc_sh, PCN32_RAP, reg);
-	return (bus_space_read_4(sc->sc_st, sc->sc_sh, PCN32_RDP));
+	return bus_space_read_4(sc->sc_st, sc->sc_sh, PCN32_RDP);
 }
 
 static inline void
@@ -482,7 +481,7 @@ pcn_bcr_read(struct pcn_softc *sc, int reg)
 {
 
 	bus_space_write_4(sc->sc_st, sc->sc_sh, PCN32_RAP, reg);
-	return (bus_space_read_4(sc->sc_st, sc->sc_sh, PCN32_BDP));
+	return bus_space_read_4(sc->sc_st, sc->sc_sh, PCN32_BDP);
 }
 
 static inline void
@@ -502,16 +501,16 @@ pcn_is_vmware(const char *enaddr)
 	 * addresses.
 	 */
 	if (enaddr[0] == 0x00 && enaddr[1] == 0x0c && enaddr[2] == 0x29)
-		return (TRUE);
+		return TRUE;
 
 	/*
 	 * VMware uses the OUI 00:50:56 for manually-set MAC
 	 * addresses (and some auto-generated ones).
 	 */
 	if (enaddr[0] == 0x00 && enaddr[1] == 0x50 && enaddr[2] == 0x56)
-		return (TRUE);
+		return TRUE;
 
-	return (FALSE);
+	return FALSE;
 }
 
 static const struct pcn_variant *
@@ -521,14 +520,14 @@ pcn_lookup_variant(uint16_t chipid)
 
 	for (pcv = pcn_variants; pcv->pcv_chipid != 0; pcv++) {
 		if (chipid == pcv->pcv_chipid)
-			return (pcv);
+			return pcv;
 	}
 
 	/*
 	 * This covers unknown chips, which we simply treat like
 	 * a generic PCnet-FAST.
 	 */
-	return (pcv);
+	return pcv;
 }
 
 static int
@@ -546,18 +545,18 @@ pcn_match(device_t parent, cfdata_t cf, void *aux)
 	if (PCI_VENDOR(pa->pa_id) == PCI_VENDOR_TRIDENT &&
 	    PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_TRIDENT_4DWAVE_DX &&
 	    PCI_CLASS(pa->pa_class) == PCI_CLASS_NETWORK)
-		return(1);
+		return 1;
 
 	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_AMD)
-		return (0);
+		return 0;
 
 	switch (PCI_PRODUCT(pa->pa_id)) {
 	case PCI_PRODUCT_AMD_PCNET_PCI:
 		/* Beat if_le_pci.c */
-		return (10);
+		return 10;
 	}
 
-	return (0);
+	return 0;
 }
 
 static void
@@ -582,6 +581,7 @@ pcn_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 	callout_init(&sc->sc_tick_ch, 0);
+	callout_setfunc(&sc->sc_tick_ch, pcn_tick, sc);
 
 	aprint_normal(": AMD PCnet-PCI Ethernet\n");
 
@@ -591,7 +591,7 @@ pcn_attach(device_t parent, device_t self, void *aux)
 	ioh_valid = (pci_mapreg_map(pa, PCN_PCI_CBIO, PCI_MAPREG_TYPE_IO, 0,
 	    &iot, &ioh, NULL, NULL) == 0);
 	memh_valid = (pci_mapreg_map(pa, PCN_PCI_CBMEM,
-	    PCI_MAPREG_TYPE_MEM|PCI_MAPREG_MEM_TYPE_32BIT, 0,
+	    PCI_MAPREG_TYPE_MEM | PCI_MAPREG_MEM_TYPE_32BIT, 0,
 	    &memt, &memh, NULL, NULL) == 0);
 
 	if (memh_valid) {
@@ -634,7 +634,7 @@ pcn_attach(device_t parent, device_t self, void *aux)
 	obj = prop_dictionary_get(device_properties(sc->sc_dev),
 				  "am79c970-no-eeprom");
 	if (prop_bool_true(obj)) {
-	        for (i = 0; i < 3; i++) {
+		for (i = 0; i < 3; i++) {
 			uint32_t val;
 			val = pcn_csr_read(sc, LE_CSR12 + i);
 			enaddr[2 * i] = val & 0xff;
@@ -684,7 +684,8 @@ pcn_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_NET, pcn_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(pc, ih, IPL_NET, pcn_intr, sc,
+	    device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "unable to establish interrupt");
 		if (intrstr != NULL)
@@ -812,14 +813,13 @@ pcn_attach(device_t parent, device_t self, void *aux)
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, enaddr);
 	rnd_attach_source(&sc->rnd_source, device_xname(self),
 	    RND_TYPE_NET, RND_FLAG_DEFAULT);
 
 #ifdef PCN_EVENT_COUNTERS
 	/* Attach event counters. */
-	evcnt_attach_dynamic(&sc->sc_ev_txsstall, EVCNT_TYPE_MISC,
-	    NULL, device_xname(self), "txsstall");
 	evcnt_attach_dynamic(&sc->sc_ev_txdstall, EVCNT_TYPE_MISC,
 	    NULL, device_xname(self), "txdstall");
 	evcnt_attach_dynamic(&sc->sc_ev_txintr, EVCNT_TYPE_INTR,
@@ -919,7 +919,7 @@ pcn_start(struct ifnet *ifp)
 	bus_dmamap_t dmamap;
 	int error, nexttx, lasttx = -1, ofree, seg;
 
-	if ((ifp->if_flags & (IFF_RUNNING|IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) != IFF_RUNNING)
 		return;
 
 	/*
@@ -933,18 +933,12 @@ pcn_start(struct ifnet *ifp)
 	 * until we drain the queue, or use up all available transmit
 	 * descriptors.
 	 */
-	for (;;) {
+	while (sc->sc_txsfree != 0) {
 		/* Grab a packet off the queue. */
 		IFQ_POLL(&ifp->if_snd, m0);
 		if (m0 == NULL)
 			break;
 		m = NULL;
-
-		/* Get a work queue entry. */
-		if (sc->sc_txsfree == 0) {
-			PCN_EVCNT_INCR(&sc->sc_ev_txsstall);
-			break;
-		}
 
 		txs = &sc->sc_txsoft[sc->sc_txsnext];
 		dmamap = txs->txs_dmamap;
@@ -956,7 +950,7 @@ pcn_start(struct ifnet *ifp)
 		 * and try again.
 		 */
 		if (bus_dmamap_load_mbuf(sc->sc_dmat, dmamap, m0,
-		    BUS_DMA_WRITE|BUS_DMA_NOWAIT) != 0) {
+		    BUS_DMA_WRITE | BUS_DMA_NOWAIT) != 0) {
 			PCN_EVCNT_INCR(&sc->sc_ev_txcopy);
 			MGETHDR(m, M_DONTWAIT, MT_DATA);
 			if (m == NULL) {
@@ -977,7 +971,7 @@ pcn_start(struct ifnet *ifp)
 			m_copydata(m0, 0, m0->m_pkthdr.len, mtod(m, void *));
 			m->m_pkthdr.len = m->m_len = m0->m_pkthdr.len;
 			error = bus_dmamap_load_mbuf(sc->sc_dmat, dmamap,
-			    m, BUS_DMA_WRITE|BUS_DMA_NOWAIT);
+			    m, BUS_DMA_WRITE | BUS_DMA_NOWAIT);
 			if (error) {
 				printf("%s: unable to load Tx buffer, "
 				    "error = %d\n", device_xname(sc->sc_dev),
@@ -996,15 +990,8 @@ pcn_start(struct ifnet *ifp)
 		if (dmamap->dm_nsegs > (sc->sc_txfree - 1)) {
 			/*
 			 * Not enough free descriptors to transmit this
-			 * packet.  We haven't committed anything yet,
-			 * so just unload the DMA map, put the packet
-			 * back on the queue, and punt.  Notify the upper
-			 * layer that there are not more slots left.
-			 *
-			 * XXX We could allocate an mbuf and copy, but
-			 * XXX is it worth it?
+			 * packet.
 			 */
-			ifp->if_flags |= IFF_OACTIVE;
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
 			if (m != NULL)
 				m_freem(m);
@@ -1102,14 +1089,14 @@ pcn_start(struct ifnet *ifp)
 		/* Set `start of packet' and `end of packet' appropriately. */
 		sc->sc_txdescs[lasttx].tmd1 |= htole32(LE_T1_ENP);
 		sc->sc_txdescs[sc->sc_txnext].tmd1 |=
-		    htole32(LE_T1_OWN|LE_T1_STP);
+		    htole32(LE_T1_OWN | LE_T1_STP);
 
 		/* Sync the descriptors we're using. */
 		PCN_CDTXSYNC(sc, sc->sc_txnext, dmamap->dm_nsegs,
-		    BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		/* Kick the transmitter. */
-		pcn_csr_write(sc, LE_CSR0, LE_C0_INEA|LE_C0_TDMD);
+		pcn_csr_write(sc, LE_CSR0, LE_C0_INEA | LE_C0_TDMD);
 
 		/*
 		 * Store a pointer to the packet so we can free it later,
@@ -1128,12 +1115,7 @@ pcn_start(struct ifnet *ifp)
 		sc->sc_txsnext = PCN_NEXTTXS(sc->sc_txsnext);
 
 		/* Pass the packet to any BPF listeners. */
-		bpf_mtap(ifp, m0);
-	}
-
-	if (sc->sc_txsfree == 0 || sc->sc_txfree == 0) {
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 	}
 
 	if (sc->sc_txfree != ofree) {
@@ -1161,7 +1143,7 @@ pcn_watchdog(struct ifnet *ifp)
 	if (sc->sc_txfree != PCN_NTXDESC) {
 		printf("%s: device timeout (txfree %d txsfree %d)\n",
 		    device_xname(sc->sc_dev), sc->sc_txfree, sc->sc_txsfree);
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 
 		/* Reset the interface. */
 		(void) pcn_init(ifp);
@@ -1179,18 +1161,11 @@ pcn_watchdog(struct ifnet *ifp)
 static int
 pcn_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
-	struct pcn_softc *sc = ifp->if_softc;
-	struct ifreq *ifr = (struct ifreq *) data;
 	int s, error;
 
 	s = splnet();
 
 	switch (cmd) {
-	case SIOCSIFMEDIA:
-	case SIOCGIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr, &sc->sc_mii.mii_media, cmd);
-		break;
-
 	default:
 		error = ether_ioctl(ifp, cmd, data);
 		if (error == ENETRESET) {
@@ -1210,7 +1185,7 @@ pcn_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 	pcn_start(ifp);
 
 	splx(s);
-	return (error);
+	return error;
 }
 
 /*
@@ -1235,8 +1210,8 @@ pcn_intr(void *arg)
 
 		/* ACK the bits and re-enable interrupts. */
 		pcn_csr_write(sc, LE_CSR0, csr0 &
-		    (LE_C0_INEA|LE_C0_BABL|LE_C0_MISS|LE_C0_MERR|LE_C0_RINT|
-		     LE_C0_TINT|LE_C0_IDON));
+		    (LE_C0_INEA | LE_C0_BABL | LE_C0_MISS | LE_C0_MERR |
+			LE_C0_RINT | LE_C0_TINT | LE_C0_IDON));
 
 		handled = 1;
 
@@ -1253,11 +1228,11 @@ pcn_intr(void *arg)
 		if (csr0 & LE_C0_ERR) {
 			if (csr0 & LE_C0_BABL) {
 				PCN_EVCNT_INCR(&sc->sc_ev_babl);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 			}
 			if (csr0 & LE_C0_MISS) {
 				PCN_EVCNT_INCR(&sc->sc_ev_miss);
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 			}
 			if (csr0 & LE_C0_MERR) {
 				PCN_EVCNT_INCR(&sc->sc_ev_merr);
@@ -1271,14 +1246,14 @@ pcn_intr(void *arg)
 		if ((csr0 & LE_C0_RXON) == 0) {
 			printf("%s: receiver disabled\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			wantinit = 1;
 		}
 
 		if ((csr0 & LE_C0_TXON) == 0) {
 			printf("%s: transmitter disabled\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			wantinit = 1;
 		}
 	}
@@ -1288,10 +1263,10 @@ pcn_intr(void *arg)
 			pcn_init(ifp);
 
 		/* Try to get more packets going. */
-		pcn_start(ifp);
+		if_schedule_deferred_start(ifp);
 	}
 
-	return (handled);
+	return handled;
 }
 
 /*
@@ -1329,8 +1304,6 @@ pcn_txintr(struct pcn_softc *sc)
 	uint32_t tmd1, tmd2, tmd;
 	int i, j;
 
-	ifp->if_flags &= ~IFF_OACTIVE;
-
 	/*
 	 * Go through our Tx list and free mbufs for those
 	 * frames which have been transmitted.
@@ -1340,7 +1313,7 @@ pcn_txintr(struct pcn_softc *sc)
 		txs = &sc->sc_txsoft[i];
 
 		PCN_CDTXSYNC(sc, txs->txs_firstdesc, txs->txs_dmamap->dm_nsegs,
-		    BUS_DMASYNC_POSTREAD|BUS_DMASYNC_POSTWRITE);
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 		tmd1 = le32toh(sc->sc_txdescs[txs->txs_lastdesc].tmd1);
 		if (tmd1 & LE_T1_OWN)
@@ -1354,7 +1327,7 @@ pcn_txintr(struct pcn_softc *sc)
 		for (j = txs->txs_firstdesc;; j = PCN_NEXTTX(j)) {
 			tmd = le32toh(sc->sc_txdescs[j].tmd1);
 			if (tmd & LE_T1_ERR) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				if (sc->sc_swstyle == LE_B20_SSTYLE_PCNETPCI3)
 					tmd2 = le32toh(sc->sc_txdescs[j].tmd0);
 				else
@@ -1385,21 +1358,21 @@ pcn_txintr(struct pcn_softc *sc)
 					    device_xname(sc->sc_dev));
 				}
 				if (tmd2 & LE_T2_LCOL)
-					ifp->if_collisions++;
+					if_statinc(ifp, if_collisions);
 				if (tmd2 & LE_T2_RTRY)
-					ifp->if_collisions += 16;
+					if_statadd(ifp, if_collisions, 16);
 				goto next_packet;
 			}
 			if (j == txs->txs_lastdesc)
 				break;
 		}
 		if (tmd1 & LE_T1_ONE)
-			ifp->if_collisions++;
+			if_statinc(ifp, if_collisions);
 		else if (tmd & LE_T1_MORE) {
 			/* Real number is unknown. */
-			ifp->if_collisions += 2;
+			if_statadd(ifp, if_collisions, 2);
 		}
-		ifp->if_opackets++;
+		if_statinc(ifp, if_opackets);
  next_packet:
 		sc->sc_txfree += txs->txs_dmamap->dm_nsegs;
 		bus_dmamap_sync(sc->sc_dmat, txs->txs_dmamap,
@@ -1437,7 +1410,8 @@ pcn_rxintr(struct pcn_softc *sc)
 	for (i = sc->sc_rxptr;; i = PCN_NEXTRX(i)) {
 		rxs = &sc->sc_rxsoft[i];
 
-		PCN_CDRXSYNC(sc, i, BUS_DMASYNC_POSTREAD|BUS_DMASYNC_POSTWRITE);
+		PCN_CDRXSYNC(sc, i,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 		rmd1 = le32toh(sc->sc_rxdescs[i].rmd1);
 
@@ -1450,14 +1424,14 @@ pcn_rxintr(struct pcn_softc *sc)
 		 * code the way it is in order to compress it into
 		 * one test in the common case (no error).
 		 */
-		if (__predict_false((rmd1 & (LE_R1_STP|LE_R1_ENP|LE_R1_ERR)) !=
-		    (LE_R1_STP|LE_R1_ENP))) {
+		if (__predict_false((rmd1 & (LE_R1_STP | LE_R1_ENP |LE_R1_ERR))
+		    != (LE_R1_STP | LE_R1_ENP))) {
 			/* Make sure the packet is in a single buffer. */
-			if ((rmd1 & (LE_R1_STP|LE_R1_ENP)) !=
-			    (LE_R1_STP|LE_R1_ENP)) {
+			if ((rmd1 & (LE_R1_STP | LE_R1_ENP)) !=
+			    (LE_R1_STP | LE_R1_ENP)) {
 				printf("%s: packet spilled into next buffer\n",
 				    device_xname(sc->sc_dev));
-				return (1);	/* pcn_intr() will re-init */
+				return 1;	/* pcn_intr() will re-init */
 			}
 
 			/*
@@ -1465,7 +1439,7 @@ pcn_rxintr(struct pcn_softc *sc)
 			 * buffer.
 			 */
 			if (rmd1 & LE_R1_ERR) {
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				/*
 				 * If we got an overflow error, chances
 				 * are there will be a CRC error.  In
@@ -1534,7 +1508,7 @@ pcn_rxintr(struct pcn_softc *sc)
 			m = rxs->rxs_mbuf;
 			if (pcn_add_rxbuf(sc, i) != 0) {
  dropit:
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				PCN_INIT_RXDESC(sc, i);
 				bus_dmamap_sync(sc->sc_dmat,
 				    rxs->rxs_dmamap, 0,
@@ -1547,17 +1521,13 @@ pcn_rxintr(struct pcn_softc *sc)
 		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
 
-		/* Pass this up to any BPF listeners. */
-		bpf_mtap(ifp, m);
-
 		/* Pass it on. */
 		if_percpuq_enqueue(ifp->if_percpuq, m);
-		ifp->if_ipackets++;
 	}
 
 	/* Update the receive pointer. */
 	sc->sc_rxptr = i;
-	return (0);
+	return 0;
 }
 
 /*
@@ -1575,7 +1545,7 @@ pcn_tick(void *arg)
 	mii_tick(&sc->sc_mii);
 	splx(s);
 
-	callout_reset(&sc->sc_tick_ch, hz, pcn_tick, sc);
+	callout_schedule(&sc->sc_tick_ch, hz);
 }
 
 /*
@@ -1649,7 +1619,7 @@ pcn_init(struct ifnet *ifp)
 	/* Initialize the transmit descriptor ring. */
 	memset(sc->sc_txdescs, 0, sizeof(sc->sc_txdescs));
 	PCN_CDTXSYNC(sc, 0, PCN_NTXDESC,
-	    BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
+	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 	sc->sc_txfree = PCN_NTXDESC;
 	sc->sc_txnext = 0;
 
@@ -1716,12 +1686,13 @@ pcn_init(struct ifnet *ifp)
 	sc->sc_initblock.init_rdra = htole32(PCN_CDRXADDR(sc, 0));
 	sc->sc_initblock.init_tdra = htole32(PCN_CDTXADDR(sc, 0));
 	sc->sc_initblock.init_mode = htole32(sc->sc_mode |
-	    ((ffs(PCN_NTXDESC) - 1) << 28) |
+	    (((uint32_t)ffs(PCN_NTXDESC) - 1) << 28) |
 	    ((ffs(PCN_NRXDESC) - 1) << 20));
 
 	/* Set the station address in the init block. */
 	sc->sc_initblock.init_padr[0] = htole32(enaddr[0] |
-	    (enaddr[1] << 8) | (enaddr[2] << 16) | (enaddr[3] << 24));
+	    (enaddr[1] << 8) | (enaddr[2] << 16) |
+	    ((uint32_t)enaddr[3] << 24));
 	sc->sc_initblock.init_padr[1] = htole32(enaddr[4] |
 	    (enaddr[5] << 8));
 
@@ -1729,14 +1700,14 @@ pcn_init(struct ifnet *ifp)
 	pcn_set_filter(sc);
 
 	/* Initialize CSR3. */
-	pcn_csr_write(sc, LE_CSR3, LE_C3_MISSM|LE_C3_IDONM|LE_C3_DXSUFLO);
+	pcn_csr_write(sc, LE_CSR3, LE_C3_MISSM | LE_C3_IDONM | LE_C3_DXSUFLO);
 
 	/* Initialize CSR4. */
-	pcn_csr_write(sc, LE_CSR4, LE_C4_DMAPLUS|LE_C4_APAD_XMT|
-	    LE_C4_MFCOM|LE_C4_RCVCCOM|LE_C4_TXSTRTM);
+	pcn_csr_write(sc, LE_CSR4, LE_C4_DMAPLUS | LE_C4_APAD_XMT |
+	    LE_C4_MFCOM | LE_C4_RCVCCOM | LE_C4_TXSTRTM);
 
 	/* Initialize CSR5. */
-	sc->sc_csr5 = LE_C5_LTINTEN|LE_C5_SINTE;
+	sc->sc_csr5 = LE_C5_LTINTEN | LE_C5_SINTE;
 	pcn_csr_write(sc, LE_CSR5, sc->sc_csr5);
 
 	/*
@@ -1772,11 +1743,11 @@ pcn_init(struct ifnet *ifp)
 		break;
 
 	case PARTID_Am79c970A:
-		reg |= LE_B18_BREADE|LE_B18_BWRITE;
+		reg |= LE_B18_BREADE | LE_B18_BWRITE;
 		break;
 
 	default:
-		reg |= LE_B18_BREADE|LE_B18_BWRITE|LE_B18_NOUFLO;
+		reg |= LE_B18_BREADE | LE_B18_BWRITE | LE_B18_NOUFLO;
 		break;
 	}
 	pcn_bcr_write(sc, LE_BCR18, reg);
@@ -1814,21 +1785,20 @@ pcn_init(struct ifnet *ifp)
 		goto out;
 
 	/* Enable interrupts and external activity (and ACK IDON). */
-	pcn_csr_write(sc, LE_CSR0, LE_C0_INEA|LE_C0_STRT|LE_C0_IDON);
+	pcn_csr_write(sc, LE_CSR0, LE_C0_INEA | LE_C0_STRT | LE_C0_IDON);
 
 	if (sc->sc_flags & PCN_F_HAS_MII) {
 		/* Start the one second MII clock. */
-		callout_reset(&sc->sc_tick_ch, hz, pcn_tick, sc);
+		callout_schedule(&sc->sc_tick_ch, hz);
 	}
 
 	/* ...all done! */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
  out:
 	if (error)
 		printf("%s: interface not running\n", device_xname(sc->sc_dev));
-	return (error);
+	return error;
 }
 
 /*
@@ -1886,7 +1856,7 @@ pcn_stop(struct ifnet *ifp, int disable)
 	}
 
 	/* Mark the interface as down and cancel the watchdog timer. */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 
 	if (disable)
@@ -1907,12 +1877,12 @@ pcn_add_rxbuf(struct pcn_softc *sc, int idx)
 
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL)
-		return (ENOBUFS);
+		return ENOBUFS;
 
 	MCLGET(m, M_DONTWAIT);
 	if ((m->m_flags & M_EXT) == 0) {
 		m_freem(m);
-		return (ENOBUFS);
+		return ENOBUFS;
 	}
 
 	if (rxs->rxs_mbuf != NULL)
@@ -1922,7 +1892,7 @@ pcn_add_rxbuf(struct pcn_softc *sc, int idx)
 
 	error = bus_dmamap_load(sc->sc_dmat, rxs->rxs_dmamap,
 	    m->m_ext.ext_buf, m->m_ext.ext_size, NULL,
-	    BUS_DMA_READ|BUS_DMA_NOWAIT);
+	    BUS_DMA_READ | BUS_DMA_NOWAIT);
 	if (error) {
 		printf("%s: can't load rx DMA map %d, error = %d\n",
 		    device_xname(sc->sc_dev), idx, error);
@@ -1934,7 +1904,7 @@ pcn_add_rxbuf(struct pcn_softc *sc, int idx)
 
 	PCN_INIT_RXDESC(sc, idx);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -1967,6 +1937,7 @@ pcn_set_filter(struct pcn_softc *sc)
 	    sc->sc_initblock.init_ladrf[2] =
 	    sc->sc_initblock.init_ladrf[3] = 0;
 
+	ETHER_LOCK(ec);
 	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi, ETHER_ADDR_LEN)) {
@@ -1978,6 +1949,7 @@ pcn_set_filter(struct pcn_softc *sc)
 			 * ranges is for IP multicast routing, for which the
 			 * range is big enough to require all bits set.)
 			 */
+			ETHER_UNLOCK(ec);
 			goto allmulti;
 		}
 
@@ -1992,6 +1964,7 @@ pcn_set_filter(struct pcn_softc *sc)
 
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 
 	ifp->if_flags &= ~IFF_ALLMULTI;
 	return;
@@ -2013,33 +1986,34 @@ static void
 pcn_79c970_mediainit(struct pcn_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
+	struct mii_data * const mii = &sc->sc_mii;
 	const char *sep = "";
 
-	sc->sc_mii.mii_ifp = ifp;
+	mii->mii_ifp = ifp;
 
-	ifmedia_init(&sc->sc_mii.mii_media, IFM_IMASK, pcn_79c970_mediachange,
+	ifmedia_init(&mii->mii_media, IFM_IMASK, pcn_79c970_mediachange,
 	    pcn_79c970_mediastatus);
 
 #define	ADD(str, m, d)							\
 do {									\
-	aprint_normal("%s%s", sep, str);					\
-	ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|(m), (d), NULL);	\
+	aprint_normal("%s%s", sep, str);				\
+	ifmedia_add(&mii->mii_media, IFM_ETHER | (m), (d), NULL);	\
 	sep = ", ";							\
 } while (/*CONSTCOND*/0)
 
 	aprint_normal("%s: ", device_xname(sc->sc_dev));
 	ADD("10base5", IFM_10_5, PORTSEL_AUI);
 	if (sc->sc_variant->pcv_chipid == PARTID_Am79c970A)
-		ADD("10base5-FDX", IFM_10_5|IFM_FDX, PORTSEL_AUI);
+		ADD("10base5-FDX", IFM_10_5 | IFM_FDX, PORTSEL_AUI);
 	ADD("10baseT", IFM_10_T, PORTSEL_10T);
 	if (sc->sc_variant->pcv_chipid == PARTID_Am79c970A)
-		ADD("10baseT-FDX", IFM_10_T|IFM_FDX, PORTSEL_10T);
+		ADD("10baseT-FDX", IFM_10_T | IFM_FDX, PORTSEL_10T);
 	ADD("auto", IFM_AUTO, 0);
 	if (sc->sc_variant->pcv_chipid == PARTID_Am79c970A)
-		ADD("auto-FDX", IFM_AUTO|IFM_FDX, 0);
+		ADD("auto-FDX", IFM_AUTO | IFM_FDX, 0);
 	aprint_normal("\n");
 
-	ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+	ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 }
 
 /*
@@ -2100,7 +2074,7 @@ pcn_79c970_mediachange(struct ifnet *ifp)
 	} else
 		pcn_bcr_write(sc, LE_BCR9, 0);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -2112,6 +2086,7 @@ static void
 pcn_79c971_mediainit(struct pcn_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
+	struct mii_data * const mii = &sc->sc_mii;
 
 	/* We have MII. */
 	sc->sc_flags |= PCN_F_HAS_MII;
@@ -2128,22 +2103,21 @@ pcn_79c971_mediainit(struct pcn_softc *sc)
 	 */
 
 	/* Initialize our media structures and probe the MII. */
-	sc->sc_mii.mii_ifp = ifp;
-	sc->sc_mii.mii_readreg = pcn_mii_readreg;
-	sc->sc_mii.mii_writereg = pcn_mii_writereg;
-	sc->sc_mii.mii_statchg = pcn_mii_statchg;
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = pcn_mii_readreg;
+	mii->mii_writereg = pcn_mii_writereg;
+	mii->mii_statchg = pcn_mii_statchg;
 
-	sc->sc_ethercom.ec_mii = &sc->sc_mii;
-	ifmedia_init(&sc->sc_mii.mii_media, 0, ether_mediachange,
-	    ether_mediastatus);
+	sc->sc_ethercom.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, 0, ether_mediachange, ether_mediastatus);
 
-	mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(sc->sc_dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE, 0, NULL);
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE);
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
 	} else
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 }
 
 /*
@@ -2152,17 +2126,16 @@ pcn_79c971_mediainit(struct pcn_softc *sc)
  *	Read a PHY register on the MII.
  */
 static int
-pcn_mii_readreg(device_t self, int phy, int reg)
+pcn_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 {
 	struct pcn_softc *sc = device_private(self);
-	uint32_t rv;
 
 	pcn_bcr_write(sc, LE_BCR33, reg | (phy << PHYAD_SHIFT));
-	rv = pcn_bcr_read(sc, LE_BCR34) & LE_B34_MIIMD;
-	if (rv == 0xffff)
-		return (0);
+	*val = pcn_bcr_read(sc, LE_BCR34) & LE_B34_MIIMD;
+	if (*val == 0xffff)
+		return -1;
 
-	return (rv);
+	return 0;
 }
 
 /*
@@ -2170,13 +2143,15 @@ pcn_mii_readreg(device_t self, int phy, int reg)
  *
  *	Write a PHY register on the MII.
  */
-static void
-pcn_mii_writereg(device_t self, int phy, int reg, int val)
+static int
+pcn_mii_writereg(device_t self, int phy, int reg, uint16_t val)
 {
 	struct pcn_softc *sc = device_private(self);
 
 	pcn_bcr_write(sc, LE_BCR33, reg | (phy << PHYAD_SHIFT));
 	pcn_bcr_write(sc, LE_BCR34, val);
+
+	return 0;
 }
 
 /*

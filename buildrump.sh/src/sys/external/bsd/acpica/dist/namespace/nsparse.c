@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -47,10 +47,134 @@
 #include "acparser.h"
 #include "acdispat.h"
 #include "actables.h"
+#include "acinterp.h"
 
 
 #define _COMPONENT          ACPI_NAMESPACE
         ACPI_MODULE_NAME    ("nsparse")
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    NsExecuteTable
+ *
+ * PARAMETERS:  TableDesc       - An ACPI table descriptor for table to parse
+ *              StartNode       - Where to enter the table into the namespace
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Load ACPI/AML table by executing the entire table as a single
+ *              large control method.
+ *
+ * NOTE: The point of this is to execute any module-level code in-place
+ * as the table is parsed. Some AML code depends on this behavior.
+ *
+ * It is a run-time option at this time, but will eventually become
+ * the default.
+ *
+ * Note: This causes the table to only have a single-pass parse.
+ * However, this is compatible with other ACPI implementations.
+ *
+ ******************************************************************************/
+
+ACPI_STATUS
+AcpiNsExecuteTable (
+    UINT32                  TableIndex,
+    ACPI_NAMESPACE_NODE     *StartNode)
+{
+    ACPI_STATUS             Status;
+    ACPI_TABLE_HEADER       *Table;
+    ACPI_OWNER_ID           OwnerId;
+    ACPI_EVALUATE_INFO      *Info = NULL;
+    UINT32                  AmlLength;
+    UINT8                   *AmlStart;
+    ACPI_OPERAND_OBJECT     *MethodObj = NULL;
+
+
+    ACPI_FUNCTION_TRACE (NsExecuteTable);
+
+
+    Status = AcpiGetTableByIndex (TableIndex, &Table);
+    if (ACPI_FAILURE (Status))
+    {
+        return_ACPI_STATUS (Status);
+    }
+
+    /* Table must consist of at least a complete header */
+
+    if (Table->Length < sizeof (ACPI_TABLE_HEADER))
+    {
+        return_ACPI_STATUS (AE_BAD_HEADER);
+    }
+
+    AmlStart = (UINT8 *) Table + sizeof (ACPI_TABLE_HEADER);
+    AmlLength = Table->Length - sizeof (ACPI_TABLE_HEADER);
+
+    Status = AcpiTbGetOwnerId (TableIndex, &OwnerId);
+    if (ACPI_FAILURE (Status))
+    {
+        return_ACPI_STATUS (Status);
+    }
+
+    /* Create, initialize, and link a new temporary method object */
+
+    MethodObj = AcpiUtCreateInternalObject (ACPI_TYPE_METHOD);
+    if (!MethodObj)
+    {
+        return_ACPI_STATUS (AE_NO_MEMORY);
+    }
+
+    /* Allocate the evaluation information block */
+
+    Info = ACPI_ALLOCATE_ZEROED (sizeof (ACPI_EVALUATE_INFO));
+    if (!Info)
+    {
+        Status = AE_NO_MEMORY;
+        goto Cleanup;
+    }
+
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_PARSE,
+        "%s: Create table pseudo-method for [%4.4s] @%p, method %p\n",
+        ACPI_GET_FUNCTION_NAME, Table->Signature, Table, MethodObj));
+
+    MethodObj->Method.AmlStart = AmlStart;
+    MethodObj->Method.AmlLength = AmlLength;
+    MethodObj->Method.OwnerId = OwnerId;
+    MethodObj->Method.InfoFlags |= ACPI_METHOD_MODULE_LEVEL;
+
+    Info->PassNumber = ACPI_IMODE_EXECUTE;
+    Info->Node = StartNode;
+    Info->ObjDesc = MethodObj;
+    Info->NodeFlags = Info->Node->Flags;
+    Info->FullPathname = AcpiNsGetNormalizedPathname (Info->Node, TRUE);
+    if (!Info->FullPathname)
+    {
+        Status = AE_NO_MEMORY;
+        goto Cleanup;
+    }
+
+    /* Optional object evaluation log */
+
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_EVALUATION,
+        "%-26s:  (Definition Block level)\n", "Module-level evaluation"));
+
+    Status = AcpiPsExecuteTable (Info);
+
+    /* Optional object evaluation log */
+
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_EVALUATION,
+        "%-26s:  (Definition Block level)\n", "Module-level complete"));
+
+Cleanup:
+    if (Info)
+    {
+        ACPI_FREE (Info->FullPathname);
+        Info->FullPathname = NULL;
+    }
+    ACPI_FREE (Info);
+    AcpiUtRemoveReference (MethodObj);
+    return_ACPI_STATUS (Status);
+}
 
 
 /*******************************************************************************
@@ -133,7 +257,7 @@ AcpiNsOneCompleteParse (
 
     /* Found OSDT table, enable the namespace override feature */
 
-    if (ACPI_COMPARE_NAME(Table->Signature, ACPI_SIG_OSDT) &&
+    if (ACPI_COMPARE_NAMESEG (Table->Signature, ACPI_SIG_OSDT) &&
         PassNumber == ACPI_IMODE_LOAD_PASS1)
     {
         WalkState->NamespaceOverride = TRUE;
@@ -156,7 +280,9 @@ AcpiNsOneCompleteParse (
 
     ACPI_DEBUG_PRINT ((ACPI_DB_PARSE,
         "*PARSE* pass %u parse\n", PassNumber));
+    AcpiExEnterInterpreter ();
     Status = AcpiPsParseAml (WalkState);
+    AcpiExExitInterpreter ();
 
 Cleanup:
     AcpiPsDeleteParseTree (ParseRoot);
@@ -189,40 +315,17 @@ AcpiNsParseTable (
 
 
     /*
-     * AML Parse, pass 1
+     * Executes the AML table as one large control method.
+     * The point of this is to execute any module-level code in-place
+     * as the table is parsed. Some AML code depends on this behavior.
      *
-     * In this pass, we load most of the namespace. Control methods
-     * are not parsed until later. A parse tree is not created. Instead,
-     * each Parser Op subtree is deleted when it is finished. This saves
-     * a great deal of memory, and allows a small cache of parse objects
-     * to service the entire parse. The second pass of the parse then
-     * performs another complete parse of the AML.
+     * Note: This causes the table to only have a single-pass parse.
+     * However, this is compatible with other ACPI implementations.
      */
-    ACPI_DEBUG_PRINT ((ACPI_DB_PARSE, "**** Start pass 1\n"));
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_PARSE,
+        "%s: **** Start table execution pass\n", ACPI_GET_FUNCTION_NAME));
 
-    Status = AcpiNsOneCompleteParse (ACPI_IMODE_LOAD_PASS1,
-        TableIndex, StartNode);
-    if (ACPI_FAILURE (Status))
-    {
-        return_ACPI_STATUS (Status);
-    }
-
-    /*
-     * AML Parse, pass 2
-     *
-     * In this pass, we resolve forward references and other things
-     * that could not be completed during the first pass.
-     * Another complete parse of the AML is performed, but the
-     * overhead of this is compensated for by the fact that the
-     * parse objects are all cached.
-     */
-    ACPI_DEBUG_PRINT ((ACPI_DB_PARSE, "**** Start pass 2\n"));
-    Status = AcpiNsOneCompleteParse (ACPI_IMODE_LOAD_PASS2,
-        TableIndex, StartNode);
-    if (ACPI_FAILURE (Status))
-    {
-        return_ACPI_STATUS (Status);
-    }
+    Status = AcpiNsExecuteTable (TableIndex, StartNode);
 
     return_ACPI_STATUS (Status);
 }

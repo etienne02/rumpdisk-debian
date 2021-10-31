@@ -1,4 +1,4 @@
-/*	$NetBSD: ubsa_common.c,v 1.10 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: ubsa_common.c,v 1.15 2021/06/13 09:29:38 mlelstv Exp $	*/
 /*-
  * Copyright (c) 2002, Alexander Kabaev <kan.FreeBSD.org>.
  * All rights reserved.
@@ -54,7 +54,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ubsa_common.c,v 1.10 2016/04/23 10:15:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ubsa_common.c,v 1.15 2021/06/13 09:29:38 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -182,15 +182,20 @@ ubsa_break(struct ubsa_softc *sc, int portno, int onoff)
 {
 	DPRINTF(("ubsa_rts: onoff = %d\n", onoff));
 
+	if (sc->sc_dying) 
+		return;
+
 	ubsa_request(sc, portno, UBSA_SET_BREAK, onoff ? 1 : 0);
 }
 
 void
 ubsa_set(void *addr, int portno, int reg, int onoff)
 {
-	struct ubsa_softc *sc;
+	struct ubsa_softc *sc = addr;
 
-	sc = addr;
+	if (sc->sc_dying)
+		return;
+
 	switch (reg) {
 	case UCOM_SET_DTR:
 		if (sc->sc_quadumts)
@@ -257,7 +262,7 @@ ubsa_parity(struct ubsa_softc *sc, int portno, tcflag_t cflag)
 {
 	int value;
 
-	DPRINTF(("ubsa_parity: cflag = 0x%x\n", cflag));
+	DPRINTF(("ubsa_parity: cflag = %#x\n", cflag));
 
 	if (cflag & PARENB)
 		value = (cflag & PARODD) ? UBSA_PARITY_ODD : UBSA_PARITY_EVEN;
@@ -272,7 +277,7 @@ ubsa_databits(struct ubsa_softc *sc, int portno, tcflag_t cflag)
 {
 	int value;
 
-	DPRINTF(("ubsa_databits: cflag = 0x%x\n", cflag));
+	DPRINTF(("ubsa_databits: cflag = %#x\n", cflag));
 
 	switch (cflag & CSIZE) {
 	case CS5: value = 0; break;
@@ -294,7 +299,7 @@ ubsa_stopbits(struct ubsa_softc *sc, int portno, tcflag_t cflag)
 {
 	int value;
 
-	DPRINTF(("ubsa_stopbits: cflag = 0x%x\n", cflag));
+	DPRINTF(("ubsa_stopbits: cflag = %#x\n", cflag));
 
 	value = (cflag & CSTOPB) ? 1 : 0;
 
@@ -306,13 +311,15 @@ ubsa_flow(struct ubsa_softc *sc, int portno, tcflag_t cflag, tcflag_t iflag)
 {
 	int value;
 
-	DPRINTF(("ubsa_flow: cflag = 0x%x, iflag = 0x%x\n", cflag, iflag));
+	DPRINTF(("ubsa_flow: cflag = %#x, iflag = %#x\n", cflag, iflag));
 
 	value = 0;
 	if (cflag & CRTSCTS)
 		value |= UBSA_FLOW_OCTS | UBSA_FLOW_IRTS;
-	if (iflag & (IXON|IXOFF))
-		value |= UBSA_FLOW_OXON | UBSA_FLOW_IXON;
+	if (iflag & IXOFF)
+		value |= UBSA_FLOW_OXON;
+	if (iflag & IXON)
+		value |= UBSA_FLOW_IXON;
 
 	ubsa_request(sc, portno, UBSA_SET_FLOW_CTRL, value);
 }
@@ -321,6 +328,9 @@ int
 ubsa_param(void *addr, int portno, struct termios *ti)
 {
 	struct ubsa_softc *sc = addr;
+
+	if (sc->sc_dying)
+		return EIO;
 
 	DPRINTF(("ubsa_param: sc = %p\n", sc));
 
@@ -342,7 +352,7 @@ ubsa_open(void *addr, int portno)
 	int err;
 
 	if (sc->sc_dying)
-		return ENXIO;
+		return EIO;
 
 	if (sc->sc_intr_number != -1 && sc->sc_intr_pipe == NULL) {
 		sc->sc_intr_buf = kmem_alloc(sc->sc_isize, KM_SLEEP);
@@ -369,30 +379,31 @@ ubsa_open(void *addr, int portno)
 }
 
 void
+ubsa_close_pipe(struct ubsa_softc *sc)
+{
+
+	if (sc->sc_intr_pipe != NULL) {
+		usbd_abort_pipe(sc->sc_intr_pipe);
+		usbd_close_pipe(sc->sc_intr_pipe);
+		sc->sc_intr_pipe = NULL;
+	}
+	if (sc->sc_intr_buf) {
+		kmem_free(sc->sc_intr_buf, sc->sc_isize);
+		sc->sc_intr_buf = NULL;
+	}
+}
+
+void
 ubsa_close(void *addr, int portno)
 {
 	struct ubsa_softc *sc = addr;
-	int err;
+
+	DPRINTF(("ubsa_close: close\n"));
 
 	if (sc->sc_dying)
 		return;
 
-	DPRINTF(("ubsa_close: close\n"));
-
-	if (sc->sc_intr_pipe != NULL) {
-		err = usbd_abort_pipe(sc->sc_intr_pipe);
-		if (err)
-			printf("%s: abort interrupt pipe failed: %s\n",
-			    device_xname(sc->sc_dev),
-			    usbd_errstr(err));
-		err = usbd_close_pipe(sc->sc_intr_pipe);
-		if (err)
-			printf("%s: close interrupt pipe failed: %s\n",
-			    device_xname(sc->sc_dev),
-			    usbd_errstr(err));
-		kmem_free(sc->sc_intr_buf, sc->sc_isize);
-		sc->sc_intr_pipe = NULL;
-	}
+	ubsa_close_pipe(sc);
 }
 
 void
@@ -436,9 +447,7 @@ ubsa_get_status(void *addr, int portno, u_char *lsr, u_char *msr)
 
 	DPRINTF(("ubsa_get_status\n"));
 
-	if (lsr != NULL)
-		*lsr = sc->sc_lsr;
-	if (msr != NULL)
-		*msr = sc->sc_msr;
+	*lsr = sc->sc_lsr;
+	*msr = sc->sc_msr;
 }
 

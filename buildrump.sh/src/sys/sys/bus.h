@@ -1,4 +1,4 @@
-/*	$NetBSD: bus.h,v 1.11 2012/05/07 18:16:38 tsutsui Exp $	*/
+/*	$NetBSD: bus.h,v 1.13 2020/03/08 02:42:00 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -42,13 +42,13 @@ struct bus_space_reservation {
 
 typedef struct bus_space_reservation bus_space_reservation_t;
 
-static inline bus_size_t
+static __inline bus_size_t
 bus_space_reservation_size(bus_space_reservation_t *bsr)
 {
 	return bsr->_bsr_size;
 }
 
-static inline bus_space_reservation_t *
+static __inline bus_space_reservation_t *
 bus_space_reservation_init(bus_space_reservation_t *bsr,
     bus_addr_t addr, bus_size_t size)
 {
@@ -57,7 +57,7 @@ bus_space_reservation_init(bus_space_reservation_t *bsr,
 	return bsr;
 }
 
-static inline bus_addr_t
+static __inline bus_addr_t
 bus_space_reservation_addr(bus_space_reservation_t *bsr)
 {
 	return bsr->_bsr_start;
@@ -244,5 +244,13 @@ typedef struct bus_dmamap {
 	bus_dma_segment_t *dm_segs;
 } *bus_dmamap_t;
 #endif /* __HAVE_NO_BUS_DMA */
+
+/*
+ * Convenience macros to correctly extract the upper and lower
+ * 32 bits of a bus_addr_t (which may be a 32-bit or 64-bit
+ * value).
+ */
+#define	BUS_ADDR_HI32(a)	((uint32_t) __SHIFTOUT(a, __BITS(32,63)))
+#define	BUS_ADDR_LO32(a)	((uint32_t) __SHIFTOUT(a, __BITS(0,31)))
 
 #endif	/* _SYS_BUS_H_ */

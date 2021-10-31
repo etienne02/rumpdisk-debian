@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_devsw.c,v 1.34 2016/02/01 05:05:43 riz Exp $	*/
+/*	$NetBSD: subr_devsw.c,v 1.38 2017/11/07 18:35:57 christos Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2007, 2008 The NetBSD Foundation, Inc.
@@ -69,7 +69,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_devsw.c,v 1.34 2016/02/01 05:05:43 riz Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_devsw.c,v 1.38 2017/11/07 18:35:57 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_dtrace.h"
@@ -128,7 +128,6 @@ devsw_attach(const char *devname,
 	struct devsw_conv *conv;
 	char *name;
 	int error, i;
-	size_t len;
 
 	if (devname == NULL || cdev == NULL)
 		return (EINVAL);
@@ -204,14 +203,12 @@ devsw_attach(const char *devname,
 		max_devsw_convs = new_convs;
 	}
 
-	len = strlen(devname) + 1;
-	name = kmem_alloc(len, KM_NOSLEEP);
+	name = kmem_strdupsize(devname, NULL, KM_NOSLEEP);
 	if (name == NULL) {
 		devsw_detach_locked(bdev, cdev);
 		error = ENOMEM;
 		goto fail;
 	}
-	strlcpy(name, devname, len);
 
 	devsw_conv[i].d_name = name;
 	devsw_conv[i].d_bmajor = *bmajor;
@@ -252,7 +249,7 @@ bdevsw_attach(const struct bdevsw *devsw, devmajor_t *devmajor)
 	}
 
 	if (*devmajor >= MAXDEVSW) {
-		printf("bdevsw_attach: block majors exhausted");
+		printf("%s: block majors exhausted", __func__);
 		return (ENOMEM);
 	}
 
@@ -299,7 +296,7 @@ cdevsw_attach(const struct cdevsw *devsw, devmajor_t *devmajor)
 	}
 
 	if (*devmajor >= MAXDEVSW) {
-		printf("cdevsw_attach: character majors exhausted");
+		printf("%s: character majors exhausted", __func__);
 		return (ENOMEM);
 	}
 
@@ -551,7 +548,7 @@ devsw_name2blk(const char *name, char *devname, size_t devnamelen)
 		if (devname != NULL) {
 #ifdef DEVSW_DEBUG
 			if (strlen(conv->d_name) >= devnamelen)
-				printf("devsw_name2blk: too short buffer");
+				printf("%s: too short buffer", __func__);
 #endif /* DEVSW_DEBUG */
 			strncpy(devname, conv->d_name, devnamelen);
 			devname[devnamelen - 1] = '\0';
@@ -599,7 +596,7 @@ devsw_name2chr(const char *name, char *devname, size_t devnamelen)
 		if (devname != NULL) {
 #ifdef DEVSW_DEBUG
 			if (strlen(conv->d_name) >= devnamelen)
-				printf("devsw_name2chr: too short buffer");
+				printf("%s: too short buffer", __func__);
 #endif /* DEVSW_DEBUG */
 			strncpy(devname, conv->d_name, devnamelen);
 			devname[devnamelen - 1] = '\0';
@@ -793,6 +790,16 @@ bdev_dump(dev_t dev, daddr_t addr, void *data, size_t sz)
 	/* DEV_UNLOCK(d); */
 
 	return rv;
+}
+
+int
+bdev_flags(dev_t dev)
+{
+	const struct bdevsw *d;
+
+	if ((d = bdevsw_lookup(dev)) == NULL)
+		return 0;
+	return d->d_flag & ~D_TYPEMASK;
 }
 
 int
@@ -1026,6 +1033,16 @@ cdev_discard(dev_t dev, off_t pos, off_t len)
 }
 
 int
+cdev_flags(dev_t dev)
+{
+	const struct cdevsw *d;
+
+	if ((d = cdevsw_lookup(dev)) == NULL)
+		return 0;
+	return d->d_flag & ~D_TYPEMASK;
+}
+
+int
 cdev_type(dev_t dev)
 {
 	const struct cdevsw *d;
@@ -1033,4 +1050,16 @@ cdev_type(dev_t dev)
 	if ((d = cdevsw_lookup(dev)) == NULL)
 		return D_OTHER;
 	return d->d_flag & D_TYPEMASK;
+}
+
+/*
+ * nommap(dev, off, prot)
+ *
+ *	mmap routine that always fails, for non-mmappable devices.
+ */
+paddr_t
+nommap(dev_t dev, off_t off, int prot)
+{
+
+	return (paddr_t)-1;
 }

@@ -1,7 +1,7 @@
-/* $NetBSD: cpu.h,v 1.1 2014/08/10 05:47:38 matt Exp $ */
+/* $NetBSD: cpu.h,v 1.38 2021/08/14 17:51:18 ryo Exp $ */
 
 /*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
+ * Copyright (c) 2014, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -32,90 +32,197 @@
 #ifndef _AARCH64_CPU_H_
 #define _AARCH64_CPU_H_
 
+#include <arm/cpu.h>
+
 #ifdef __aarch64__
 
+#ifdef _KERNEL_OPT
+#include "opt_gprof.h"
+#include "opt_multiprocessor.h"
+#endif
+
+#include <sys/param.h>
+
 #if defined(_KERNEL) || defined(_KMEMUSER)
+#include <sys/evcnt.h>
+
+#include <aarch64/armreg.h>
+#include <aarch64/frame.h>
+
 struct clockframe {
-	uintptr_t cf_pc;
-	uint32_t cf_psr;
-	int cf_intr_depth;
+	struct trapframe cf_tf;
 };
 
-#define CLKF_USERMODE(cf)	(((cf)->cf_psr & 0x0f) == 0)
-#define CLKF_PC(cf)		((cf)->cf_pc)
-#define CLKF_INTR(cf)		((cf)->cf_intr_depth > 0)
+/* (spsr & 15) == SPSR_M_EL0T(64bit,0) or USER(32bit,0) */
+#define CLKF_USERMODE(cf)	((((cf)->cf_tf.tf_spsr) & 0x0f) == 0)
+#define CLKF_PC(cf)		((cf)->cf_tf.tf_pc)
+#define CLKF_INTR(cf)		((void)(cf), curcpu()->ci_intr_depth > 1)
+
+/*
+ * LWP_PC: Find out the program counter for the given lwp.
+ */
+#define LWP_PC(l)		((l)->l_md.md_utf->tf_pc)
 
 #include <sys/cpu_data.h>
 #include <sys/device_if.h>
 #include <sys/intr.h>
 
+struct aarch64_cpufuncs {
+	void (*cf_set_ttbr0)(uint64_t);
+	void (*cf_icache_sync_range)(vaddr_t, vsize_t);
+};
+
 struct cpu_info {
 	struct cpu_data ci_data;
 	device_t ci_dev;
 	cpuid_t ci_cpuid;
-	cpuid_t ci_gicid;		// used for IPIs
-	struct lwp *ci_curlwp;
-	struct lwp *ci_softlwps[SOFTINT_COUNT];
+
+	/*
+	 * the following are in their own cache line, as they are stored to
+	 * regularly by remote CPUs; when they were mixed with other fields
+	 * we observed frequent cache misses.
+	 */
+	int ci_want_resched __aligned(COHERENCY_UNIT);
+	/* XXX pending IPIs? */
+
+	/*
+	 * this is stored frequently, and is fetched by remote CPUs.
+	 */
+	struct lwp *ci_curlwp __aligned(COHERENCY_UNIT);
+	struct lwp *ci_onproc;
+
+	/*
+	 * largely CPU-private.
+	 */
+	struct lwp *ci_softlwps[SOFTINT_COUNT] __aligned(COHERENCY_UNIT);
 
 	uint64_t ci_lastintr;
 
 	int ci_mtx_oldspl;
 	int ci_mtx_count;
 
-	int ci_want_resched;
-	int ci_cpl;
-	u_int ci_softints;
-	volatile u_int ci_astpending;
+	int ci_cpl;		/* current processor level (spl) */
+	int ci_hwpl;		/* current hardware priority */
+	volatile u_int ci_softints;
 	volatile u_int ci_intr_depth;
-};
+	volatile uint32_t ci_blocked_pics;
+	volatile uint32_t ci_pending_pics;
+	volatile uint32_t ci_pending_ipls;
 
-static inline struct cpu_info *
-curcpu(void)
+	int ci_kfpu_spl;
+
+	/* event counters */
+	struct evcnt ci_vfp_use;
+	struct evcnt ci_vfp_reuse;
+	struct evcnt ci_vfp_save;
+	struct evcnt ci_vfp_release;
+	struct evcnt ci_uct_trap;
+	struct evcnt ci_intr_preempt;
+
+	/* FDT or similar supplied "cpu capacity" */
+	uint32_t ci_capacity_dmips_mhz;
+
+	/* interrupt controller */
+	u_int ci_gic_redist;	/* GICv3 redistributor index */
+	uint64_t ci_gic_sgir;	/* GICv3 SGIR target */
+
+	/* ACPI */
+	uint32_t ci_acpiid;	/* ACPI Processor Unique ID */
+
+	struct aarch64_sysctl_cpu_id ci_id;
+
+	struct aarch64_cache_info *ci_cacheinfo;
+	struct aarch64_cpufuncs ci_cpufuncs;
+
+#if defined(GPROF) && defined(MULTIPROCESSOR)
+	struct gmonparam *ci_gmon;	/* MI per-cpu GPROF */
+#endif
+} __aligned(COHERENCY_UNIT);
+
+#ifdef _KERNEL
+static inline struct lwp * __attribute__ ((const))
+aarch64_curlwp(void)
 {
-	struct cpu_info *ci;
-	__asm __volatile("mrs %0, tpidr_el1" : "=r"(ci));
-	return ci;
+	struct lwp *l;
+	__asm("mrs %0, tpidr_el1" : "=r"(l));
+	return l;
 }
 
-#define curlwp		(curcpu()->ci_curlwp)
+/* forward declaration; defined in sys/lwp.h. */
+static __inline struct cpu_info *lwp_getcpu(struct lwp *);
 
-static inline cpuid_t
-cpu_number(void)
+#define	curcpu()		(lwp_getcpu(aarch64_curlwp()))
+#define	setsoftast(ci)		(cpu_signotify((ci)->ci_onproc))
+#undef curlwp
+#define	curlwp			(aarch64_curlwp())
+
+static inline int
+cpu_maxproc(void)
 {
-	return curcpu()->ci_gicid;
+	/*
+	 * the pmap uses PID for ASID.
+	 */
+	switch (__SHIFTOUT(reg_id_aa64mmfr0_el1_read(), ID_AA64MMFR0_EL1_ASIDBITS)) {
+	case ID_AA64MMFR0_EL1_ASIDBITS_8BIT:
+		return (1U << 8) - 1;
+	case ID_AA64MMFR0_EL1_ASIDBITS_16BIT:
+		return (1U << 16) - 1;
+	default:
+		return 0;
+	}
 }
 
-void	cpu_set_curpri(int);
-void	cpu_proc_fork(struct proc *, struct proc *);
-void	cpu_signotify(struct lwp *);
+void	cpu_signotify(struct lwp *l);
 void	cpu_need_proftick(struct lwp *l);
-void	cpu_boot_secondary_processors(void);
 
-#define CPU_INFO_ITERATOR	cpuid_t
-#define CPU_INFO_FOREACH(cii, ci) \
-	(cii) = 0; ((ci) = cpu_infos[cii]) != NULL; (cii)++
+void	cpu_hatch(struct cpu_info *);
+
+extern struct cpu_info *cpu_info[];
+extern struct cpu_info cpu_info_store[];
+
+#define CPU_INFO_ITERATOR	int
+#if defined(MULTIPROCESSOR) || defined(_MODULE)
+#define cpu_number()		(curcpu()->ci_index)
+#define CPU_IS_PRIMARY(ci)	((ci)->ci_index == 0)
+#define CPU_INFO_FOREACH(cii, ci)					\
+	cii = 0, ci = cpu_info[0];					\
+	cii < (ncpu ? ncpu : 1) && (ci = cpu_info[cii]) != NULL;	\
+	cii++
+#else /* MULTIPROCESSOR */
+#define cpu_number()		0
+#define CPU_IS_PRIMARY(ci)	true
+#define CPU_INFO_FOREACH(cii, ci)					\
+	cii = 0, __USE(cii), ci = curcpu(); ci != NULL; ci = NULL
+#endif /* MULTIPROCESSOR */
+
+#define	LWP0_CPU_INFO	(&cpu_info_store[0])
+
+#define	__HAVE_CPU_DOSOFTINTS_CI
+
+static inline void
+cpu_dosoftints_ci(struct cpu_info *ci)
+{
+#if defined(__HAVE_FAST_SOFTINTS) && !defined(__HAVE_PIC_FAST_SOFTINTS)
+	void dosoftints(void);
+
+	if (ci->ci_intr_depth == 0 && (ci->ci_softints >> ci->ci_cpl) > 0) {
+		dosoftints();
+	}
+#endif
+}
 
 static inline void
 cpu_dosoftints(void)
 {
-	extern void dosoftints(void);
-        struct cpu_info * const ci = curcpu();
-        if (ci->ci_intr_depth == 0
-	    && (ci->ci_data.cpu_softints >> ci->ci_cpl) > 0)
-                dosoftints();
+#if defined(__HAVE_FAST_SOFTINTS) && !defined(__HAVE_PIC_FAST_SOFTINTS)
+	cpu_dosoftints_ci(curcpu());
+#endif
 }
 
-static inline bool
-cpu_intr_p(void)
-{
-	return curcpu()->ci_intr_depth > 0;
-}
+
+#endif /* _KERNEL */
 
 #endif /* _KERNEL || _KMEMUSER */
-
-#elif defined(__arm__)
-
-#include <arm/cpu.h>
 
 #endif
 

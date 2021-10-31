@@ -1,5 +1,9 @@
-#	$NetBSD: Makefile,v 1.3 2015/10/19 16:16:37 pooka Exp $
+#	$NetBSD: Makefile,v 1.6 2021/04/15 17:31:44 christos Exp $
 #
+
+NEED_ISYSTEM=	# Tell rump that we must use -isystem
+
+.include <bsd.init.mk>
 
 S!=             cd ${.PARSEDIR}/../../../../;pwd
 
@@ -7,8 +11,6 @@ S!=             cd ${.PARSEDIR}/../../../../;pwd
 
 LIB=	rumpkern_solaris
 COMMENT=Solaris compatibility layer (for ZFS)
-
-CPPFLAGS+=	-DASSERT=KASSERT
 
 .include <bsd.lib.mk>
 .include <bsd.klinks.mk>

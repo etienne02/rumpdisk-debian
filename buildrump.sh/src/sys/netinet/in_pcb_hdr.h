@@ -1,4 +1,4 @@
-/*	$NetBSD: in_pcb_hdr.h,v 1.11 2014/05/30 01:39:03 christos Exp $	*/
+/*	$NetBSD: in_pcb_hdr.h,v 1.15 2020/08/28 07:01:57 riastradh Exp $	*/
 
 /*
  * Copyright (C) 2003 WIDE Project.
@@ -63,9 +63,16 @@
 #ifndef _NETINET_IN_PCB_HDR_H_
 #define _NETINET_IN_PCB_HDR_H_
 
+#include <sys/types.h>
 #include <sys/queue.h>
 
+#include <netinet/in.h>
+
 struct inpcbpolicy;
+struct inpcbtable;
+struct mbuf;
+struct sockaddr;
+struct socket;
 
 /*
  * align it with inpcb and in6pcb!
@@ -84,10 +91,12 @@ struct inpcb_hdr {
 };
 
 #define	sotoinpcb_hdr(so)	((struct inpcb_hdr *)(so)->so_pcb)
+#define	inph_locked(inph)	(solocked((inph)->inph_socket))
 
 LIST_HEAD(inpcbhead, inpcb_hdr);
 
 struct vestigial_inpcb;
+struct in6_addr;
 
 /* Hooks for vestigial pcb entries.
  * If vestigial entries exist for a table (TCP only)
@@ -129,5 +138,8 @@ struct inpcbtable {
 #define	INP_ATTACHED		0
 #define	INP_BOUND		1
 #define	INP_CONNECTED		2
+
+typedef int (*pcb_overudp_cb_t)(struct mbuf **, int, struct socket *,
+    struct sockaddr *, void *);
 
 #endif /* !_NETINET_IN_PCB_HDR_H_ */

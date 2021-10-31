@@ -1,3 +1,5 @@
+/*	$NetBSD: via_dmablit.c,v 1.8 2020/02/14 14:34:59 maya Exp $	*/
+
 /* via_dmablit.c -- PCI DMA BitBlt support for the VIA Unichrome/Pro
  *
  * Copyright (C) 2005 Thomas Hellstrom, All Rights Reserved.
@@ -34,6 +36,9 @@
  * the same DMA mappings?
  */
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: via_dmablit.c,v 1.8 2020/02/14 14:34:59 maya Exp $");
+
 #include <drm/drmP.h>
 #include <drm/via_drm.h>
 #include "via_drv.h"
@@ -41,7 +46,6 @@
 
 #include <linux/pagemap.h>
 #include <linux/slab.h>
-#include <linux/timer.h>
 
 #define VIA_PGDN(x)	     (((unsigned long)(x)) & PAGE_MASK)
 #define VIA_PGOFF(x)	    (((unsigned long)(x)) & ~PAGE_MASK)
@@ -343,7 +347,7 @@ via_lock_all_dma_pages(struct drm_device *dev, drm_via_sg_info_t *vsg,
 /*
  * Allocate DMA capable memory for the blit descriptor chain, and an array that keeps track of the
  * pages we allocate. We don't want to use kmalloc for the descriptor chain because it may be
- * quite large for some blits, and pages don't need to be contingous.
+ * quite large for some blits, and pages don't need to be contiguous.
  */
 
 static int
@@ -509,7 +513,7 @@ via_dmablit_handler(struct drm_device *dev, int engine, int from_irq)
 
 		via_abort_dmablit(dev, engine);
 		blitq->aborting = 1;
-		blitq->end = jiffies + DRM_HZ;
+		blitq->end = jiffies + HZ;
 	}
 
 	if (!blitq->is_active) {
@@ -518,7 +522,7 @@ via_dmablit_handler(struct drm_device *dev, int engine, int from_irq)
 			blitq->is_active = 1;
 			blitq->cur = cur;
 			blitq->num_outstanding--;
-			blitq->end = jiffies + DRM_HZ;
+			blitq->end = jiffies + HZ;
 			if (!timer_pending(&blitq->poll_timer))
 				mod_timer(&blitq->poll_timer, jiffies + 1);
 		} else {
@@ -598,7 +602,7 @@ via_dmablit_sync(struct drm_device *dev, uint32_t handle, int engine)
 #ifdef __NetBSD__
 	spin_lock(&blitq->blit_lock);
 	if (via_dmablit_active(blitq, engine, handle, &queue)) {
-		DRM_SPIN_WAIT_ON(ret, queue, &blitq->blit_lock, 3*DRM_HZ,
+		DRM_SPIN_WAIT_ON(ret, queue, &blitq->blit_lock, 3*HZ,
 		    !via_dmablit_active(blitq, engine, handle, NULL));
 	}
 	spin_unlock(&blitq->blit_lock);
@@ -876,7 +880,7 @@ via_dmablit_grab_slot(drm_via_blitq_t *blitq, int engine)
 	while (blitq->num_free == 0) {
 #ifdef __NetBSD__
 		DRM_SPIN_WAIT_ON(ret, &blitq->busy_queue, &blitq->blit_lock,
-		    DRM_HZ,
+		    HZ,
 		    blitq->num_free > 0);
 		/* Map -EINTR to -EAGAIN.  */
 		if (ret == -EINTR)

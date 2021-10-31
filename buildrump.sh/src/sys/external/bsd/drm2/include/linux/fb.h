@@ -1,4 +1,4 @@
-/*	$NetBSD: fb.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: fb.h,v 1.4 2020/02/14 04:37:10 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,7 +32,13 @@
 #ifndef _LINUX_FB_H_
 #define _LINUX_FB_H_
 
+#include <linux/kgdb.h>
+#include <linux/notifier.h>
+
 #define	PICOS2KHZ(PICOS)	(1000000000ul / (PICOS))
 #define	KHZ2PICOS(KHZ)		(1000000000ul / (KHZ))
+
+#define	FBINFO_STATE_RUNNING	0
+#define	FBINFO_STATE_SUSPENDED	1
 
 #endif  /* _LINUX_FB_H_ */

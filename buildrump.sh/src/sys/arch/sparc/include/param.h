@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.70 2012/02/10 17:35:48 para Exp $ */
+/*	$NetBSD: param.h,v 1.74 2020/05/01 08:21:27 isaki Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -81,15 +81,8 @@ extern int nbpg, pgofset, pgshift;
 #define	KERNBASE	0xe8000000
 #endif
 #define KERNEND		0xfe000000	/* end of kernel virtual space */
-/* Arbitrarily only use 1/4 of the kernel address space for buffers. */
-#define VM_MAX_KERNEL_BUF	((KERNEND - KERNBASE)/4)
 #define PROM_LOADADDR	0x00004000	/* where the prom loads us */
 #define	KERNTEXTOFF	(KERNBASE+PROM_LOADADDR)/* start of kernel text */
-
-#define	DEV_BSIZE	512
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define	BLKDEV_IOSIZE	2048
-#define	MAXPHYS		(64 * 1024)
 
 #define	SSIZE		1		/* initial stack size in pages */
 #define	USPACE		8192
@@ -119,8 +112,12 @@ extern int nbpg, pgofset, pgshift;
 
 #if defined(_KERNEL) || defined(_STANDALONE)
 #ifndef _LOCORE
+
+#ifndef __HIDE_DELAY
 extern void	delay(unsigned int);
 #define	DELAY(n)	delay(n)
+#endif /* __HIDE_DELAY */
+
 #endif /* _LOCORE */
 
 /*
@@ -157,5 +154,8 @@ extern void	delay(unsigned int);
 #	define PGOFSET		pgofset
 #	define PGSHIFT		pgshift
 #endif
+
+/* Default audio blocksize in msec.  See sys/dev/audio/audio.c */
+#define	__AUDIO_BLK_MS (40)
 
 #endif /* _KERNEL || _STANDALONE */

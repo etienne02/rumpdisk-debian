@@ -1,4 +1,4 @@
-/*	$NetBSD: sbp.c,v 1.36 2014/02/25 18:30:09 pooka Exp $	*/
+/*	$NetBSD: sbp.c,v 1.41 2021/08/07 16:19:12 thorpej Exp $	*/
 /*-
  * Copyright (c) 2003 Hidetoshi Shimokawa
  * Copyright (c) 1998-2002 Katsushi Kobayashi and Hidetoshi Shimokawa
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sbp.c,v 1.36 2014/02/25 18:30:09 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sbp.c,v 1.41 2021/08/07 16:19:12 thorpej Exp $");
 
 
 #include <sys/param.h>
@@ -517,7 +517,8 @@ sbpattach(device_t parent, device_t self, void *aux)
 	sc_channel->chan_nluns = target->num_lun;	/* We set nluns 0 now */
 	sc_channel->chan_id = 1;
 
-	sc->sc_bus = config_found(sc->sc_fd.dev, sc_channel, scsiprint);
+	sc->sc_bus = config_found(sc->sc_fd.dev, sc_channel, scsiprint,
+	    CFARGS_NONE);
 	if (sc->sc_bus == NULL) {
 		aprint_error_dev(self, "attach failed\n");
 		return;
@@ -711,13 +712,7 @@ END_DEBUG
 	if (maxlun != target->num_lun) {
 		newluns = (struct sbp_dev **) realloc(target->luns,
 		    sizeof(struct sbp_dev *) * maxlun,
-		    M_SBP, M_NOWAIT | M_ZERO);
-
-		if (newluns == NULL) {
-			aprint_error_dev(sc->sc_fd.dev, "realloc failed\n");
-			newluns = target->luns;
-			maxlun = target->num_lun;
-		}
+		    M_SBP, M_WAITOK | M_ZERO);
 
 		/*
 		 * We must zero the extended region for the case
@@ -751,12 +746,7 @@ END_DEBUG
 		sdev = target->luns[lun];
 		if (sdev == NULL) {
 			sdev = malloc(sizeof(struct sbp_dev),
-			    M_SBP, M_NOWAIT | M_ZERO);
-			if (sdev == NULL) {
-				aprint_error_dev(sc->sc_fd.dev,
-				    "malloc failed\n");
-				goto next;
-			}
+			    M_SBP, M_WAITOK | M_ZERO);
 			target->luns[lun] = sdev;
 			sdev->lun_id = lun;
 			sdev->target = target;
@@ -1432,7 +1422,7 @@ END_DEBUG
 
 	if (new) {
 		xfer->recv.pay_len = 0;
-		xfer->send.spd = min(target->fwdev->speed, max_speed);
+		xfer->send.spd = uimin(target->fwdev->speed, max_speed);
 		xfer->fc = target->sbp->sc_fd.fc;
 	}
 
@@ -1989,7 +1979,7 @@ done0:
 	sfp = (struct fw_pkt *)xfer->send.buf;
 	sfp->mode.wres.dst = rfp->mode.wreqb.src;
 	xfer->dst = sfp->mode.wres.dst;
-	xfer->spd = min(sdev->target->fwdev->speed, max_speed);
+	xfer->spd = uimin(sdev->target->fwdev->speed, max_speed);
 	xfer->hand = sbp_loginres_callback;
 
 	sfp->mode.wres.tlrt = rfp->mode.wreqb.tlrt;
@@ -2052,7 +2042,6 @@ sbp_free_sdev(struct sbp_dev *sdev)
 		bus_dmamap_destroy(sc->sc_dmat, sdev->ocb[i].dmamap);
 	fwdma_free(sdev->dma.dma_tag, sdev->dma.dma_map, sdev->dma.v_addr);
 	free(sdev, M_SBP);
-	sdev = NULL;
 }
 
 static void
@@ -2293,7 +2282,7 @@ END_DEBUG
 	ocb->orb[1] = 0;
 	ocb->orb[2] = htonl(((sc->sc_fd.fc->nodeid | FWLOCALBUS) << 16));
 	ocb->orb[3] = htonl(ocb->bus_addr + IND_PTR_OFFSET);
-	speed = min(target->fwdev->speed, max_speed);
+	speed = uimin(target->fwdev->speed, max_speed);
 	ocb->orb[4] =
 	    htonl(ORB_NOTIFY | ORB_CMD_SPD(speed) | ORB_CMD_MAXP(speed + 7));
 	if ((xs->xs_control & (XS_CTL_DATA_IN | XS_CTL_DATA_OUT)) ==

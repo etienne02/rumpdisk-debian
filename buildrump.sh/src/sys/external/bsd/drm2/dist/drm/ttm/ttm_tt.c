@@ -1,3 +1,5 @@
+/*	$NetBSD: ttm_tt.c,v 1.12 2020/02/14 14:34:59 maya Exp $	*/
+
 /**************************************************************************
  *
  * Copyright (c) 2006-2009 VMware, Inc., Palo Alto, CA., USA
@@ -28,6 +30,9 @@
  * Authors: Thomas Hellstrom <thellstrom-at-vmware-dot-com>
  */
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: ttm_tt.c,v 1.12 2020/02/14 14:34:59 maya Exp $");
+
 #define pr_fmt(fmt) "[TTM] " fmt
 
 #include <linux/sched.h>
@@ -38,7 +43,6 @@
 #include <linux/swap.h>
 #include <linux/slab.h>
 #include <linux/export.h>
-#include <linux/printk.h>
 #include <drm/drm_cache.h>
 #include <drm/drm_mem_util.h>
 #include <drm/ttm/ttm_module.h>
@@ -57,10 +61,16 @@ static void ttm_tt_alloc_page_directory(struct ttm_tt *ttm)
 
 static void ttm_dma_tt_alloc_page_directory(struct ttm_dma_tt *ttm)
 {
-	ttm->ttm.pages = drm_calloc_large(ttm->ttm.num_pages, sizeof(void*));
-#ifndef __NetBSD__
-	ttm->dma_address = drm_calloc_large(ttm->ttm.num_pages,
-					    sizeof(*ttm->dma_address));
+#ifdef __NetBSD__		/* cpu/dma addrs handled by bus_dma */
+	ttm->ttm.pages = drm_calloc_large(ttm->ttm.num_pages,
+	    sizeof(*ttm->ttm.pages));
+#else
+	ttm->ttm.pages = drm_calloc_large(ttm->ttm.num_pages,
+					  sizeof(*ttm->ttm.pages) +
+					  sizeof(*ttm->dma_address) +
+					  sizeof(*ttm->cpu_address));
+	ttm->cpu_address = (void *) (ttm->ttm.pages + ttm->ttm.num_pages);
+	ttm->dma_address = (void *) (ttm->cpu_address + ttm->ttm.num_pages);
 #endif
 }
 
@@ -203,6 +213,9 @@ int ttm_tt_init(struct ttm_tt *ttm, struct ttm_bo_device *bdev,
 	ttm->dummy_read_page = dummy_read_page;
 	ttm->state = tt_unpopulated;
 #ifdef __NetBSD__
+	WARN(size == 0, "zero-size allocation in %s, please file a NetBSD PR",
+	    __func__);	/* paranoia -- can't prove in five minutes */
+	size = MAX(size, 1);
 	ttm->swap_storage = uao_create(roundup2(size, PAGE_SIZE), 0);
 	uao_set_pgfl(ttm->swap_storage, bus_dmamem_pgfl(bdev->dmat));
 #else
@@ -245,6 +258,9 @@ int ttm_dma_tt_init(struct ttm_dma_tt *ttm_dma, struct ttm_bo_device *bdev,
 	ttm->dummy_read_page = dummy_read_page;
 	ttm->state = tt_unpopulated;
 #ifdef __NetBSD__
+	WARN(size == 0, "zero-size allocation in %s, please file a NetBSD PR",
+	    __func__);	/* paranoia -- can't prove in five minutes */
+	size = MAX(size, 1);
 	ttm->swap_storage = uao_create(roundup2(size, PAGE_SIZE), 0);
 	uao_set_pgfl(ttm->swap_storage, bus_dmamem_pgfl(bdev->dmat));
 #else
@@ -278,12 +294,13 @@ fail2: __unused
 fail1:	kmem_free(ttm_dma->dma_segs, (ttm->num_pages *
 		sizeof(ttm_dma->dma_segs[0])));
 fail0:	KASSERT(error);
-	ttm_tt_destroy(ttm);
+	drm_free_large(ttm->pages);
+	uao_detach(ttm->swap_storage);
 	/* XXX errno NetBSD->Linux */
 	return -error;
     }
 #else
-	if (!ttm->pages || !ttm_dma->dma_address) {
+	if (!ttm->pages) {
 		ttm_tt_destroy(ttm);
 		pr_err("Failed allocating page table\n");
 		return -ENOMEM;
@@ -308,7 +325,7 @@ void ttm_dma_tt_fini(struct ttm_dma_tt *ttm_dma)
 	kmem_free(ttm_dma->dma_segs, (ttm->num_pages *
 		sizeof(ttm_dma->dma_segs[0])));
 #else
-	drm_free_large(ttm_dma->dma_address);
+	ttm_dma->cpu_address = NULL;
 	ttm_dma->dma_address = NULL;
 #endif
 }
@@ -354,9 +371,9 @@ EXPORT_SYMBOL(ttm_tt_bind);
  * ttm_tt_wire(ttm)
  *
  *	Wire the uvm pages of ttm and fill the ttm page array.  ttm
- *	must be unpopulated or unbound, and must be marked swapped.
- *	This does not change either state -- the caller is expected to
- *	include it among other operations for such a state transition.
+ *	must be unpopulated, and must be marked swapped.  This does not
+ *	change either state -- the caller is expected to include it
+ *	among other operations for such a state transition.
  */
 int
 ttm_tt_wire(struct ttm_tt *ttm)
@@ -366,9 +383,8 @@ ttm_tt_wire(struct ttm_tt *ttm)
 	unsigned i;
 	int error;
 
-	KASSERTMSG((ttm->state == tt_unpopulated || ttm->state == tt_unbound),
-	    "ttm_tt %p must be unpopulated or unbound for wiring,"
-	    " but state=%d",
+	KASSERTMSG((ttm->state == tt_unpopulated),
+	    "ttm_tt %p must be unpopulated for wiring, but state=%d",
 	    ttm, (int)ttm->state);
 	KASSERT(ISSET(ttm->page_flags, TTM_PAGE_FLAG_SWAPPED));
 	KASSERT(uobj != NULL);
@@ -488,7 +504,7 @@ int ttm_tt_swapout(struct ttm_tt *ttm, struct file *persistent_swap_storage)
 		swap_storage = shmem_file_setup("ttm swap",
 						ttm->num_pages << PAGE_SHIFT,
 						0);
-		if (unlikely(IS_ERR(swap_storage))) {
+		if (IS_ERR(swap_storage)) {
 			pr_err("Failed allocating swap storage\n");
 			return PTR_ERR(swap_storage);
 		}
@@ -502,7 +518,7 @@ int ttm_tt_swapout(struct ttm_tt *ttm, struct file *persistent_swap_storage)
 		if (unlikely(from_page == NULL))
 			continue;
 		to_page = shmem_read_mapping_page(swap_space, i);
-		if (unlikely(IS_ERR(to_page))) {
+		if (IS_ERR(to_page)) {
 			ret = PTR_ERR(to_page);
 			goto out_err;
 		}

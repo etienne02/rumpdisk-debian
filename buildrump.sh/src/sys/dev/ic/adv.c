@@ -1,4 +1,4 @@
-/*	$NetBSD: adv.c,v 1.47 2016/07/14 04:19:26 msaitoh Exp $	*/
+/*	$NetBSD: adv.c,v 1.52 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*
  * Generic driver for the Advanced Systems Inc. Narrow SCSI controllers
@@ -16,13 +16,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -38,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adv.c,v 1.47 2016/07/14 04:19:26 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adv.c,v 1.52 2021/08/07 16:19:11 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -405,7 +398,7 @@ adv_init(ASC_SOFTC *sc)
 			aprint_normal("unknown warning %d\n", warn);
 		}
 	}
-	sc->isr_callback = (ASC_CALLBACK) adv_narrow_isr_callback;
+	sc->isr_callback = adv_narrow_isr_callback;
 
 	return (0);
 }
@@ -494,7 +487,7 @@ adv_attach(ASC_SOFTC *sc)
 	adapt->adapt_openings = i;
 	adapt->adapt_max_periph = adapt->adapt_openings;
 
-	sc->sc_child = config_found(sc->sc_dev, chan, scsiprint);
+	sc->sc_child = config_found(sc->sc_dev, chan, scsiprint, CFARGS_NONE);
 }
 
 int
@@ -899,6 +892,14 @@ adv_narrow_isr_callback(ASC_SOFTC *sc, ASC_QDONE_INFO *qdonep)
 		switch (qdonep->d3.host_stat) {
 		case ASC_QHSTA_NO_ERROR:
 			xs->error = XS_NOERROR;
+			/*
+			 * XXX
+			 * According to the original Linux driver, xs->resid
+			 * should be qdonep->remain_bytes. However, its value
+			 * is bogus, which seems like a H/W bug. The best thing
+			 * we can do would be to ignore it, assuming that all
+			 * data has been successfully transferred...
+			 */
 			xs->resid = 0;
 			break;
 

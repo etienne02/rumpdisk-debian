@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.120 2016/07/16 01:59:05 macallan Exp $	*/
+/*	$NetBSD: cpu.h,v 1.133 2021/08/14 17:51:19 ryo Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -35,7 +35,7 @@
  */
 
 #ifndef _CPU_H_
-#define _CPU_H_
+#define	_CPU_H_
 
 /*
  * Exported definitions unique to NetBSD/mips cpu support.
@@ -45,18 +45,22 @@
 #error Use assym.h to get definitions from <mips/cpu.h>
 #endif
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_KMEMUSER)
 
 #if defined(_KERNEL_OPT)
 #include "opt_cputype.h"
+#include "opt_gprof.h"
 #include "opt_lockdebug.h"
 #include "opt_multiprocessor.h"
 #endif
+
+#include <mips/frame.h>
 
 #include <sys/cpu_data.h>
 #include <sys/device_if.h>
 #include <sys/evcnt.h>
 #include <sys/kcpuset.h>
+#include <sys/intr.h>
 
 typedef struct cpu_watchpoint {
 	register_t	cw_addr;
@@ -66,14 +70,14 @@ typedef struct cpu_watchpoint {
 } cpu_watchpoint_t;
 
 /* (abstract) mode bits */
-#define CPUWATCH_WRITE	__BIT(0)
-#define CPUWATCH_READ	__BIT(1)
-#define CPUWATCH_EXEC	__BIT(2)
-#define CPUWATCH_MASK	__BIT(3)
-#define CPUWATCH_ASID	__BIT(4)
-#define CPUWATCH_RWX	(CPUWATCH_EXEC|CPUWATCH_READ|CPUWATCH_WRITE)
+#define	CPUWATCH_WRITE	__BIT(0)
+#define	CPUWATCH_READ	__BIT(1)
+#define	CPUWATCH_EXEC	__BIT(2)
+#define	CPUWATCH_MASK	__BIT(3)
+#define	CPUWATCH_ASID	__BIT(4)
+#define	CPUWATCH_RWX	(CPUWATCH_EXEC|CPUWATCH_READ|CPUWATCH_WRITE)
 
-#define CPUWATCH_MAX	8	/* max possible number of watchpoints */
+#define	CPUWATCH_MAX	8	/* max possible number of watchpoints */
 
 u_int		  cpuwatch_discover(void);
 void		  cpuwatch_free(cpu_watchpoint_t *);
@@ -95,6 +99,7 @@ struct cpu_info {
 	u_long ci_divisor_delay;	/* for delay/DELAY */
 	u_long ci_divisor_recip;	/* unused, for obsolete microtime(9) */
 	struct lwp *ci_curlwp;		/* currently running lwp */
+	struct lwp *ci_onproc;		/* current user LWP / kthread */
 	volatile int ci_want_resched;	/* user preemption pending */
 	int ci_mtx_count;		/* negative count of held mutexes */
 	int ci_mtx_oldspl;		/* saved SPL value */
@@ -118,12 +123,12 @@ struct cpu_info {
 	u_int ci_pmap_asid_cur;		/* current ASID */
 	struct pmap_tlb_info *ci_tlb_info; /* tlb information for this cpu */
 	union pmap_segtab *ci_pmap_segtabs[2];
-#define ci_pmap_user_segtab	ci_pmap_segtabs[0]
-#define ci_pmap_kern_segtab	ci_pmap_segtabs[1]
+#define	ci_pmap_user_segtab	ci_pmap_segtabs[0]
+#define	ci_pmap_kern_segtab	ci_pmap_segtabs[1]
 #ifdef _LP64
 	union pmap_segtab *ci_pmap_seg0tabs[2];
-#define ci_pmap_user_seg0tab	ci_pmap_seg0tabs[0]
-#define ci_pmap_kern_seg0tab	ci_pmap_seg0tabs[1]
+#define	ci_pmap_user_seg0tab	ci_pmap_seg0tabs[0]
+#define	ci_pmap_kern_seg0tab	ci_pmap_seg0tabs[1]
 #endif
 	vaddr_t ci_pmap_srcbase;	/* starting VA of ephemeral src space */
 	vaddr_t ci_pmap_dstbase;	/* starting VA of ephemeral dst space */
@@ -150,14 +155,28 @@ struct cpu_info {
 #define	CPUF_RUNNING	0x04		/* CPU is running */
 #define	CPUF_PAUSED	0x08		/* CPU is paused */
 #define	CPUF_USERPMAP	0x20		/* CPU has a user pmap activated */
+	kcpuset_t *ci_shootdowncpus;
+	kcpuset_t *ci_multicastcpus;
+	kcpuset_t *ci_watchcpus;
+	kcpuset_t *ci_ddbcpus;
+#endif
+#if defined(GPROF) && defined(MULTIPROCESSOR)
+	struct gmonparam *ci_gmon;	/* MI per-cpu GPROF */
 #endif
 
 };
+#endif /* _KERNEL || _KMEMUSER */
+
+#ifdef _KERNEL
 
 #ifdef MULTIPROCESSOR
 #define	CPU_INFO_ITERATOR		int
 #define	CPU_INFO_FOREACH(cii, ci)	\
-    cii = 0, ci = cpu_infos[0]; cii < ncpu && (ci = cpu_infos[cii]) != NULL; cii++
+    cii = 0, ci = &cpu_info_store; \
+    ci != NULL; \
+    cii++, \
+    ncpu ? (ci = cpu_infos[cii]) \
+         : (ci = NULL)
 #else
 #define	CPU_INFO_ITERATOR		int __unused
 #define	CPU_INFO_FOREACH(cii, ci)	\
@@ -166,9 +185,9 @@ struct cpu_info {
 
 /* Note: must be kept in sync with -ffixed-?? Makefile.mips. */
 //	MIPS_CURLWP moved to <mips/regdef.h>
-#define MIPS_CURLWP_QUOTED	"$24"
-#define MIPS_CURLWP_LABEL	_L_T8
-#define MIPS_CURLWP_REG		_R_T8
+#define	MIPS_CURLWP_QUOTED	"$24"
+#define	MIPS_CURLWP_LABEL	_L_T8
+#define	MIPS_CURLWP_REG		_R_T8
 
 extern struct cpu_info cpu_info_store;
 #ifdef MULTIPROCESSOR
@@ -193,17 +212,17 @@ register struct lwp *mips_curlwp asm(MIPS_CURLWP_QUOTED);
  */
 
 /*
- * Send an inter-processor interupt to each other CPU (excludes curcpu())
+ * Send an inter-processor interrupt to each other CPU (excludes curcpu())
  */
 void cpu_broadcast_ipi(int);
 
 /*
- * Send an inter-processor interupt to CPUs in kcpuset (excludes curcpu())
+ * Send an inter-processor interrupt to CPUs in kcpuset (excludes curcpu())
  */
 void cpu_multicast_ipi(const kcpuset_t *, int);
 
 /*
- * Send an inter-processor interupt to another CPU.
+ * Send an inter-processor interrupt to another CPU.
  */
 int cpu_send_ipi(struct cpu_info *, int);
 
@@ -244,11 +263,6 @@ struct pcb;
 struct reg;
 
 /*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-void	cpu_need_resched(struct cpu_info *, int);
-/*
  * Notify the current lwp (l) that it has a signal pending,
  * process as soon as possible.
  */
@@ -260,7 +274,6 @@ void	cpu_signotify(struct lwp *);
  * through trap, marking the proc as needing a profiling tick.
  */
 void	cpu_need_proftick(struct lwp *);
-void	cpu_set_curpri(int);
 
 /* VM related hooks */
 void	cpu_boot_secondary_processors(void);
@@ -277,18 +290,10 @@ void	cpu_vmspace_exec(struct lwp *, vaddr_t, vaddr_t);
 /*
  * CTL_MACHDEP definitions.
  */
-#define CPU_CONSDEV		1	/* dev_t: console terminal device */
-#define CPU_BOOTED_KERNEL	2	/* string: booted kernel name */
-#define CPU_ROOT_DEVICE		3	/* string: root device name */
-#define CPU_LLSC		4	/* OS/CPU supports LL/SC instruction */
-#define CPU_LMMI		5	/* Loongson multimedia instructions */
-
-/*
- * Platform can override, but note this breaks userland compatibility
- * with other mips platforms.
- */
-#ifndef CPU_MAXID
-#define CPU_MAXID		5	/* number of valid machdep ids */
-#endif
+#define	CPU_CONSDEV		1	/* dev_t: console terminal device */
+#define	CPU_BOOTED_KERNEL	2	/* string: booted kernel name */
+#define	CPU_ROOT_DEVICE		3	/* string: root device name */
+#define	CPU_LLSC		4	/* OS/CPU supports LL/SC instruction */
+#define	CPU_LMMI		5	/* Loongson multimedia instructions */
 
 #endif /* _CPU_H_ */

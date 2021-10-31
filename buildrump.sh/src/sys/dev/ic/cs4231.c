@@ -1,4 +1,4 @@
-/*	$NetBSD: cs4231.c,v 1.28 2011/11/28 11:46:54 jmcneill Exp $	*/
+/*	$NetBSD: cs4231.c,v 1.32 2019/11/10 21:16:35 chs Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs4231.c,v 1.28 2011/11/28 11:46:54 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs4231.c,v 1.32 2019/11/10 21:16:35 chs Exp $");
 
 #include "audio.h"
 #if NAUDIO > 0
@@ -47,7 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD: cs4231.c,v 1.28 2011/11/28 11:46:54 jmcneill Exp $")
 #include <sys/cpu.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/ic/ad1848reg.h>
 #include <dev/ic/cs4231reg.h>
@@ -164,11 +164,10 @@ cs4231_common_attach(struct cs4231_softc *sc, device_t self,
 		sc->sc_ad1848.chip_name = "CS4232C";
 		break;
 	default:
-		if ((buf = malloc(32, M_TEMP, M_NOWAIT)) != NULL) {
-			snprintf(buf, 32, "unknown rev: %x/%x",
-			    reg&0xe0, reg&7);
-			sc->sc_ad1848.chip_name = buf;
-		}
+		buf = malloc(32, M_TEMP, M_WAITOK);
+		snprintf(buf, 32, "unknown rev: %x/%x",
+		    reg&0xe0, reg&7);
+		sc->sc_ad1848.chip_name = buf;
 	}
 
 	sc->sc_ad1848.mode = 2;	/* put ad1848 driver in `MODE 2' mode */
@@ -185,8 +184,6 @@ cs4231_malloc(void *addr, int direction, size_t size)
 	sc = addr;
 	dmatag = sc->sc_dmatag;
 	p = kmem_alloc(sizeof(*p), KM_SLEEP);
-	if (p == NULL)
-		return NULL;
 
 	/* Allocate a DMA map */
 	if (bus_dmamap_create(dmatag, size, 1, size, 0,
@@ -425,7 +422,8 @@ int
 cs4231_get_props(void *addr)
 {
 
-	return AUDIO_PROP_FULLDUPLEX;
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE |
+	    AUDIO_PROP_FULLDUPLEX;
 }
 
 int

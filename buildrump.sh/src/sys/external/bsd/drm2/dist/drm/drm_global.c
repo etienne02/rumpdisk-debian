@@ -1,3 +1,5 @@
+/*	$NetBSD: drm_global.c,v 1.6 2020/02/14 14:34:57 maya Exp $	*/
+
 /**************************************************************************
  *
  * Copyright 2008-2009 VMware, Inc., Palo Alto, CA., USA
@@ -28,13 +30,16 @@
  * Authors: Thomas Hellstrom <thellstrom-at-vmware-dot-com>
  */
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: drm_global.c,v 1.6 2020/02/14 14:34:57 maya Exp $");
+
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/export.h>
 #include <asm/bug.h>
 #include <drm/drm_global.h>
+
+#include <linux/nbsd-namespace.h>
 
 struct drm_global_item {
 	struct mutex mutex;
@@ -50,11 +55,7 @@ void drm_global_init(void)
 
 	for (i = 0; i < DRM_GLOBAL_NUM; ++i) {
 		struct drm_global_item *item = &glob[i];
-#ifdef __NetBSD__
-		linux_mutex_init(&item->mutex);
-#else
 		mutex_init(&item->mutex);
-#endif
 		item->object = NULL;
 		item->refcount = 0;
 	}
@@ -65,9 +66,9 @@ void drm_global_release(void)
 	int i;
 	for (i = 0; i < DRM_GLOBAL_NUM; ++i) {
 		struct drm_global_item *item = &glob[i];
-		(void)item;	/* ignore */
 		BUG_ON(item->object != NULL);
 		BUG_ON(item->refcount != 0);
+		mutex_destroy(&item->mutex);
 	}
 }
 

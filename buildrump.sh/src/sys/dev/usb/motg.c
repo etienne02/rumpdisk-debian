@@ -1,4 +1,4 @@
-/*	$NetBSD: motg.c,v 1.17 2016/06/05 18:46:03 jakllsch Exp $	*/
+/*	$NetBSD: motg.c,v 1.37 2021/08/07 16:19:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998, 2004, 2011, 2012, 2014 The NetBSD Foundation, Inc.
@@ -40,10 +40,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: motg.c,v 1.17 2016/06/05 18:46:03 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: motg.c,v 1.37 2021/08/07 16:19:16 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
-#include "opt_motg.h"
 #include "opt_usb.h"
 #endif
 
@@ -68,12 +67,7 @@ __KERNEL_RCSID(0, "$NetBSD: motg.c,v 1.17 2016/06/05 18:46:03 jakllsch Exp $");
 #include <dev/usb/usb_mem.h>
 #include <dev/usb/usbhist.h>
 
-#ifdef MOTG_ALLWINNER
-#include <arch/arm/allwinner/awin_otgreg.h>
-#else
 #include <dev/usb/motgreg.h>
-#endif
-
 #include <dev/usb/motgvar.h>
 #include <dev/usb/usbroothub.h>
 
@@ -150,6 +144,7 @@ static void		motg_softintr(void *);
 static struct usbd_xfer *
 			motg_allocx(struct usbd_bus *, unsigned int);
 static void		motg_freex(struct usbd_bus *, struct usbd_xfer *);
+static bool		motg_dying(struct usbd_bus *);
 static void		motg_get_lock(struct usbd_bus *, kmutex_t **);
 static int		motg_roothub_ctrl(struct usbd_bus *, usb_device_request_t *,
 			    void *, int);
@@ -180,7 +175,7 @@ static void		motg_device_data_read(struct usbd_xfer *);
 static void		motg_device_data_write(struct usbd_xfer *);
 
 static void		motg_device_clear_toggle(struct usbd_pipe *);
-static void		motg_device_xfer_abort(struct usbd_xfer *);
+static void		motg_abortx(struct usbd_xfer *);
 
 #define UBARR(sc) bus_space_barrier((sc)->sc_iot, (sc)->sc_ioh, 0, (sc)->sc_size, \
 			BUS_SPACE_BARRIER_READ|BUS_SPACE_BARRIER_WRITE)
@@ -239,6 +234,8 @@ const struct usbd_bus_methods motg_bus_methods = {
 	.ubm_dopoll =	motg_poll,
 	.ubm_allocx =	motg_allocx,
 	.ubm_freex =	motg_freex,
+	.ubm_abortx =	motg_abortx,
+	.ubm_dying =	motg_dying,
 	.ubm_getlock =	motg_get_lock,
 	.ubm_rhctrl =	motg_roothub_ctrl,
 };
@@ -313,7 +310,7 @@ motg_init(struct motg_softc *sc)
 		UWRITE1(sc, MUSB2_REG_DEVCTL, val);
 	}
 	delay(1000);
-	DPRINTF("DEVCTL 0x%x", UREAD1(sc, MUSB2_REG_DEVCTL), 0, 0, 0);
+	DPRINTF("DEVCTL %#jx", UREAD1(sc, MUSB2_REG_DEVCTL), 0, 0, 0);
 
 	/* disable testmode */
 
@@ -337,7 +334,7 @@ motg_init(struct motg_softc *sc)
 
 		/* these numbers exclude the control endpoint */
 
-		DPRINTFN(1,"RX/TX endpoints: %u/%u", nrx, ntx, 0, 0);
+		DPRINTFN(1,"RX/TX endpoints: %ju/%ju", nrx, ntx, 0, 0);
 
 		sc->sc_ep_max = MAX(nrx, ntx);
 	} else {
@@ -351,7 +348,7 @@ motg_init(struct motg_softc *sc)
 	/* read out configuration data */
 	val = UREAD1(sc, MUSB2_REG_CONFDATA);
 
-	DPRINTF("Config Data: 0x%02x", val, 0, 0, 0);
+	DPRINTF("Config Data: 0x%02jx", val, 0, 0, 0);
 
 	dynfifo = (val & MUSB2_MASK_CD_DYNFIFOSZ) ? 1 : 0;
 
@@ -360,7 +357,7 @@ motg_init(struct motg_softc *sc)
 		    "assuming 16Kbytes of FIFO RAM\n");
 	}
 
-	DPRINTF("HW version: 0x%04x\n", UREAD1(sc, MUSB2_REG_HWVERS), 0, 0, 0);
+	DPRINTF("HW version: 0x%04jx\n", UREAD1(sc, MUSB2_REG_HWVERS), 0, 0, 0);
 
 	/* initialise endpoint profiles */
 	sc->sc_in_ep[0].ep_fifo_size = 64;
@@ -383,7 +380,7 @@ motg_init(struct motg_softc *sc)
 			fifotx_size = (val & MUSB2_MASK_TX_FSIZE);
 		}
 
-		DPRINTF("Endpoint %u FIFO size: IN=%u, OUT=%u, DYN=%d",
+		DPRINTF("Endpoint %ju FIFO size: IN=%ju, OUT=%ju, DYN=%jd",
 		    i, fifotx_size, fiforx_size, dynfifo);
 
 		if (dynfifo) {
@@ -451,7 +448,7 @@ motg_init(struct motg_softc *sc)
 	}
 
 
-	DPRINTF("Dynamic FIFO size = %d bytes", offset, 0, 0, 0);
+	DPRINTF("Dynamic FIFO size = %jd bytes", offset, 0, 0, 0);
 
 	/* turn on default interrupts */
 
@@ -474,9 +471,8 @@ motg_init(struct motg_softc *sc)
 	sc->sc_bus.ub_revision = USBREV_2_0;
 	sc->sc_bus.ub_usedma = false;
 	sc->sc_bus.ub_hcpriv = sc;
-	snprintf(sc->sc_vendor, sizeof(sc->sc_vendor),
-	    "Mentor Graphics");
-	sc->sc_child = config_found(sc->sc_dev, &sc->sc_bus, usbctlprint);
+	sc->sc_child = config_found(sc->sc_dev, &sc->sc_bus, usbctlprint,
+	    CFARGS_NONE);
 	return 0;
 }
 
@@ -496,8 +492,8 @@ motg_select_ep(struct motg_softc *sc, struct usbd_pipe *pipe)
 
 	for (i = sc->sc_ep_max; i >= 1; i--) {
 		DPRINTF(UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_IN ?
-		    "in_ep[%d].ep_fifo_size %d size %d ref %d" :
-		    "out_ep[%d].ep_fifo_size %d size %d ref %d", i,
+		    "in_ep[%jd].ep_fifo_size %jd size %jd ref %jd" :
+		    "out_ep[%jd].ep_fifo_size %jd size %jd ref %jd", i,
 		    ep[i].ep_fifo_size, size, ep[i].refcount);
 		if (ep[i].ep_fifo_size >= size) {
 			/* found a suitable endpoint */
@@ -530,7 +526,7 @@ motg_open(struct usbd_pipe *pipe)
 
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	DPRINTF("pipe=%p, addr=%d, endpt=%d (%d)", pipe,
+	DPRINTF("pipe=%#jx, addr=%jd, endpt=%jd (%jd)", (uintptr_t)pipe,
 	    pipe->up_dev->ud_addr, ed->bEndpointAddress, rhaddr);
 
 	if (sc->sc_dying)
@@ -565,7 +561,7 @@ motg_open(struct usbd_pipe *pipe)
 		case UE_BULK:
 		case UE_INTERRUPT:
 			DPRINTFN(MD_BULK,
-			    "type %d dir %d pipe wMaxPacketSize %d",
+			    "type %jd dir %jd pipe wMaxPacketSize %jd",
 			    UE_GET_XFERTYPE(ed->bmAttributes),
 			    UE_GET_DIR(pipe->up_endpoint->ue_edesc->bEndpointAddress),
 			    UGETW(pipe->up_endpoint->ue_edesc->wMaxPacketSize), 0);
@@ -604,7 +600,7 @@ motg_softintr(void *v)
 
 	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
-	DPRINTFN(MD_ROOT | MD_CTRL, "sc %p", sc, 0 ,0 ,0);
+	DPRINTFN(MD_ROOT | MD_CTRL, "sc %#jx", (uintptr_t)sc, 0 ,0 ,0);
 
 	mutex_spin_enter(&sc->sc_intr_lock);
 	rx_status = sc->sc_intr_rx_ep;
@@ -620,7 +616,7 @@ motg_softintr(void *v)
 	if (ctrl_status & (MUSB2_MASK_IRESET |
 	    MUSB2_MASK_IRESUME | MUSB2_MASK_ISUSP |
 	    MUSB2_MASK_ICONN | MUSB2_MASK_IDISC)) {
-		DPRINTFN(MD_ROOT | MD_CTRL, "bus 0x%x", ctrl_status, 0, 0, 0);
+		DPRINTFN(MD_ROOT | MD_CTRL, "bus %#jx", ctrl_status, 0, 0, 0);
 
 		if (ctrl_status & MUSB2_MASK_IRESET) {
 			sc->sc_isreset = 1;
@@ -634,7 +630,7 @@ motg_softintr(void *v)
 				sc->sc_high_speed = 1;
 			else
 				sc->sc_high_speed = 0;
-			DPRINTFN(MD_ROOT | MD_CTRL, "speed %d", sc->sc_high_speed,
+			DPRINTFN(MD_ROOT | MD_CTRL, "speed %jd", sc->sc_high_speed,
 			    0, 0, 0);
 
 			/* turn off interrupts */
@@ -752,7 +748,7 @@ motg_allocx(struct usbd_bus *bus, unsigned int nframes)
 	struct motg_softc *sc = MOTG_BUS2SC(bus);
 	struct usbd_xfer *xfer;
 
-	xfer = pool_cache_get(sc->sc_xferpool, PR_NOWAIT);
+	xfer = pool_cache_get(sc->sc_xferpool, PR_WAITOK);
 	if (xfer != NULL) {
 		memset(xfer, 0, sizeof(struct motg_xfer));
 #ifdef DIAGNOSTIC
@@ -768,13 +764,22 @@ motg_freex(struct usbd_bus *bus, struct usbd_xfer *xfer)
 	struct motg_softc *sc = MOTG_BUS2SC(bus);
 
 #ifdef DIAGNOSTIC
-	if (xfer->ux_state != XFER_BUSY) {
+	if (xfer->ux_state != XFER_BUSY &&
+	    xfer->ux_status != USBD_NOT_STARTED) {
 		printf("motg_freex: xfer=%p not busy, 0x%08x\n", xfer,
 		       xfer->ux_state);
 	}
 	xfer->ux_state = XFER_FREE;
 #endif
 	pool_cache_put(sc->sc_xferpool, xfer);
+}
+
+static bool
+motg_dying(struct usbd_bus *bus)
+{
+	struct motg_softc *sc = MOTG_BUS2SC(bus);
+
+	return sc->sc_dying;
 }
 
 static void
@@ -804,7 +809,7 @@ motg_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 	if (sc->sc_dying)
 		return -1;
 
-	DPRINTFN(MD_ROOT, "type=0x%02x request=%02x", req->bmRequestType,
+	DPRINTFN(MD_ROOT, "type=0x%02jx request=%02jx", req->bmRequestType,
 	    req->bRequest, 0, 0);
 
 	len = UGETW(req->wLength);
@@ -814,22 +819,9 @@ motg_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 #define C(x,y) ((x) | ((y) << 8))
 	switch (C(req->bRequest, req->bmRequestType)) {
 	case C(UR_GET_DESCRIPTOR, UT_READ_DEVICE):
-		DPRINTFN(MD_ROOT, "wValue=0x%04x", value, 0, 0, 0);
+		DPRINTFN(MD_ROOT, "wValue=0x%04jx", value, 0, 0, 0);
 		switch (value) {
-		case C(0, UDESC_DEVICE): {
-			usb_device_descriptor_t devd;
-
-			totlen = min(buflen, sizeof(devd));
-			memcpy(&devd, buf, totlen);
-			USETW(devd.idVendor, sc->sc_id_vendor);
-			memcpy(buf, &devd, totlen);
-			break;
-		}
-		case C(1, UDESC_STRING):
 #define sd ((usb_string_descriptor_t *)buf)
-			/* Vendor */
-			totlen = usb_makestrdesc(sd, len, sc->sc_vendor);
-			break;
 		case C(2, UDESC_STRING):
 			/* Product */
 			totlen = usb_makestrdesc(sd, len, "MOTG root hub");
@@ -845,7 +837,7 @@ motg_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 		break;
 	case C(UR_CLEAR_FEATURE, UT_WRITE_CLASS_OTHER):
 		DPRINTFN(MD_ROOT,
-		    "UR_CLEAR_PORT_FEATURE port=%d feature=%d", index, value,
+		    "UR_CLEAR_PORT_FEATURE port=%jd feature=%jd", index, value,
 		    0, 0);
 		if (index != 1) {
 			return -1;
@@ -937,7 +929,7 @@ motg_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 			change |= UPS_C_PORT_RESET;
 		USETW(ps.wPortStatus, status);
 		USETW(ps.wPortChange, change);
-		totlen = min(len, sizeof(ps));
+		totlen = uimin(len, sizeof(ps));
 		memcpy(buf, &ps, totlen);
 		break;
 	case C(UR_SET_DESCRIPTOR, UT_WRITE_CLASS_DEVICE):
@@ -1000,8 +992,16 @@ motg_root_intr_abort(struct usbd_xfer *xfer)
 	KASSERT(mutex_owned(&sc->sc_lock));
 	KASSERT(xfer->ux_pipe->up_intrxfer == xfer);
 
-	sc->sc_intr_xfer = NULL;
+	/* If xfer has already completed, nothing to do here.  */
+	if (sc->sc_intr_xfer == NULL)
+		return;
 
+	/*
+	 * Otherwise, sc->sc_intr_xfer had better be this transfer.
+	 * Cancel it.
+	 */
+	KASSERT(sc->sc_intr_xfer == xfer);
+	KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 	xfer->ux_status = USBD_CANCELLED;
 	usb_transfer_complete(xfer);
 }
@@ -1032,16 +1032,24 @@ motg_root_intr_start(struct usbd_xfer *xfer)
 {
 	struct usbd_pipe *pipe = xfer->ux_pipe;
 	struct motg_softc *sc = MOTG_PIPE2SC(pipe);
+	const bool polling = sc->sc_bus.ub_usepolling;
 
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	DPRINTFN(MD_ROOT, "xfer=%p len=%d flags=%d", xfer, xfer->ux_length,
-	    xfer->ux_flags, 0);
+	DPRINTFN(MD_ROOT, "xfer=%#jx len=%jd flags=%jd", (uintptr_t)xfer,
+	    xfer->ux_length, xfer->ux_flags, 0);
 
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
+	if (!polling)
+		mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_intr_xfer == NULL);
 	sc->sc_intr_xfer = xfer;
+	xfer->ux_status = USBD_IN_PROGRESS;
+	if (!polling)
+		mutex_exit(&sc->sc_lock);
+
 	return USBD_IN_PROGRESS;
 }
 
@@ -1049,17 +1057,30 @@ motg_root_intr_start(struct usbd_xfer *xfer)
 void
 motg_root_intr_close(struct usbd_pipe *pipe)
 {
-	struct motg_softc *sc = MOTG_PIPE2SC(pipe);
+	struct motg_softc *sc __diagused = MOTG_PIPE2SC(pipe);
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
 	KASSERT(mutex_owned(&sc->sc_lock));
 
-	sc->sc_intr_xfer = NULL;
+	/*
+	 * Caller must guarantee the xfer has completed first, by
+	 * closing the pipe only after normal completion or an abort.
+	 */
+	KASSERT(sc->sc_intr_xfer == NULL);
 }
 
 void
 motg_root_intr_done(struct usbd_xfer *xfer)
 {
+	struct motg_softc *sc = MOTG_XFER2SC(xfer);
+	MOTGHIST_FUNC(); MOTGHIST_CALLED();
+
+	KASSERT(mutex_owned(&sc->sc_lock));
+
+	/* Claim the xfer so it doesn't get completed again.  */
+	KASSERT(sc->sc_intr_xfer == xfer);
+	KASSERT(xfer->ux_status != USBD_IN_PROGRESS);
+	sc->sc_intr_xfer = NULL;
 }
 
 void
@@ -1089,7 +1110,7 @@ motg_portreset(struct motg_softc *sc)
 		sc->sc_high_speed = 1;
 	else
 		sc->sc_high_speed = 0;
-	DPRINTFN(MD_ROOT | MD_CTRL, "speed %d", sc->sc_high_speed, 0, 0, 0);
+	DPRINTFN(MD_ROOT | MD_CTRL, "speed %jd", sc->sc_high_speed, 0, 0, 0);
 
 	sc->sc_isreset = 1;
 	sc->sc_port_enabled = 1;
@@ -1110,6 +1131,7 @@ motg_hub_change(struct motg_softc *sc)
 
 	if (xfer == NULL)
 		return; /* the interrupt pipe is not open */
+	KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 
 	pipe = xfer->ux_pipe;
 	if (pipe->up_dev == NULL || pipe->up_dev->ud_bus == NULL)
@@ -1263,7 +1285,7 @@ motg_device_ctrl_transfer(struct usbd_xfer *xfer)
 	/* Insert last in queue. */
 	mutex_enter(&sc->sc_lock);
 	err = usb_insert_transfer(xfer);
-	xfer->ux_status = USBD_NOT_STARTED;
+	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
 	mutex_exit(&sc->sc_lock);
 	if (err)
 		return err;
@@ -1283,9 +1305,7 @@ motg_device_ctrl_start(struct usbd_xfer *xfer)
 	mutex_enter(&sc->sc_lock);
 	err = motg_device_ctrl_start1(sc);
 	mutex_exit(&sc->sc_lock);
-	if (err != USBD_IN_PROGRESS)
-		return err;
-	return USBD_IN_PROGRESS;
+	return err;
 }
 
 static usbd_status
@@ -1312,8 +1332,9 @@ motg_device_ctrl_start1(struct motg_softc *sc)
 	/* locate the first pipe with work to do */
 	SIMPLEQ_FOREACH(otgpipe, &ep->ep_pipes, ep_pipe_list) {
 		xfer = SIMPLEQ_FIRST(&otgpipe->pipe.up_queue);
-		DPRINTFN(MD_CTRL, "pipe %p xfer %p status %d",
-		    otgpipe, xfer, (xfer != NULL) ? xfer->ux_status : 0, 0);
+		DPRINTFN(MD_CTRL, "pipe %#jx xfer %#jx status %jd",
+		    (uintptr_t)otgpipe, (uintptr_t)xfer,
+		    (xfer != NULL) ? xfer->ux_status : 0, 0);
 
 		if (xfer != NULL) {
 			/* move this pipe to the end of the list */
@@ -1328,7 +1349,12 @@ motg_device_ctrl_start1(struct motg_softc *sc)
 		err = USBD_NOT_STARTED;
 		goto end;
 	}
-	xfer->ux_status = USBD_IN_PROGRESS;
+	if (xfer->ux_status == USBD_NOT_STARTED) {
+		usbd_xfer_schedule_timeout(xfer);
+		xfer->ux_status = USBD_IN_PROGRESS;
+	} else {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
+	}
 	KASSERT(otgpipe == MOTG_PIPE2MPIPE(xfer->ux_pipe));
 	KASSERT(otgpipe->hw_ep == ep);
 	KASSERT(xfer->ux_rqflags & URQ_REQUEST);
@@ -1348,11 +1374,13 @@ motg_device_ctrl_start1(struct motg_softc *sc)
 		ep->need_short_xfer = 0;
 	/* now we need send this request */
 	DPRINTFN(MD_CTRL,
-	    "xfer %p send data %p len %d short %d",
-	    xfer, ep->data, ep->datalen, ep->need_short_xfer);
+	    "xfer %#jx send data %#jx len %jd short %jd",
+	    (uintptr_t)xfer, (uintptr_t)ep->data, ep->datalen,
+	    ep->need_short_xfer);
 	DPRINTFN(MD_CTRL,
-	    "xfer %p ... speed %d to %d", xfer->ux_pipe->up_dev->ud_speed,
-	    xfer->ux_pipe->up_dev->ud_addr, 0, 0);
+	    "xfer %#jx ... speed %jd to %jd", (uintptr_t)xfer,
+	    xfer->ux_pipe->up_dev->ud_speed,
+	    xfer->ux_pipe->up_dev->ud_addr, 0);
 	KASSERT(ep->phase == IDLE);
 	ep->phase = SETUP;
 	/* select endpoint 0 */
@@ -1403,15 +1431,16 @@ motg_device_ctrl_intr_rx(struct motg_softc *sc)
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
 	KASSERT(mutex_owned(&sc->sc_lock));
-
 	KASSERT(ep->phase == DATA_IN || ep->phase == STATUS_IN);
+
 	/* select endpoint 0 */
 	UWRITE1(sc, MUSB2_REG_EPINDEX, 0);
 
 	/* read out FIFO status */
 	csr = UREAD1(sc, MUSB2_REG_TXCSRL);
-	DPRINTFN(MD_CTRL, "phase %d csr 0x%x xfer %p status %d",
-	    ep->phase, csr, xfer, (xfer != NULL) ? xfer->ux_status : 0);
+	DPRINTFN(MD_CTRL, "phase %jd csr %#jx xfer %#jx status %jd",
+	    ep->phase, csr, (uintptr_t)xfer,
+	    (xfer != NULL) ? xfer->ux_status : 0);
 
 	if (csr & MUSB2_MASK_CSR0L_NAKTIMO) {
 		csr &= ~MUSB2_MASK_CSR0L_REQPKT;
@@ -1443,9 +1472,9 @@ motg_device_ctrl_intr_rx(struct motg_softc *sc)
 		goto complete;
 	}
 	datalen = UREAD2(sc, MUSB2_REG_RXCOUNT);
-	DPRINTFN(MD_CTRL, "phase %d datalen %d", ep->phase, datalen, 0, 0);
+	DPRINTFN(MD_CTRL, "phase %jd datalen %jd", ep->phase, datalen, 0, 0);
 	KASSERT(UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize) > 0);
-	max_datalen = min(UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize),
+	max_datalen = uimin(UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize),
 	    ep->datalen);
 	if (datalen > max_datalen) {
 		new_status = USBD_IOERROR;
@@ -1461,14 +1490,15 @@ motg_device_ctrl_intr_rx(struct motg_softc *sc)
 		xfer->ux_actlen += datalen;
 		if (((vaddr_t)data & 0x3) == 0 &&
 		    (datalen >> 2) > 0) {
-			DPRINTFN(MD_CTRL, "r4 data %p len %d", data, datalen,
-			    0, 0);
+			DPRINTFN(MD_CTRL, "r4 data %#jx len %jd",
+			    (uintptr_t)data, datalen, 0, 0);
 			bus_space_read_multi_4(sc->sc_iot, sc->sc_ioh,
 			    MUSB2_REG_EPFIFO(0), (void *)data, datalen >> 2);
 			data += (datalen & ~0x3);
 			datalen -= (datalen & ~0x3);
 		}
-		DPRINTFN(MD_CTRL, "r1 data %p len %d", data, datalen, 0, 0);
+		DPRINTFN(MD_CTRL, "r1 data %#jx len %jd", (uintptr_t)data,
+		    datalen, 0, 0);
 		if (datalen) {
 			bus_space_read_multi_1(sc->sc_iot, sc->sc_ioh,
 			    MUSB2_REG_EPFIFO(0), data, datalen);
@@ -1495,7 +1525,12 @@ motg_device_ctrl_intr_rx(struct motg_softc *sc)
 complete:
 	ep->phase = IDLE;
 	ep->xfer = NULL;
-	if (xfer && xfer->ux_status == USBD_IN_PROGRESS) {
+	/*
+	 * Try to claim this xfer for completion.  If it has already
+	 * completed or aborted, drop it on the floor.
+	 */
+	if (xfer && usbd_xfer_trycomplete(xfer)) {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 		KASSERT(new_status != USBD_IN_PROGRESS);
 		xfer->ux_status = new_status;
 		usb_transfer_complete(xfer);
@@ -1516,6 +1551,7 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
 	KASSERT(mutex_owned(&sc->sc_lock));
+
 	if (ep->phase == DATA_IN || ep->phase == STATUS_IN) {
 		motg_device_ctrl_intr_rx(sc);
 		return;
@@ -1528,8 +1564,9 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 	UWRITE1(sc, MUSB2_REG_EPINDEX, 0);
 
 	csr = UREAD1(sc, MUSB2_REG_TXCSRL);
-	DPRINTFN(MD_CTRL, "phase %d csr 0x%x xfer %p status %d",
-	    ep->phase, csr, xfer, (xfer != NULL) ? xfer->ux_status : 0);
+	DPRINTFN(MD_CTRL, "phase %jd csr %#jx xfer %#jx status %jd",
+	    ep->phase, csr, (uintptr_t)xfer,
+	    (xfer != NULL) ? xfer->ux_status : 0);
 
 	if (csr & MUSB2_MASK_CSR0L_RXSTALL) {
 		/* command not accepted */
@@ -1561,15 +1598,15 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 		/* data still not sent */
 		return;
 	}
-	if (xfer == NULL)
+	if (xfer == NULL || xfer->ux_status != USBD_IN_PROGRESS)
 		goto complete;
 	if (ep->phase == STATUS_OUT) {
 		/*
 		 * we have sent status and got no error;
 		 * declare transfer complete
 		 */
-		DPRINTFN(MD_CTRL, "xfer %p status %d complete", xfer,
-		    xfer->ux_status, 0, 0);
+		DPRINTFN(MD_CTRL, "xfer %#jx status %jd complete",
+		    (uintptr_t)xfer, xfer->ux_status, 0, 0);
 		new_status = USBD_NORMAL_COMPLETION;
 		goto complete;
 	}
@@ -1578,14 +1615,15 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 			ep->need_short_xfer = 0;
 			/* one more data phase */
 			if (xfer->ux_request.bmRequestType & UT_READ) {
-				DPRINTFN(MD_CTRL, "xfer %p to DATA_IN", xfer,
-				    0, 0, 0);
+				DPRINTFN(MD_CTRL, "xfer %#jx to DATA_IN",
+				    (uintptr_t)xfer, 0, 0, 0);
 				motg_device_ctrl_read(xfer);
 				return;
 			} /*  else fall back to DATA_OUT */
 		} else {
-			DPRINTFN(MD_CTRL, "xfer %p to STATUS_IN, csrh 0x%x",
-			    xfer, UREAD1(sc, MUSB2_REG_TXCSRH), 0, 0);
+			DPRINTFN(MD_CTRL, "xfer %#jx to STATUS_IN, csrh %#jx",
+			    (uintptr_t)xfer, UREAD1(sc, MUSB2_REG_TXCSRH),
+			    0, 0);
 			ep->phase = STATUS_IN;
 			UWRITE1(sc, MUSB2_REG_RXCSRH,
 			    UREAD1(sc, MUSB2_REG_RXCSRH) |
@@ -1602,10 +1640,10 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 		return;
 	}
 	/* setup a dataout phase */
-	datalen = min(ep->datalen,
+	datalen = uimin(ep->datalen,
 	    UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize));
 	ep->phase = DATA_OUT;
-	DPRINTFN(MD_CTRL, "xfer %p to DATA_OUT, csrh 0x%x", xfer,
+	DPRINTFN(MD_CTRL, "xfer %#jx to DATA_OUT, csrh %#jx", (uintptr_t)xfer,
 	    UREAD1(sc, MUSB2_REG_TXCSRH), 0, 0);
 	if (datalen) {
 		data = ep->data;
@@ -1632,7 +1670,12 @@ motg_device_ctrl_intr_tx(struct motg_softc *sc)
 complete:
 	ep->phase = IDLE;
 	ep->xfer = NULL;
-	if (xfer && xfer->ux_status == USBD_IN_PROGRESS) {
+	/*
+	 * Try to claim this xfer for completion.  If it has already
+	 * completed or aborted, drop it on the floor.
+	 */
+	if (xfer && usbd_xfer_trycomplete(xfer)) {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 		KASSERT(new_status != USBD_IN_PROGRESS);
 		xfer->ux_status = new_status;
 		usb_transfer_complete(xfer);
@@ -1646,7 +1689,7 @@ motg_device_ctrl_abort(struct usbd_xfer *xfer)
 {
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	motg_device_xfer_abort(xfer);
+	usbd_xfer_abort(xfer);
 }
 
 /* Close a device control pipe */
@@ -1695,9 +1738,9 @@ motg_device_data_transfer(struct usbd_xfer *xfer)
 
 	/* Insert last in queue. */
 	mutex_enter(&sc->sc_lock);
-	DPRINTF("xfer %p status %d", xfer, xfer->ux_status, 0, 0);
+	DPRINTF("xfer %#jx status %jd", (uintptr_t)xfer, xfer->ux_status, 0, 0);
 	err = usb_insert_transfer(xfer);
-	xfer->ux_status = USBD_NOT_STARTED;
+	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
 	mutex_exit(&sc->sc_lock);
 	if (err)
 		return err;
@@ -1719,12 +1762,10 @@ motg_device_data_start(struct usbd_xfer *xfer)
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
 	mutex_enter(&sc->sc_lock);
-	DPRINTF("xfer %p status %d", xfer, xfer->ux_status, 0, 0);
+	DPRINTF("xfer %#jx status %jd", (uintptr_t)xfer, xfer->ux_status, 0, 0);
 	err = motg_device_data_start1(sc, otgpipe->hw_ep);
 	mutex_exit(&sc->sc_lock);
-	if (err != USBD_IN_PROGRESS)
-		return err;
-	return USBD_IN_PROGRESS;
+	return err;
 }
 
 static usbd_status
@@ -1751,7 +1792,8 @@ motg_device_data_start1(struct motg_softc *sc, struct motg_hw_ep *ep)
 	/* locate the first pipe with work to do */
 	SIMPLEQ_FOREACH(otgpipe, &ep->ep_pipes, ep_pipe_list) {
 		xfer = SIMPLEQ_FIRST(&otgpipe->pipe.up_queue);
-		DPRINTFN(MD_BULK, "pipe %p xfer %p status %d", otgpipe, xfer,
+		DPRINTFN(MD_BULK, "pipe %#jx xfer %#jx status %jd",
+		    (uintptr_t)otgpipe, (uintptr_t)xfer,
 		    (xfer != NULL) ? xfer->ux_status : 0, 0);
 		if (xfer != NULL) {
 			/* move this pipe to the end of the list */
@@ -1766,7 +1808,12 @@ motg_device_data_start1(struct motg_softc *sc, struct motg_hw_ep *ep)
 		err = USBD_NOT_STARTED;
 		goto end;
 	}
-	xfer->ux_status = USBD_IN_PROGRESS;
+	if (xfer->ux_status == USBD_NOT_STARTED) {
+		usbd_xfer_schedule_timeout(xfer);
+		xfer->ux_status = USBD_IN_PROGRESS;
+	} else {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
+	}
 	KASSERT(otgpipe == MOTG_PIPE2MPIPE(xfer->ux_pipe));
 	KASSERT(otgpipe->hw_ep == ep);
 	KASSERT(!(xfer->ux_rqflags & URQ_REQUEST));
@@ -1785,10 +1832,12 @@ motg_device_data_start1(struct motg_softc *sc, struct motg_hw_ep *ep)
 	/* now we need send this request */
 	DPRINTFN(MD_BULK,
 	    UE_GET_DIR(xfer->ux_pipe->up_endpoint->ue_edesc->bEndpointAddress) == UE_DIR_IN ?
-	    "xfer %p in  data %p len %d short %d" :
-	    "xfer %p out data %p len %d short %d",
-	    xfer, ep->data, ep->datalen, ep->need_short_xfer);
-	DPRINTFN(MD_BULK, "... speed %d to %d", xfer->ux_pipe->up_dev->ud_speed,
+	    "xfer %#jx in  data %#jx len %jd short %jd" :
+	    "xfer %#jx out data %#jx len %jd short %jd",
+	    (uintptr_t)xfer, (uintptr_t)ep->data, ep->datalen,
+	    ep->need_short_xfer);
+	DPRINTFN(MD_BULK, "... speed %jd to %jd",
+	    xfer->ux_pipe->up_dev->ud_speed,
 	    xfer->ux_pipe->up_dev->ud_addr, 0, 0);
 	KASSERT(ep->phase == IDLE);
 	/* select endpoint */
@@ -1835,8 +1884,9 @@ motg_device_data_read(struct usbd_xfer *xfer)
 		val &= ~MUSB2_MASK_CSRH_RXDT_VAL;
 	UWRITE1(sc, MUSB2_REG_RXCSRH, val);
 
-	DPRINTFN(MD_BULK, "%p to DATA_IN on ep %d, csrh 0x%x",
-	    xfer, otgpipe->hw_ep->ep_number, UREAD1(sc, MUSB2_REG_RXCSRH), 0);
+	DPRINTFN(MD_BULK, "%#jx to DATA_IN on ep %jd, csrh %#jx",
+	    (uintptr_t)xfer, otgpipe->hw_ep->ep_number,
+	    UREAD1(sc, MUSB2_REG_RXCSRH), 0);
 	/* start transaction */
 	UWRITE1(sc, MUSB2_REG_RXCSRL, MUSB2_MASK_CSRL_RXREQPKT);
 	otgpipe->hw_ep->phase = DATA_IN;
@@ -1857,11 +1907,12 @@ motg_device_data_write(struct usbd_xfer *xfer)
 	KASSERT(xfer!=NULL);
 	KASSERT(mutex_owned(&sc->sc_lock));
 
-	datalen = min(ep->datalen,
+	datalen = uimin(ep->datalen,
 	    UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize));
 	ep->phase = DATA_OUT;
-	DPRINTFN(MD_BULK, "%p to DATA_OUT on ep %d, len %d csrh 0x%x",
-	    xfer, ep->ep_number, datalen, UREAD1(sc, MUSB2_REG_TXCSRH));
+	DPRINTFN(MD_BULK, "%#jx to DATA_OUT on ep %jd, len %jd csrh %#jx",
+	    (uintptr_t)xfer, ep->ep_number, datalen,
+	    UREAD1(sc, MUSB2_REG_TXCSRH));
 
 	/* assume endpoint already selected */
 	/* write data to fifo */
@@ -1915,13 +1966,13 @@ motg_device_intr_rx(struct motg_softc *sc, int epnumber)
 	KASSERT(mutex_owned(&sc->sc_lock));
 	KASSERT(ep->ep_number == epnumber);
 
-	DPRINTFN(MD_BULK, "on ep %d", epnumber, 0, 0, 0);
+	DPRINTFN(MD_BULK, "on ep %jd", epnumber, 0, 0, 0);
 	/* select endpoint */
 	UWRITE1(sc, MUSB2_REG_EPINDEX, epnumber);
 
 	/* read out FIFO status */
 	csr = UREAD1(sc, MUSB2_REG_RXCSRL);
-	DPRINTFN(MD_BULK, "phase %d csr 0x%x", ep->phase, csr ,0 ,0);
+	DPRINTFN(MD_BULK, "phase %jd csr %#jx", ep->phase, csr ,0 ,0);
 
 	if ((csr & (MUSB2_MASK_CSRL_RXNAKTO | MUSB2_MASK_CSRL_RXSTALL |
 	    MUSB2_MASK_CSRL_RXERROR | MUSB2_MASK_CSRL_RXPKTRDY)) == 0)
@@ -1957,9 +2008,9 @@ motg_device_intr_rx(struct motg_softc *sc, int epnumber)
 	otgpipe->nexttoggle = otgpipe->nexttoggle ^ 1;
 
 	datalen = UREAD2(sc, MUSB2_REG_RXCOUNT);
-	DPRINTFN(MD_BULK, "phase %d datalen %d", ep->phase, datalen ,0 ,0);
+	DPRINTFN(MD_BULK, "phase %jd datalen %jd", ep->phase, datalen ,0 ,0);
 	KASSERT(UE_GET_SIZE(UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize)) > 0);
-	max_datalen = min(
+	max_datalen = uimin(
 	    UE_GET_SIZE(UGETW(xfer->ux_pipe->up_endpoint->ue_edesc->wMaxPacketSize)),
 	    ep->datalen);
 	if (datalen > max_datalen) {
@@ -1976,15 +2027,16 @@ motg_device_intr_rx(struct motg_softc *sc, int epnumber)
 		xfer->ux_actlen += datalen;
 		if (((vaddr_t)data & 0x3) == 0 &&
 		    (datalen >> 2) > 0) {
-			DPRINTFN(MD_BULK, "r4 data %p len %d", data, datalen,
-			    0, 0);
+			DPRINTFN(MD_BULK, "r4 data %#jx len %jd",
+			    (uintptr_t)data, datalen, 0, 0);
 			bus_space_read_multi_4(sc->sc_iot, sc->sc_ioh,
 			    MUSB2_REG_EPFIFO(ep->ep_number),
 			    (void *)data, datalen >> 2);
 			data += (datalen & ~0x3);
 			datalen -= (datalen & ~0x3);
 		}
-		DPRINTFN(MD_BULK, "r1 data %p len %d", data, datalen ,0 ,0);
+		DPRINTFN(MD_BULK, "r1 data %#jx len %jd", (uintptr_t)data,
+		    datalen ,0 ,0);
 		if (datalen) {
 			bus_space_read_multi_1(sc->sc_iot, sc->sc_ioh,
 			    MUSB2_REG_EPFIFO(ep->ep_number), data, datalen);
@@ -2002,11 +2054,16 @@ motg_device_intr_rx(struct motg_softc *sc, int epnumber)
 	motg_device_data_read(xfer);
 	return;
 complete:
-	DPRINTFN(MD_BULK, "xfer %p complete, status %d", xfer,
+	DPRINTFN(MD_BULK, "xfer %#jx complete, status %jd", (uintptr_t)xfer,
 	    (xfer != NULL) ? xfer->ux_status : 0, 0, 0);
 	ep->phase = IDLE;
 	ep->xfer = NULL;
-	if (xfer && xfer->ux_status == USBD_IN_PROGRESS) {
+	/*
+	 * Try to claim this xfer for completion.  If it has already
+	 * completed or aborted, drop it on the floor.
+	 */
+	if (xfer && usbd_xfer_trycomplete(xfer)) {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 		KASSERT(new_status != USBD_IN_PROGRESS);
 		xfer->ux_status = new_status;
 		usb_transfer_complete(xfer);
@@ -2028,12 +2085,12 @@ motg_device_intr_tx(struct motg_softc *sc, int epnumber)
 	KASSERT(mutex_owned(&sc->sc_lock));
 	KASSERT(ep->ep_number == epnumber);
 
-	DPRINTFN(MD_BULK, " on ep %d", epnumber, 0, 0, 0);
+	DPRINTFN(MD_BULK, " on ep %jd", epnumber, 0, 0, 0);
 	/* select endpoint */
 	UWRITE1(sc, MUSB2_REG_EPINDEX, epnumber);
 
 	csr = UREAD1(sc, MUSB2_REG_TXCSRL);
-	DPRINTFN(MD_BULK, "phase %d csr 0x%x", ep->phase, csr, 0, 0);
+	DPRINTFN(MD_BULK, "phase %jd csr %#jx", ep->phase, csr, 0, 0);
 
 	if (csr & (MUSB2_MASK_CSRL_TXSTALLED|MUSB2_MASK_CSRL_TXERROR)) {
 		/* command not accepted */
@@ -2056,7 +2113,7 @@ motg_device_intr_tx(struct motg_softc *sc, int epnumber)
 			UWRITE1(sc, MUSB2_REG_TXCSRL, csr);
 			delay(1000);
 			csr = UREAD1(sc, MUSB2_REG_TXCSRL);
-			DPRINTFN(MD_BULK, "TX fifo flush ep %d CSR 0x%x",
+			DPRINTFN(MD_BULK, "TX fifo flush ep %jd CSR %#jx",
 			    epnumber, csr, 0, 0);
 		}
 		goto complete;
@@ -2085,15 +2142,16 @@ motg_device_intr_tx(struct motg_softc *sc, int epnumber)
 	return;
 
 complete:
-	DPRINTFN(MD_BULK, "xfer %p complete, status %d", xfer,
+	DPRINTFN(MD_BULK, "xfer %#jx complete, status %jd", (uintptr_t)xfer,
 	    (xfer != NULL) ? xfer->ux_status : 0, 0, 0);
-#ifdef DIAGNOSTIC
-	if (xfer && xfer->ux_status == USBD_IN_PROGRESS && ep->phase != DATA_OUT)
-		panic("motg_device_intr_tx: bad phase %d", ep->phase);
-#endif
 	ep->phase = IDLE;
 	ep->xfer = NULL;
-	if (xfer && xfer->ux_status == USBD_IN_PROGRESS) {
+	/*
+	 * Try to claim this xfer for completion.  If it has already
+	 * completed or aborted, drop it on the floor.
+	 */
+	if (xfer && usbd_xfer_trycomplete(xfer)) {
+		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 		KASSERT(new_status != USBD_IN_PROGRESS);
 		xfer->ux_status = new_status;
 		usb_transfer_complete(xfer);
@@ -2110,7 +2168,7 @@ motg_device_data_abort(struct usbd_xfer *xfer)
 
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	motg_device_xfer_abort(xfer);
+	usbd_xfer_abort(xfer);
 }
 
 /* Close a device control pipe */
@@ -2159,26 +2217,25 @@ motg_device_clear_toggle(struct usbd_pipe *pipe)
 
 /* Abort a device control request. */
 static void
-motg_device_xfer_abort(struct usbd_xfer *xfer)
+motg_abortx(struct usbd_xfer *xfer)
 {
-	int wake;
+	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 	uint8_t csr;
 	struct motg_softc *sc = MOTG_XFER2SC(xfer);
 	struct motg_pipe *otgpipe = MOTG_PIPE2MPIPE(xfer->ux_pipe);
+
 	KASSERT(mutex_owned(&sc->sc_lock));
+	ASSERT_SLEEPABLE();
 
-	MOTGHIST_FUNC(); MOTGHIST_CALLED();
-
-	if (xfer->ux_hcflags & UXFER_ABORTING) {
-		DPRINTF("already aborting", 0, 0, 0, 0);
-		xfer->ux_hcflags |= UXFER_ABORTWAIT;
-		while (xfer->ux_hcflags & UXFER_ABORTING)
-			cv_wait(&xfer->ux_hccv, &sc->sc_lock);
-		return;
+	/*
+	 * If we're dying, skip the hardware action and just notify the
+	 * software that we're done.
+	 */
+	if (sc->sc_dying) {
+		goto dying;
 	}
-	xfer->ux_hcflags |= UXFER_ABORTING;
+
 	if (otgpipe->hw_ep->xfer == xfer) {
-		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 		otgpipe->hw_ep->xfer = NULL;
 		if (otgpipe->hw_ep->ep_number > 0) {
 			/* select endpoint */
@@ -2204,10 +2261,7 @@ motg_device_xfer_abort(struct usbd_xfer *xfer)
 			otgpipe->hw_ep->phase = IDLE;
 		}
 	}
-	xfer->ux_status = USBD_CANCELLED; /* make software ignore it */
-	wake = xfer->ux_hcflags & UXFER_ABORTWAIT;
-	xfer->ux_hcflags &= ~(UXFER_ABORTING | UXFER_ABORTWAIT);
+dying:
 	usb_transfer_complete(xfer);
-	if (wake)
-		cv_broadcast(&xfer->ux_hccv);
+	KASSERT(mutex_owned(&sc->sc_lock));
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: locore_subr.S,v 1.54 2014/07/30 23:27:55 matt Exp $	*/
+/*	$NetBSD: locore_subr.S,v 1.65 2021/03/06 08:34:58 rin Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -73,11 +73,12 @@
  *	#include <powerpc/powerpc/locore_subr.S>
  */
 
-#include "opt_ppcarch.h"
-#include "opt_lockdebug.h"
-#include "opt_multiprocessor.h"
+#ifdef _KERNEL_OPT
 #include "opt_ddb.h"
 #include "opt_modular.h"
+#include "opt_multiprocessor.h"
+#include "opt_ppcarch.h"
+#endif
 
 #ifdef DDB
 #define	CFRAME_LRSAVE(t0)					\
@@ -156,7 +157,7 @@ GLOBAL(powersave)
  * struct lwp *
  * cpu_switchto(struct lwp *current, struct lwp *new)
  * switch to the indicated new LWP.
- * 	r3 - current LWP (maybe NULL, if so don't save state)
+ * 	r3 - current LWP
  * 	r4 - LWP to switch to
  *	scheduler lock held
  *	SPL is IPL_SCHED.
@@ -174,16 +175,7 @@ ENTRY(cpu_switchto)
 	mfmsr	%r0
 	andis.	%r0,%r0,PSL_CE@h
 	tweqi	%r0,0	
-	mfmsr	%r0
-	andi.	%r0,%r0,PSL_DE@l
-	tweqi	%r0,0	
 #endif
-
-	/* 
-	 * If the oldlwp was null, don't bother saving the switch state.
-	 */
-	cmpwi	%r30,0
-	beq	switchto_restore
 
 #if defined (PPC_OEA) || defined (PPC_OEA64_BRIDGE)
 	mfsr	%r10,USER_SR		/* save USER_SR for copyin/copyout */
@@ -202,7 +194,6 @@ ENTRY(cpu_switchto)
 	streg	%r9,PCB_USPRG0(%r4)	/* save in PCB, not switchframe. */
 #endif
 
-switchto_restore:
 /* Lock the scheduler. */
 #if defined(PPC_IBM4XX) || defined(PPC_BOOKE)
 	wrteei	0			/* disable interrupts while
@@ -288,6 +279,8 @@ switchto_restore:
  */
 	ldreg	%r31,CFRAME_R31(%r1)	/* restore saved registers */
 	ldreg	%r30,CFRAME_R30(%r1)
+	IBM405_ERRATA77_DCBT(0,%r1)
+	stwcx.	%r1,0,%r1		/* clear reservation */
 #if 1
 	addi	%r1,%r1,CALLFRAMELEN
 #else
@@ -318,8 +311,6 @@ _ENTRY(softint_cleanup)
 	ldint	%r5, CI_MTX_COUNT(%r7)
 	addi	%r5, %r5, 1
 	stint	%r5, CI_MTX_COUNT(%r7)
-	li	%r0, 0
-	stptr	%r0, L_CTXSWTCH(%r3)	/* clear ctxswitch of old lwp */
 	ldreg	%r0, CFRAME_R31(%r1)	/* get saved MSR */
 #if defined(PPC_IBM4XX) || defined(PPC_BOOKE)
 	wrtee	%r0			/* restore EE */
@@ -328,6 +319,8 @@ _ENTRY(softint_cleanup)
 	mtmsr	%r0
 	isync
 #endif
+	IBM405_ERRATA77_DCBT(0,%r1)
+	stwcx.	%r1,0,%r1		/* clear reservation */
 	addi	%r1, %r1, CALLFRAMELEN
 	ldreg	%r0, CFRAME_LR(%r1)
 	mtlr	%r0
@@ -408,7 +401,7 @@ _ENTRY(softint_fast_dispatch)
 	addi	%r1, %r5, USPACE - FRAMELEN - CALLFRAMELEN
 
 #if defined(PPC_IBM4XX) || defined(PPC_BOOKE)
-	wrteei	1			/* interrupts are okay again */
+	wrtee	%r29			/* interrupts are okay again */
 #else /* PPC_OEA */
 	mtmsr	%r29
 #endif
@@ -478,6 +471,8 @@ _ENTRY(softint_fast_dispatch)
 	ldreg	%r29,SFRAME_R29(%r1)	/* R29 */
 	ldreg	%r31,SFRAMELEN+CFRAME_R31(%r1)	/* restore saved registers */
 	ldreg	%r30,SFRAMELEN+CFRAME_R30(%r1)
+	IBM405_ERRATA77_DCBT(0,%r1)
+	stwcx.	%r1,0,%r1		/* clear reservation */
 	addi	%r1,%r1,SFRAMELEN+2*CALLFRAMELEN /* remove switch & callframes */
 #endif
 	ldreg	%r0,CFRAME_LR(%r1)
@@ -512,8 +507,6 @@ _ENTRY(cpu_lwp_bootstrap)
 	ori	%r30, %r30, 0xbeeffeed@l
 	andis.	%r0,%r31,PSL_CE@h
 	tweqi	%r0,0
-	andi.	%r0,%r31,PSL_DE@l
-	tweqi	%r0,0
 #endif
 	li	%r4, 1			/* make sure userret gets called */
 	stint	%r4, L_MD_ASTPENDING(%r13)
@@ -523,6 +516,18 @@ _ENTRY(cpu_lwp_bootstrap)
 ENTRY(cpu_spinup_trampoline)
 	li	%r0,0
 	mtmsr	%r0
+
+	lis	%r5,oeacpufeat@ha
+	lwz	%r5,oeacpufeat@l(%r5)
+	andi.	%r5,%r5,OEACPU_64_BRIDGE
+	beq	6f
+	sync
+	slbia
+	sync
+	isync
+	clrldi	%r0,%r0,32
+	mtmsrd	%r0
+6:
 	isync
 
 	lis	%r4,_C_LABEL(cpu_hatch_stack)@ha
@@ -564,14 +569,16 @@ ENTRY(cpu_spinstart)
 
 #endif /*MULTIPROCESSOR + OEA*/
 
+#if 0 /* XXX CPU configuration spaghetti */
 /*
- * int do_ucas_32(int32_t *uptr, int32_t old, int32_t new, int32_t *ret);
+ * int do_ucas_32(uint32_t *uptr, uint32_t old, uint32_t new, uint32_t *ret);
  */
 ENTRY(do_ucas_32)
 1:
 	lwarx	%r10,0,%r3
 	cmpw	%r10, %r4
 	bne	2f
+	IBM405_ERRATA77_DCBT(0,%r3)
 	stwcx.	%r5,0,%r3
 	bne	1b
 	mr	%r5,%r10
@@ -579,3 +586,4 @@ ENTRY(do_ucas_32)
 	li	%r3,0
 	stw	%r10,0(%r6)
 	blr
+#endif

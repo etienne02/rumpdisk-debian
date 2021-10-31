@@ -1,4 +1,33 @@
-/*	$NetBSD: asm.h,v 1.27 2014/03/04 15:27:58 matt Exp $	*/
+/*	$NetBSD: asm.h,v 1.34 2020/04/23 23:22:41 jakllsch Exp $	*/
+
+/*-
+ * Copyright (c) 2014 The NetBSD Foundation, Inc.
+ * All rights reserved.
+ *
+ * This code is derived from software contributed to The NetBSD Foundation
+ * by Matt Thomas of 3am Software Foundry.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
+ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -38,8 +67,9 @@
 #define _ARM_ASM_H_
 
 #include <arm/cdefs.h>
-
-	.syntax		unified
+#if defined(_KERNEL_OPT)
+#include "opt_cpuoptions.h"
+#endif
 
 #ifdef __thumb__
 #define THUMB_INSN(n)	n
@@ -49,6 +79,10 @@
 
 #define	__BIT(n)	(1 << (n))
 #define __BITS(hi,lo)	((~((~0)<<((hi)+1)))&((~0)<<(lo)))
+
+#define __LOWEST_SET_BIT(__mask) ((((__mask) - 1) & (__mask)) ^ (__mask))
+#define __SHIFTOUT(__x, __mask) (((__x) & (__mask)) / __LOWEST_SET_BIT(__mask))
+#define __SHIFTIN(__x, __mask) ((__x) * __LOWEST_SET_BIT(__mask))
 
 #define _C_LABEL(x)	x
 #define	_ASM_LABEL(x)	x
@@ -68,6 +102,11 @@
 #ifndef _TEXT_SECTION
 #define _TEXT_SECTION	.text
 #endif
+
+#ifdef __arm__
+
+	.syntax		unified
+
 /*
  * gas/arm uses @ as a single comment character and thus cannot be used here
  * Instead it recognised the # instead of an @ symbols in .type directives
@@ -95,9 +134,44 @@
 #else
 # define _PROF_PROLOGUE
 #endif
+#endif
 
-#define	ENTRY(y)		_ENTRY(_C_LABEL(y)); _PROF_PROLOGUE
-#define	ENTRY_NP(y)		_ENTRY(_C_LABEL(y))
+#ifdef __aarch64__
+#define _ASM_TYPE_FUNCTION	@function
+#define _ASM_TYPE_OBJECT	@object
+#define _ENTRY(x) \
+	_TEXT_SECTION; _ALIGN_TEXT; .globl x; .type x,_ASM_TYPE_FUNCTION; x:
+#define	_END(x)		.size x,.-x
+
+#ifdef GPROF
+# define _PROF_PROLOGUE	\
+	stp	x29, x30, [sp, #-16]!;	\
+	mov	fp, sp;			\
+	bl	__mcount; 		\
+	ldp	x29, x30, [sp], #16;
+#else
+# define _PROF_PROLOGUE
+#endif
+
+#ifdef __PIC__
+#define GOTREF(x)		:got:x
+#define GOTLO12(x)		:got_lo12:x
+#else
+#define GOTREF(x)		x
+#define GOTLO12(x)		:lo12:x
+#endif
+#endif
+
+#ifdef ARMV85_BTI
+#define	_BTI_PROLOGUE \
+	.byte	0x5F, 0x24, 0x03, 0xD5	/* the "bti c" instruction */
+#else
+#define	_BTI_PROLOGUE		/* nothing */
+#endif
+
+#define	ENTRY(y)		_ENTRY(_C_LABEL(y)); _BTI_PROLOGUE ; _PROF_PROLOGUE
+#define	ENTRY_NP(y)		_ENTRY(_C_LABEL(y)); _BTI_PROLOGUE
+#define	ENTRY_NBTI(y)		_ENTRY(_C_LABEL(y))
 #define	END(y)			_END(_C_LABEL(y))
 #define	ARM_ENTRY(y)		_ARM_ENTRY(_C_LABEL(y)); _PROF_PROLOGUE
 #define	ARM_ENTRY_NP(y)		_ARM_ENTRY(_C_LABEL(y))
@@ -150,7 +224,9 @@
 #define	PIC_SYM(x,y)	x
 #endif	/* __PIC__ */
 
-#define RCSID(x)	.pushsection ".ident"; .asciz x; .popsection
+#define RCSID(x)	.pushsection ".ident","MS",%progbits,1;		\
+			.asciz x;					\
+			.popsection
 
 #define	WEAK_ALIAS(alias,sym)						\
 	.weak alias;							\
@@ -188,8 +264,10 @@
 #  define XPOPRET	ldmfd	sp!, {lr}; mov pc, lr
 # endif
 #endif
-  
-#if defined (_ARM_ARCH_4T)
+
+#if defined(__aarch64__)
+# define RET		ret
+#elif defined (_ARM_ARCH_4T)
 # define RET		bx		lr
 # define RETr(r)	bx		r
 # if defined(__thumb__)

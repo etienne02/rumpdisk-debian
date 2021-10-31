@@ -1,4 +1,4 @@
-/*      $NetBSD: procfs_linux.c,v 1.72 2016/03/28 17:23:47 mlelstv Exp $      */
+/*      $NetBSD: procfs_linux.c,v 1.87 2020/09/05 16:30:12 riastradh Exp $      */
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -36,10 +36,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_linux.c,v 1.72 2016/03/28 17:23:47 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_linux.c,v 1.87 2020/09/05 16:30:12 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/atomic.h>
 #include <sys/time.h>
 #include <sys/cpu.h>
 #include <sys/kernel.h>
@@ -63,8 +64,8 @@ __KERNEL_RCSID(0, "$NetBSD: procfs_linux.c,v 1.72 2016/03/28 17:23:47 mlelstv Ex
 #include <compat/linux/common/linux_exec.h>
 #include <compat/linux32/common/linux32_sysctl.h>
 
-#include <uvm/uvm_extern.h>
 #include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 
 extern struct devsw_conv *devsw_conv;
 extern int max_devsw_convs;
@@ -75,19 +76,15 @@ extern int max_devsw_convs;
 #define LBFSZ (8 * 1024)
 
 static void
-get_proc_size_info(struct lwp *l, unsigned long *stext, unsigned long *etext, unsigned long *sstack)
+get_proc_size_info(struct proc *p, struct vm_map *map, unsigned long *stext,
+    unsigned long *etext, unsigned long *sstack)
 {
-	struct proc *p = l->l_proc;
-	struct vmspace *vm;
-	struct vm_map *map;
 	struct vm_map_entry *entry;
 
 	*stext = 0;
 	*etext = 0;
 	*sstack = 0;
 
-	proc_vmspace_getref(p, &vm);
-	map = &vm->vm_map;
 	vm_map_lock_read(map);
 
 	for (entry = map->header.next; entry != &map->header;
@@ -128,7 +125,6 @@ get_proc_size_info(struct lwp *l, unsigned long *stext, unsigned long *etext, un
 	*sstack -= PAGE_SIZE;
 
 	vm_map_unlock_read(map);
-	uvmspace_free(vm);
 }
 
 /*
@@ -142,8 +138,20 @@ procfs_domeminfo(struct lwp *curl, struct proc *p,
 	char *bf;
 	int len;
 	int error = 0;
+	long filepg, anonpg, execpg, freepg;
 
 	bf = malloc(LBFSZ, M_TEMP, M_WAITOK);
+
+	/* uvm_availmem() will sync the counters if needed. */
+	freepg = (long)uvm_availmem(true);
+	filepg = (long)(cpu_count_get(CPU_COUNT_FILECLEAN) +
+	    cpu_count_get(CPU_COUNT_FILEDIRTY) + 
+	    cpu_count_get(CPU_COUNT_FILEUNKNOWN) -
+	    cpu_count_get(CPU_COUNT_EXECPAGES));
+	anonpg = (long)(cpu_count_get(CPU_COUNT_ANONCLEAN) +
+	    cpu_count_get(CPU_COUNT_ANONDIRTY) + 
+	    cpu_count_get(CPU_COUNT_ANONUNKNOWN));
+	execpg = (long)cpu_count_get(CPU_COUNT_EXECPAGES);
 
 	len = snprintf(bf, LBFSZ,
 		"        total:    used:    free:  shared: buffers: cached:\n"
@@ -157,19 +165,19 @@ procfs_domeminfo(struct lwp *curl, struct proc *p,
 		"SwapTotal: %8lu kB\n"
 		"SwapFree:  %8lu kB\n",
 		PGTOB(uvmexp.npages),
-		PGTOB(uvmexp.npages - uvmexp.free),
-		PGTOB(uvmexp.free),
+		PGTOB(uvmexp.npages - freepg),
+		PGTOB(freepg),
 		0L,
-		PGTOB(uvmexp.filepages),
-		PGTOB(uvmexp.anonpages + uvmexp.filepages + uvmexp.execpages),
+		PGTOB(filepg),
+		PGTOB(anonpg + filepg + execpg),
 		PGTOB(uvmexp.swpages),
 		PGTOB(uvmexp.swpginuse),
 		PGTOB(uvmexp.swpages - uvmexp.swpginuse),
 		PGTOKB(uvmexp.npages),
-		PGTOKB(uvmexp.free),
+		PGTOKB(freepg),
 		0L,
-		PGTOKB(uvmexp.filepages),
-		PGTOKB(uvmexp.anonpages + uvmexp.filepages + uvmexp.execpages),
+		PGTOKB(freepg),
+		PGTOKB(anonpg + filepg + execpg),
 		PGTOKB(uvmexp.swpages),
 		PGTOKB(uvmexp.swpages - uvmexp.swpginuse));
 
@@ -258,8 +266,6 @@ procfs_docpustat(struct lwp *curl, struct proc *p,
         CPU_INFO_ITERATOR cii;
 #endif
 	int	 	 i;
-	uint64_t	nintr;
-	uint64_t	nswtch;
 
 	error = ENAMETOOLONG;
 	bf = malloc(LBFSZ, M_TEMP, M_WAITOK);
@@ -282,8 +288,6 @@ procfs_docpustat(struct lwp *curl, struct proc *p,
 #endif
 
 	i = 0;
-	nintr = 0;
-	nswtch = 0;
 	for (ALLCPUS) {
 		len += snprintf(&bf[len], LBFSZ - len, 
 			"cpu%d %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64
@@ -295,22 +299,25 @@ procfs_docpustat(struct lwp *curl, struct proc *p,
 		if (len >= LBFSZ)
 			goto out;
 		i += 1;
-		nintr += CPUNAME->ci_data.cpu_nintr;
-		nswtch += CPUNAME->ci_data.cpu_nswtch;
 	}
+
+	cpu_count_sync(true);
+
+	struct timeval btv;
+	getmicroboottime(&btv);
 
 	len += snprintf(&bf[len], LBFSZ - len,
 			"disk 0 0 0 0\n"
 			"page %u %u\n"
 			"swap %u %u\n"
-			"intr %"PRIu64"\n"
-			"ctxt %"PRIu64"\n"
+			"intr %"PRId64"\n"
+			"ctxt %"PRId64"\n"
 			"btime %"PRId64"\n",
 			uvmexp.pageins, uvmexp.pdpageouts,
 			uvmexp.pgswapin, uvmexp.pgswapout,
-			nintr,
-			nswtch,
-			boottime.tv_sec);
+			cpu_count_get(CPU_COUNT_NINTR),
+			cpu_count_get(CPU_COUNT_NSWTCH),
+			btv.tv_sec);
 	if (len >= LBFSZ)
 		goto out;
 
@@ -345,7 +352,7 @@ procfs_doloadavg(struct lwp *curl, struct proc *p,
 		(int)(averunnable.ldavg[2] / averunnable.fscale),
 		(int)(averunnable.ldavg[2] * 100 / averunnable.fscale % 100),
 		1,		/* number of ONPROC processes */
-		nprocs,
+		atomic_load_relaxed(&nprocs),
 		30000);		/* last pid */
 	if (len == 0)
 		goto out;
@@ -379,14 +386,15 @@ procfs_do_pid_statm(struct lwp *curl, struct lwp *l,
 		goto out;
 	}
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	mutex_enter(p->p_lock);
 
 	/* retrieve RSS size */
-	fill_kproc2(p, &ki, false);
+	memset(&ki, 0, sizeof(ki));
+	fill_kproc2(p, &ki, false, false);
 
 	mutex_exit(p->p_lock);
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	uvmspace_free(vm);
 
@@ -435,12 +443,13 @@ procfs_do_pid_stat(struct lwp *curl, struct lwp *l,
 		goto out;
 	}
 
-	get_proc_size_info(l, &stext, &etext, &sstack);
+	get_proc_size_info(p, &vm->vm_map, &stext, &etext, &sstack);
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	mutex_enter(p->p_lock);
 
-	fill_kproc2(p, &ki, false);
+	memset(&ki, 0, sizeof(ki));
+	fill_kproc2(p, &ki, false, false);
 	calcru(p, NULL, NULL, NULL, &rt);
 
 	len = snprintf(bf, LBFSZ,
@@ -503,7 +512,7 @@ procfs_do_pid_stat(struct lwp *curl, struct lwp *l,
 	    ki.p_cpuid);				/* 39 task_cpu */
 
 	mutex_exit(p->p_lock);
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	uvmspace_free(vm);
 
@@ -603,26 +612,23 @@ procfs_domounts(struct lwp *curl, struct proc *p,
 {
 	char *bf, *mtab = NULL;
 	size_t mtabsz = 0;
-	struct mount *mp, *nmp;
+	mount_iterator_t *iter;
+	struct mount *mp;
 	int error = 0, root = 0;
 	struct cwdinfo *cwdi = curl->l_proc->p_cwdi;
+	struct statvfs *sfs;
 
 	bf = malloc(LBFSZ, M_TEMP, M_WAITOK);
 
-	mutex_enter(&mountlist_lock);
-	for (mp = TAILQ_FIRST(&mountlist); mp != NULL; mp = nmp) {
-		struct statvfs sfs;
-
-		if (vfs_busy(mp, &nmp))
-			continue;
-
-		if ((error = dostatvfs(mp, &sfs, curl, MNT_WAIT, 0)) == 0)
+	sfs = malloc(sizeof(*sfs), M_TEMP, M_WAITOK);
+	mountlist_iterator_init(&iter);
+	while ((mp = mountlist_iterator_next(iter)) != NULL) {
+		if ((error = dostatvfs(mp, sfs, curl, MNT_WAIT, 0)) == 0)
 			root |= procfs_format_sfs(&mtab, &mtabsz, bf, LBFSZ,
-			    &sfs, curl, 0);
-
-		vfs_unbusy(mp, false, &nmp);
+			    sfs, curl, 0);
 	}
-	mutex_exit(&mountlist_lock);
+	mountlist_iterator_destroy(iter);
+	free(sfs, M_TEMP);
 
 	/*
 	 * If we are inside a chroot that is not itself a mount point,

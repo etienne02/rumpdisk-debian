@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu_topology.c,v 1.9 2014/02/22 17:48:08 dsl Exp $	*/
+/*	$NetBSD: cpu_topology.c,v 1.19 2020/02/15 07:20:41 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2009 Mindaugas Rasiukevicius <rmind at NetBSD org>,
@@ -36,17 +36,42 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_topology.c,v 1.9 2014/02/22 17:48:08 dsl Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_topology.c,v 1.19 2020/02/15 07:20:41 skrll Exp $");
+
+#include "acpica.h"
 
 #include <sys/param.h>
 #include <sys/bitops.h>
+#include <sys/cpu.h>
 
 #include <machine/specialreg.h>
-#include <machine/cpu.h>
+
+#include <dev/acpi/acpi_srat.h>
 
 #include <x86/cpufunc.h>
 #include <x86/cputypes.h>
 #include <x86/cpuvar.h>
+
+static uint32_t
+x86_cpu_get_numa_node(uint32_t apic_id)
+{
+#if NACPICA > 0
+	uint32_t i, j, nn, nc;
+	struct acpisrat_cpu c;
+
+	nn = acpisrat_nodes();
+	for (i = 0; i < nn; i++) {
+		nc = acpisrat_node_cpus(i);
+		for (j = 0; j < nc; j++) {
+			acpisrat_cpu(i, j, &c);
+			if (c.apicid == apic_id) {
+				return c.nodeid;
+			}
+		}
+	}
+#endif
+	return 0;
+}
 
 void
 x86_cpu_topology(struct cpu_info *ci)
@@ -55,23 +80,31 @@ x86_cpu_topology(struct cpu_info *ci)
 	u_int core_max;		/* Core per package */
 	int n, cpu_family, apic_id, smt_bits, core_bits = 0;
 	uint32_t descs[4];
+	u_int package_id, core_id, smt_id, numa_id;
 
 	apic_id = ci->ci_initapicid;
 	cpu_family = CPUID_TO_FAMILY(ci->ci_signature);
 
 	/* Initial values. */
-	ci->ci_package_id = apic_id;
-	ci->ci_core_id = 0;
-	ci->ci_smt_id = 0;
+	package_id = apic_id;
+	core_id = 0;
+	smt_id = 0;
+	numa_id = x86_cpu_get_numa_node(apic_id);
 
 	switch (cpu_vendor) {
 	case CPUVENDOR_INTEL:
-		if (cpu_family < 6)
+		if (cpu_family < 6) {
+			cpu_topology_set(ci, package_id, core_id, smt_id,
+			    numa_id);
 			return;
+		}
 		break;
 	case CPUVENDOR_AMD:
-		if (cpu_family < 0xf)
+		if (cpu_family < 0xf) {
+			cpu_topology_set(ci, package_id, core_id, smt_id,
+			    numa_id);
 			return;
+		}
 		break;
 	default:
 		return;
@@ -81,7 +114,7 @@ x86_cpu_topology(struct cpu_info *ci)
 	if ((ci->ci_feat_val[0] & CPUID_HTT) != 0) {
 		/* Maximum number of LPs sharing a cache (ebx[23:16]). */
 		x86_cpuid(1, descs);
-		lp_max = (descs[1] >> 16) & 0xff;
+		lp_max = __SHIFTOUT(descs[1], CPUID_HTT_CORES);
 	} else {
 		lp_max = 1;
 	}
@@ -92,7 +125,8 @@ x86_cpu_topology(struct cpu_info *ci)
 		if (ci->ci_max_cpuid >= 4) {
 			/* Maximum number of Cores per package (eax[31:26]). */
 			x86_cpuid2(4, 0, descs);
-			core_max = (descs[0] >> 26) + 1;
+			core_max = __SHIFTOUT(descs[0], CPUID_DCP_CORE_P_PKG)
+			    + 1;
 		} else {
 			core_max = 1;
 		}
@@ -108,6 +142,7 @@ x86_cpu_topology(struct cpu_info *ci)
 			core_max = lp_max;
 			break;
 		}
+
 		/* Number of Cores (NC) per package (ecx[7:0]). */
 		x86_cpuid(0x80000008, descs);
 		core_max = (descs[2] & 0xff) + 1;
@@ -116,9 +151,9 @@ x86_cpu_topology(struct cpu_info *ci)
 		if (n != 0) {
 			/*
 			 * Extended Method.
-			 * core_bits = 2 ^ n (power of two)
+			 * core_max = 2 ^ n (power of two)
 			 */
-			core_bits = 1 << n;
+			core_bits = n;
 		}
 		break;
 	default:
@@ -150,15 +185,31 @@ x86_cpu_topology(struct cpu_info *ci)
 		}
 	}
 
+	/* Family 0x17 supports SMT */
+	if (cpu_vendor == CPUVENDOR_AMD && cpu_family == 0x17) { /* XXX */
+		x86_cpuid(0x8000001e, descs);
+		const u_int threads = ((descs[1] >> 8) & 0xff) + 1;
+
+		KASSERT(smt_bits == 0);
+		smt_bits = ilog2(threads);
+		KASSERT(smt_bits <= core_bits);
+		core_bits -= smt_bits;
+	}
+
 	if (smt_bits + core_bits) {
-		ci->ci_package_id = apic_id >> (smt_bits + core_bits);
+		if (smt_bits + core_bits < sizeof(apic_id) * NBBY)
+			package_id = apic_id >> (smt_bits + core_bits);
+		else
+			package_id = 0;
 	}
 	if (core_bits) {
 		u_int core_mask = __BITS(smt_bits, smt_bits + core_bits - 1);
-		ci->ci_core_id = __SHIFTOUT(apic_id, core_mask);
+		core_id = __SHIFTOUT(apic_id, core_mask);
 	}
 	if (smt_bits) {
 		u_int smt_mask = __BITS(0, smt_bits - 1);
-		ci->ci_smt_id = __SHIFTOUT(apic_id, smt_mask);
+		smt_id = __SHIFTOUT(apic_id, smt_mask);
 	}
+
+	cpu_topology_set(ci, package_id, core_id, smt_id, numa_id);
 }

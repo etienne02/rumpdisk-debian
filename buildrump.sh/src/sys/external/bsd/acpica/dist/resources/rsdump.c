@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -108,6 +108,11 @@ AcpiRsDumpResourceSource (
     ACPI_RESOURCE_SOURCE    *ResourceSource);
 
 static void
+AcpiRsDumpResourceLabel (
+    const char             *Title,
+    ACPI_RESOURCE_LABEL    *ResourceLabel);
+
+static void
 AcpiRsDumpAddressCommon (
     ACPI_RESOURCE_DATA      *Resource);
 
@@ -162,6 +167,11 @@ AcpiRsDumpResourceList (
             AcpiOsPrintf (
                 "Invalid descriptor type (%X) in resource list\n",
                 ResourceList->Type);
+            return;
+        }
+        else if (!ResourceList->Type)
+        {
+            ACPI_ERROR ((AE_INFO, "Invalid Zero Resource Type"));
             return;
         }
 
@@ -347,6 +357,11 @@ AcpiRsDumpDescriptor (
             AcpiRsOutString (Name, Table->Pointer [*Target & 0x07]);
             break;
 
+        case ACPI_RSD_6BITFLAG:
+
+            AcpiRsOutInteger8 (Name, (ACPI_GET8 (Target) & 0x3F));
+            break;
+
         case ACPI_RSD_SHORTLIST:
             /*
              * Short byte list (single line output) for DMA and IRQ resources
@@ -423,6 +438,22 @@ AcpiRsDumpDescriptor (
                 ACPI_RESOURCE_SOURCE, Target));
             break;
 
+        case ACPI_RSD_LABEL:
+            /*
+             * ResourceLabel
+             */
+            AcpiRsDumpResourceLabel ("Resource Label", ACPI_CAST_PTR (
+                ACPI_RESOURCE_LABEL, Target));
+            break;
+
+        case ACPI_RSD_SOURCE_LABEL:
+            /*
+             * ResourceSourceLabel
+             */
+            AcpiRsDumpResourceLabel ("Resource Source Label", ACPI_CAST_PTR (
+                ACPI_RESOURCE_LABEL, Target));
+            break;
+
         default:
 
             AcpiOsPrintf ("**** Invalid table opcode [%X] ****\n",
@@ -467,6 +498,32 @@ AcpiRsDumpResourceSource (
     AcpiRsOutString ("Resource Source",
         ResourceSource->StringPtr ?
             ResourceSource->StringPtr : "[Not Specified]");
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiRsDumpResourceLabel
+ *
+ * PARAMETERS:  Title              - Title of the dumped resource field
+ *              ResourceLabel      - Pointer to a Resource Label struct
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Common routine for dumping the ResourceLabel
+ *
+ ******************************************************************************/
+
+static void
+AcpiRsDumpResourceLabel (
+    const char             *Title,
+    ACPI_RESOURCE_LABEL    *ResourceLabel)
+{
+    ACPI_FUNCTION_ENTRY ();
+
+    AcpiRsOutString (Title,
+        ResourceLabel->StringPtr ?
+            ResourceLabel->StringPtr : "[Not Specified]");
 }
 
 
@@ -613,7 +670,7 @@ AcpiRsDumpByteList (
     UINT16                  Length,
     UINT8                   *Data)
 {
-    UINT8                   i;
+    UINT16                  i;
 
 
     for (i = 0; i < Length; i++)

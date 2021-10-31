@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -74,6 +74,7 @@
 #define ACPI_SIG_XSDT           "XSDT"      /* Extended  System Description Table */
 #define ACPI_SIG_SSDT           "SSDT"      /* Secondary System Description Table */
 #define ACPI_RSDP_NAME          "RSDP"      /* Short name for RSDP, not signature */
+#define ACPI_OEM_NAME           "OEM"       /* Short name for OEM, not signature */
 
 
 /*
@@ -104,14 +105,14 @@
 
 typedef struct acpi_table_header
 {
-    char                    Signature[ACPI_NAME_SIZE];          /* ASCII table signature */
+    char                    Signature[ACPI_NAMESEG_SIZE];       /* ASCII table signature */
     UINT32                  Length;                             /* Length of table in bytes, including this header */
     UINT8                   Revision;                           /* ACPI Specification minor version number */
     UINT8                   Checksum;                           /* To make sum of entire table == 0 */
     char                    OemId[ACPI_OEM_ID_SIZE];            /* ASCII OEM identification */
     char                    OemTableId[ACPI_OEM_TABLE_ID_SIZE]; /* ASCII OEM table identification */
     UINT32                  OemRevision;                        /* OEM revision number */
-    char                    AslCompilerId[ACPI_NAME_SIZE];      /* ASCII ASL compiler vendor ID */
+    char                    AslCompilerId[ACPI_NAMESEG_SIZE];   /* ASCII ASL compiler vendor ID */
     UINT32                  AslCompilerRevision;                /* ASL compiler version */
 
 } ACPI_TABLE_HEADER;
@@ -405,8 +406,23 @@ typedef struct acpi_table_desc
     ACPI_NAME_UNION                 Signature;
     ACPI_OWNER_ID                   OwnerId;
     UINT8                           Flags;
+    UINT16                          ValidationCount;
 
 } ACPI_TABLE_DESC;
+
+/*
+ * Maximum value of the ValidationCount field in ACPI_TABLE_DESC.
+ * When reached, ValidationCount cannot be changed any more and the table will
+ * be permanently regarded as validated.
+ *
+ * This is to prevent situations in which unbalanced table get/put operations
+ * may cause premature table unmapping in the OS to happen.
+ *
+ * The maximum validation count can be defined to any value, but should be
+ * greater than the maximum number of OS early stage mapping slots to avoid
+ * leaking early stage table mappings to the late stage.
+ */
+#define ACPI_MAX_TABLE_VALIDATIONS          ACPI_UINT16_MAX
 
 /* Masks for Flags field above */
 
@@ -414,6 +430,7 @@ typedef struct acpi_table_desc
 #define ACPI_TABLE_ORIGIN_INTERNAL_PHYSICAL (1) /* Physical address, internally mapped */
 #define ACPI_TABLE_ORIGIN_INTERNAL_VIRTUAL  (2) /* Virtual address, internallly allocated */
 #define ACPI_TABLE_ORIGIN_MASK              (3)
+#define ACPI_TABLE_IS_VERIFIED              (4)
 #define ACPI_TABLE_IS_LOADED                (8)
 
 

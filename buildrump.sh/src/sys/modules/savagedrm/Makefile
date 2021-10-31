@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.1 2011/08/28 16:19:08 jmcneill Exp $
+# $NetBSD: Makefile,v 1.4 2019/09/29 23:45:00 mrg Exp $
 
 .include "../Makefile.inc"
 
@@ -14,5 +14,11 @@ SRCS+=	savage_state.c
 
 CPPFLAGS+=	-I${S}/external/bsd/drm/dist/bsd-core \
 		-I${S}/external/bsd/drm/dist/shared-core
+
+WARNS=	3
+
+.if defined(HAVE_GCC) && ${HAVE_GCC} >= 7 && ${ACTIVE_CC} == "gcc"
+COPTS.savage_state.c+=	-Wno-error=implicit-fallthrough
+.endif
 
 .include <bsd.kmodule.mk>

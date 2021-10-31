@@ -1,4 +1,4 @@
-/* $NetBSD: param.h,v 1.1 2014/09/19 17:36:26 matt Exp $ */
+/* $NetBSD: param.h,v 1.6 2021/07/19 10:28:58 christos Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -32,6 +32,10 @@
 #ifndef	_RISCV_PARAM_H_
 #define	_RISCV_PARAM_H_
 
+#ifdef _KERNEL_OPT
+#include "opt_param.h"
+#endif
+
 /*
  * Machine dependent constants for all OpenRISC processors
  */
@@ -63,22 +67,10 @@
 #define STACK_ALIGNBYTES	(__BIGGEST_ALIGNMENT__ - 1)
 #define	ALIGNBYTES32	__BIGGEST_ALIGNMENT__
 
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define	DEV_BSIZE	(1 << DEV_BSHIFT)
-#define	BLKDEV_IOSIZE	2048
-
-#ifndef MAXPHYS
-#define	MAXPHYS		65536		/* max I/O transfer size */
-#endif
-
 #define NKMEMPAGES_MAX_DEFAULT	(2048UL * 1024 * 1024)
 #define NKMEMPAGES_MIN_DEFAULT	(128UL * 1024 * 1024)
 
-#ifdef _LP64
-#define PGSHIFT		13
-#else
 #define PGSHIFT		12
-#endif
 #define	NBPG		(1 << PGSHIFT)
 #define PGOFSET		(NBPG - 1)
 
@@ -99,6 +91,12 @@
 #endif	/* MCLSHIFT */
 
 #define	MCLBYTES	(1 << MCLSHIFT)	/* size of a m_buf cluster */
+
+#ifndef MSGBUFSIZE
+#define MSGBUFSIZE		65536	/* default message buffer size */
+#endif
+
+#define MAXCPUS			32
 
 #ifdef _KERNEL
 void delay(unsigned long);

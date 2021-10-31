@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.9 2011/03/18 16:30:01 tsutsui Exp $	*/
+/*	$NetBSD: param.h,v 1.11 2019/01/07 22:00:31 jdolecek Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -46,16 +46,11 @@
 
 #include <mips/mips_param.h>
 
-#define	DEV_BSIZE	512
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define BLKDEV_IOSIZE	2048
-#define	MAXPHYS		(64 * 1024)	/* max raw I/O transfer size */
-
 #ifdef _KERNEL
 #ifndef _LOCORE
 
 void	delay(int n);
-#define	DELAY	 	delay
+#define	DELAY(x)	 	delay(x)
 
 #include <machine/intr.h>
 

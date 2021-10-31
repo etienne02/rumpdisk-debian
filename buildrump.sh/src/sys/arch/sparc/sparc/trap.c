@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.195 2015/12/13 19:49:34 christos Exp $ */
+/*	$NetBSD: trap.c,v 1.200 2021/01/24 07:36:54 mrg Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -49,10 +49,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.195 2015/12/13 19:49:34 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.200 2021/01/24 07:36:54 mrg Exp $");
 
 #include "opt_ddb.h"
-#include "opt_compat_svr4.h"
 #include "opt_compat_sunos.h"
 #include "opt_sparc_arch.h"
 #include "opt_multiprocessor.h"
@@ -79,17 +78,15 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.195 2015/12/13 19:49:34 christos Exp $");
 #include <machine/pcb.h>
 #include <machine/pmap.h>
 #include <machine/userret.h>
+#include <machine/locore.h>
 
 #ifdef DDB
 #include <machine/db_machdep.h>
 #else
 #include <machine/frame.h>
 #endif
-#ifdef COMPAT_SVR4
-#include <machine/svr4_machdep.h>
-#endif
 #ifdef COMPAT_SUNOS
-extern struct emul emul_sunos;
+#include <compat/sunos/sunos_exec.h>
 #define SUNOS_MAXSADDR_SLOP (32 * 1024)
 #endif
 
@@ -107,10 +104,19 @@ int	rwindow_debug = 0;
  * set, no matter how it is interpreted.  Appendix N of the Sparc V8 document
  * seems to imply that we should do this, and it does make sense.
  */
-struct	fpstate initfpstate = {
-	{ ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0,
-	  ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0 },
-	0, 0,
+struct fpstate initfpstate = {
+    .fs_reg = { 
+	.fr_regs = { 
+	    ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0,
+	    ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0, ~0,
+	},
+	.fr_fsr = 0,
+    },
+    .fs_qsize = 0,
+    .fs_queue = { {
+	.fq_addr = NULL,
+	.fq_instr = 0,
+    }, },
 };
 
 /*
@@ -243,7 +249,6 @@ trap(unsigned type, int psr, int pc, struct trapframe *tf)
 #if defined(MULTIPROCESSOR)
 		if (type == T_DBPAUSE) {
 			/* XXX - deal with kgdb too */
-			extern void ddb_suspend(struct trapframe *);
 			write_all_windows();
 			ddb_suspend(tf);
 			ADVANCE;
@@ -338,9 +343,7 @@ trap(unsigned type, int psr, int pc, struct trapframe *tf)
 			ksi.ksi_addr = (void *)pc;
 			break;
 		}
-#if defined(COMPAT_SVR4)
-badtrap:
-#endif
+
 #ifdef DIAGNOSTIC
 		if (type < 0x90 || type > 0x9f) {
 			/* the following message is gratuitous */
@@ -355,19 +358,6 @@ badtrap:
 		ksi.ksi_code = ILL_ILLTRP;
 		ksi.ksi_addr = (void *)pc;
 		break;
-
-#ifdef COMPAT_SVR4
-	case T_SVR4_GETCC:
-	case T_SVR4_SETCC:
-	case T_SVR4_GETPSR:
-	case T_SVR4_SETPSR:
-	case T_SVR4_GETHRTIME:
-	case T_SVR4_GETHRVTIME:
-	case T_SVR4_GETHRESTIME:
-		if (!svr4_trap(type, l))
-			goto badtrap;
-		break;
-#endif
 
 	case T_AST:
 		break;	/* the work is all in userret() */
@@ -616,7 +606,6 @@ badtrap:
 		break;
 
 	case T_CPDISABLED:
-		uprintf("coprocessor instruction\n");	/* XXX */
 		sig = SIGILL;
 		KSI_INIT_TRAP(&ksi);
 		ksi.ksi_trap = type;
@@ -748,7 +737,7 @@ rwindow_save(struct lwp *l)
  * the registers into the new process after the exec.
  */
 void
-cpu_vmspace_exec(struct lwp *l, vaddr_t start, vaddr_t end)
+cpu_vmspace_exec(struct lwp *l, vaddr_t vstart, vaddr_t vend)
 {
 	struct pcb *pcb = lwp_getpcb(l);
 
@@ -829,14 +818,14 @@ mem_access_fault(unsigned type, int ser, u_int v, int pc, int psr,
 		 * instructions as read faults, so if the faulting instruction
 		 * is one of those, relabel this fault as both read and write.
 		 */
-		if ((fuword((void *)pc) & 0xc1680000) == 0xc0680000) {
+		u_int insn;
+		if (ufetch_int((void *)pc, &insn) == 0 &&
+		    (insn & 0xc1680000) == 0xc0680000) {
 			atype = VM_PROT_READ | VM_PROT_WRITE;
 		}
 	}
 	va = trunc_page(v);
 	if (psr & PSR_PS) {
-		extern char Lfsbail[];
-
 		if (type == T_TEXTFAULT) {
 			(void) splhigh();
 		        snprintb(bits, sizeof(bits), SER_BITS, ser);
@@ -849,7 +838,7 @@ mem_access_fault(unsigned type, int ser, u_int v, int pc, int psr,
 		 * If this was an access that we shouldn't try to page in,
 		 * resume at the fault handler without any action.
 		 */
-		if (onfault == (vaddr_t)Lfsbail) {
+		if (onfault == (vaddr_t)sparc_fsbail) {
 			rv = EFAULT;
 			goto kfault;
 		}
@@ -1165,7 +1154,6 @@ mem_access_fault4m(unsigned type, u_int sfsr, u_int sfva, struct trapframe *tf)
 	}
 
 	if (psr & PSR_PS) {
-		extern char Lfsbail[];
 		if (sfsr & SFSR_AT_TEXT || type == T_TEXTFAULT) {
 			(void) splhigh();
 			snprintb(bits, sizeof(bits), SFSR_BITS, sfsr);
@@ -1178,7 +1166,7 @@ mem_access_fault4m(unsigned type, u_int sfsr, u_int sfva, struct trapframe *tf)
 		 * If this was an access that we shouldn't try to page in,
 		 * resume at the fault handler without any action.
 		 */
-		if (onfault == (vaddr_t)Lfsbail) {
+		if (onfault == (vaddr_t)sparc_fsbail) {
 			rv = EFAULT;
 			goto kfault;
 		}

@@ -1,3 +1,5 @@
+/*	$NetBSD: rv770d.h,v 1.3 2019/10/16 01:44:48 msaitoh Exp $	*/
+
 /*
  * Copyright 2009 Advanced Micro Devices, Inc.
  * Copyright 2009 Red Hat Inc.
@@ -561,7 +563,7 @@
 #define	SQ_DYN_GPR_SIZE_SIMD_AB_5			0x8DC4
 #define	SQ_DYN_GPR_SIZE_SIMD_AB_6			0x8DC8
 #define	SQ_DYN_GPR_SIZE_SIMD_AB_7			0x8DCC
-#define		ES_PRIO(x)					((x) << 30)
+#define		ES_PRIO(x)					((u32)(x) << 30)
 #define	SQ_GPR_RESOURCE_MGMT_1				0x8C04
 #define		NUM_PS_GPRS(x)					((x) << 0)
 #define		NUM_VS_GPRS(x)					((x) << 16)
@@ -659,7 +661,7 @@
 #define DMA_RB_WPTR                                       0xd00c
 
 /* async DMA packets */
-#define DMA_PACKET(cmd, t, s, n)	((((cmd) & 0xF) << 28) |	\
+#define DMA_PACKET(cmd, t, s, n)	((((u32)(cmd) & 0xF) << 28) |	\
 					 (((t) & 0x1) << 23) |		\
 					 (((s) & 0x1) << 22) |		\
 					 (((n) & 0xFFFF) << 0))
@@ -989,6 +991,9 @@
 			 ((n) & 0x3FFF) << 16)
 
 /* UVD */
+#define UVD_SEMA_ADDR_LOW				0xef00
+#define UVD_SEMA_ADDR_HIGH				0xef04
+#define UVD_SEMA_CMD					0xef08
 #define UVD_GPCOM_VCPU_CMD				0xef0c
 #define UVD_GPCOM_VCPU_DATA0				0xef10
 #define UVD_GPCOM_VCPU_DATA1				0xef14

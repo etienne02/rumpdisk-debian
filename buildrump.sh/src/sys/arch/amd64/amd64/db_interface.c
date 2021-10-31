@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.24 2011/08/11 19:52:52 cherry Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.39 2021/02/23 07:13:51 mrg Exp $	*/
 
 /*
  * Mach Operating System
@@ -33,10 +33,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.24 2011/08/11 19:52:52 cherry Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.39 2021/02/23 07:13:51 mrg Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
+
+#include "lapic.h"
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -50,9 +52,13 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.24 2011/08/11 19:52:52 cherry Exp
 #include <machine/cpufunc.h>
 #include <machine/db_machdep.h>
 #include <machine/cpuvar.h>
+#if NIOAPIC > 0
 #include <machine/i82093var.h>
+#endif
+#if NLAPIC > 0
 #include <machine/i82489reg.h>
 #include <machine/i82489var.h>
+#endif
 
 #include <ddb/db_sym.h>
 #include <ddb/db_command.h>
@@ -64,9 +70,13 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.24 2011/08/11 19:52:52 cherry Exp
 extern const char *const trap_type[];
 extern int trap_types;
 
-int	db_active;
-db_regs_t ddb_regs;	/* register state */
-db_regs_t *ddb_regp;
+int	db_active = 0;
+#ifdef MULTIPROCESSOR
+/* ddb_regs defined as a macro */
+db_regs_t *ddb_regp = NULL;
+#else
+db_regs_t ddb_regs;
+#endif
 
 void db_mach_cpu (db_expr_t, bool, db_expr_t, const char *);
 
@@ -75,16 +85,16 @@ const struct db_command db_machine_command_table[] = {
 	{ DDB_ADD_CMD("cpu",	db_mach_cpu,	0,
 	  "switch to another cpu", "cpu-no", NULL) },
 #endif
-	{ DDB_ADD_CMD(NULL,     NULL,          0,NULL,NULL,NULL) },
+	{ DDB_END_CMD },
 };
 
 void kdbprinttrap(int, int);
 #ifdef MULTIPROCESSOR
 extern void ddb_ipi(struct trapframe);
 static void ddb_suspend(struct trapframe *);
-#ifndef XEN
+#ifndef XENPV
 int ddb_vec;
-#endif /* XEN */
+#endif /* XENPV */
 static bool ddb_mp_online;
 #endif
 
@@ -93,20 +103,27 @@ static bool ddb_mp_online;
 int ddb_cpu = NOCPU;
 
 typedef void (vector)(void);
-extern vector Xintrddb;
+extern vector Xintr_ddbipi, Xintr_x2apic_ddbipi;
 
 void
 db_machine_init(void)
 {
 
 #ifdef MULTIPROCESSOR
-#ifndef XEN
-	ddb_vec = idt_vec_alloc(0xf0, 0xff);
-	setgate((struct gate_descriptor *)&idt[ddb_vec], &Xintrddb, 1,
-	    SDT_SYS386IGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+#ifndef XENPV
+	struct idt_vec *iv = &(cpu_info_primary.ci_idtvec);
+	vector *handler = &Xintr_ddbipi;
+	idt_descriptor_t *idt = iv->iv_idt;
+#if NLAPIC > 0
+	if (lapic_is_x2apic())
+		handler = &Xintr_x2apic_ddbipi;
+#endif
+	ddb_vec = idt_vec_alloc(iv, 0xf0, 0xff);
+	set_idtgate(&idt[ddb_vec], handler, 1, SDT_SYS386IGT, SEL_KPL,
+	    GSEL(GCODE_SEL, SEL_KPL));
 #else
 	/* Initialised as part of xen_ipi_init() */
-#endif /* XEN */
+#endif /* XENPV */
 #endif
 }
 
@@ -120,10 +137,10 @@ db_suspend_others(void)
 	int cpu_me = cpu_number();
 	int win;
 
-#ifndef XEN
+#ifndef XENPV
 	if (ddb_vec == 0)
 		return 1;
-#endif /* XEN */
+#endif /* XENPV */
 
 	__cpu_simple_lock(&db_lock);
 	if (ddb_cpu == NOCPU)
@@ -131,12 +148,15 @@ db_suspend_others(void)
 	win = (ddb_cpu == cpu_me);
 	__cpu_simple_unlock(&db_lock);
 	if (win) {
-#ifdef XEN
+#ifdef XENPV
 		xen_broadcast_ipi(XEN_IPI_DDB);
 #else
-		x86_ipi(ddb_vec, LAPIC_DEST_ALLEXCL, LAPIC_DLMODE_FIXED);
-#endif /* XEN */
-
+#if NLAPIC > 0
+		if (ddb_vec != 0)
+			x86_ipi(ddb_vec, LAPIC_DEST_ALLEXCL,
+			    LAPIC_DLMODE_FIXED);
+#endif
+#endif /* XENPV */
 	}
 	ddb_mp_online = x86_mp_online;
 	x86_mp_online = false;
@@ -183,7 +203,9 @@ int
 kdb_trap(int type, int code, db_regs_t *regs)
 {
 	int s;
+#ifdef MULTIPROCESSOR
 	db_regs_t dbreg;
+#endif
 
 	switch (type) {
 	case T_NMI:	/* NMI */
@@ -194,7 +216,7 @@ kdb_trap(int type, int code, db_regs_t *regs)
 	case -1:	/* keyboard interrupt */
 		break;
 	default:
-		if (!db_onpanic && db_recover==0)
+		if (!db_onpanic && db_recover == 0)
 			return (0);
 
 		kdbprinttrap(type, code);
@@ -228,13 +250,17 @@ kdb_trap(int type, int code, db_regs_t *regs)
 	cnpollc(false);
 	db_active--;
 	splx(s);
-#ifdef MULTIPROCESSOR  
+#ifdef MULTIPROCESSOR
 	db_resume_others();
 	}
-#endif  
+	/* Restore dbreg because ddb_regp can be changed by db_mach_cpu */
 	ddb_regp = &dbreg;
+#endif
 
 	*regs = ddb_regs;
+#ifdef MULTIPROCESSOR
+	ddb_regp = NULL;
+#endif
 
 	return (1);
 }

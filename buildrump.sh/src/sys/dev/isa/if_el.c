@@ -1,4 +1,4 @@
-/*	$NetBSD: if_el.c,v 1.93 2016/06/10 13:27:14 ozaki-r Exp $	*/
+/*	$NetBSD: if_el.c,v 1.99 2020/01/29 06:21:40 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994, Matthew E. Kimmel.  Permission is hereby granted
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.93 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.99 2020/01/29 06:21:40 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.93 2016/06/10 13:27:14 ozaki-r Exp $");
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
+#include <net/bpf.h>
 
 #include <net/if_ether.h>
 
@@ -46,10 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.93 2016/06/10 13:27:14 ozaki-r Exp $");
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/cpu.h>
 #include <sys/intr.h>
@@ -239,7 +236,7 @@ elattach(device_t parent, device_t self, void *aux)
 	ifp->if_start = elstart;
 	ifp->if_ioctl = elioctl;
 	ifp->if_watchdog = elwatchdog;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX;
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Now we can attach the interface. */
@@ -384,7 +381,7 @@ elstart(struct ifnet *ifp)
 			break;
 
 		/* Give the packet to the bpf, if any. */
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		/* Disable the receiver. */
 		bus_space_write_1(iot, ioh, EL_AC, EL_AC_HOST);
@@ -392,7 +389,7 @@ elstart(struct ifnet *ifp)
 
 		/* Transfer datagram to board. */
 		DPRINTF(("el: xfr pkt length=%d...\n", m0->m_pkthdr.len));
-		off = EL_BUFSIZ - max(m0->m_pkthdr.len,
+		off = EL_BUFSIZ - uimax(m0->m_pkthdr.len,
 		    ETHER_MIN_LEN - ETHER_CRC_LEN);
 #ifdef DIAGNOSTIC
 		if ((off & 0xffff) != off)
@@ -418,7 +415,7 @@ elstart(struct ifnet *ifp)
 			bus_space_write_1(iot, ioh, EL_GPBL, off & 0xff);
 			bus_space_write_1(iot, ioh, EL_GPBH, (off >> 8) & 0xff);
 			if (el_xmit(sc)) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 			/* Check out status. */
@@ -427,7 +424,7 @@ elstart(struct ifnet *ifp)
 			if ((i & EL_TXS_READY) == 0) {
 				DPRINTF(("el: err txs=%x\n", i));
 				if (i & (EL_TXS_COLL | EL_TXS_COLL16)) {
-					ifp->if_collisions++;
+					if_statinc(ifp, if_collisions);
 					if ((i & EL_TXC_DCOLL16) == 0 &&
 					    retries < 15) {
 						retries++;
@@ -435,11 +432,11 @@ elstart(struct ifnet *ifp)
 						    EL_AC, EL_AC_HOST);
 					}
 				} else {
-					ifp->if_oerrors++;
+					if_statinc(ifp, if_oerrors);
 					break;
 				}
 			} else {
-				ifp->if_opackets++;
+				if_statinc(ifp, if_opackets);
 				break;
 			}
 		}
@@ -572,24 +569,16 @@ elread(struct el_softc *sc, int len)
 	    len > ETHER_MAX_LEN) {
 		printf("%s: invalid packet size %d; dropping\n",
 		    device_xname(sc->sc_dev), len);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
 	/* Pull packet off interface. */
 	m = elget(sc, len);
 	if (m == 0) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
-
-	ifp->if_ipackets++;
-
-	/*
-	 * Check if there's a BPF listener on this interface.
-	 * If so, hand off the raw packet to BPF.
-	 */
-	bpf_mtap(ifp, m);
 
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
@@ -627,7 +616,7 @@ elget(struct el_softc *sc, int totlen)
 			len = MCLBYTES;
 		}
 
-		m->m_len = len = min(totlen, len);
+		m->m_len = len = uimin(totlen, len);
 		bus_space_read_multi_1(iot, ioh, EL_BUF, mtod(m, u_int8_t *), len);
 
 		totlen -= len;
@@ -727,7 +716,7 @@ elwatchdog(struct ifnet *ifp)
 	struct el_softc *sc = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	sc->sc_ethercom.ec_if.if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	elreset(sc);
 }

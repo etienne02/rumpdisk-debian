@@ -1,4 +1,4 @@
-/*	$NetBSD: kttcp.c,v 1.39 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: kttcp.c,v 1.42 2018/12/22 14:28:56 maxv Exp $	*/
 
 /*
  * Copyright (c) 2002 Wasabi Systems, Inc.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kttcp.c,v 1.39 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kttcp.c,v 1.42 2018/12/22 14:28:56 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -297,7 +297,7 @@ nopages:
 					 * for protocol headers in first mbuf.
 					 */
 					if (atomic && top == 0 && len < mlen)
-						MH_ALIGN(m, len);
+						m_align(m, len);
 				}
 				resid -= len;
 				m->m_len = len;
@@ -376,7 +376,7 @@ kttcp_soreceive(struct socket *so, unsigned long long slen,
 		if (error)
 			goto bad;
 		do {
-			resid -= min(resid, m->m_len);
+			resid -= uimin(resid, m->m_len);
 			m = m_free(m);
 		} while (resid && error == 0 && m);
  bad:
@@ -474,8 +474,7 @@ kttcp_soreceive(struct socket *so, unsigned long long slen,
 			m = m->m_next;
 		} else {
 			sbfree(&so->so_rcv, m);
-			MFREE(m, so->so_rcv.sb_mb);
-			m = so->so_rcv.sb_mb;
+			m = so->so_rcv.sb_mb = m_free(m);
 		}
 	}
 	while (m && m->m_type == MT_CONTROL && error == 0) {
@@ -483,8 +482,7 @@ kttcp_soreceive(struct socket *so, unsigned long long slen,
 			m = m->m_next;
 		} else {
 			sbfree(&so->so_rcv, m);
-			MFREE(m, so->so_rcv.sb_mb);
-			m = so->so_rcv.sb_mb;
+			m = so->so_rcv.sb_mb = m_free(m);
 		}
 	}
 
@@ -562,8 +560,7 @@ kttcp_soreceive(struct socket *so, unsigned long long slen,
 					so->so_rcv.sb_mb = m = m->m_next;
 					*mp = NULL;
 				} else {
-					MFREE(m, so->so_rcv.sb_mb);
-					m = so->so_rcv.sb_mb;
+					m = so->so_rcv.sb_mb = m_free(m);
 				}
 				/*
 				 * If m != NULL, we also know that

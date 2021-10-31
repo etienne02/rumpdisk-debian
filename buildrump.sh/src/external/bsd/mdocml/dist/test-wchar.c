@@ -1,4 +1,4 @@
-/*	Id: test-wchar.c,v 1.3 2015/10/06 18:32:20 schwarze Exp 	*/
+/*	Id: test-wchar.c,v 1.5 2018/08/15 02:15:52 schwarze Exp 	*/
 /*
  * Copyright (c) 2014 Ingo Schwarze <schwarze@openbsd.org>
  *
@@ -14,10 +14,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-#if defined(__linux__) || defined(__MINT__)
-#define _GNU_SOURCE /* wcwidth() */
-#endif
 
 #include <locale.h>
 #include <stdio.h>
@@ -35,9 +31,9 @@ main(void)
 		return 1;
 	}
 
-	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL) {
-		fputs("setlocale(LC_CTYPE, \"en_US.UTF-8\") failed\n",
-		    stderr);
+	if (setlocale(LC_CTYPE, UTF8_LOCALE) == NULL) {
+		fprintf(stderr, "setlocale(LC_CTYPE, \"%s\") failed\n",
+		    UTF8_LOCALE);
 		return 1;
 	}
 

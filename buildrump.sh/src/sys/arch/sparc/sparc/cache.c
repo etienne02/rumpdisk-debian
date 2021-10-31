@@ -1,4 +1,4 @@
-/*	$NetBSD: cache.c,v 1.97 2007/03/04 09:03:34 macallan Exp $ */
+/*	$NetBSD: cache.c,v 1.102 2021/01/24 07:36:54 mrg Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cache.c,v 1.97 2007/03/04 09:03:34 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cache.c,v 1.102 2021/01/24 07:36:54 mrg Exp $");
 
 #include "opt_multiprocessor.h"
 #include "opt_sparc_arch.h"
@@ -72,25 +72,26 @@ __KERNEL_RCSID(0, "$NetBSD: cache.c,v 1.97 2007/03/04 09:03:34 macallan Exp $");
 
 #include <machine/ctlreg.h>
 #include <machine/pte.h>
+#include <machine/locore.h>
 
 #include <sparc/sparc/asm.h>
 #include <sparc/sparc/cache.h>
 #include <sparc/sparc/cpuvar.h>
 
 struct evcnt vcache_flush_pg =
-	EVCNT_INITIALIZER(EVCNT_TYPE_INTR,0,"vcfl","pg");
+	EVCNT_INITIALIZER(EVCNT_TYPE_MISC,0,"vcfl","pg");
 EVCNT_ATTACH_STATIC(vcache_flush_pg);
 struct evcnt vcache_flush_seg =
-	EVCNT_INITIALIZER(EVCNT_TYPE_INTR,0,"vcfl","seg");
+	EVCNT_INITIALIZER(EVCNT_TYPE_MISC,0,"vcfl","seg");
 EVCNT_ATTACH_STATIC(vcache_flush_seg);
 struct evcnt vcache_flush_reg =
-	EVCNT_INITIALIZER(EVCNT_TYPE_INTR,0,"vcfl","reg");
+	EVCNT_INITIALIZER(EVCNT_TYPE_MISC,0,"vcfl","reg");
 EVCNT_ATTACH_STATIC(vcache_flush_reg);
 struct evcnt vcache_flush_ctx =
-	EVCNT_INITIALIZER(EVCNT_TYPE_INTR,0,"vcfl","ctx");
+	EVCNT_INITIALIZER(EVCNT_TYPE_MISC,0,"vcfl","ctx");
 EVCNT_ATTACH_STATIC(vcache_flush_ctx);
 struct evcnt vcache_flush_range =
-	EVCNT_INITIALIZER(EVCNT_TYPE_INTR,0,"vcfl","rng");
+	EVCNT_INITIALIZER(EVCNT_TYPE_MISC,0,"vcfl","rng");
 EVCNT_ATTACH_STATIC(vcache_flush_range);
 
 int cache_alias_dist;		/* Cache anti-aliasing constants */
@@ -141,7 +142,7 @@ ms1_cache_enable(void)
 {
 	u_int pcr;
 
-	cache_alias_dist = max(
+	cache_alias_dist = uimax(
 		CACHEINFO.ic_totalsize / CACHEINFO.ic_associativity,
 		CACHEINFO.dc_totalsize / CACHEINFO.dc_associativity);
 	cache_alias_bits = (cache_alias_dist - 1) & ~PGOFSET;
@@ -166,7 +167,7 @@ ms1_cache_enable(void)
 	 * MS1 cache is write-through and not write-allocate, so we can
 	 * use cacheable access while not displacing cache lines.
 	 */
-	cpuinfo.flags |= CPUFLG_CACHE_MANDATORY;
+	CACHEINFO.c_flags |= CACHE_MANDATORY;
 }
 
 void
@@ -197,7 +198,7 @@ viking_cache_enable(void)
 		/* Set external cache enable bit in MXCC control register */
 		stda(MXCC_CTRLREG, ASI_CONTROL,
 		     ldda(MXCC_CTRLREG, ASI_CONTROL) | MXCC_CTRLREG_CE);
-		cpuinfo.flags |= CPUFLG_CACHEPAGETABLES; /* Ok to cache PTEs */
+		CACHEINFO.c_flags |= CACHE_PAGETABLES; /* Ok to cache PTEs */
 		CACHEINFO.ec_enabled = 1;
 	}
 }
@@ -258,7 +259,7 @@ swift_cache_enable(void)
 	int i, ls, ts;
 	u_int pcr;
 
-	cache_alias_dist = max(
+	cache_alias_dist = uimax(
 		CACHEINFO.ic_totalsize / CACHEINFO.ic_associativity,
 		CACHEINFO.dc_totalsize / CACHEINFO.dc_associativity);
 	cache_alias_bits = (cache_alias_dist - 1) & ~PGOFSET;
@@ -323,7 +324,7 @@ turbosparc_cache_enable(void)
 	/* External cache sizes in KB; see Turbo sparc manual */
 	static const int ts_ecache_table[8] = {0,256,512,1024,512,1024,1024,0};
 
-	cache_alias_dist = max(
+	cache_alias_dist = uimax(
 		CACHEINFO.ic_totalsize / CACHEINFO.ic_associativity,
 		CACHEINFO.dc_totalsize / CACHEINFO.dc_associativity);
 	cache_alias_bits = (cache_alias_dist - 1) & ~PGOFSET;
@@ -912,8 +913,6 @@ hypersparc_cache_flush_all(void)
 void
 cypress_cache_flush_all(void)
 {
-	extern char kernel_text[];
-
 	char *p;
 	int i, ls;
 
@@ -973,8 +972,8 @@ viking_pcache_flush_page(paddr_t pa, int invalidate_only)
 		 * +-------+-+-------+-+-------+-+-----------+----------------+
 		 *
 		 * PA: bits 12-35 of the physical address
-		 * S:  line shared bit
-		 * D:  line dirty bit
+		 * S:  line shared bit (not present on SuperSPARC-II)
+		 * D:  line dirty bit (not present on SuperSPARC-II)
 		 * V:  line valid bit
 		 */
 
@@ -1002,8 +1001,6 @@ viking_pcache_flush_page(paddr_t pa, int invalidate_only)
 		}
 
 	} else {
-		extern char kernel_text[];
-
 		/*
 		 * Force the cache to validate its backing memory
 		 * by displacing all cache lines with known read-only

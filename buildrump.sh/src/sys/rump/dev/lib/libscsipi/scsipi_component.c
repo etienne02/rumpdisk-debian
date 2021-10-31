@@ -1,4 +1,7 @@
-/*	$NetBSD: scsipi_component.c,v 1.2 2016/01/26 23:12:16 pooka Exp $	*/
+/*	$NetBSD: scsipi_component.c,v 1.5 2019/01/27 09:19:36 rin Exp $	*/
+
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: scsipi_component.c,v 1.5 2019/01/27 09:19:36 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>

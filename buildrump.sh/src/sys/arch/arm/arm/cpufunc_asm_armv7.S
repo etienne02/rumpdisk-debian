@@ -64,64 +64,87 @@ ENTRY(armv7_context_switch)
 END(armv7_context_switch)
 
 #ifdef ARM_MMU_EXTENDED_XXX
-ENTRY(armv7_tlb_flushID_ASID)
-#ifdef MULTIPROCESSOR
-	mcr	p15, 0, r0, c8, c3, 2	@ flush I+D tlb all ASID
-#else
+ENTRY(armv7up_tlb_flushID_ASID)
 	mcr	p15, 0, r0, c8, c7, 2	@ flush I+D tlb all ASID
-#endif
 	dsb				@ data synchronization barrier
 	isb
 	bx	lr
-END(armv7_tlb_flushID_ASID)
-#endif
+END(armv7up_tlb_flushID_ASID)
 
-STRONG_ALIAS(armv7_tlb_flushD_SE, armv7_tlb_flushID_SE)
-STRONG_ALIAS(armv7_tlb_flushI_SE, armv7_tlb_flushID_SE)
-ENTRY(armv7_tlb_flushID_SE)
-	bfc	r0, #0, #12		@ Always KERNEL_PID, i.e. 0
 #ifdef MULTIPROCESSOR
-	mcr	p15, 0, r0, c8, c3, 1	@ flush I+D tlb single entry
-#if PAGE_SIZE == 2*L2_S_SIZE
-	add	r0, r0, #L2_S_SIZE
-	mcr	p15, 0, r0, c8, c3, 1	@ flush I+D tlb single entry
-#endif
-#else /* !MULTIPROCESSOR */
-	mcr	p15, 0, r0, c8, c7, 1	@ flush I+D tlb single entry
-#if PAGE_SIZE == 2*L2_S_SIZE
-	add	r0, r0, #L2_S_SIZE
-	mcr	p15, 0, r0, c8, c7, 1	@ flush I+D tlb single entry
-#endif
-#endif /* !MULTIPROCESSOR */
+ENTRY(armv7mp_tlb_flushID_ASID)
+	mcr	p15, 0, r0, c8, c3, 2	@ flush I+D tlb all ASID
 	dsb				@ data synchronization barrier
 	isb
 	bx	lr
-END(armv7_tlb_flushID_SE)
+END(armv7mp_tlb_flushID_ASID)
+#endif
+#endif
 
-ENTRY(armv7_tlb_flushD)
+STRONG_ALIAS(armv7up_tlb_flushD_SE, armv7up_tlb_flushID_SE)
+STRONG_ALIAS(armv7up_tlb_flushI_SE, armv7up_tlb_flushID_SE)
+ENTRY(armv7up_tlb_flushID_SE)
+	bfc	r0, #0, #12		@ Always KERNEL_PID, i.e. 0
+	mcr	p15, 0, r0, c8, c7, 1	@ flush I+D tlb single entry
+#if PAGE_SIZE == 2*L2_S_SIZE
+	add	r0, r0, #L2_S_SIZE
+	mcr	p15, 0, r0, c8, c7, 1	@ flush I+D tlb single entry
+#endif
+	dsb				@ data synchronization barrier
+	isb
+	bx	lr
+END(armv7up_tlb_flushID_SE)
+
+#ifdef MULTIPROCESSOR
+STRONG_ALIAS(armv7mp_tlb_flushD_SE, armv7mp_tlb_flushID_SE)
+STRONG_ALIAS(armv7mp_tlb_flushI_SE, armv7mp_tlb_flushID_SE)
+ENTRY(armv7mp_tlb_flushID_SE)
+	bfc	r0, #0, #12		@ Always KERNEL_PID, i.e. 0
+	mcr	p15, 0, r0, c8, c3, 1	@ flush I+D tlb single entry
+#if PAGE_SIZE == 2*L2_S_SIZE
+	add	r0, r0, #L2_S_SIZE
+	mcr	p15, 0, r0, c8, c3, 1	@ flush I+D tlb single entry
+#endif
+	dsb				@ data synchronization barrier
+	isb
+	bx	lr
+END(armv7mp_tlb_flushID_SE)
+#endif
+
+#ifdef MULTIPROCESSOR
+STRONG_ALIAS(armv7mp_tlb_flushD, armv7up_tlb_flushD)
+#endif
+ENTRY(armv7up_tlb_flushD)
 	mov	r0, #0
 	mcr	p15, 0, r0, c8, c6, 0	@ flush entire D tlb
 	dsb				@ data synchronization barrier
 	isb
 	bx      lr
-END(armv7_tlb_flushD)
+END(armv7up_tlb_flushD)
 
-STRONG_ALIAS(armv7_tlb_flushI, armv7_tlb_flushID)
-ENTRY(armv7_tlb_flushID)
+STRONG_ALIAS(armv7up_tlb_flushI, armv7up_tlb_flushID)
+ENTRY(armv7up_tlb_flushID)
 	dsb
 	mov	r0, #0
-#ifdef MULTIPROCESSOR
-	mcr	p15, 0, r0, c8, c3, 0	@ flush entire I+D tlb, IS
-	mcr	p15, 0, r0, c7, c1, 6	@ branch predictor invalidate, IS
-#else
 	mcr	p15, 0, r0, c8, c7, 0	@ flush entire I+D tlb
 	mcr	p15, 0, r0, c7, c5, 6	@ branch predictor invalidate
-#endif
 	dsb				@ data synchronization barrier
 	isb
 	bx      lr
-END(armv7_tlb_flushID)
+END(armv7up_tlb_flushID)
 
+#ifdef MULTIPROCESSOR
+STRONG_ALIAS(armv7mp_tlb_flushI, armv7mp_tlb_flushID)
+ENTRY(armv7mp_tlb_flushID)
+	dsb
+	mov	r0, #0
+	mcr	p15, 0, r0, c8, c3, 0	@ flush entire I+D tlb, IS
+	mcr	p15, 0, r0, c7, c1, 6	@ branch predictor invalidate, IS
+	dsb				@ data synchronization barrier
+	isb
+	bx      lr
+END(armv7mp_tlb_flushID)
+#endif
 
 ENTRY_NP(armv7_setttb)
 	mrc	p15, 0, ip, c0, c0, 5	@ get MPIDR
@@ -324,7 +347,7 @@ ENTRY_NP(armv7_icache_inv_all)
 	mov	r2, ip			@ r2 now contains set way decr
 
 	/* r3 = ways/sets, r2 = way decr, r1 = set decr, r0 and ip are free */
-1:	mcr	p15, 0, r3, c7, c6, 2	@ invalidate line
+1:	mcr	p15, 0, r3, c7, c6, 2	@ DCISW (data cache invalidate by set/way)
 	movs	r0, r3			@ get current way/set
 	beq	2f			@ at 0 means we are done.
 	lsls	r0, r0, #10		@ clear way bits leaving only set bits
@@ -368,7 +391,7 @@ ENTRY_NP(armv7_dcache_l1inv_all)
 	sub	r2, r2, r0		@ subtract from way decr
 
 	/* r3 = ways/sets/level, r2 = way decr, r1 = set decr, r0 and ip are free */
-1:	mcr	p15, 0, r3, c7, c6, 2	@ invalidate line
+1:	mcr	p15, 0, r3, c7, c6, 2	@ DCISW (data cache invalidate by set/way)
 	cmp	r3, #15			@ are we done with this level (way/set == 0)
 	bls	.Ldone_l1inv		@ yes, we've finished
 	ubfx	r0, r3, #4, #18		@ extract set bits
@@ -422,7 +445,7 @@ ENTRY_NP(armv7_dcache_inv_all)
 	sub	r2, r2, r0		@ subtract from way decr
 
 	/* r3 = ways/sets/level, r2 = way decr, r1 = set decr, r0 and ip are free */
-1:	mcr	p15, 0, r3, c7, c6, 2	@ invalidate line
+1:	mcr	p15, 0, r3, c7, c6, 2	@ DCISW (data cache invalidate by set/way)
 	cmp	r3, #15			@ are we done with this level (way/set == 0)
 	bls	.Lnext_level_inv	@ yes, go to next level
 	ubfx	r0, r3, #4, #18		@ extract set bits
@@ -483,7 +506,7 @@ ENTRY_NP(armv7_dcache_wbinv_all)
 	sub	r2, r2, r0		@ subtract from way decr
 
 	/* r3 = ways/sets/level, r2 = way decr, r1 = set decr, r0 and ip are free */
-1:	mcr	p15, 0, r3, c7, c14, 2	@ writeback and invalidate line
+1:	mcr	p15, 0, r3, c7, c14, 2	@ DCCISW (data cache clean and invalidate by set/way)
 	cmp	r3, #15			@ are we done with this level (way/set == 0)
 	bls	.Lnext_level_wbinv	@ yes, go to next level
 	ubfx	r0, r3, #4, #18		@ extract set bits

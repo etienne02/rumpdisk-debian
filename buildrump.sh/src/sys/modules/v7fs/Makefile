@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.1 2011/07/19 19:19:09 tron Exp $
+#	$NetBSD: Makefile,v 1.3 2020/10/18 19:56:42 christos Exp $
 
 .include "../Makefile.inc"
 
@@ -21,5 +21,9 @@ SRCS+=	v7fs_io_kern.c
 SRCS+=	v7fs_extern.c
 SRCS+=	v7fs_vnops.c
 SRCS+=	v7fs_vfsops.c
+
+COPTS.v7fs_superblock.c += ${NO_ADDR_OF_PACKED_MEMBER}
+
+WARNS=	3
 
 .include <bsd.kmodule.mk>

@@ -1,4 +1,4 @@
-/*	$NetBSD: types.h,v 1.54 2016/01/24 19:49:35 christos Exp $	*/
+/*	$NetBSD: types.h,v 1.66 2021/04/01 04:35:46 simonb Exp $	*/
 
 /*-
  * Copyright (C) 1995 Wolfgang Solfrank.
@@ -31,8 +31,12 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef	_MACHTYPES_H_
-#define	_MACHTYPES_H_
+#ifndef	_POWERPC_TYPES_H_
+#define	_POWERPC_TYPES_H_
+
+#ifdef _KERNEL_OPT
+#include "opt_ppcarch.h"
+#endif
 
 #include <sys/cdefs.h>
 #include <sys/featuretest.h>
@@ -71,12 +75,12 @@ typedef struct label_t {
 typedef __uint32_t tlb_asid_t;		/* for booke */
 #endif
 
-#define __SIMPLELOCK_LOCKED	1
-#define __SIMPLELOCK_UNLOCKED	0
+#define	__SIMPLELOCK_LOCKED	1
+#define	__SIMPLELOCK_UNLOCKED	0
 
-#define __HAVE_CPU_COUNTER
-#define __HAVE_NEW_STYLE_BUS_H
-#define __HAVE_SYSCALL_INTERN
+#define	__HAVE_CPU_COUNTER
+#define	__HAVE_NEW_STYLE_BUS_H
+#define	__HAVE_SYSCALL_INTERN
 #define	__HAVE_CPU_DATA_FIRST
 #define	__HAVE_CPU_UAREA_ROUTINES
 #ifdef _LP64
@@ -87,6 +91,7 @@ typedef __uint32_t tlb_asid_t;		/* for booke */
 #define	__HAVE___LWP_GETTCB_FAST
 #define	__HAVE___LWP_SETTCB
 #define	__HAVE_TLS_VARIANT_I
+#define	__HAVE_BUS_SPACE_8
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 #define	PCU_FPU		0	/* FPU */
@@ -96,8 +101,16 @@ typedef __uint32_t tlb_asid_t;		/* for booke */
 
 #define	__HAVE_MM_MD_DIRECT_MAPPED_PHYS
 #define	__HAVE_MM_MD_KERNACC
+#if 0	/* XXX CPU configuration spaghetti */
+#define	__HAVE_UCAS_FULL
+#endif
 #if defined(_KERNEL)
 #define	__HAVE_RAS
 #endif
 
-#endif	/* _MACHTYPES_H_ */
+#ifndef PPC_IBM4XX
+/* XXX temporary */
+#define	__HAVE_UNLOCKED_PMAP
+#endif
+
+#endif	/* _POWERPC_TYPES_H_ */

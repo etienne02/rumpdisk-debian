@@ -1,4 +1,4 @@
-/*	$NetBSD: esp_sbus.c,v 1.53 2014/10/18 08:33:28 snj Exp $	*/
+/*	$NetBSD: esp_sbus.c,v 1.56 2021/02/23 07:13:53 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: esp_sbus.c,v 1.53 2014/10/18 08:33:28 snj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: esp_sbus.c,v 1.56 2021/02/23 07:13:53 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -191,19 +191,9 @@ espattach_sbus(device_t parent, device_t self, void *aux)
 		 * allocate space for dma, in SUNW,fas there are no separate
 		 * dma device
 		 */
-		lsc = malloc(sizeof(struct lsi64854_softc), M_DEVBUF, M_NOWAIT);
-
-		if (lsc == NULL) {
-			aprint_error(": out of memory (lsi64854_softc)\n");
-			return;
-		}
+		lsc = malloc(sizeof(struct lsi64854_softc), M_DEVBUF, M_WAITOK);
 		lsc->sc_dev = malloc(sizeof(struct device), M_DEVBUF,
-		    M_NOWAIT | M_ZERO);
-		if (lsc->sc_dev == NULL) {
-			aprint_error(": out of memory (device_t)\n");
-			free(lsc, M_DEVBUF);
-			return;
-		}
+		    M_WAITOK | M_ZERO);
 		esc->sc_dma = lsc;
 
 		lsc->sc_bustag = sa->sa_bustag;
@@ -697,7 +687,7 @@ const struct db_command db_esp_command_table[] = {
 	{ DDB_ADD_CMD("esp",	db_esp,	0, 
 	  "display status of all esp SCSI controllers and their devices",
 	  NULL, NULL) },
-	{ DDB_ADD_CMD(NULL,	NULL,	0, NULL, NULL, NULL) }
+	{ DDB_END_CMD },
 };
 
 static void
@@ -752,12 +742,13 @@ db_esp(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
 				    " busy %d used %x\n",
 				    t, (int)li->lun, li->untagged, li->busy,
 				    li->used);
-				for (i = 0; i < 256; i++)
+				for (i = 0; i < 256; i++) {
 					ecb = li->queued[i];
 					if (ecb != NULL) {
 						db_printf("ecb %p tag %x\n",
 						    ecb, i);
 					}
+				}
 			}
 		}
 	}

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -83,7 +83,7 @@ OpcDoPrintf (
 
     /* Store destination is the Debug op */
 
-    DestOp = TrAllocateNode (PARSEOP_DEBUG);
+    DestOp = TrAllocateOp (PARSEOP_DEBUG);
     DestOp->Asl.AmlOpcode = AML_DEBUG_OP;
     DestOp->Asl.Parent = Op;
     DestOp->Asl.LogicalLineNumber = Op->Asl.LogicalLineNumber;
@@ -131,7 +131,7 @@ OpcDoFprintf (
  * RETURN:      None
  *
  * DESCRIPTION: Convert printf macro to a Store AML operation. The printf
- *              macro parse tree is layed out as follows:
+ *              macro parse tree is laid out as follows:
  *
  *              Op        - printf parse op
  *              Op->Child - Format string
@@ -185,10 +185,10 @@ OpcParsePrintf (
 
         if (StringToProcess)
         {
-            NewString = UtStringCacheCalloc (StringLength + 1);
+            NewString = UtLocalCacheCalloc (StringLength + 1);
             strncpy (NewString, StartPosition, StringLength);
 
-            NewOp = TrAllocateNode (PARSEOP_STRING_LITERAL);
+            NewOp = TrAllocateOp (PARSEOP_STRING_LITERAL);
             NewOp->Asl.Value.String = NewString;
             NewOp->Asl.AmlOpcode = AML_STRING_OP;
             NewOp->Asl.AcpiBtype = ACPI_BTYPE_STRING;
@@ -244,12 +244,12 @@ OpcParsePrintf (
 
             /*
              * Append an empty string if the first argument is
-             * not a string. This will implicitly conver the 2nd
+             * not a string. This will implicitly convert the 2nd
              * concat source to a string per the ACPI specification.
              */
             if (!Op->Asl.Child)
             {
-                NewOp = TrAllocateNode (PARSEOP_STRING_LITERAL);
+                NewOp = TrAllocateOp (PARSEOP_STRING_LITERAL);
                 NewOp->Asl.Value.String = "";
                 NewOp->Asl.AmlOpcode = AML_STRING_OP;
                 NewOp->Asl.AcpiBtype = ACPI_BTYPE_STRING;
@@ -274,10 +274,10 @@ OpcParsePrintf (
 
     if (StringToProcess)
     {
-        NewString = UtStringCacheCalloc (StringLength + 1);
+        NewString = UtLocalCacheCalloc (StringLength + 1);
         strncpy (NewString, StartPosition, StringLength);
 
-        NewOp = TrAllocateNode (PARSEOP_STRING_LITERAL);
+        NewOp = TrAllocateOp (PARSEOP_STRING_LITERAL);
         NewOp->Asl.Value.String = NewString;
         NewOp->Asl.AcpiBtype = ACPI_BTYPE_STRING;
         NewOp->Asl.AmlOpcode = AML_STRING_OP;
@@ -315,7 +315,7 @@ OpcParsePrintf (
 
     /* Disable further optimization */
 
-    Op->Asl.CompileFlags &= ~NODE_COMPILE_TIME_CONST;
+    Op->Asl.CompileFlags &= ~OP_COMPILE_TIME_CONST;
     UtSetParseOpName (Op);
 
     /* Set Store destination */
@@ -353,8 +353,8 @@ OpcCreateConcatenateNode (
         return;
     }
 
-    NewConcatOp = TrAllocateNode (PARSEOP_CONCATENATE);
-    NewConcatOp->Asl.AmlOpcode = AML_CONCAT_OP;
+    NewConcatOp = TrAllocateOp (PARSEOP_CONCATENATE);
+    NewConcatOp->Asl.AmlOpcode = AML_CONCATENATE_OP;
     NewConcatOp->Asl.AcpiBtype = 0x7;
     NewConcatOp->Asl.LogicalLineNumber = Op->Asl.LogicalLineNumber;
 
@@ -371,7 +371,7 @@ OpcCreateConcatenateNode (
     /* Third arg is Zero (not used) */
 
     NewConcatOp->Asl.Child->Asl.Next->Asl.Next =
-        TrAllocateNode (PARSEOP_ZERO);
+        TrAllocateOp (PARSEOP_ZERO);
     NewConcatOp->Asl.Child->Asl.Next->Asl.Next->Asl.Parent =
         NewConcatOp;
 

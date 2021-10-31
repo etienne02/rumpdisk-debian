@@ -1,13 +1,14 @@
-# 	$NetBSD: files.wsfont,v 1.21 2015/01/25 20:09:42 christos Exp $
+# 	$NetBSD: files.wsfont,v 1.28 2020/11/21 23:00:02 rin Exp $
 
 defpseudo wsfont
 
 # Note: `wsfont_glue' is only here to force the header file's name
 #	hence it must be mentioned first  (shudder...)
 file	dev/wsfont/wsfont.c	(wsfont_glue & rasops_rotation) |
-    rasterconsole | wsdisplay | wsfont		needs-flag
+    rasterconsole | wsdisplay | wsfont | vcons		needs-flag
 
 defflag	opt_wsfont.h		FONT_BOLD8x16
+				FONT_BOLD16x32
 				FONT_GLASS10x19
 				FONT_GLASS10x25
 				FONT_GALLANT12x22
@@ -27,5 +28,13 @@ defflag	opt_wsfont.h		FONT_BOLD8x16
 				FONT_DROID_SANS_MONO12x22
 				FONT_DROID_SANS_MONO9x18
 				FONT_DROID_SANS_MONO19x36
+				FONT_GO_MONO12x23
+				FONT_SPLEEN5x8
+				FONT_SPLEEN6x12
+				FONT_SPLEEN8x16
+				FONT_SPLEEN12x24
+				FONT_SPLEEN16x32
+				FONT_SPLEEN32x64
+				FONT_LIBERATION_MONO12x21
 
 file	dev/wsfont/wsfontdev.c	wsfont needs-flag

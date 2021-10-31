@@ -1,4 +1,4 @@
-/*	$NetBSD: com_puc.c,v 1.23 2014/05/23 14:16:39 msaitoh Exp $	*/
+/*	$NetBSD: com_puc.c,v 1.27 2021/03/25 05:33:59 rin Exp $	*/
 
 /*
  * Copyright (c) 1998 Christopher G. Demetriou.  All rights reserved.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com_puc.c,v 1.23 2014/05/23 14:16:39 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com_puc.c,v 1.27 2021/03/25 05:33:59 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -91,7 +91,7 @@ com_puc_attach(device_t parent, device_t self, void *aux)
 	struct com_puc_softc *psc = device_private(self);
 	struct com_softc *sc = &psc->sc_com;
 	struct puc_attach_args *aa = aux;
-	const char *intrstr;
+	const char *intrstr = NULL;
 	char intrbuf[PCI_INTRSTR_LEN];
 	unsigned int iface;
 
@@ -103,18 +103,23 @@ com_puc_attach(device_t parent, device_t self, void *aux)
 		aprint_normal(" (%s-compatible)", serialtype[iface]);
 	aprint_normal(": ");
 
-	COM_INIT_REGS(sc->sc_regs, aa->t, aa->h, aa->a);
+	com_init_regs(&sc->sc_regs, aa->t, aa->h, aa->a);
 	sc->sc_frequency = aa->flags & PUC_COM_CLOCKMASK;
 
-	intrstr = pci_intr_string(aa->pc, aa->intrhandle, intrbuf, sizeof(intrbuf));
-	psc->sc_ih = pci_intr_establish(aa->pc, aa->intrhandle, IPL_SERIAL,
-	    comintr, sc);
-	if (psc->sc_ih == NULL) {
-		aprint_error("couldn't establish interrupt");
-		if (intrstr != NULL)
-			aprint_error(" at %s", intrstr);
-		aprint_error("\n");
-		return;
+	if (!aa->poll) {
+		intrstr = pci_intr_string(aa->pc, aa->intrhandle, intrbuf,
+		    sizeof(intrbuf));
+		psc->sc_ih = pci_intr_establish_xname(aa->pc, aa->intrhandle,
+		    IPL_SERIAL, comintr, sc, device_xname(self));
+		if (psc->sc_ih == NULL) {
+			aprint_error("couldn't establish interrupt");
+			if (intrstr != NULL)
+				aprint_error(" at %s", intrstr);
+			aprint_error("\n");
+			return;
+		}
+	} else {
+		sc->sc_poll_ticks = 1;
 	}
 
 #if defined(amd64) || defined(i386)
@@ -128,7 +133,10 @@ com_puc_attach(device_t parent, device_t self, void *aux)
 	if (aa->h < 0x10000)
 		aprint_normal("ioaddr 0x%04lx, ", aa->h);
 #endif
-	aprint_normal("interrupting at %s\n", intrstr);
+	if (!aa->poll)
+		aprint_normal("interrupting at %s\n", intrstr);
+	else
+		aprint_normal("polling\n");
 
 	/* Enable Cyberserial 8X clock. */
 	if (aa->flags & (PUC_COM_SIIG10x|PUC_COM_SIIG20x)) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.21 2012/07/27 22:13:58 matt Exp $	*/
+/*	$NetBSD: cpu.h,v 1.26 2021/05/31 14:38:56 simonb Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -38,14 +38,16 @@
 #ifndef	_IBM4XX_CPU_H_
 #define	_IBM4XX_CPU_H_
 
+#ifdef _KERNEL_OPT
+#include "opt_param.h"
+#endif
+
 #include <powerpc/psl.h>
 #include <powerpc/spr.h>
 #include <powerpc/ibm4xx/spr.h>
 #include <powerpc/ibm4xx/dcr4xx.h>
 
 #if defined(_KERNEL)
-extern char bootpath[];
-
 struct exc_info {
 	vaddr_t exc_vector;
 	const uint32_t *exc_addr; 
@@ -73,7 +75,7 @@ extern void ibm4xx_dumpsys(void);
 extern void ibm4xx_install_extint(void (*)(void));
 
 /* export from ibm4xx/ibm4xx_autoconf.c */
-extern void ibm4xx_device_register(device_t dev, void *aux);
+extern void ibm4xx_device_register(device_t, void *, int);
 
 /* export from ibm4xx/clock.c */
 extern void calc_delayconst(void);
@@ -88,13 +90,13 @@ extern void intr_init(void);
  * macros because register address is encoded as immediate
  * operand.
  */
-static inline void
+static __inline void
 mtdcr(int reg, uint32_t val)
 {
 	__asm volatile("mtdcr %0,%1" : : "K"(reg), "r"(val));
 }
 
-static inline uint32_t
+static __inline uint32_t
 mfdcr(int reg)
 {
 	uint32_t val;	
@@ -103,14 +105,14 @@ mfdcr(int reg)
 	return val;
 }
 
-static inline void
+static __inline void
 mtcpr(int reg, uint32_t val)
 {
 	mtdcr(DCR_CPR0_CFGADDR, reg);
 	mtdcr(DCR_CPR0_CFGDATA, val);
 }
 
-static inline uint32_t
+static __inline uint32_t
 mfcpr(int reg)
 {
 	mtdcr(DCR_CPR0_CFGADDR, reg);
@@ -124,7 +126,7 @@ mtsdr(int reg, uint32_t val)
 	mtdcr(DCR_SDR0_CFGDATA, val);
 }
 
-static inline uint32_t
+static __inline uint32_t
 mfsdr(int reg)
 {
 	mtdcr(DCR_SDR0_CFGADDR, reg);
@@ -146,24 +148,5 @@ extern char msgbuf[MSGBUFSIZE];
 /* Board info dictionary */
 extern prop_dictionary_t board_properties;
 extern void board_info_init(void);
-
-/*****************************************************************************/
-/* THIS CODE IS OBSOLETE. WILL BE REMOVED */
-/*
- * Board configuration structure from the OpenBIOS.
- */
-struct board_cfg_data {
-	unsigned char	usr_config_ver[4];
-	unsigned char	rom_sw_ver[30];
-	unsigned int	mem_size;
-	unsigned char	mac_address_local[6];
-	unsigned char	mac_address_pci[6];
-	unsigned int	processor_speed;
-	unsigned int	plb_speed;
-	unsigned int	pci_speed;
-};
-
-extern struct board_cfg_data board_data;
-/*****************************************************************************/
 
 #endif	/* _IBM4XX_CPU_H_ */

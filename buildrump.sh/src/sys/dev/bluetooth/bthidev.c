@@ -1,4 +1,4 @@
-/*	$NetBSD: bthidev.c,v 1.29 2014/08/05 07:55:31 rtr Exp $	*/
+/*	$NetBSD: bthidev.c,v 1.34 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bthidev.c,v 1.29 2014/08/05 07:55:31 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bthidev.c,v 1.34 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/condvar.h>
@@ -54,7 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: bthidev.c,v 1.29 2014/08/05 07:55:31 rtr Exp $");
 #include <netbt/bluetooth.h>
 #include <netbt/l2cap.h>
 
-#include <dev/usb/hid.h>
+#include <dev/hid/hid.h>
 #include <dev/bluetooth/btdev.h>
 #include <dev/bluetooth/bthid.h>
 #include <dev/bluetooth/bthidev.h>
@@ -172,7 +172,7 @@ bthidev_match(device_t self, cfdata_t cfdata, void *aux)
 	prop_object_t obj;
 
 	obj = prop_dictionary_get(dict, BTDEVservice);
-	if (prop_string_equals_cstring(obj, "HID"))
+	if (prop_string_equals_string(obj, "HID"))
 		return 1;
 
 	return 0;
@@ -216,24 +216,24 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 	 * extract config from proplist
 	 */
 	obj = prop_dictionary_get(dict, BTDEVladdr);
-	bdaddr_copy(&sc->sc_laddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_laddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(dict, BTDEVraddr);
-	bdaddr_copy(&sc->sc_raddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_raddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(dict, BTDEVvendor);
-	vendor = (int)prop_number_integer_value(obj);
+	vendor = (int)prop_number_signed_value(obj);
 
 	obj = prop_dictionary_get(dict, BTDEVproduct);
-	product = (int)prop_number_integer_value(obj);
+	product = (int)prop_number_signed_value(obj);
 
 	obj = prop_dictionary_get(dict, BTDEVmode);
 	if (prop_object_type(obj) == PROP_TYPE_STRING) {
-		if (prop_string_equals_cstring(obj, BTDEVauth))
+		if (prop_string_equals_string(obj, BTDEVauth))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_AUTH);
-		else if (prop_string_equals_cstring(obj, BTDEVencrypt))
+		else if (prop_string_equals_string(obj, BTDEVencrypt))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_ENCRYPT);
-		else if (prop_string_equals_cstring(obj, BTDEVsecure))
+		else if (prop_string_equals_string(obj, BTDEVsecure))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_SECURE);
 		else  {
 			aprint_error(" unknown %s\n", BTDEVmode);
@@ -241,13 +241,13 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 		}
 
 		aprint_verbose(" %s %s", BTDEVmode,
-					 prop_string_cstring_nocopy(obj));
+					 prop_string_value(obj));
 	} else
 		sockopt_setint(&sc->sc_mode, 0);
 
 	obj = prop_dictionary_get(dict, BTHIDEVcontrolpsm);
 	if (prop_object_type(obj) == PROP_TYPE_NUMBER) {
-		sc->sc_ctlpsm = prop_number_integer_value(obj);
+		sc->sc_ctlpsm = prop_number_signed_value(obj);
 		if (L2CAP_PSM_INVALID(sc->sc_ctlpsm)) {
 			aprint_error(" invalid %s\n", BTHIDEVcontrolpsm);
 			return;
@@ -256,7 +256,7 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 
 	obj = prop_dictionary_get(dict, BTHIDEVinterruptpsm);
 	if (prop_object_type(obj) == PROP_TYPE_NUMBER) {
-		sc->sc_intpsm = prop_number_integer_value(obj);
+		sc->sc_intpsm = prop_number_signed_value(obj);
 		if (L2CAP_PSM_INVALID(sc->sc_intpsm)) {
 			aprint_error(" invalid %s\n", BTHIDEVinterruptpsm);
 			return;
@@ -266,7 +266,7 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 	obj = prop_dictionary_get(dict, BTHIDEVdescriptor);
 	if (prop_object_type(obj) == PROP_TYPE_DATA) {
 		dlen = prop_data_size(obj);
-		desc = prop_data_data_nocopy(obj);
+		desc = prop_data_value(obj);
 	} else {
 		aprint_error(" no %s\n", BTHIDEVdescriptor);
 		return;
@@ -284,7 +284,7 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 	h.report_ID = 0;
 	d = hid_start_parse(desc, dlen, hid_none);
 	while (hid_get_item(d, &h)) {
-		if (h.report_ID > maxid)
+		if ((int)h.report_ID > maxid)
 			maxid = h.report_ID;
 	}
 	hid_end_parse(d);
@@ -319,8 +319,10 @@ bthidev_attach(device_t parent, device_t self, void *aux)
 
 		locs[BTHIDBUSCF_REPORTID] = rep;
 
-		dev = config_found_sm_loc(self, "bthidbus",
-					locs, &bha, bthidev_print, config_stdsubmatch);
+		dev = config_found(self, &bha, bthidev_print,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .iattr = "bthidbus",
+			   .locators = locs));
 		if (dev != NULL) {
 			hidev = device_private(dev);
 			hidev->sc_dev = dev;

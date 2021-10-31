@@ -1,4 +1,4 @@
-/*	$NetBSD: mips_fixup.c,v 1.16 2016/07/11 19:17:55 skrll Exp $	*/
+/*	$NetBSD: mips_fixup.c,v 1.21 2021/02/16 06:06:58 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mips_fixup.c,v 1.16 2016/07/11 19:17:55 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mips_fixup.c,v 1.21 2021/02/16 06:06:58 simonb Exp $");
 
 #include "opt_mips3_wired.h"
 #include "opt_multiprocessor.h"
@@ -145,11 +145,19 @@ mips_fixup_exceptions(mips_fixup_callback_t callback, void *arg)
 				}
 				lui_insnp = NULL;
 			}
+		} else if (INSN_LOAD_P(insn)) {
+			/*
+			 * If we are loading the register used in the LUI,
+			 * then that LUI is meaningless now.
+			 */
+			size_t rt = (insn >> 16) & 31;
+			if (lui_reg == rt)
+				lui_insn = 0;
 		}
 	}
 
 	if (fixed)
-		mips_icache_sync_range((vaddr_t)start,
+		mips_icache_sync_range((intptr_t)start,
 		   sizeof(start[0]) * (end - start));
 
 	return fixed;
@@ -278,11 +286,25 @@ mips_fixup_addr(const uint32_t *stubp)
 	 *	dmtc0	at, $22
 	 *	jr	t9
 	 *	nop
+	 *
+	 * A profiled n32/n64 stub will start with:
+	 *	move	ta, ra
+	 *	jal	_mcount
+	 *	 nop
 	 */
 	mips_reg_t regs[32];
 	uint32_t used = 1 |__BIT(_R_A0)|__BIT(_R_A1)|__BIT(_R_A2)|__BIT(_R_A3);
 	size_t n;
 	const char *errstr = "mips";
+
+#ifdef GPROF
+	static uint32_t mcount_addr = 0;
+	extern void _mcount(u_long, u_long);	/* XXX decl */
+
+	if (mcount_addr == 0)
+		mcount_addr = (uint32_t)(uintptr_t)_mcount & 0x0fffffff;
+#endif /* GPROF */
+
 	/*
 	 * This is basically a small MIPS emulator for those instructions
 	 * that might be in a stub routine.
@@ -353,6 +375,14 @@ mips_fixup_addr(const uint32_t *stubp)
 				goto out;
 			}
 			break;
+#ifdef GPROF
+		case OP_JAL:
+			if (insn.JType.target << 2 != mcount_addr) {
+				errstr = "JAL-non-_mcount";
+				goto out;
+			}
+			break;
+#endif /* GPROF */
 		case OP_SPECIAL:
 			switch (insn.RType.func) {
 			case OP_JALR:
@@ -396,6 +426,19 @@ mips_fixup_addr(const uint32_t *stubp)
 					goto out;
 				}
 				break;
+#ifdef GPROF
+			case OP_OR:
+				if (insn.RType.rt != 0) {
+					errstr = "NON-MOVE OR";
+					goto out;
+				}
+				if (insn.RType.rd != 1 ||
+				    insn.RType.rs != 31) {
+					errstr = "NON at,ra MOVE";
+					goto out;
+				}
+				break;
+#endif /* GPROF */
 			case OP_DSLL:
 			default:
 				errstr = "SPECIAL";
@@ -483,7 +526,7 @@ mips_fixup_stubs(uint32_t *start, uint32_t *end)
 	if (sizeof(uint32_t [end - start]) > mips_cache_info.mci_picache_size)
 		mips_icache_sync_all();
 	else
-		mips_icache_sync_range((vaddr_t)start,
+		mips_icache_sync_range((intptr_t)start,
 		    sizeof(uint32_t [end - start]));
 
 #ifdef DEBUG
@@ -528,7 +571,7 @@ mips_cpu_switch_resume(struct lwp *l)
 tlb_asid_t
 tlb_get_asid(void)
 {
-	return (*mips_locore_jumpvec.ljv_tlb_get_asid)();  
+	return (*mips_locore_jumpvec.ljv_tlb_get_asid)();
 }
 
 void
@@ -662,26 +705,22 @@ __strong_alias(_atomic_cas_64, _atomic_cas_ulong)
 __strong_alias(_atomic_cas_64_ni, _atomic_cas_ulong)
 #endif
 
-int	ucas_uint(volatile u_int *, u_int, u_int, u_int *)	__stub;
-int	ucas_ulong(volatile u_long *, u_long, u_long, u_long *)	__stub;
-
+int	__ucas_32(volatile uint32_t *, uint32_t, uint32_t, uint32_t *) __stub;
 int
-ucas_uint(volatile u_int *ptr, u_int old, u_int new, u_int *retp)
+__ucas_32(volatile uint32_t *ptr, uint32_t old, uint32_t new, uint32_t *retp)
 {
 
-	return (*mips_locore_atomicvec.lav_ucas_uint)(ptr, old, new, retp);
+	return (*mips_locore_atomicvec.lav_ucas_32)(ptr, old, new, retp);
 }
-__strong_alias(ucas_32, ucas_uint);
-__strong_alias(ucas_int, ucas_uint);
+__strong_alias(_ucas_32,__ucas_32);
 
-int
-ucas_ulong(volatile u_long *ptr, u_long old, u_long new, u_long *retp)
-{
-
-	return (*mips_locore_atomicvec.lav_ucas_ulong)(ptr, old, new, retp);
-}
-__strong_alias(ucas_ptr, ucas_ulong);
-__strong_alias(ucas_long, ucas_ulong);
 #ifdef _LP64
-__strong_alias(ucas_64, ucas_ulong);
-#endif
+int	__ucas_64(volatile uint64_t *, uint64_t, uint64_t, uint64_t *) __stub;
+int
+__ucas_64(volatile uint64_t *ptr, uint64_t old, uint64_t new, uint64_t *retp)
+{
+
+	return (*mips_locore_atomicvec.lav_ucas_64)(ptr, old, new, retp);
+}
+__strong_alias(_ucas_64,__ucas_64);
+#endif /* _LP64 */

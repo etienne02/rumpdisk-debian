@@ -1,5 +1,5 @@
 /*	$KAME: dccp_var.h,v 1.29 2005/11/03 14:59:28 nishida Exp $	*/
-/*	$NetBSD: dccp_var.h,v 1.3 2016/07/07 06:55:43 msaitoh Exp $ */
+/*	$NetBSD: dccp_var.h,v 1.5 2018/09/14 05:09:51 maxv Exp $ */
 
 /*
  * Copyright (c) 2003 Joacim Häggmark, Magnus Erixzon, Nils-Erik Mattsson 
@@ -258,14 +258,6 @@ extern const char *dccpstates[];
 #define DCCPCTL_SENDSPACE	4
 #define DCCPCTL_RECVSPACE	5
 
-#define DCCPCTL_NAMES { \
-	{ 0, 0 }, \
-	{ "defccid", CTLTYPE_INT }, \
-	{ "stats", CTLTYPE_STRUCT }, \
-	{ "sendspace", CTLTYPE_INT }, \
-	{ "recvspace", CTLTYPE_INT }, \
-}
-
 #ifdef _KERNEL
 
 #ifdef DCCP_DEBUG_ON
@@ -295,7 +287,7 @@ extern struct inpcbtable dccpbtable;
 /* These four functions are called from inetsw (in_proto.c) */
 void	dccp_init(void);
 void	dccp_log(int, const char *, ...);
-void	dccp_input(struct mbuf *, ...);
+void	dccp_input(struct mbuf *, int, int);
 void*	dccp_ctlinput(int, const struct sockaddr *, void *);
 int	dccp_ctloutput(int , struct socket *, struct sockopt *);
 int	dccp_sysctl(int *, u_int, void *, size_t *, void *, size_t);

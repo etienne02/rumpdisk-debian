@@ -1,4 +1,4 @@
-/*	$NetBSD: ahc_cardbus.c,v 1.36 2016/07/14 04:00:45 msaitoh Exp $	*/
+/*	$NetBSD: ahc_cardbus.c,v 1.38 2019/11/10 21:16:34 chs Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2005 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahc_cardbus.c,v 1.36 2016/07/14 04:00:45 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahc_cardbus.c,v 1.38 2019/11/10 21:16:34 chs Exp $");
 
 #include "opt_ahc_cardbus.h"
 
@@ -200,10 +200,7 @@ ahc_cardbus_attach(device_t parent, device_t self, void *aux)
 	}
 
 	ahc->seep_config = malloc(sizeof(*ahc->seep_config),
-				  M_DEVBUF, M_NOWAIT);
-	if (ahc->seep_config == NULL)
-		return;
-
+				  M_DEVBUF, M_WAITOK);
 	ahc_check_extport(ahc, &sxfrctl1);
 	/*
 	 * Take the LED out of diagnostic mode.
@@ -228,8 +225,6 @@ ahc_cardbus_attach(device_t parent, device_t self, void *aux)
 		ahc_outb(ahc, SCSICONF, our_id | ENSPCHK | RESET_SCSI);
 		ahc->our_id = our_id;
 	}
-
-	printf("%s: aic7860", ahc_name(ahc));
 
 	/*
 	 * Record our termination setting for the

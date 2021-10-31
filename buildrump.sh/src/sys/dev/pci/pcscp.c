@@ -1,4 +1,4 @@
-/*	$NetBSD: pcscp.c,v 1.47 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: pcscp.c,v 1.49 2018/12/09 11:14:02 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999 The NetBSD Foundation, Inc.
@@ -35,11 +35,11 @@
  * written by Izumi Tsutsui <tsutsui@NetBSD.org>
  *
  * Technical manual available at
- * http://www.amd.com/files/connectivitysolutions/networking/archivednetworking/19113.pdf
+ * http://support.amd.com/TechDocs/19113.pdf
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcscp.c,v 1.47 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcscp.c,v 1.49 2018/12/09 11:14:02 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -284,8 +284,8 @@ pcscp_attach(device_t parent, device_t self, void *aux)
 	}
 
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	esc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO,
-	    ncr53c9x_intr, esc);
+	esc->sc_ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO,
+	    ncr53c9x_intr, esc, device_xname(self));
 	if (esc->sc_ih == NULL) {
 		aprint_error(": couldn't establish interrupt");
 		if (intrstr != NULL)

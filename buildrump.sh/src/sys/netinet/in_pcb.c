@@ -1,4 +1,4 @@
-/*	$NetBSD: in_pcb.c,v 1.167 2016/07/20 03:38:09 ozaki-r Exp $	*/
+/*	$NetBSD: in_pcb.c,v 1.185 2020/09/08 14:12:57 christos Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -93,7 +93,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in_pcb.c,v 1.167 2016/07/20 03:38:09 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in_pcb.c,v 1.185 2020/09/08 14:12:57 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -103,7 +103,6 @@ __KERNEL_RCSID(0, "$NetBSD: in_pcb.c,v 1.167 2016/07/20 03:38:09 ozaki-r Exp $")
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
-#include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/ioctl.h>
@@ -193,9 +192,9 @@ in_pcballoc(struct socket *so, void *v)
 	struct inpcb *inp;
 	int s;
 
-	s = splnet();
+	KASSERT(so->so_proto->pr_domain->dom_family == AF_INET);
+
 	inp = pool_get(&inpcb_pool, PR_NOWAIT);
-	splx(s);
 	if (inp == NULL)
 		return (ENOBUFS);
 	memset(inp, 0, sizeof(*inp));
@@ -205,19 +204,21 @@ in_pcballoc(struct socket *so, void *v)
 	inp->inp_errormtu = -1;
 	inp->inp_portalgo = PORTALGO_DEFAULT;
 	inp->inp_bindportonsend = false;
+	inp->inp_prefsrcip.s_addr = INADDR_ANY;
+	inp->inp_overudp_cb = NULL;
+	inp->inp_overudp_arg = NULL;
 #if defined(IPSEC)
 	if (ipsec_enabled) {
 		int error = ipsec_init_pcbpolicy(so, &inp->inp_sp);
 		if (error != 0) {
-			s = splnet();
 			pool_put(&inpcb_pool, inp);
-			splx(s);
 			return error;
 		}
+		inp->inp_sp->sp_inph = (struct inpcb_hdr *)inp;
 	}
 #endif
 	so->so_pcb = inp;
-	s = splnet();
+	s = splsoftnet();
 	TAILQ_INSERT_HEAD(&table->inpt_queue, &inp->inp_head, inph_queue);
 	LIST_INSERT_HEAD(INPCBHASH_PORT(table, inp->inp_lport), &inp->inp_head,
 	    inph_lhash);
@@ -272,30 +273,54 @@ in_pcbsetport(struct sockaddr_in *sin, struct inpcb *inp, kauth_cred_t cred)
 	return (0);
 }
 
-static int
-in_pcbbind_addr(struct inpcb *inp, struct sockaddr_in *sin, kauth_cred_t cred)
+int
+in_pcbbindableaddr(const struct inpcb *inp, struct sockaddr_in *sin,
+    kauth_cred_t cred)
 {
+	int error = EADDRNOTAVAIL;
+	struct ifaddr *ifa = NULL;
+	int s;
+
 	if (sin->sin_family != AF_INET)
 		return (EAFNOSUPPORT);
 
+	s = pserialize_read_enter();
 	if (IN_MULTICAST(sin->sin_addr.s_addr)) {
 		/* Always succeed; port reuse handled in in_pcbbind_port(). */
 	} else if (!in_nullhost(sin->sin_addr)) {
-		struct in_ifaddr *ia = NULL;
+		struct in_ifaddr *ia;
 
 		ia = in_get_ia(sin->sin_addr);
 		/* check for broadcast addresses */
+		if (ia == NULL) {
+			ifa = ifa_ifwithaddr(sintosa(sin));
+			if (ifa != NULL)
+				ia = ifatoia(ifa);
+			else if ((inp->inp_flags & INP_BINDANY) != 0) {
+				error = 0;
+				goto error;
+			}
+		}
 		if (ia == NULL)
-			ia = ifatoia(ifa_ifwithaddr(sintosa(sin)));
-		if (ia == NULL)
-			return (EADDRNOTAVAIL);
-		if (ia->ia4_flags & (IN_IFF_NOTREADY | IN_IFF_DETACHED))
-			return (EADDRNOTAVAIL);
+			goto error;
+		if (ia->ia4_flags & IN_IFF_DUPLICATED)
+			goto error;
 	}
+	error = 0;
+ error:
+	pserialize_read_exit(s);
+	return error;
+}
 
-	inp->inp_laddr = sin->sin_addr;
+static int
+in_pcbbind_addr(struct inpcb *inp, struct sockaddr_in *sin, kauth_cred_t cred)
+{
+	int error;
 
-	return (0);
+	error = in_pcbbindableaddr(inp, sin, cred);
+	if (error == 0)
+		inp->inp_laddr = sin->sin_addr;
+	return error;
 }
 
 static int
@@ -484,6 +509,7 @@ in_pcbconnect(void *v, struct sockaddr_in *sin, struct lwp *l)
 			    IN_ADDRLIST_READER_FIRST()->ia_addr.sin_addr;
 		} else if (sin->sin_addr.s_addr == INADDR_BROADCAST) {
 			struct in_ifaddr *ia;
+			int s = pserialize_read_enter();
 			IN_ADDRLIST_READER_FOREACH(ia) {
 				if (ia->ia_ifp->if_flags & IFF_BROADCAST) {
 					sin->sin_addr =
@@ -491,6 +517,7 @@ in_pcbconnect(void *v, struct sockaddr_in *sin, struct lwp *l)
 					break;
 				}
 			}
+			pserialize_read_exit(s);
 		}
 	}
 	/*
@@ -507,26 +534,40 @@ in_pcbconnect(void *v, struct sockaddr_in *sin, struct lwp *l)
 	 */
 	if (in_nullhost(inp->inp_laddr)) {
 		int xerror;
-		struct sockaddr_in *ifaddr;
-		struct in_ifaddr *ia;
+		struct in_ifaddr *ia, *_ia;
+		int s;
+		struct psref psref;
+		int bound;
 
-		ifaddr = in_selectsrc(sin, &inp->inp_route,
-		    inp->inp_socket->so_options, inp->inp_moptions, &xerror);
-		if (ifaddr == NULL) {
+		bound = curlwp_bind();
+		ia = in_selectsrc(sin, &inp->inp_route,
+		    inp->inp_socket->so_options, inp->inp_moptions, &xerror,
+		    &psref);
+		if (ia == NULL) {
+			curlwp_bindx(bound);
 			if (xerror == 0)
 				xerror = EADDRNOTAVAIL;
 			return xerror;
 		}
-		ia = in_get_ia(ifaddr->sin_addr);
-		if (ia == NULL)
+		s = pserialize_read_enter();
+		_ia = in_get_ia(IA_SIN(ia)->sin_addr);
+		if (_ia == NULL && (inp->inp_flags & INP_BINDANY) == 0) {
+			pserialize_read_exit(s);
+			ia4_release(ia, &psref);
+			curlwp_bindx(bound);
 			return (EADDRNOTAVAIL);
-		laddr = ifaddr->sin_addr;
+		}
+		pserialize_read_exit(s);
+		laddr = IA_SIN(ia)->sin_addr;
+		ia4_release(ia, &psref);
+		curlwp_bindx(bound);
 	} else
 		laddr = inp->inp_laddr;
 	if (in_pcblookup_connect(inp->inp_table, sin->sin_addr, sin->sin_port,
-	                         laddr, inp->inp_lport, &vestige) != 0
-	    || vestige.valid)
+	                         laddr, inp->inp_lport, &vestige) != NULL ||
+	    vestige.valid) {
 		return (EADDRINUSE);
+	}
 	if (in_nullhost(inp->inp_laddr)) {
 		if (inp->inp_lport == 0) {
 			error = in_pcbbind(inp, NULL, l);
@@ -551,7 +592,7 @@ in_pcbconnect(void *v, struct sockaddr_in *sin, struct lwp *l)
 		lsin.sin_addr = inp->inp_laddr;
 		lsin.sin_port = 0;
 
-               if ((error = in_pcbbind_port(inp, &lsin, l->l_cred)) != 0)
+		if ((error = in_pcbbind_port(inp, &lsin, l->l_cred)) != 0)
                        return error;
 	}
 
@@ -594,11 +635,11 @@ in_pcbdetach(void *v)
 
 #if defined(IPSEC)
 	if (ipsec_enabled)
-		ipsec4_delete_pcbpolicy(inp);
+		ipsec_delete_pcbpolicy(inp);
 #endif
 	so->so_pcb = NULL;
 
-	s = splnet();
+	s = splsoftnet();
 	in_pcbstate(inp, INP_ATTACHED);
 	LIST_REMOVE(&inp->inp_head, inph_lhash);
 	TAILQ_REMOVE(&inp->inp_table->inpt_queue, &inp->inp_head, inph_queue);
@@ -699,6 +740,7 @@ in_purgeifmcast(struct ip_moptions *imo, struct ifnet *ifp)
 {
 	int i, gap;
 
+	/* The owner of imo should be protected by solock */
 	KASSERT(ifp != NULL);
 
 	if (imo == NULL)
@@ -732,9 +774,22 @@ in_pcbpurgeif0(struct inpcbtable *table, struct ifnet *ifp)
 
 	TAILQ_FOREACH_SAFE(inph, &table->inpt_queue, inph_queue, ninph) {
 		struct inpcb *inp = (struct inpcb *)inph;
+		bool need_unlock = false;
+
 		if (inp->inp_af != AF_INET)
 			continue;
+
+		/* The caller holds either one of inps' lock */
+		if (!inp_locked(inp)) {
+			inp_lock(inp);
+			need_unlock = true;
+		}
+
+		/* IFNET_LOCK must be taken after solock */
 		in_purgeifmcast(inp->inp_moptions, ifp);
+
+		if (need_unlock)
+			inp_unlock(inp);
 	}
 }
 
@@ -749,8 +804,11 @@ in_pcbpurgeif(struct inpcbtable *table, struct ifnet *ifp)
 		if (inp->inp_af != AF_INET)
 			continue;
 		if ((rt = rtcache_validate(&inp->inp_route)) != NULL &&
-		    rt->rt_ifp == ifp)
+		    rt->rt_ifp == ifp) {
+			rtcache_unref(rt, &inp->inp_route);
 			in_rtchange(inp, 0);
+		} else
+			rtcache_unref(rt, &inp->inp_route);
 	}
 }
 
@@ -777,10 +835,17 @@ in_losing(struct inpcb *inp)
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	rt_missmsg(RTM_LOSING, &info, rt->rt_flags, 0);
-	if (rt->rt_flags & RTF_DYNAMIC)
-		(void) rtrequest(RTM_DELETE, rt_getkey(rt),
-			rt->rt_gateway, rt_mask(rt), rt->rt_flags,
-			NULL);
+	if (rt->rt_flags & RTF_DYNAMIC) {
+		int error;
+		struct rtentry *nrt;
+
+		error = rtrequest(RTM_DELETE, rt_getkey(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &nrt);
+		rtcache_unref(rt, &inp->inp_route);
+		if (error == 0)
+			rt_free(nrt);
+	} else
+		rtcache_unref(rt, &inp->inp_route);
 	/*
 	 * A new route can be allocated
 	 * the next time output is attempted.
@@ -1059,4 +1124,11 @@ in_pcbrtentry(struct inpcb *inp)
 
 	sockaddr_in_init(&u.dst4, &inp->inp_faddr, 0);
 	return rtcache_lookup(ro, &u.dst);
+}
+
+void
+in_pcbrtentry_unref(struct rtentry *rt, struct inpcb *inp)
+{
+
+	rtcache_unref(rt, &inp->inp_route);
 }

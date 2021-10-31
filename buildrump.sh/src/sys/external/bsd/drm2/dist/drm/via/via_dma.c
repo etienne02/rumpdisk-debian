@@ -1,3 +1,5 @@
+/*	$NetBSD: via_dma.c,v 1.5 2020/02/14 14:34:59 maya Exp $	*/
+
 /* via_dma.c -- DMA support for the VIA Unichrome/Pro
  *
  * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
@@ -34,12 +36,13 @@
  *    Thomas Hellstrom.
  */
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: via_dma.c,v 1.5 2020/02/14 14:34:59 maya Exp $");
+
 #include <drm/drmP.h>
 #include <drm/via_drm.h>
 #include "via_drv.h"
 #include "via_3d_reg.h"
-
-#include <linux/delay.h>
 
 #define CMDBUF_ALIGNMENT_SIZE   (0x100)
 #define CMDBUF_ALIGNMENT_MASK   (0x0ff)
@@ -163,7 +166,7 @@ int via_dma_cleanup(struct drm_device *dev)
 		if (dev_priv->ring.virtual_start) {
 			via_cmdbuf_reset(dev_priv);
 
-			drm_core_ioremapfree(&dev_priv->ring.map, dev);
+			drm_legacy_ioremapfree(&dev_priv->ring.map, dev);
 			dev_priv->ring.virtual_start = NULL;
 		}
 
@@ -202,7 +205,7 @@ static int via_initialize(struct drm_device *dev,
 	dev_priv->ring.map.flags = 0;
 	dev_priv->ring.map.mtrr = 0;
 
-	drm_core_ioremap(&dev_priv->ring.map, dev);
+	drm_legacy_ioremap(&dev_priv->ring.map, dev);
 
 	if (dev_priv->ring.map.handle == NULL) {
 		via_dma_cleanup(dev);
@@ -236,21 +239,13 @@ static int via_dma_init(struct drm_device *dev, void *data, struct drm_file *fil
 
 	switch (init->func) {
 	case VIA_INIT_DMA:
-#ifdef __NetBSD__
-		if (!DRM_SUSER())
-#else
 		if (!capable(CAP_SYS_ADMIN))
-#endif
 			retcode = -EPERM;
 		else
 			retcode = via_initialize(dev, dev_priv, init);
 		break;
 	case VIA_CLEANUP_DMA:
-#ifdef __NetBSD__
-		if (!DRM_SUSER())
-#else
 		if (!capable(CAP_SYS_ADMIN))
-#endif
 			retcode = -EPERM;
 		else
 			retcode = via_dma_cleanup(dev);
@@ -745,4 +740,4 @@ const struct drm_ioctl_desc via_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(VIA_BLIT_SYNC, via_dma_blit_sync, DRM_AUTH)
 };
 
-int via_max_ioctl = DRM_ARRAY_SIZE(via_ioctls);
+int via_max_ioctl = ARRAY_SIZE(via_ioctls);

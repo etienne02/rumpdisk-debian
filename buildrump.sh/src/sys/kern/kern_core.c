@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_core.c,v 1.24 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: kern_core.c,v 1.35 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1991, 1993
@@ -37,7 +37,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.24 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.35 2021/06/29 22:40:53 dholland Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_execfmt.h"
+#include "opt_compat_netbsd32.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/vnode.h>
@@ -50,6 +55,8 @@ __KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.24 2016/07/07 06:55:43 msaitoh Exp $
 #include <sys/filedesc.h>
 #include <sys/kauth.h>
 #include <sys/module.h>
+#include <sys/compat_stub.h>
+#include <sys/exec_elf.h>
 
 MODULE(MODULE_CLASS_MISC, coredump, NULL);
 
@@ -62,6 +69,9 @@ struct coredump_iostate {
 
 static int	coredump(struct lwp *, const char *);
 static int	coredump_buildname(struct proc *, char *, const char *, size_t);
+static int	coredump_write(struct coredump_iostate *, enum uio_seg segflg,
+		    const void *, size_t);
+static off_t	coredump_offset(struct coredump_iostate *);
 
 static int
 coredump_modcmd(modcmd_t cmd, void *arg)
@@ -69,16 +79,32 @@ coredump_modcmd(modcmd_t cmd, void *arg)
 
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		coredump_vec = coredump;
+		MODULE_HOOK_SET(coredump_hook, coredump);
+		MODULE_HOOK_SET(coredump_write_hook, coredump_write);
+		MODULE_HOOK_SET(coredump_offset_hook, coredump_offset);
+		MODULE_HOOK_SET(coredump_netbsd_hook, real_coredump_netbsd);
+#if defined(EXEC_ELF64)
+		MODULE_HOOK_SET(coredump_elf64_hook, real_coredump_elf64);
+#elif defined(EXEC_ELF32)
+		MODULE_HOOK_SET(coredump_elf32_hook, real_coredump_elf32);
+#endif
+		MODULE_HOOK_SET(uvm_coredump_walkmap_hook,
+		    uvm_coredump_walkmap);
+		MODULE_HOOK_SET(uvm_coredump_count_segs_hook,
+		    uvm_coredump_count_segs);
 		return 0;
 	case MODULE_CMD_FINI:
-		/*
-		 * In theory we don't need to patch this, as the various
-		 * exec formats depend on this module.  If this module has
-		 * no references, and so can be unloaded, no user programs
-		 * can be running and so nothing can call *coredump_vec.
-		 */
-		coredump_vec = (int (*)(struct lwp *, const char *))enosys;
+		MODULE_HOOK_UNSET(uvm_coredump_count_segs_hook);
+		MODULE_HOOK_UNSET(uvm_coredump_walkmap_hook);
+#if defined(EXEC_ELF64)
+		MODULE_HOOK_UNSET(coredump_elf64_hook);
+#elif defined(EXEC_ELF32)
+		MODULE_HOOK_UNSET(coredump_elf32_hook);
+#endif
+		MODULE_HOOK_UNSET(coredump_netbsd_hook);
+		MODULE_HOOK_UNSET(coredump_offset_hook);
+		MODULE_HOOK_UNSET(coredump_write_hook);
+		MODULE_HOOK_UNSET(coredump_hook);
 		return 0;
 	default:
 		return ENOTTY;
@@ -97,7 +123,6 @@ coredump(struct lwp *l, const char *pattern)
 	struct vmspace		*vm;
 	kauth_cred_t		cred;
 	struct pathbuf		*pb;
-	struct nameidata	nd;
 	struct vattr		vattr;
 	struct coredump_iostate	io;
 	struct plimit		*lim;
@@ -109,7 +134,7 @@ coredump(struct lwp *l, const char *pattern)
 	p = l->l_proc;
 	vm = p->p_vmspace;
 
-	mutex_enter(proc_lock);		/* p_session */
+	mutex_enter(&proc_lock);		/* p_session */
 	mutex_enter(p->p_lock);
 
 	/*
@@ -121,7 +146,7 @@ coredump(struct lwp *l, const char *pattern)
 	    p->p_rlimit[RLIMIT_CORE].rlim_cur) {
 		error = EFBIG;		/* better error code? */
 		mutex_exit(p->p_lock);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		goto done;
 	}
 
@@ -140,7 +165,7 @@ coredump(struct lwp *l, const char *pattern)
 		if (!security_setidcore_dump) {
 			error = EPERM;
 			mutex_exit(p->p_lock);
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 			goto done;
 		}
 		pattern = security_setidcore_path;
@@ -157,7 +182,7 @@ coredump(struct lwp *l, const char *pattern)
 
 	if (error) {
 		mutex_exit(p->p_lock);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		goto done;
 	}
 
@@ -174,7 +199,7 @@ coredump(struct lwp *l, const char *pattern)
 	}
 
 	mutex_exit(p->p_lock);
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 	if (error)
 		goto done;
 
@@ -214,13 +239,12 @@ coredump(struct lwp *l, const char *pattern)
 		error = ENOMEM;
 		goto done;
 	}
-	NDINIT(&nd, LOOKUP, NOFOLLOW, pb);
-	if ((error = vn_open(&nd, O_CREAT | O_NOFOLLOW | FWRITE,
-	    S_IRUSR | S_IWUSR)) != 0) {
+	error = vn_open(NULL, pb, 0, O_CREAT | O_NOFOLLOW | FWRITE,
+	    S_IRUSR | S_IWUSR, &vp, NULL, NULL);
+	if (error != 0) {
 		pathbuf_destroy(pb);
 		goto done;
 	}
-	vp = nd.ni_vp;
 	pathbuf_destroy(pb);
 
 	/*
@@ -272,7 +296,7 @@ coredump_buildname(struct proc *p, char *dst, const char *src, size_t len)
 	char		*d, *end;
 	int		i;
 
-	KASSERT(mutex_owned(proc_lock));
+	KASSERT(mutex_owned(&proc_lock));
 
 	for (s = src, d = dst, end = d + len; *s != '\0'; s++) {
 		if (*s == '%') {
@@ -308,7 +332,7 @@ coredump_buildname(struct proc *p, char *dst, const char *src, size_t len)
 	return 0;
 }
 
-int
+static int
 coredump_write(struct coredump_iostate *io, enum uio_seg segflg,
     const void *data, size_t len)
 {
@@ -330,7 +354,7 @@ coredump_write(struct coredump_iostate *io, enum uio_seg segflg,
 	return (0);
 }
 
-off_t
+static off_t
 coredump_offset(struct coredump_iostate *io)
 {
 	return io->io_offset;

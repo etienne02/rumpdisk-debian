@@ -1,4 +1,4 @@
-/*	$NetBSD: net_stub.c,v 1.23 2016/05/12 02:24:17 ozaki-r Exp $	*/
+/*	$NetBSD: net_stub.c,v 1.43 2021/07/14 03:19:24 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 2008 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: net_stub.c,v 1.23 2016/05/12 02:24:17 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: net_stub.c,v 1.43 2021/07/14 03:19:24 ozaki-r Exp $");
 
 #include <sys/mutex.h>
 #include <sys/param.h>
@@ -37,6 +37,10 @@ __KERNEL_RCSID(0, "$NetBSD: net_stub.c,v 1.23 2016/05/12 02:24:17 ozaki-r Exp $"
 
 #include <net/if.h>
 #include <net/route.h>
+
+#include <netipsec/ipsec.h>
+#include <netipsec/ipsec6.h>
+#include <netipsec/key.h>
 
 #include <compat/sys/socket.h>
 #include <compat/sys/sockio.h>
@@ -57,6 +61,8 @@ rumpnet_stub(void)
 /* bridge */
 __weak_alias(bridge_ifdetach,rumpnet_stub);
 __weak_alias(bridge_output,rumpnet_stub);
+__weak_alias(bridge_calc_csum_flags,rumpnet_stub);
+__weak_alias(bridge_calc_link_state,rumpnet_stub);
 
 /* agr */
 __weak_alias(agr_input,rumpnet_stub);
@@ -67,14 +73,54 @@ __weak_alias(ieee8023ad_marker_input,rumpnet_stub);
 __weak_alias(pppoe_input,rumpnet_stub);
 __weak_alias(pppoedisc_input,rumpnet_stub);
 
+/* vlan */
+__weak_alias(vlan_input,rumpnet_stub);
+__weak_alias(vlan_ifdetach,rumpnet_stub);
+__weak_alias(vlan_link_state_changed,rumpnet_stub);
+
+/* ipsec */
+/* FIXME: should modularize netipsec and reduce reverse symbol references */
+int ipsec_debug;
+int ipsec_enabled;
+int ipsec_used;
+percpu_t *ipsecstat_percpu;
+u_int ipsec_spdgen;
+
+__weak_alias(ah4_ctlinput,rumpnet_stub);
+__weak_alias(ah6_ctlinput,rumpnet_stub);
+__weak_alias(esp4_ctlinput,rumpnet_stub);
+__weak_alias(esp6_ctlinput,rumpnet_stub);
+__weak_alias(ipsec4_output,rumpnet_stub);
+__weak_alias(ipsec4_common_input,rumpnet_stub);
+__weak_alias(ipsec6_common_input,rumpnet_stub);
+__weak_alias(ipsec6_check_policy,rumpnet_stub);
+__weak_alias(ipsec6_process_packet,rumpnet_stub);
+__weak_alias(ipsec_mtu,rumpnet_stub);
+__weak_alias(ipsec_ip_input_checkpolicy,rumpnet_stub);
+__weak_alias(ipsec_set_policy,rumpnet_stub);
+__weak_alias(ipsec_get_policy,rumpnet_stub);
+__weak_alias(ipsec_delete_pcbpolicy,rumpnet_stub);
+__weak_alias(ipsec_hdrsiz,rumpnet_stub);
+__weak_alias(ipsec_in_reject,rumpnet_stub);
+__weak_alias(ipsec_init_pcbpolicy,rumpnet_stub);
+__weak_alias(ipsec_pcbconn,rumpnet_stub);
+__weak_alias(ipsec_pcbdisconn,rumpnet_stub);
+__weak_alias(key_sa_routechange,rumpnet_stub);
+__weak_alias(key_sp_unref,rumpnet_stub);
+
+/* lagg */
+__weak_alias(lagg_ifdetach,rumpnet_stub);
+__weak_alias(lagg_input_ethernet,rumpnet_stub);
+__weak_alias(lagg_linkstate_changed,rumpnet_stub);
+
+/* altq */
+int (*altq_input)(struct mbuf *, int);
+__weak_alias(in6mask128,rumpnet_stub);
+__weak_alias(in6mask0,rumpnet_stub);
+__weak_alias(altq_detach,rumpnet_stub);
+__weak_alias(altq_disable,rumpnet_stub);
+__weak_alias(tbr_dequeue,rumpnet_stub);
+
 struct ifnet_head ifnet_list;
 struct pslist_head ifnet_pslist;
-struct psref_class *ifnet_psref_class;
 kmutex_t ifnet_mtx;
-
-int
-compat_ifconf(u_long cmd, void *data)
-{
-
-	return EOPNOTSUPP;
-}

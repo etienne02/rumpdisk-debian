@@ -1,4 +1,4 @@
-/*	$NetBSD: com_isa.c,v 1.39 2010/02/24 22:37:58 dyoung Exp $	*/
+/*	$NetBSD: com_isa.c,v 1.41 2018/12/08 17:46:13 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com_isa.c,v 1.39 2010/02/24 22:37:58 dyoung Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com_isa.c,v 1.41 2018/12/08 17:46:13 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -187,7 +187,7 @@ com_isa_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 
-	COM_INIT_REGS(sc->sc_regs, iot, ioh, iobase);
+	com_init_regs(&sc->sc_regs, iot, ioh, iobase);
 
 	sc->sc_frequency = COM_FREQ;
 	irq = ia->ia_irq[0].ir_irq;
@@ -213,8 +213,8 @@ com_isa_attach(device_t parent, device_t self, void *aux)
 
 	isc->sc_ic = ia->ia_ic;
 	isc->sc_irq = irq;
-	isc->sc_ih = isa_intr_establish(ia->ia_ic, irq, IST_EDGE, IPL_SERIAL,
-	    comintr, sc);
+	isc->sc_ih = isa_intr_establish_xname(ia->ia_ic, irq, IST_EDGE,
+	    IPL_SERIAL, comintr, sc, device_xname(sc->sc_dev));
 }
 
 static bool

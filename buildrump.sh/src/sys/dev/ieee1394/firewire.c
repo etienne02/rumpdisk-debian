@@ -1,4 +1,4 @@
-/*	$NetBSD: firewire.c,v 1.45 2014/10/18 08:33:28 snj Exp $	*/
+/*	$NetBSD: firewire.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $	*/
 /*-
  * Copyright (c) 2003 Hidetoshi Shimokawa
  * Copyright (c) 1998-2002 Katsushi Kobayashi and Hidetoshi Shimokawa
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: firewire.c,v 1.45 2014/10/18 08:33:28 snj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: firewire.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -210,30 +210,12 @@ firewireattach(device_t parent, device_t self, void *aux)
 	if (fc->nisodma > FWMAXNDMA)
 	    fc->nisodma = FWMAXNDMA;
 
-	fc->crom_src_buf =
-	    (struct crom_src_buf *)malloc(sizeof(struct crom_src_buf),
-	    M_FW, M_NOWAIT | M_ZERO);
-	if (fc->crom_src_buf == NULL) {
-		aprint_error_dev(fc->bdev, "Malloc Failure crom src buff\n");
-		return;
-	}
-	fc->topology_map =
-	    (struct fw_topology_map *)malloc(sizeof(struct fw_topology_map),
-	    M_FW, M_NOWAIT | M_ZERO);
-	if (fc->topology_map == NULL) {
-		aprint_error_dev(fc->dev, "Malloc Failure topology map\n");
-		free(fc->crom_src_buf, M_FW);
-		return;
-	}
-	fc->speed_map =
-	    (struct fw_speed_map *)malloc(sizeof(struct fw_speed_map),
-	    M_FW, M_NOWAIT | M_ZERO);
-	if (fc->speed_map == NULL) {
-		aprint_error_dev(fc->dev, "Malloc Failure speed map\n");
-		free(fc->crom_src_buf, M_FW);
-		free(fc->topology_map, M_FW);
-		return;
-	}
+	fc->crom_src_buf = malloc(sizeof(struct crom_src_buf),
+	    M_FW, M_WAITOK | M_ZERO);
+	fc->topology_map =malloc(sizeof(struct fw_topology_map),
+	    M_FW, M_WAITOK | M_ZERO);
+	fc->speed_map = malloc(sizeof(struct fw_speed_map),
+	    M_FW, M_WAITOK | M_ZERO);
 
 	mutex_init(&fc->tlabel_lock, MUTEX_DEFAULT, IPL_VM);
 	mutex_init(&fc->fc_mtx, MUTEX_DEFAULT, IPL_VM);
@@ -259,16 +241,12 @@ firewireattach(device_t parent, device_t self, void *aux)
 		config_pending_decr(self);
 	}
 
-	devlist = malloc(sizeof(struct firewire_dev_list), M_DEVBUF, M_NOWAIT);
-	if (devlist == NULL) {
-		aprint_error_dev(self, "device list allocation failed\n");
-		return;
-	}
+	devlist = malloc(sizeof(struct firewire_dev_list), M_DEVBUF, M_WAITOK);
 
 	faa.name = "fwip";
 	faa.fc = fc;
 	faa.fwdev = NULL;
-	devlist->dev = config_found(sc->dev, &faa, firewire_print);
+	devlist->dev = config_found(sc->dev, &faa, firewire_print, CFARGS_NONE);
 	if (devlist->dev == NULL)
 		free(devlist, M_DEVBUF);
 	else
@@ -622,32 +600,10 @@ fw_init(struct firewire_comm *fc)
 	mutex_init(&fc->atq->q_mtx, MUTEX_DEFAULT, IPL_VM);
 	mutex_init(&fc->ats->q_mtx, MUTEX_DEFAULT, IPL_VM);
 
-	for (i = 0; i < fc->nisodma; i++) {
-		fc->it[i]->queued = 0;
-		fc->ir[i]->queued = 0;
-
-		fc->it[i]->start = NULL;
-		fc->ir[i]->start = NULL;
-
-		fc->it[i]->buf = NULL;
-		fc->ir[i]->buf = NULL;
-
-		fc->it[i]->flag = FWXFERQ_STREAM;
-		fc->ir[i]->flag = FWXFERQ_STREAM;
-
-		STAILQ_INIT(&fc->it[i]->q);
-		STAILQ_INIT(&fc->ir[i]->q);
-	}
-
 	fc->arq->maxq = FWMAXQUEUE;
 	fc->ars->maxq = FWMAXQUEUE;
 	fc->atq->maxq = FWMAXQUEUE;
 	fc->ats->maxq = FWMAXQUEUE;
-
-	for (i = 0; i < fc->nisodma; i++) {
-		fc->ir[i]->maxq = FWMAXQUEUE;
-		fc->it[i]->maxq = FWMAXQUEUE;
-	}
 
 	CSRARC(fc, TOPO_MAP) = 0x3f1 << 16;
 	CSRARC(fc, TOPO_MAP + 4) = 1;
@@ -675,6 +631,50 @@ fw_init(struct firewire_comm *fc)
 #endif
 
 	fc->crom_src_buf = NULL;
+}
+
+/*
+ * Called by HCI driver when it has determined the number of
+ * isochronous DMA channels.
+ */
+void
+fw_init_isodma(struct firewire_comm *fc)
+{
+	unsigned i;
+
+	for (i = 0; i < fc->nisodma; i++) {
+		fc->it[i]->queued = 0;
+		fc->ir[i]->queued = 0;
+
+		fc->it[i]->start = NULL;
+		fc->ir[i]->start = NULL;
+
+		fc->it[i]->buf = NULL;
+		fc->ir[i]->buf = NULL;
+
+		fc->it[i]->flag = FWXFERQ_STREAM;
+		fc->ir[i]->flag = FWXFERQ_STREAM;
+
+		STAILQ_INIT(&fc->it[i]->q);
+		STAILQ_INIT(&fc->ir[i]->q);
+
+		fc->ir[i]->maxq = FWMAXQUEUE;
+		fc->it[i]->maxq = FWMAXQUEUE;
+
+		cv_init(&fc->ir[i]->cv, "fw_read");
+		cv_init(&fc->it[i]->cv, "fw_write");
+	}
+}
+
+void
+fw_destroy_isodma(struct firewire_comm *fc)
+{
+	unsigned i;
+
+	for (i = 0; i < fc->nisodma; i++) {
+		cv_destroy(&fc->ir[i]->cv);
+		cv_destroy(&fc->it[i]->cv);
+	}
 }
 
 void
@@ -994,7 +994,7 @@ fw_sidrcv(struct firewire_comm* fc, uint32_t *sid, u_int len)
 			for (j = 0; j < node; j++)
 				fc->speed_map->speed[j][node] =
 				    fc->speed_map->speed[node][j] =
-				    min(fc->speed_map->speed[j][j],
+				    uimin(fc->speed_map->speed[j][j],
 							self_id->p0.phy_speed);
 			if ((fc->irm == -1 || self_id->p0.phy_id > fc->irm) &&
 			    (self_id->p0.link_active && self_id->p0.contender))
@@ -1385,12 +1385,12 @@ fw_reset_csr(struct firewire_comm *fc)
 	CSRARC(fc, BANDWIDTH_AV) = 4915;
 	CSRARC(fc, CHANNELS_AV_HI) = 0xffffffff;
 	CSRARC(fc, CHANNELS_AV_LO) = 0xffffffff;
-	CSRARC(fc, IP_CHANNELS) = (1 << 31);
+	CSRARC(fc, IP_CHANNELS) = (1U << 31);
 
 	CSRARC(fc, CONF_ROM) = 0x04 << 24;
 	CSRARC(fc, CONF_ROM + 4) = 0x31333934; /* means strings 1394 */
 	CSRARC(fc, CONF_ROM + 8) =
-	    1 << 31 | 1 << 30 | 1 << 29 | 1 << 28 | 0xff << 16 | 0x09 << 8;
+	    1U << 31 | 1 << 30 | 1 << 29 | 1 << 28 | 0xff << 16 | 0x09 << 8;
 	CSRARC(fc, CONF_ROM + 0xc) = 0;
 
 /* DV depend CSRs see blue book */
@@ -1775,13 +1775,7 @@ fw_explore_node(struct fw_device *dfwdev)
 	mutex_exit(&fc->fc_mtx);
 	if (fwdev == NULL) {
 		/* new device */
-		fwdev =
-		    malloc(sizeof(struct fw_device), M_FW, M_NOWAIT | M_ZERO);
-		if (fwdev == NULL) {
-			if (firewire_debug)
-				printf("node%d: no memory\n", node);
-			return -1;
-		}
+		fwdev = malloc(sizeof(struct fw_device), M_FW, M_WAITOK | M_ZERO);
 		fwdev->fc = fc;
 		fwdev->eui = binfo->eui64;
 		fwdev->dst = dfwdev->dst;
@@ -1893,9 +1887,8 @@ fw_explore(struct firewire_comm *fc)
 	char nodes[63];
 
 	todo = 0;
-	dfwdev = malloc(sizeof(*dfwdev), M_TEMP, M_NOWAIT);
-	if (dfwdev == NULL)
-		return;
+	dfwdev = malloc(sizeof(*dfwdev), M_TEMP, M_WAITOK);
+
 	/* setup dummy fwdev */
 	dfwdev->fc = fc;
 	dfwdev->speed = 0;
@@ -2042,20 +2035,15 @@ fw_attach_dev(struct firewire_comm *fc)
 		switch (fwdev->status) {
 		case FWDEVNEW:
 			devlist = malloc(sizeof(struct firewire_dev_list),
-			    M_DEVBUF, M_NOWAIT);
-			if (devlist == NULL) {
-				aprint_error_dev(fc->bdev,
-				    "memory allocation failed\n");
-				break;
-			}
-
+			    M_DEVBUF, M_WAITOK);
 			locs[IEEE1394IFCF_EUIHI] = fwdev->eui.hi;
 			locs[IEEE1394IFCF_EUILO] = fwdev->eui.lo;
 
 			fwa.name = fw_get_devclass(fwdev);
 			fwa.fwdev = fwdev;
-			fwdev->dev = config_found_sm_loc(sc->dev, "ieee1394if",
-			    locs, &fwa, firewire_print, config_stdsubmatch);
+			fwdev->dev = config_found(sc->dev, &fwa, firewire_print,
+			    CFARGS(.submatch = config_stdsubmatch,
+				   .locators = locs));
 			if (fwdev->dev == NULL) {
 				free(devlist, M_DEVBUF);
 				break;

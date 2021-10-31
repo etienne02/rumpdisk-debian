@@ -1,4 +1,4 @@
-/*	$NetBSD: rec_open.c,v 1.20 2013/12/01 00:22:48 christos Exp $	*/
+/*	$NetBSD: rec_open.c,v 1.22 2016/09/24 21:31:25 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993, 1994
@@ -37,7 +37,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: rec_open.c,v 1.20 2013/12/01 00:22:48 christos Exp $");
+__RCSID("$NetBSD: rec_open.c,v 1.22 2016/09/24 21:31:25 christos Exp $");
 
 #include "namespace.h"
 #include <sys/types.h>

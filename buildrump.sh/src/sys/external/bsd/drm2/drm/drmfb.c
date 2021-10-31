@@ -1,4 +1,4 @@
-/*	$NetBSD: drmfb.c,v 1.2 2015/11/09 23:11:18 jmcneill Exp $	*/
+/*	$NetBSD: drmfb.c,v 1.8 2020/06/27 13:41:44 jmcneill Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drmfb.c,v 1.2 2015/11/09 23:11:18 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drmfb.c,v 1.8 2020/06/27 13:41:44 jmcneill Exp $");
 
 #ifdef _KERNEL_OPT
 #include "vga.h"
@@ -92,7 +92,7 @@ drmfb_attach(struct drmfb_softc *sc, const struct drmfb_attach_args *da)
 	struct genfb_ops genfb_ops = zero_genfb_ops;
 	enum { CONS_VGA, CONS_GENFB, CONS_NONE } what_was_cons;
 	bool is_console;
-	int error;
+	int error, n;
 
 	/* genfb requires this.  */
 	KASSERTMSG((void *)&sc->sc_genfb == device_private(da->da_dev),
@@ -103,9 +103,7 @@ drmfb_attach(struct drmfb_softc *sc, const struct drmfb_attach_args *da)
 	prop_dictionary_set_uint32(dict, "width", sizes->surface_width);
 	prop_dictionary_set_uint32(dict, "height", sizes->surface_height);
 	prop_dictionary_set_uint8(dict, "depth", sizes->surface_bpp);
-	prop_dictionary_set_uint16(dict, "linebytes",
-	    roundup2((sizes->surface_width * howmany(sizes->surface_bpp, 8)),
-		64));
+	prop_dictionary_set_uint16(dict, "linebytes", da->da_fb_linebytes);
 	prop_dictionary_set_uint32(dict, "address", 0); /* XXX >32-bit */
 	CTASSERT(sizeof(uintptr_t) <= sizeof(uint64_t));
 	prop_dictionary_set_uint64(dict, "virtual_address",
@@ -135,6 +133,18 @@ drmfb_attach(struct drmfb_softc *sc, const struct drmfb_attach_args *da)
 		}
 	} else {
 		what_was_cons = CONS_NONE;
+	}
+
+	/* Make the first EDID we find available to wsfb */
+	for (n = 0; n < da->da_fb_helper->connector_count; n++) {
+		struct drm_connector *connector =
+		    da->da_fb_helper->connector_info[n]->connector;
+		struct drm_property_blob *edid = connector->edid_blob_ptr;
+		if (edid && edid->length) {
+			prop_dictionary_set_data(dict, "EDID", edid->data,
+			    edid->length);
+			break;
+		}
 	}
 
 	sc->sc_genfb.sc_dev = sc->sc_da.da_dev;
@@ -282,9 +292,10 @@ drmfb_genfb_setmode(struct genfb_softc *genfb, int mode)
 {
 	struct drmfb_softc *sc = container_of(genfb, struct drmfb_softc,
 	    sc_genfb);
+	struct drm_fb_helper *fb_helper = sc->sc_da.da_fb_helper;
 
 	if (mode == WSDISPLAYIO_MODE_EMUL)
-		drm_fb_helper_set_config(sc->sc_da.da_fb_helper);
+		drm_fb_helper_restore_fbdev_mode_unlocked(fb_helper);
 
 	return true;
 }

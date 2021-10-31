@@ -6,7 +6,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -46,13 +46,13 @@
 #include "accommon.h"
 #include "acdebug.h"
 #include "actables.h"
-#include <stdio.h>
-#ifdef ACPI_APPLICATION
-#include "acapps.h"
-#endif
 
 #define _COMPONENT          ACPI_CA_DEBUGGER
         ACPI_MODULE_NAME    ("dbfileio")
+
+
+#ifdef ACPI_APPLICATION
+#include "acapps.h"
 
 
 #ifdef ACPI_DEBUGGER
@@ -73,8 +73,6 @@ AcpiDbCloseDebugFile (
     void)
 {
 
-#ifdef ACPI_APPLICATION
-
     if (AcpiGbl_DebugFile)
     {
        fclose (AcpiGbl_DebugFile);
@@ -83,7 +81,6 @@ AcpiDbCloseDebugFile (
        AcpiOsPrintf ("Debug output file %s closed\n",
             AcpiGbl_DbDebugFilename);
     }
-#endif
 }
 
 
@@ -104,8 +101,6 @@ AcpiDbOpenDebugFile (
     char                    *Name)
 {
 
-#ifdef ACPI_APPLICATION
-
     AcpiDbCloseDebugFile ();
     AcpiGbl_DebugFile = fopen (Name, "w+");
     if (!AcpiGbl_DebugFile)
@@ -115,11 +110,9 @@ AcpiDbOpenDebugFile (
     }
 
     AcpiOsPrintf ("Debug output file %s opened\n", Name);
-    strncpy (AcpiGbl_DbDebugFilename, Name,
+    AcpiUtSafeStrncpy (AcpiGbl_DbDebugFilename, Name,
         sizeof (AcpiGbl_DbDebugFilename));
     AcpiGbl_DbOutputToFile = TRUE;
-
-#endif
 }
 #endif
 
@@ -152,7 +145,7 @@ AcpiDbLoadTables (
     {
         Table = TableListHead->Table;
 
-        Status = AcpiLoadTable (Table);
+        Status = AcpiLoadTable (Table, NULL);
         if (ACPI_FAILURE (Status))
         {
             if (Status == AE_ALREADY_EXISTS)
@@ -169,8 +162,7 @@ AcpiDbLoadTables (
             return (Status);
         }
 
-        fprintf (stderr,
-            "Acpi table [%4.4s] successfully installed and loaded\n",
+        AcpiOsPrintf ("Acpi table [%4.4s] successfully installed and loaded\n",
             Table->Signature);
 
         TableListHead = TableListHead->Next;
@@ -178,3 +170,4 @@ AcpiDbLoadTables (
 
     return (AE_OK);
 }
+#endif

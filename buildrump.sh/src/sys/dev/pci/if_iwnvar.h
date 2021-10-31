@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwnvar.h,v 1.17 2015/09/22 23:23:06 nonaka Exp $	*/
+/*	$NetBSD: if_iwnvar.h,v 1.22 2020/03/20 16:35:41 sevan Exp $	*/
 /*	$OpenBSD: if_iwnvar.h,v 1.28 2014/09/09 18:55:08 sthen Exp $	*/
 
 /*-
@@ -30,7 +30,7 @@ struct iwn_rx_radiotap_header {
 	uint16_t	wr_chan_flags;
 	int8_t		wr_dbm_antsignal;
 	int8_t		wr_dbm_antnoise;
-} __packed;
+};
 
 #define IWN_RX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_TSFT) |				\
@@ -47,7 +47,7 @@ struct iwn_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_hwqueue;
-} __packed;
+};
 
 #define IWN_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -225,6 +225,7 @@ struct iwn_softc {
 #define IWN_FLAG_SCANNING_2GHZ	(1 << 9)
 #define IWN_FLAG_SCANNING_5GHZ	(1 << 10)
 #define IWN_FLAG_SCANNING	(IWN_FLAG_SCANNING_2GHZ|IWN_FLAG_SCANNING_5GHZ)
+#define IWN_FLAG_ATTACHED	(1 << 11)
 
 	uint8_t 		hw_type;
 
@@ -264,7 +265,9 @@ struct iwn_softc {
 
 	bus_space_tag_t		sc_st;
 	bus_space_handle_t	sc_sh;
+	pci_intr_handle_t	*sc_pihp;
 	void 			*sc_ih;
+	void			*sc_soft_ih;
 	pci_chipset_tag_t	sc_pct;
 	pcitag_t		sc_pcitag;
 	bus_size_t		sc_sz;
@@ -321,6 +324,8 @@ struct iwn_softc {
 
 	struct bpf_if *		sc_drvbpf;
 
+	kmutex_t 		sc_media_mtx;	/* XXX */
+
 	union {
 		struct iwn_rx_radiotap_header th;
 		uint8_t	pad[IEEE80211_RADIOTAP_HDRLEN];
@@ -335,7 +340,11 @@ struct iwn_softc {
 #define sc_txtap	sc_txtapu.th
 	int			sc_txtap_len;
 
+#define IWN_UCODE_API(ver)	(((ver) & 0x0000ff00) >> 8)
+	uint32_t		ucode_rev;
+
 	kmutex_t		sc_mtx;         /* mutex for init/stop */
 
+	int			sc_beacon_wait;	/* defer/skip sending */
 };
 

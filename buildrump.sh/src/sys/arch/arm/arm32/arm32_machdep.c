@@ -1,4 +1,4 @@
-/*	$NetBSD: arm32_machdep.c,v 1.112 2016/07/16 01:49:42 mrg Exp $	*/
+/*	$NetBSD: arm32_machdep.c,v 1.139 2020/12/01 02:43:14 rin Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -42,31 +42,34 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.112 2016/07/16 01:49:42 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.139 2020/12/01 02:43:14 rin Exp $");
 
+#include "opt_arm_debug.h"
+#include "opt_arm_start.h"
+#include "opt_fdt.h"
 #include "opt_modular.h"
 #include "opt_md.h"
-#include "opt_pmap_debug.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/reboot.h>
-#include <sys/proc.h>
+
+#include <sys/atomic.h>
+#include <sys/buf.h>
+#include <sys/cpu.h>
+#include <sys/device.h>
+#include <sys/intr.h>
+#include <sys/ipi.h>
 #include <sys/kauth.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
-#include <sys/mount.h>
-#include <sys/buf.h>
-#include <sys/msgbuf.h>
-#include <sys/device.h>
-#include <sys/sysctl.h>
-#include <sys/cpu.h>
-#include <sys/intr.h>
 #include <sys/module.h>
-#include <sys/atomic.h>
+#include <sys/mount.h>
+#include <sys/msgbuf.h>
+#include <sys/proc.h>
+#include <sys/reboot.h>
+#include <sys/sysctl.h>
+#include <sys/systm.h>
 #include <sys/xcall.h>
-#include <sys/ipi.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -75,10 +78,33 @@ __KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.112 2016/07/16 01:49:42 mrg Exp 
 
 #include <arm/locore.h>
 
+#include <arm/cpu_topology.h>
 #include <arm/arm32/machdep.h>
 
 #include <machine/bootconfig.h>
 #include <machine/pcb.h>
+
+#if defined(FDT)
+#include <arm/fdt/arm_fdtvar.h>
+#include <arch/evbarm/fdt/platform.h>
+#endif
+
+#ifdef VERBOSE_INIT_ARM
+#define VPRINTF(...)	printf(__VA_ARGS__)
+#ifdef __HAVE_GENERIC_START
+void generic_prints(const char *);
+void generic_printx(int);
+#define VPRINTS(s)	generic_prints(s)
+#define VPRINTX(x)	generic_printx(x)
+#else
+#define VPRINTS(s)	__nothing
+#define VPRINTX(x)	__nothing
+#endif
+#else
+#define VPRINTF(...)	__nothing
+#define VPRINTS(s)	__nothing
+#define VPRINTX(x)	__nothing
+#endif
 
 void (*cpu_reset_address)(void);	/* Used by locore */
 paddr_t cpu_reset_address_paddr;	/* Used by locore */
@@ -151,9 +177,7 @@ arm32_vector_init(vaddr_t va, int which)
 		vector_page = (vaddr_t)page0rel;
 		KASSERT((vector_page & 0x1f) == 0);
 		armreg_vbar_write(vector_page);
-#ifdef VERBOSE_INIT_ARM
-		printf(" vbar=%p", page0rel);
-#endif
+		VPRINTF(" vbar=%p", page0rel);
 		cpu_control(CPU_CONTROL_VECRELOC, 0);
 		return;
 #ifndef ARM_HAS_VBAR
@@ -251,7 +275,7 @@ bootsync(void)
 /*
  * void cpu_startup(void)
  *
- * Machine dependent startup code. 
+ * Machine dependent startup code.
  *
  */
 void
@@ -259,15 +283,11 @@ cpu_startup(void)
 {
 	vaddr_t minaddr;
 	vaddr_t maxaddr;
-	char pbuf[9];
 
-	/*
-	 * Until we better locking, we have to live under the kernel lock.
-	 */
-	//KERNEL_LOCK(1, NULL);
-
+#ifndef __HAVE_GENERIC_START
 	/* Set the CPU control register */
 	cpu_setup(boot_args);
+#endif
 
 #ifndef ARM_HAS_VBAR
 	/* Lock down zero page */
@@ -279,6 +299,11 @@ cpu_startup(void)
 	 * is initialised
 	 */
 	pmap_postinit();
+
+#ifdef FDT
+	if (arm_fdt_platform()->ap_startup != NULL)
+		arm_fdt_platform()->ap_startup();
+#endif
 
 	/*
 	 * Initialize error message buffer (at end of core).
@@ -296,29 +321,45 @@ cpu_startup(void)
 	initmsgbuf(msgbufaddr, round_page(MSGBUFSIZE));
 
 	/*
-	 * Identify ourselves for the msgbuf (everything printed earlier will
-	 * not be buffered).
-	 */
-	printf("%s%s", copyright, version);
-
-	format_bytes(pbuf, sizeof(pbuf), arm_ptob(physmem));
-	printf("total memory = %s\n", pbuf);
-
-	minaddr = 0;
-
-	/*
 	 * Allocate a submap for physio
 	 */
+	minaddr = 0;
 	phys_map = uvm_km_suballoc(kernel_map, &minaddr, &maxaddr,
 				   VM_PHYS_SIZE, 0, false, NULL);
 
-	format_bytes(pbuf, sizeof(pbuf), ptoa(uvmexp.free));
-	printf("avail memory = %s\n", pbuf);
+	banner();
 
+	/*
+	 * This is actually done by initarm_common, but not all ports use it
+	 * yet so do it here to catch them as well
+	 */
 	struct lwp * const l = &lwp0;
 	struct pcb * const pcb = lwp_getpcb(l);
+
+	/* Zero out the PCB. */
+ 	memset(pcb, 0, sizeof(*pcb));
+
 	pcb->pcb_ksp = uvm_lwp_getuarea(l) + USPACE_SVC_STACK_TOP;
-	lwp_settrapframe(l, (struct trapframe *)pcb->pcb_ksp - 1);
+	pcb->pcb_ksp -= sizeof(struct trapframe);
+
+	struct trapframe * tf = (struct trapframe *)pcb->pcb_ksp;
+
+	/* Zero out the trapframe. */
+	memset(tf, 0, sizeof(*tf));
+	lwp_settrapframe(l, tf);
+
+ 	tf->tf_spsr = PSR_USR32_MODE;
+#ifdef _ARM_ARCH_BE8
+	tf->tf_spsr |= PSR_E_BIT;
+#endif
+
+	cpu_startup_hook();
+}
+
+__weak_alias(cpu_startup_hook,cpu_startup_default)
+void
+cpu_startup_default(void)
+{
 }
 
 /*
@@ -330,12 +371,12 @@ sysctl_machdep_booted_device(SYSCTLFN_ARGS)
 	struct sysctlnode node;
 
 	if (booted_device == NULL)
-		return (EOPNOTSUPP);
+		return EOPNOTSUPP;
 
 	node = *rnode;
 	node.sysctl_data = __UNCONST(device_xname(booted_device));
 	node.sysctl_size = strlen(device_xname(booted_device)) + 1;
-	return (sysctl_lookup(SYSCTLFN_CALL(&node)));
+	return sysctl_lookup(SYSCTLFN_CALL(&node));
 }
 
 static int
@@ -344,12 +385,12 @@ sysctl_machdep_booted_kernel(SYSCTLFN_ARGS)
 	struct sysctlnode node;
 
 	if (booted_kernel == NULL || booted_kernel[0] == '\0')
-		return (EOPNOTSUPP);
+		return EOPNOTSUPP;
 
 	node = *rnode;
 	node.sysctl_data = booted_kernel;
 	node.sysctl_size = strlen(booted_kernel) + 1;
-	return (sysctl_lookup(SYSCTLFN_CALL(&node)));
+	return sysctl_lookup(SYSCTLFN_CALL(&node));
 }
 
 static int
@@ -373,22 +414,13 @@ sysctl_machdep_powersave(SYSCTLFN_ARGS)
 		node.sysctl_flags &= ~CTLFLAG_READWRITE;
 	error = sysctl_lookup(SYSCTLFN_CALL(&node));
 	if (error || newp == NULL || newval == cpu_do_powersave)
-		return (error);
+		return error;
 
 	if (newval < 0 || newval > 1)
-		return (EINVAL);
+		return EINVAL;
 	cpu_do_powersave = newval;
 
-	return (0);
-}
-
-static int
-sysctl_hw_machine_arch(SYSCTLFN_ARGS)
-{
-	struct sysctlnode node = *rnode;
-	node.sysctl_data = l->l_proc->p_md.md_march;
-	node.sysctl_size = strlen(l->l_proc->p_md.md_march) + 1;
-	return sysctl_lookup(SYSCTLFN_CALL(&node));
+	return 0;
 }
 
 SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
@@ -439,7 +471,7 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READONLY,
 		       CTLTYPE_INT, "fpu_id", NULL,
-		       NULL, 0, &cpu_info_store.ci_vfp_id, 0,
+		       NULL, 0, &cpu_info_store[0].ci_vfp_id, 0,
 		       CTL_MACHDEP, CTL_CREATE, CTL_EOL);
 #endif
 	sysctl_createv(clog, 0, NULL, NULL,
@@ -505,25 +537,20 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 		       CTLTYPE_INT, "printfataltraps", NULL,
 		       NULL, 0, &cpu_printfataltraps, 0,
 		       CTL_MACHDEP, CTL_CREATE, CTL_EOL);
-	cpu_unaligned_sigbus = !CPU_IS_ARMV6_P() && !CPU_IS_ARMV7_P();
+	cpu_unaligned_sigbus =
+#if defined(__ARMEL__)
+	    !CPU_IS_ARMV6_P() && !CPU_IS_ARMV7_P();
+#elif defined(_ARM_ARCH_BE8)
+	    0;
+#else
+	    1;
+#endif
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READONLY,
 		       CTLTYPE_INT, "unaligned_sigbus",
 		       SYSCTL_DESCR("Do SIGBUS for fixed unaligned accesses"),
 		       NULL, 0, &cpu_unaligned_sigbus, 0,
 		       CTL_MACHDEP, CTL_CREATE, CTL_EOL);
-
-
-	/*
-	 * We need override the usual CTL_HW HW_MACHINE_ARCH so we
-	 * return the right machine_arch based on the running executable.
-	 */
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_READONLY,
-		       CTLTYPE_STRING, "machine_arch",
-		       SYSCTL_DESCR("Machine CPU class"),
-		       sysctl_hw_machine_arch, 0, NULL, 0,
-		       CTL_HW, HW_MACHINE_ARCH, CTL_EOL);
 }
 
 void
@@ -544,13 +571,6 @@ parse_mi_bootargs(char *args)
 	    || get_bootconf_option(args, "-a", BOOTOPT_TYPE_BOOLEAN, &integer))
 		if (integer)
 			boothowto |= RB_ASKNAME;
-
-#ifdef PMAP_DEBUG
-	if (get_bootconf_option(args, "pmapdebug", BOOTOPT_TYPE_INT, &integer)) {
-		pmap_debug_level = integer;
-		pmap_debug(pmap_debug_level);
-	}
-#endif	/* PMAP_DEBUG */
 
 /*	if (get_bootconf_option(args, "nbuf", BOOTOPT_TYPE_INT, &integer))
 		bufpages = integer;*/
@@ -674,6 +694,9 @@ dosoftints(void)
 void
 module_init_md(void)
 {
+#ifdef FDT
+	arm_fdt_module_init();
+#endif
 }
 #endif /* MODULAR */
 
@@ -691,27 +714,89 @@ mm_md_physacc(paddr_t pa, vm_prot_t prot)
 vaddr_t
 cpu_uarea_alloc_idlelwp(struct cpu_info *ci)
 {
-	const vaddr_t va = idlestack.pv_va + ci->ci_cpuid * USPACE;
+	const vaddr_t va = idlestack.pv_va + cpu_index(ci) * USPACE;
 	// printf("%s: %s: va=%lx\n", __func__, ci->ci_data.cpu_name, va);
 	return va;
 }
 #endif
 
 #ifdef MULTIPROCESSOR
-void
-cpu_boot_secondary_processors(void)
+/*
+ * Initialise a secondary processor.
+ *
+ * printf isn't available to us for a number of reasons.
+ *
+ * -  kprint_init has been called and printf will try to take locks which we
+ *    can't  do just yet because bootstrap translation tables do not allowing
+ *    caching.
+ *
+ * -  kmutex(9) relies on curcpu which isn't setup yet.
+ *
+ */
+void __noasan
+cpu_init_secondary_processor(int cpuindex)
 {
-#ifdef VERBOSE_INIT_ARM
-	printf("%s: writing mbox with %#x\n", __func__, arm_cpu_hatched);
+	// pmap_kernel has been successfully built and we can switch to it
+	cpu_domains(DOMAIN_DEFAULT);
+	cpu_idcache_wbinv_all();
+
+	VPRINTS("index: ");
+	VPRINTX(cpuindex);
+	VPRINTS(" ttb");
+
+	cpu_setup(boot_args);
+
+#ifdef ARM_MMU_EXTENDED
+	/*
+	 * TTBCR should have been initialized by the MD start code.
+	 */
+	KASSERT((armreg_contextidr_read() & 0xff) == 0);
+	KASSERT(armreg_ttbcr_read() == __SHIFTIN(1, TTBCR_S_N));
+	/*
+	 * Disable lookups via TTBR0 until there is an activated pmap.
+	 */
+
+	armreg_ttbcr_write(armreg_ttbcr_read() | TTBCR_S_PD0);
+	cpu_setttb(pmap_kernel()->pm_l1_pa , KERNEL_PID);
+	isb();
+#else
+	cpu_setttb(pmap_kernel()->pm_l1->l1_physaddr, true);
 #endif
-	arm_cpu_mbox = arm_cpu_hatched;
-	membar_producer();
-#ifdef _ARM_ARCH_7
-	__asm __volatile("sev; sev; sev");
+
+	cpu_tlb_flushID();
+
+	VPRINTS(" (TTBR0=");
+	VPRINTX(armreg_ttbr_read());
+	VPRINTS(")");
+
+#ifdef ARM_MMU_EXTENDED
+	VPRINTS(" (TTBR1=");
+	VPRINTX(armreg_ttbr1_read());
+	VPRINTS(")");
+	VPRINTS(" (TTBCR=");
+	VPRINTX(armreg_ttbcr_read());
+	VPRINTS(")");
 #endif
-	while (arm_cpu_mbox) {
-		__asm("wfe");
-	}
+
+	struct cpu_info * ci = &cpu_info_store[cpuindex];
+
+	VPRINTS(" ci = ");
+	VPRINTX((int)ci);
+
+	ci->ci_midr = armreg_midr_read();
+	ci->ci_mpidr = armreg_mpidr_read();
+
+	arm_cpu_topology_set(ci, ci->ci_mpidr);
+
+	VPRINTS(" hatched|=");
+	VPRINTX(__BIT(cpuindex));
+	VPRINTS("\n\r");
+
+	cpu_set_hatched(cpuindex);
+
+	/*
+	 * return to assembly to wait for cpu_boot_secondary_processors
+	 */
 }
 
 void
@@ -760,3 +845,36 @@ mm_md_page_color(paddr_t pa, int *colorp)
 	return true;
 #endif
 }
+
+#if defined(FDT)
+extern char KERNEL_BASE_phys[];
+#define KERNEL_BASE_PHYS ((paddr_t)KERNEL_BASE_phys)
+
+void
+cpu_kernel_vm_init(paddr_t memory_start, psize_t memory_size)
+{
+	const struct arm_platform *plat = arm_fdt_platform();
+
+#ifdef __HAVE_MM_MD_DIRECT_MAPPED_PHYS
+	const bool mapallmem_p = true;
+#ifndef PMAP_NEED_ALLOC_POOLPAGE
+	if (memory_size > KERNEL_VM_BASE - KERNEL_BASE) {
+		VPRINTF("%s: dropping RAM size from %luMB to %uMB\n",
+		    __func__, (unsigned long) (memory_size >> 20),
+		    (KERNEL_VM_BASE - KERNEL_BASE) >> 20);
+		memory_size = KERNEL_VM_BASE - KERNEL_BASE;
+	}
+#endif
+#else
+	const bool mapallmem_p = false;
+#endif
+
+	VPRINTF("%s: kernel phys start %" PRIxPADDR " end %" PRIxPADDR "\n",
+	    __func__, memory_start, memory_start + memory_size);
+
+	arm32_bootmem_init(memory_start, memory_size, KERNEL_BASE_PHYS);
+	arm32_kernel_vm_init(KERNEL_VM_BASE, ARM_VECTORS_HIGH, 0,
+	    plat->ap_devmap(), mapallmem_p);
+}
+#endif
+

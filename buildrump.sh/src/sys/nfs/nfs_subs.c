@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_subs.c,v 1.228 2016/06/10 13:27:16 ozaki-r Exp $	*/
+/*	$NetBSD: nfs_subs.c,v 1.241 2020/09/05 16:30:12 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_subs.c,v 1.228 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_subs.c,v 1.241 2020/09/05 16:30:12 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs.h"
@@ -100,7 +100,8 @@ __KERNEL_RCSID(0, "$NetBSD: nfs_subs.c,v 1.228 2016/06/10 13:27:16 ozaki-r Exp $
 #include <sys/atomic.h>
 #include <sys/cprng.h>
 
-#include <uvm/uvm.h>
+#include <uvm/uvm_page.h>
+#include <uvm/uvm_page_array.h>
 
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
@@ -206,7 +207,7 @@ const int nfsv2_procid[NFS_NPROCS] = {
  * Use NFSERR_IO as the catch all for ones not specifically defined in
  * RFC 1094.
  */
-static const u_char nfsrv_v2errmap[ELAST] = {
+static const u_char nfsrv_v2errmap[] = {
   NFSERR_PERM,	NFSERR_NOENT,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
   NFSERR_NXIO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
   NFSERR_IO,	NFSERR_IO,	NFSERR_ACCES,	NFSERR_IO,	NFSERR_IO,
@@ -223,8 +224,12 @@ static const u_char nfsrv_v2errmap[ELAST] = {
   NFSERR_NOTEMPTY, NFSERR_IO,	NFSERR_IO,	NFSERR_DQUOT,	NFSERR_STALE,
   NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
   NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
-  NFSERR_IO,	NFSERR_IO,
+  NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
+  NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
+  NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,	NFSERR_IO,
+  NFSERR_IO,	NFSERR_IO,	NFSERR_IO
 };
+__CTASSERT(__arraycount(nfsrv_v2errmap) == ELAST);
 
 /*
  * Maps errno values to nfs error numbers.
@@ -614,9 +619,9 @@ nfsm_rpchead(kauth_cred_t cr, int nmflag, int procid,
 	if ((authsiz + 10 * NFSX_UNSIGNED) >= MINCLSIZE) {
 		m_clget(mb, M_WAIT);
 	} else if ((authsiz + 10 * NFSX_UNSIGNED) < MHLEN) {
-		MH_ALIGN(mb, authsiz + 10 * NFSX_UNSIGNED);
+		m_align(mb, authsiz + 10 * NFSX_UNSIGNED);
 	} else {
-		MH_ALIGN(mb, 8 * NFSX_UNSIGNED);
+		m_align(mb, 8 * NFSX_UNSIGNED);
 	}
 	mb->m_len = 0;
 	mreq = mb;
@@ -671,7 +676,7 @@ nfsm_rpchead(kauth_cred_t cr, int nmflag, int procid,
 				mb->m_len = 0;
 				bpos = mtod(mb, void *);
 			}
-			i = min(siz, M_TRAILINGSPACE(mb));
+			i = uimin(siz, M_TRAILINGSPACE(mb));
 			memcpy(bpos, auth_str, i);
 			mb->m_len += i;
 			auth_str += i;
@@ -706,7 +711,7 @@ nfsm_rpchead(kauth_cred_t cr, int nmflag, int procid,
 				mb->m_len = 0;
 				bpos = mtod(mb, void *);
 			}
-			i = min(siz, M_TRAILINGSPACE(mb));
+			i = uimin(siz, M_TRAILINGSPACE(mb));
 			memcpy(bpos, verf_str, i);
 			mb->m_len += i;
 			verf_str += i;
@@ -942,10 +947,7 @@ nfsm_disct(struct mbuf **mdp, char **dposp, int siz, int left, char **cp2)
 			*mdp = m1 = m_get(M_WAIT, MT_DATA);
 			MCLAIM(m1, m2->m_owner);
 			if ((m2->m_flags & M_PKTHDR) != 0) {
-				/* XXX MOVE */
-				M_COPY_PKTHDR(m1, m2);
-				m_tag_delete_chain(m2, NULL);
-				m2->m_flags &= ~M_PKTHDR;
+				m_move_pkthdr(m1, m2);
 			}
 			if (havebuf) {
 				havebuf->m_next = m1;
@@ -1005,7 +1007,7 @@ nfsm_disct(struct mbuf **mdp, char **dposp, int siz, int left, char **cp2)
 	 */
 	dst = mtod(m1, char *) + m1->m_len;
 	while ((len = M_TRAILINGSPACE(m1)) != 0 && m2) {
-		if ((len = min(len, m2->m_len)) != 0) {
+		if ((len = uimin(len, m2->m_len)) != 0) {
 			memcpy(dst, mtod(m2, char *), len);
 		}
 		m1->m_len += len;
@@ -1495,6 +1497,7 @@ nfs_init0(void)
 	 * Initialize reply list and start timer
 	 */
 	TAILQ_INIT(&nfs_reqq);
+	mutex_init(&nfs_reqq_lock, MUTEX_DEFAULT, IPL_NONE);
 	nfs_timer_init();
 	MOWNER_ATTACH(&nfs_mowner);
 
@@ -1534,6 +1537,7 @@ nfs_fini(void)
 	if (--nfs_refcount == 0) {
 		MOWNER_DETACH(&nfs_mowner);
 		nfs_timer_fini();
+		mutex_destroy(&nfs_reqq_lock);
 		nfsdreq_fini();
 	}
 	nfs_v();
@@ -1600,7 +1604,7 @@ nfs_zeropad(struct mbuf *mp, int len, int nul)
 		char *cp;
 		int i;
 
-		if (M_ROMAP(m) || M_TRAILINGSPACE(m) < nul) {
+		if (M_READONLY(m) || M_TRAILINGSPACE(m) < nul) {
 			struct mbuf *n;
 
 			KDASSERT(MLEN >= nul);
@@ -1692,8 +1696,8 @@ nfsm_srvfattr(struct nfsrv_descript *nfsd, struct vattr *vap, struct nfs_fattr *
 	} else {
 		fp->fa_type = vtonfsv2_type(vap->va_type);
 		fp->fa_mode = vtonfsv2_mode(vap->va_type, vap->va_mode);
-		fp->fa2_size = txdr_unsigned(vap->va_size);
-		fp->fa2_blocksize = txdr_unsigned(vap->va_blocksize);
+		fp->fa2_size = txdr_unsigned(NFS_V2CLAMP32(vap->va_size));
+		fp->fa2_blocksize = txdr_unsigned(NFS_V2CLAMP16(vap->va_blocksize));
 		if (vap->va_type == VFIFO)
 			fp->fa2_rdev = 0xffffffff;
 		else
@@ -1751,18 +1755,13 @@ nfs_clearcommit_selector(void *cl, struct vnode *vp)
 {
 	struct nfs_clearcommit_ctx *c = cl;
 	struct nfsnode *np;
-	struct vm_page *pg;
 
+	KASSERT(mutex_owned(vp->v_interlock));
+
+	/* XXXAD mountpoint check looks like nonsense to me */
 	np = VTONFS(vp);
 	if (vp->v_type != VREG || vp->v_mount != c->mp || np == NULL)
 		return false;
-	np->n_pushlo = np->n_pushhi = np->n_pushedlo =
-	    np->n_pushedhi = 0;
-	np->n_commitflags &=
-	    ~(NFS_COMMIT_PUSH_VALID | NFS_COMMIT_PUSHED_VALID);
-	TAILQ_FOREACH(pg, &vp->v_uobj.memq, listq.queue) {
-		pg->flags &= ~PG_NEEDCOMMIT;
-	}
 	return false;
 }
 
@@ -1776,15 +1775,41 @@ nfs_clearcommit_selector(void *cl, struct vnode *vp)
 void
 nfs_clearcommit(struct mount *mp)
 {
-	struct vnode *vp __diagused;
+	struct vnode *vp;
 	struct vnode_iterator *marker;
 	struct nfsmount *nmp = VFSTONFS(mp);
 	struct nfs_clearcommit_ctx ctx;
+	struct nfsnode *np;
+	struct vm_page *pg;
+	struct uvm_page_array a;
+	voff_t off;
 
 	rw_enter(&nmp->nm_writeverflock, RW_WRITER);
 	vfs_vnode_iterator_init(mp, &marker);
 	ctx.mp = mp;
-	vp = vfs_vnode_iterator_next(marker, nfs_clearcommit_selector, &ctx);
+	for (;;) {
+		vp = vfs_vnode_iterator_next(marker, nfs_clearcommit_selector,
+		    &ctx);
+		if (vp == NULL)
+			break;
+		rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
+		np = VTONFS(vp);
+		np->n_pushlo = np->n_pushhi = np->n_pushedlo =
+		    np->n_pushedhi = 0;
+		np->n_commitflags &=
+		    ~(NFS_COMMIT_PUSH_VALID | NFS_COMMIT_PUSHED_VALID);
+		uvm_page_array_init(&a, &vp->v_uobj, 0);
+		off = 0;
+		while ((pg = uvm_page_array_fill_and_peek(&a, off, 0)) !=
+		    NULL) {
+			pg->flags &= ~PG_NEEDCOMMIT;
+			uvm_page_array_advance(&a);
+			off = pg->offset + PAGE_SIZE;
+		}
+		uvm_page_array_fini(&a);
+		rw_exit(vp->v_uobj.vmobjlock);
+		vrele(vp);
+	}
 	KASSERT(vp == NULL);
 	vfs_vnode_iterator_destroy(marker);
 	mutex_enter(&nmp->nm_lock);

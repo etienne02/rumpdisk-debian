@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -101,7 +101,6 @@ AcpiDsClearImplicitReturn (
 }
 
 
-#ifndef ACPI_NO_METHOD_EXECUTION
 /*******************************************************************************
  *
  * FUNCTION:    AcpiDsDoImplicitReturn
@@ -297,8 +296,8 @@ AcpiDsIsResultUsed (
         if ((Op->Common.Parent->Common.AmlOpcode == AML_REGION_OP)       ||
             (Op->Common.Parent->Common.AmlOpcode == AML_DATA_REGION_OP)  ||
             (Op->Common.Parent->Common.AmlOpcode == AML_PACKAGE_OP)      ||
-            (Op->Common.Parent->Common.AmlOpcode == AML_VAR_PACKAGE_OP)  ||
             (Op->Common.Parent->Common.AmlOpcode == AML_BUFFER_OP)       ||
+            (Op->Common.Parent->Common.AmlOpcode == AML_VARIABLE_PACKAGE_OP) ||
             (Op->Common.Parent->Common.AmlOpcode == AML_INT_EVAL_SUBTREE_OP) ||
             (Op->Common.Parent->Common.AmlOpcode == AML_BANK_FIELD_OP))
         {
@@ -475,7 +474,6 @@ AcpiDsClearOperands (
     WalkState->NumOperands = 0;
     return_VOID;
 }
-#endif
 
 
 /*******************************************************************************
@@ -589,7 +587,7 @@ AcpiDsCreateOperand (
              */
             if (Status == AE_NOT_FOUND)
             {
-                if (ParentOp->Common.AmlOpcode == AML_COND_REF_OF_OP)
+                if (ParentOp->Common.AmlOpcode == AML_CONDITIONAL_REF_OF_OP)
                 {
                     /*
                      * For the Conditional Reference op, it's OK if
@@ -624,7 +622,8 @@ AcpiDsCreateOperand (
 
             if (ACPI_FAILURE (Status))
             {
-                ACPI_ERROR_NAMESPACE (NameString, Status);
+                ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                    NameString, Status);
             }
         }
 
@@ -683,12 +682,6 @@ AcpiDsCreateOperand (
         if ((OpInfo->Flags & AML_HAS_RETVAL) ||
             (Arg->Common.Flags & ACPI_PARSEOP_IN_STACK))
         {
-            ACPI_DEBUG_PRINT ((ACPI_DB_DISPATCH,
-                "Argument previously created, already stacked\n"));
-
-            AcpiDbDisplayArgumentObject (
-                WalkState->Operands [WalkState->NumOperands - 1], WalkState);
-
             /*
              * Use value that was already previously returned
              * by the evaluation of this argument
@@ -870,7 +863,7 @@ AcpiDsEvaluateNamePath (
     }
 
     if ((Op->Common.Parent->Common.AmlOpcode == AML_PACKAGE_OP) ||
-        (Op->Common.Parent->Common.AmlOpcode == AML_VAR_PACKAGE_OP) ||
+        (Op->Common.Parent->Common.AmlOpcode == AML_VARIABLE_PACKAGE_OP) ||
         (Op->Common.Parent->Common.AmlOpcode == AML_REF_OF_OP))
     {
         /* TBD: Should we specify this feature as a bit of OpInfo->Flags of these opcodes? */

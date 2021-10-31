@@ -1,4 +1,4 @@
-/*	$NetBSD: sio16.c,v 1.24 2011/07/18 00:58:52 mrg Exp $	*/
+/*	$NetBSD: sio16.c,v 1.27 2021/08/07 16:19:15 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sio16.c,v 1.24 2011/07/18 00:58:52 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sio16.c,v 1.27 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -230,7 +230,7 @@ sio16_attach(device_t parent, device_t self, void *aux)
 		cd.cd_handle = (bus_space_handle_t)sc->sc_reg[i];
 		cd.cd_ackfunc = sio16_ackfunc;
 		cd.cd_ackfunc_arg = sc;
-		(void)config_found(self, (void *)&cd, NULL);
+		(void)config_found(self, (void *)&cd, NULL, CFARGS_NONE);
 	}
 }
 
@@ -286,6 +286,7 @@ clcd_attach(device_t parent, device_t self, void *aux)
 	struct cd18xx_softc *sc = device_private(self);
 	struct sio16_attach_args *args = aux;
 
+	sc->sc_dev = self;
 	sc->sc_tag = args->cd_tag;
 	sc->sc_handle = args->cd_handle;
 	sc->sc_osc = args->cd_osc;

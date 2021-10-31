@@ -1,3 +1,5 @@
+/*	$NetBSD: db_panic.c,v 1.10 2021/07/20 11:39:16 christos Exp $	*/
+
 /*-
  * Copyright (c) 2000, 2002, 2006, 2007, 2009, 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -25,8 +27,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_panic.c,v 1.3 2014/01/22 15:20:40 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_panic.c,v 1.10 2021/07/20 11:39:16 christos Exp $");
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/cpu.h>
 
@@ -41,9 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_panic.c,v 1.3 2014/01/22 15:20:40 christos Exp $"
 void db_panic(void)
 {
 
-	if (db_onpanic == 1)
-		Debugger();
-	else if (db_onpanic >= 0) {
+	if (db_dumpstack > 0) {
 		static int intrace = 0;
 
 		if (intrace == 0) {
@@ -52,14 +53,16 @@ void db_panic(void)
 			    cpu_index(curcpu()));
 			db_stack_trace_print(
 			    (db_expr_t)(intptr_t)__builtin_frame_address(0),
-			    true, 65535, "", printf);
+			    true, db_panicstackframes, "", printf);
 			printf("cpu%u: End traceback...\n",
 			    cpu_index(curcpu()));
 			intrace = 0;
 		} else
 			printf("Faulted in mid-traceback; aborting...\n");
-		if (db_onpanic == 2)
-			Debugger();
 	}
+
+	if (db_onpanic > 0)
+		Debugger();
+
 	return;
 }

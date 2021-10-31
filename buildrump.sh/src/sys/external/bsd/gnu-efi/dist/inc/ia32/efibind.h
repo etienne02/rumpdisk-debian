@@ -1,4 +1,4 @@
-/*	$NetBSD: efibind.h,v 1.2 2014/04/01 16:22:45 jakllsch Exp $	*/
+/*	$NetBSD: efibind.h,v 1.4 2019/09/13 20:56:29 tnn Exp $	*/
 
 /*++
 
@@ -91,6 +91,7 @@ Revision History
 # define __WCHAR_TYPE__ short
 #endif
 
+#ifndef __ACTYPES_H__
 typedef uint64_t   UINT64;
 typedef int64_t    INT64;
 
@@ -103,6 +104,7 @@ typedef uint16_t   UINT16;
 typedef int16_t    INT16;
 typedef uint8_t    UINT8;
 typedef int8_t     INT8;
+#endif /* __ACTYPES_H__ */
 typedef __WCHAR_TYPE__ WCHAR;
 
 #undef VOID
@@ -237,9 +239,13 @@ typedef uint32_t   UINTN;
 
 //
 // When build similiar to FW, then link everything together as
-// one big module.
+// one big module. For the MSVC toolchain, we simply tell the
+// linker what our driver init function is using /ENTRY.
 //
-
+#if defined(_MSC_EXTENSIONS)
+    #define EFI_DRIVER_ENTRY_POINT(InitFunction) \
+        __pragma(comment(linker, "/ENTRY:" # InitFunction))
+#else
     #define EFI_DRIVER_ENTRY_POINT(InitFunction)    \
         UINTN                                       \
         InitializeDriver (                          \
@@ -256,6 +262,7 @@ typedef uint32_t   UINTN;
             EFI_SYSTEM_TABLE *systab                \
             ) __attribute__((weak,                  \
                     alias ("InitializeDriver")));
+#endif
 
     #define LOAD_INTERNAL_DRIVER(_if, type, name, entry)    \
             (_if)->LoadInternal(type, name, entry)
@@ -271,7 +278,7 @@ typedef uint32_t   UINTN;
 #ifdef NO_INTERFACE_DECL
 #define INTERFACE_DECL(x)
 #else
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(_MSC_EXTENSIONS)
 #define INTERFACE_DECL(x) struct x
 #else
 #define INTERFACE_DECL(x) typedef struct x

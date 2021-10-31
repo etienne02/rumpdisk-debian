@@ -1,4 +1,4 @@
-/*	$NetBSD: edc_mca.c,v 1.52 2016/07/14 10:19:06 msaitoh Exp $	*/
+/*	$NetBSD: edc_mca.c,v 1.54 2021/08/07 16:19:13 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -46,7 +46,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: edc_mca.c,v 1.52 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: edc_mca.c,v 1.54 2021/08/07 16:19:13 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -301,8 +301,9 @@ edc_mca_attach(device_t parent, device_t self, void *aux)
 		locs[EDCCF_DRIVE] = devno;
 
 		sc->sc_ed[devno] = device_private(
-		    config_found_sm_loc(self, "edc", locs, &eda, NULL,
-		    config_stdsubmatch));
+		    config_found(self, &eda, NULL,
+				 CFARGS(.submatch = config_stdsubmatch,
+					.locators = locs)));
 
 		/* If initialization did not succeed, NULL the pointer. */
 		if (sc->sc_ed[devno]

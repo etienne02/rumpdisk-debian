@@ -1,4 +1,4 @@
-/*	$NetBSD: dl_print.c,v 1.3 2016/04/06 18:04:58 christos Exp $	*/
+/*	$NetBSD: dl_print.c,v 1.8 2021/05/27 13:40:38 christos Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,63 +29,84 @@
 #include <sys/types.h>
 
 #ifdef _KERNEL
-__KERNEL_RCSID(0, "$NetBSD: dl_print.c,v 1.3 2016/04/06 18:04:58 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dl_print.c,v 1.8 2021/05/27 13:40:38 christos Exp $");
 #include <sys/systm.h>
 #else
-__RCSID("$NetBSD: dl_print.c,v 1.3 2016/04/06 18:04:58 christos Exp $");
+__RCSID("$NetBSD: dl_print.c,v 1.8 2021/05/27 13:40:38 christos Exp $");
 #include <stdio.h>
-static const uint8_t hexdigits[] = "0123456789abcdef";
+static const char hexdigits[] = "0123456789abcdef";
 #endif
 #include <net/if_dl.h>
+
+static int
+lla_snprintf1(char *dst, size_t dst_len, const void *src, size_t src_len)
+{
+	char *dp;
+	const uint8_t *sp, *ep;
+
+	dp = dst;
+	sp = (const uint8_t *)src;
+	ep = sp + src_len;
+	while (sp < ep) {
+		if (dst_len-- == 0)
+			break;
+		*dp++ = hexdigits[(*sp) >> 4];
+		if (dst_len-- == 0)
+			break;
+		*dp++ = hexdigits[(*sp++) & 0xf];
+		if (dst_len-- == 0)
+			break;
+		*dp++ = ':';
+	}
+	if (dp != dst)
+		*--dp = '\0';
+
+	return src_len ? (int)(src_len * 3) - 1 : 0;
+}
+
+char *
+lla_snprintf(char *dst, size_t dst_len, const void *src, size_t src_len)
+{
+	(void)lla_snprintf1(dst, dst_len, src, src_len);
+	return dst;
+}
+
+#define clip(a, b) ((a) > (size_t)(b) ? (a) - (size_t)(b) : 0)
 
 int
 dl_print(char *buf, size_t len, const struct dl_addr *dl)
 {
-	const uint8_t *ap = (const uint8_t *)dl->dl_data;
-	char abuf[256 * 3], *cp, *ecp;
+	int l = snprintf(buf, len, "%.*s/%hhu#",
+	    (int)dl->dl_nlen, dl->dl_data, dl->dl_type);
+	if (l == -1)
+		return l;
+	int ll = lla_snprintf1(buf + l, clip(len, l),
+	    dl->dl_data + dl->dl_nlen, dl->dl_alen);
+	if (ll == -1)
+		return ll;
 
-	ap += dl->dl_nlen;
-	cp = abuf;
-	ecp = abuf + sizeof(abuf);
-
-#define ADDC(c) do { \
-		if (cp >= ecp) {\
-			cp++; \
-		} else \
-			*cp++ = (char)(c); \
-	} while (/*CONSTCOND*/0)
-
-#define ADDX(v) do { \
-		uint8_t n = hexdigits[(v)]; \
-		ADDC(n); \
-	} while (/*CONSTCOND*/0)
-
-	for (size_t i = 0; i < dl->dl_alen; i++) {
-		ADDX((u_int)ap[i] >> 4);
-		ADDX(ap[i] & 0xf);
-		ADDC(':');
-	}
-	if (cp > abuf)
-		--cp;
-	if (ecp > abuf) {
-		if (cp < ecp)
-			*cp = '\0';
-		else
-			*--ecp = '\0';
-	}
-	return snprintf(buf, len, "%.*s/%hhu#%s",
-	    (int)dl->dl_nlen, dl->dl_data, dl->dl_type, abuf);
+	return ll + l;
 }
 
 int
 sdl_print(char *buf, size_t len, const void *v)
 {
 	const struct sockaddr_dl *sdl = v;
-	char abuf[LINK_ADDRSTRLEN];
 
 	if (sdl->sdl_slen == 0 && sdl->sdl_nlen == 0 && sdl->sdl_alen == 0)
 		return snprintf(buf, len, "link#%hu", sdl->sdl_index);
 
-	dl_print(abuf, sizeof(abuf), &sdl->sdl_addr);
-	return snprintf(buf, len, "[%s]:%hu", abuf, sdl->sdl_index);
+	if (len > 0) {
+		buf[0] = '[';
+		len--;
+	}
+	int l = dl_print(buf + 1, len, &sdl->sdl_addr);
+	if (l == -1)
+		return l;
+	l++;
+	len++;
+	int ll = snprintf(buf + l, clip(len, l), "]:%hu", sdl->sdl_index);
+	if (ll == -1)
+		return ll;
+	return ll + l;
 }

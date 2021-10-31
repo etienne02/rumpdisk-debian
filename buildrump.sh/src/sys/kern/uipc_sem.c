@@ -1,11 +1,11 @@
-/*	$NetBSD: uipc_sem.c,v 1.46 2016/06/10 23:24:33 christos Exp $	*/
+/*	$NetBSD: uipc_sem.c,v 1.60 2020/12/14 23:12:12 chs Exp $	*/
 
 /*-
- * Copyright (c) 2011 The NetBSD Foundation, Inc.
+ * Copyright (c) 2011, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Mindaugas Rasiukevicius.
+ * by Mindaugas Rasiukevicius and Jason R. Thorpe.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -60,13 +60,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.46 2016/06/10 23:24:33 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.60 2020/12/14 23:12:12 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
 
 #include <sys/atomic.h>
 #include <sys/proc.h>
+#include <sys/lwp.h>
 #include <sys/ksem.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
@@ -77,17 +78,20 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.46 2016/06/10 23:24:33 christos Exp $
 #include <sys/kauth.h>
 #include <sys/module.h>
 #include <sys/mount.h>
+#include <sys/mutex.h>
+#include <sys/rwlock.h>
 #include <sys/semaphore.h>
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
 #include <sys/sysctl.h>
+#include <sys/uidinfo.h>
+#include <sys/cprng.h>
 
 MODULE(MODULE_CLASS_MISC, ksem, NULL);
 
-#define	SEM_MAX_NAMELEN		14
+#define	SEM_MAX_NAMELEN		NAME_MAX
 
-#define	SEM_NSEMS_MAX		256
 #define	KS_UNLINKED		0x01
 
 static kmutex_t		ksem_lock	__cacheline_aligned;
@@ -95,17 +99,25 @@ static LIST_HEAD(,ksem)	ksem_head	__cacheline_aligned;
 static u_int		nsems_total	__cacheline_aligned;
 static u_int		nsems		__cacheline_aligned;
 
+static krwlock_t	ksem_pshared_lock __cacheline_aligned;
+static LIST_HEAD(, ksem) *ksem_pshared_hashtab __cacheline_aligned;
+static u_long		ksem_pshared_hashmask __read_mostly;
+
+#define	KSEM_PSHARED_HASHSIZE	32
+
 static kauth_listener_t	ksem_listener;
 
 static int		ksem_sysinit(void);
 static int		ksem_sysfini(bool);
 static int		ksem_modcmd(modcmd_t, void *);
+static void		ksem_release(ksem_t *, int);
 static int		ksem_close_fop(file_t *);
 static int		ksem_stat_fop(file_t *, struct stat *);
 static int		ksem_read_fop(file_t *, off_t *, struct uio *,
     kauth_cred_t, int);
 
 static const struct fileops semops = {
+	.fo_name = "sem",
 	.fo_read = ksem_read_fop,
 	.fo_write = fbadop_write,
 	.fo_ioctl = fbadop_ioctl,
@@ -132,7 +144,29 @@ static const struct syscall_package ksem_syscalls[] = {
 };
 
 struct sysctllog *ksem_clog;
-int ksem_max;
+int ksem_max = KSEM_MAX;
+
+static int
+name_copyin(const char *uname, char **name)
+{
+	*name = kmem_alloc(SEM_MAX_NAMELEN, KM_SLEEP);
+
+	int error = copyinstr(uname, *name, SEM_MAX_NAMELEN, NULL);
+	if (error)
+		kmem_free(*name, SEM_MAX_NAMELEN);
+
+	return error;
+}
+
+static void
+name_destroy(char **name)
+{
+	if (!*name)
+		return;
+
+	kmem_free(*name, SEM_MAX_NAMELEN);
+	*name = NULL;
+}
 
 static int
 ksem_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
@@ -166,17 +200,16 @@ ksem_sysinit(void)
 	nsems_total = 0;
 	nsems = 0;
 
-	error = syscall_establish(NULL, ksem_syscalls);
-	if (error) {
-		(void)ksem_sysfini(false);
-	}
+	rw_init(&ksem_pshared_lock);
+	ksem_pshared_hashtab = hashinit(KSEM_PSHARED_HASHSIZE, HASH_LIST,
+	    true, &ksem_pshared_hashmask);
+	KASSERT(ksem_pshared_hashtab != NULL);
 
 	ksem_listener = kauth_listen_scope(KAUTH_SCOPE_SYSTEM,
 	    ksem_listener_cb, NULL);
 
 	/* Define module-specific sysctl tree */
 
-	ksem_max = KSEM_MAX;
 	ksem_clog = NULL;
 
 	sysctl_createv(&ksem_clog, 0, NULL, &rnode,
@@ -197,6 +230,11 @@ ksem_sysinit(void)
 			SYSCTL_DESCR("Current number of semaphores"),
 			NULL, 0, &nsems, 0,
 			CTL_CREATE, CTL_EOL);
+
+	error = syscall_establish(NULL, ksem_syscalls);
+	if (error) {
+		(void)ksem_sysfini(false);
+	}
 
 	return error;
 }
@@ -222,6 +260,8 @@ ksem_sysfini(bool interface)
 		}
 	}
 	kauth_unlisten_scope(ksem_listener);
+	hashdone(ksem_pshared_hashtab, HASH_LIST, ksem_pshared_hashmask);
+	rw_destroy(&ksem_pshared_lock);
 	mutex_destroy(&ksem_lock);
 	sysctl_teardown(&ksem_clog);
 	return 0;
@@ -273,28 +313,123 @@ ksem_perm(lwp_t *l, ksem_t *ks)
 }
 
 /*
+ * Bits 1..23 are random, just pluck a few of those and assume the
+ * distribution is going to be pretty good.
+ */
+#define	KSEM_PSHARED_HASH(id)	(((id) >> 1) & ksem_pshared_hashmask)
+
+static void
+ksem_remove_pshared(ksem_t *ksem)
+{
+	rw_enter(&ksem_pshared_lock, RW_WRITER);
+	LIST_REMOVE(ksem, ks_entry);
+	rw_exit(&ksem_pshared_lock);
+}
+
+static ksem_t *
+ksem_lookup_pshared_locked(intptr_t id)
+{
+	u_long bucket = KSEM_PSHARED_HASH(id);
+	ksem_t *ksem = NULL;
+
+	/* ksem_t is locked and referenced upon return. */
+
+	LIST_FOREACH(ksem, &ksem_pshared_hashtab[bucket], ks_entry) {
+		if (ksem->ks_pshared_id == id) {
+			mutex_enter(&ksem->ks_lock);
+			if (ksem->ks_pshared_proc == NULL) {
+				/*
+				 * This entry is dead, and in the process
+				 * of being torn down; skip it.
+				 */
+				mutex_exit(&ksem->ks_lock);
+				continue;
+			}
+			ksem->ks_ref++;
+			KASSERT(ksem->ks_ref != 0);
+			return ksem;
+		}
+	}
+
+	return NULL;
+}
+
+static ksem_t *
+ksem_lookup_pshared(intptr_t id)
+{
+	rw_enter(&ksem_pshared_lock, RW_READER);
+	ksem_t *ksem = ksem_lookup_pshared_locked(id);
+	rw_exit(&ksem_pshared_lock);
+	return ksem;
+}
+
+static void
+ksem_alloc_pshared_id(ksem_t *ksem)
+{
+	ksem_t *ksem0;
+	uint32_t try;
+
+	KASSERT(ksem->ks_pshared_proc != NULL);
+
+	rw_enter(&ksem_pshared_lock, RW_WRITER);
+	for (;;) {
+		try = (cprng_fast32() & ~KSEM_MARKER_MASK) |
+		    KSEM_PSHARED_MARKER;
+
+		if ((ksem0 = ksem_lookup_pshared_locked(try)) == NULL) {
+			/* Got it! */
+			break;
+		}
+		ksem_release(ksem0, -1);
+	}
+	ksem->ks_pshared_id = try;
+	u_long bucket = KSEM_PSHARED_HASH(ksem->ks_pshared_id);
+	LIST_INSERT_HEAD(&ksem_pshared_hashtab[bucket], ksem, ks_entry);
+	rw_exit(&ksem_pshared_lock);
+}
+
+/*
  * ksem_get: get the semaphore from the descriptor.
  *
- * => locks the semaphore, if found.
+ * => locks the semaphore, if found, and holds an extra reference.
  * => holds a reference on the file descriptor.
  */
 static int
-ksem_get(int fd, ksem_t **ksret)
+ksem_get(intptr_t id, ksem_t **ksret, int *fdp)
 {
 	ksem_t *ks;
-	file_t *fp;
+	int fd;
 
-	fp = fd_getfile(fd);
-	if (__predict_false(fp == NULL))
-		return EINVAL;
-	if (__predict_false(fp->f_type != DTYPE_SEM)) {
-		fd_putfile(fd);
+	if ((id & KSEM_MARKER_MASK) == KSEM_PSHARED_MARKER) {
+		/*
+		 * ksem_lookup_pshared() returns the ksem_t *
+		 * locked and referenced.
+		 */
+		ks = ksem_lookup_pshared(id);
+		if (ks == NULL)
+			return EINVAL;
+		KASSERT(ks->ks_pshared_id == id);
+		KASSERT(ks->ks_pshared_proc != NULL);
+		fd = -1;
+	} else if (id <= INT_MAX) {
+		fd = (int)id;
+		file_t *fp = fd_getfile(fd);
+
+		if (__predict_false(fp == NULL))
+			return EINVAL;
+		if (__predict_false(fp->f_type != DTYPE_SEM)) {
+			fd_putfile(fd);
+			return EINVAL;
+		}
+		ks = fp->f_ksem;
+		mutex_enter(&ks->ks_lock);
+		ks->ks_ref++;
+	} else {
 		return EINVAL;
 	}
-	ks = fp->f_ksem;
-	mutex_enter(&ks->ks_lock);
 
 	*ksret = ks;
+	*fdp = fd;
 	return 0;
 }
 
@@ -334,11 +469,6 @@ ksem_create(lwp_t *l, const char *name, ksem_t **ksret, mode_t mode, u_int val)
 		len = 0;
 	}
 
-	if (atomic_inc_uint_nv(&l->l_proc->p_nsems) > SEM_NSEMS_MAX) {
-               atomic_dec_uint(&l->l_proc->p_nsems);
-		return -1;
-       }
-
 	ks = kmem_zalloc(sizeof(ksem_t), KM_SLEEP);
 	mutex_init(&ks->ks_lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&ks->ks_cv, "psem");
@@ -351,8 +481,9 @@ ksem_create(lwp_t *l, const char *name, ksem_t **ksret, mode_t mode, u_int val)
 	uc = l->l_cred;
 	ks->ks_uid = kauth_cred_geteuid(uc);
 	ks->ks_gid = kauth_cred_getegid(uc);
-
+	chgsemcnt(ks->ks_uid, 1);
 	atomic_inc_uint(&nsems_total);
+
 	*ksret = ks;
 	return 0;
 }
@@ -363,6 +494,13 @@ ksem_free(ksem_t *ks)
 
 	KASSERT(!cv_has_waiters(&ks->ks_cv));
 
+	chgsemcnt(ks->ks_uid, -1);
+	atomic_dec_uint(&nsems_total);
+
+	if (ks->ks_pshared_id) {
+		KASSERT(ks->ks_pshared_proc == NULL);
+		ksem_remove_pshared(ks);
+	}
 	if (ks->ks_name) {
 		KASSERT(ks->ks_namelen > 0);
 		kmem_free(ks->ks_name, ks->ks_namelen);
@@ -370,9 +508,35 @@ ksem_free(ksem_t *ks)
 	mutex_destroy(&ks->ks_lock);
 	cv_destroy(&ks->ks_cv);
 	kmem_free(ks, sizeof(ksem_t));
+}
 
-	atomic_dec_uint(&nsems_total);
- 	atomic_dec_uint(&curproc->p_nsems);	
+#define	KSEM_ID_IS_PSHARED(id)		\
+	(((id) & KSEM_MARKER_MASK) == KSEM_PSHARED_MARKER)
+
+static void
+ksem_release(ksem_t *ksem, int fd)
+{
+	bool destroy = false;
+
+	KASSERT(mutex_owned(&ksem->ks_lock));
+
+	KASSERT(ksem->ks_ref > 0);
+	if (--ksem->ks_ref == 0) {
+		/*
+		 * Destroy if the last reference and semaphore is unnamed,
+		 * or unlinked (for named semaphore).
+		 */
+		destroy = (ksem->ks_flags & KS_UNLINKED) ||
+		    (ksem->ks_name == NULL);
+	}
+	mutex_exit(&ksem->ks_lock);
+
+	if (destroy) {
+		ksem_free(ksem);
+	}
+	if (fd != -1) {
+		fd_putfile(fd);
+	}
 }
 
 int
@@ -384,17 +548,30 @@ sys__ksem_init(struct lwp *l, const struct sys__ksem_init_args *uap,
 		intptr_t *idp;
 	} */
 
-	return do_ksem_init(l, SCARG(uap, value), SCARG(uap, idp), copyout);
+	return do_ksem_init(l, SCARG(uap, value), SCARG(uap, idp),
+	    copyin, copyout);
 }
 
 int
-do_ksem_init(lwp_t *l, u_int val, intptr_t *idp, copyout_t docopyout)
+do_ksem_init(lwp_t *l, u_int val, intptr_t *idp, copyin_t docopyin,
+    copyout_t docopyout)
 {
 	proc_t *p = l->l_proc;
 	ksem_t *ks;
 	file_t *fp;
-	intptr_t id;
+	intptr_t id, arg;
 	int fd, error;
+
+	/*
+	 * Newer versions of librt / libpthread pass us 'PSRD' in *idp to
+	 * indicate that a pshared semaphore is wanted.  In that case we
+	 * allocate globally unique ID and return that, rather than the
+	 * process-scoped file descriptor ID.
+	 */
+	error = (*docopyin)(idp, &arg, sizeof(*idp));
+	if (error) {
+		return error;
+	}
 
 	error = fd_allocfile(&fp, &fd);
 	if (error) {
@@ -404,11 +581,14 @@ do_ksem_init(lwp_t *l, u_int val, intptr_t *idp, copyout_t docopyout)
 	fp->f_flag = FREAD | FWRITE;
 	fp->f_ops = &semops;
 
-	id = (intptr_t)fd;
-	error = (*docopyout)(&id, idp, sizeof(*idp));
-	if (error) {
+	if (fd >= KSEM_MARKER_MIN) {
+		/*
+		 * This is super-unlikely, but we check for it anyway
+		 * because potential collisions with the pshared marker
+		 * would be bad.
+		 */
 		fd_abort(p, fp, fd);
-		return error;
+		return EMFILE;
 	}
 
 	/* Note the mode does not matter for anonymous semaphores. */
@@ -417,6 +597,23 @@ do_ksem_init(lwp_t *l, u_int val, intptr_t *idp, copyout_t docopyout)
 		fd_abort(p, fp, fd);
 		return error;
 	}
+
+	if (arg == KSEM_PSHARED) {
+		ks->ks_pshared_proc = curproc;
+		ks->ks_pshared_fd = fd;
+		ksem_alloc_pshared_id(ks);
+		id = ks->ks_pshared_id;
+	} else {
+		id = (intptr_t)fd;
+	}
+
+	error = (*docopyout)(&id, idp, sizeof(*idp));
+	if (error) {
+		ksem_free(ks);
+		fd_abort(p, fp, fd);
+		return error;
+	}
+
 	fp->f_ksem = ks;
 	fd_affix(p, fp, fd);
 	return error;
@@ -442,24 +639,35 @@ int
 do_ksem_open(struct lwp *l, const char *semname, int oflag, mode_t mode,
      unsigned int value, intptr_t *idp, copyout_t docopyout)
 {
-	char name[SEM_MAX_NAMELEN + 1];
+	char *name;
 	proc_t *p = l->l_proc;
 	ksem_t *ksnew = NULL, *ks;
 	file_t *fp;
 	intptr_t id;
 	int fd, error;
 
-	error = copyinstr(semname, name, sizeof(name), NULL);
+	error = name_copyin(semname, &name);
 	if (error) {
 		return error;
 	}
 	error = fd_allocfile(&fp, &fd);
 	if (error) {
+		name_destroy(&name);
 		return error;
 	}
 	fp->f_type = DTYPE_SEM;
 	fp->f_flag = FREAD | FWRITE;
 	fp->f_ops = &semops;
+
+	if (fd >= KSEM_MARKER_MIN) {
+		/*
+		 * This is super-unlikely, but we check for it anyway
+		 * because potential collisions with the pshared marker
+		 * would be bad.
+		 */
+		fd_abort(p, fp, fd);
+		return EMFILE;
+	}
 
 	/*
 	 * The ID (file descriptor number) can be stored early.
@@ -483,6 +691,7 @@ do_ksem_open(struct lwp *l, const char *semname, int oflag, mode_t mode,
 	/* Lookup for a semaphore with such name. */
 	mutex_enter(&ksem_lock);
 	ks = ksem_lookup(name);
+	name_destroy(&name);
 	if (ks) {
 		KASSERT(mutex_owned(&ks->ks_lock));
 		mutex_exit(&ksem_lock);
@@ -536,6 +745,7 @@ do_ksem_open(struct lwp *l, const char *semname, int oflag, mode_t mode,
 	fp->f_ksem = ks;
 	fd_affix(p, fp, fd);
 err:
+	name_destroy(&name);
 	if (error) {
 		fd_abort(p, fp, fd);
 	}
@@ -552,10 +762,24 @@ sys__ksem_close(struct lwp *l, const struct sys__ksem_close_args *uap,
 	/* {
 		intptr_t id;
 	} */
-	int fd = (int)SCARG(uap, id);
+	intptr_t id = SCARG(uap, id);
+	int fd, error;
+	ksem_t *ks;
 
-	if (fd_getfile(fd) == NULL) {
-		return EBADF;
+	error = ksem_get(id, &ks, &fd);
+	if (error) {
+		return error;
+	}
+
+	/* This is only for named semaphores. */
+	if (ks->ks_name == NULL) {
+		error = EINVAL;
+	}
+	ksem_release(ks, -1);
+	if (error) {
+		if (fd != -1)
+			fd_putfile(fd);
+		return error;
 	}
 	return fd_close(fd);
 }
@@ -611,22 +835,20 @@ static int
 ksem_close_fop(file_t *fp)
 {
 	ksem_t *ks = fp->f_ksem;
-	bool destroy = false;
 
 	mutex_enter(&ks->ks_lock);
-	KASSERT(ks->ks_ref > 0);
-	if (--ks->ks_ref == 0) {
-		/*
-		 * Destroy if the last reference and semaphore is unnamed,
-		 * or unlinked (for named semaphore).
-		 */
-		destroy = (ks->ks_flags & KS_UNLINKED) || (ks->ks_name == NULL);
-	}
-	mutex_exit(&ks->ks_lock);
 
-	if (destroy) {
-		ksem_free(ks);
+	if (ks->ks_pshared_id) {
+		if (ks->ks_pshared_proc != curproc) {
+			/* Do nothing if this is not the creator. */
+			mutex_exit(&ks->ks_lock);
+			return 0;
+		}
+		/* Mark this semaphore as dead. */
+		ks->ks_pshared_proc = NULL;
 	}
+
+	ksem_release(ks, -1);
 	return 0;
 }
 
@@ -637,17 +859,18 @@ sys__ksem_unlink(struct lwp *l, const struct sys__ksem_unlink_args *uap,
 	/* {
 		const char *name;
 	} */
-	char name[SEM_MAX_NAMELEN + 1];
+	char *name;
 	ksem_t *ks;
 	u_int refcnt;
 	int error;
 
-	error = copyinstr(SCARG(uap, name), name, sizeof(name), NULL);
+	error = name_copyin(SCARG(uap, name), &name);
 	if (error)
 		return error;
 
 	mutex_enter(&ksem_lock);
 	ks = ksem_lookup(name);
+	name_destroy(&name);
 	if (ks == NULL) {
 		mutex_exit(&ksem_lock);
 		return ENOENT;
@@ -687,10 +910,10 @@ sys__ksem_post(struct lwp *l, const struct sys__ksem_post_args *uap,
 	/* {
 		intptr_t id;
 	} */
-	int fd = (int)SCARG(uap, id), error;
+	int fd, error;
 	ksem_t *ks;
 
-	error = ksem_get(fd, &ks);
+	error = ksem_get(SCARG(uap, id), &ks, &fd);
 	if (error) {
 		return error;
 	}
@@ -704,18 +927,17 @@ sys__ksem_post(struct lwp *l, const struct sys__ksem_post_args *uap,
 		cv_broadcast(&ks->ks_cv);
 	}
 out:
-	mutex_exit(&ks->ks_lock);
-	fd_putfile(fd);
+	ksem_release(ks, fd);
 	return error;
 }
 
 int
 do_ksem_wait(lwp_t *l, intptr_t id, bool try_p, struct timespec *abstime)
 {
-	int fd = (int)id, error, timeo;
+	int fd, error, timeo;
 	ksem_t *ks;
 
-	error = ksem_get(fd, &ks);
+	error = ksem_get(id, &ks, &fd);
 	if (error) {
 		return error;
 	}
@@ -738,8 +960,7 @@ do_ksem_wait(lwp_t *l, intptr_t id, bool try_p, struct timespec *abstime)
 	}
 	ks->ks_value--;
 out:
-	mutex_exit(&ks->ks_lock);
-	fd_putfile(fd);
+	ksem_release(ks, fd);
 	return error;
 }
 
@@ -797,18 +1018,17 @@ sys__ksem_getvalue(struct lwp *l, const struct sys__ksem_getvalue_args *uap,
 		intptr_t id;
 		unsigned int *value;
 	} */
-	int fd = (int)SCARG(uap, id), error;
+	int fd, error;
 	ksem_t *ks;
 	unsigned int val;
 
-	error = ksem_get(fd, &ks);
+	error = ksem_get(SCARG(uap, id), &ks, &fd);
 	if (error) {
 		return error;
 	}
 	KASSERT(mutex_owned(&ks->ks_lock));
 	val = ks->ks_value;
-	mutex_exit(&ks->ks_lock);
-	fd_putfile(fd);
+	ksem_release(ks, fd);
 
 	return copyout(&val, SCARG(uap, value), sizeof(val));
 }
@@ -820,10 +1040,12 @@ sys__ksem_destroy(struct lwp *l, const struct sys__ksem_destroy_args *uap,
 	/* {
 		intptr_t id;
 	} */
-	int fd = (int)SCARG(uap, id), error;
+	int fd, error;
 	ksem_t *ks;
 
-	error = ksem_get(fd, &ks);
+	intptr_t id = SCARG(uap, id);
+
+	error = ksem_get(id, &ks, &fd);
 	if (error) {
 		return error;
 	}
@@ -839,10 +1061,29 @@ sys__ksem_destroy(struct lwp *l, const struct sys__ksem_destroy_args *uap,
 		error = EBUSY;
 		goto out;
 	}
+	if (KSEM_ID_IS_PSHARED(id)) {
+		/* Cannot destroy if we did't create it. */
+		KASSERT(fd == -1);
+		KASSERT(ks->ks_pshared_proc != NULL);
+		if (ks->ks_pshared_proc != curproc) {
+			error = EINVAL;
+			goto out;
+		}
+		fd = ks->ks_pshared_fd;
+
+		/* Mark it dead so subsequent lookups fail. */
+		ks->ks_pshared_proc = NULL;
+
+		/* Do an fd_getfile() to for the benefit of fd_close(). */
+		file_t *fp __diagused = fd_getfile(fd);
+		KASSERT(fp != NULL);
+		KASSERT(fp->f_ksem == ks);
+	}
 out:
-	mutex_exit(&ks->ks_lock);
+	ksem_release(ks, -1);
 	if (error) {
-		fd_putfile(fd);
+		if (!KSEM_ID_IS_PSHARED(id))
+			fd_putfile(fd);
 		return error;
 	}
 	return fd_close(fd);

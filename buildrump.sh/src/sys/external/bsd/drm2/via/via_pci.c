@@ -1,4 +1,4 @@
-/*	$NetBSD: via_pci.c,v 1.2 2015/04/29 12:30:43 riastradh Exp $	*/
+/*	$NetBSD: via_pci.c,v 1.5 2021/02/13 15:42:15 jakllsch Exp $	*/
 
 /*-
  * Copyright (c) 2015 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: via_pci.c,v 1.2 2015/04/29 12:30:43 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: via_pci.c,v 1.5 2021/02/13 15:42:15 jakllsch Exp $");
 
 #include <sys/types.h>
 #include <sys/device.h>
@@ -70,6 +70,9 @@ viadrm_lookup(const struct pci_attach_args *pa)
 	unsigned i;
 
 	for (i = 0; i < __arraycount(viadrm_pci_ids); i++) {
+		if (viadrm_pci_ids[i].vendor == 0 &&
+		    viadrm_pci_ids[i].device == 0)
+			break;
 		KASSERT(viadrm_pci_ids[i].subvendor == PCI_ANY_ID);
 		KASSERT(viadrm_pci_ids[i].subdevice == PCI_ANY_ID);
 		KASSERT(viadrm_pci_ids[i].class == 0);
@@ -113,8 +116,14 @@ viadrm_attach(device_t parent, device_t self, void *aux)
 
 	KASSERT(cookiep != NULL);
 
+	aprint_naive("\n");
+	aprint_normal("\n");
+
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
+
+	/* Initialize the Linux PCI device descriptor.  */
+	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
 
 	/* XXX errno Linux->NetBSD */
 	error = -drm_pci_attach(self, pa, &sc->sc_pci_dev, via_drm_driver,
@@ -141,6 +150,8 @@ viadrm_detach(device_t self, int flags)
 	if (error)
 		return error;
 	sc->sc_drm_dev = NULL;
+
+out:	linux_pci_dev_destroy(&sc->sc_pci_dev);
 	pmf_device_deregister(self);
-out:	return 0;
+	return 0;
 }

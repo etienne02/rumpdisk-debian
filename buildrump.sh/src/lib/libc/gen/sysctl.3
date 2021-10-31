@@ -1,4 +1,4 @@
-.\"	$NetBSD: sysctl.3,v 1.202 2014/06/13 22:05:15 wiz Exp $
+.\"	$NetBSD: sysctl.3,v 1.206 2019/09/15 07:01:13 wiz Exp $
 .\"
 .\" Copyright (c) 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -29,7 +29,7 @@
 .\"
 .\"	@(#)sysctl.3	8.4 (Berkeley) 5/9/95
 .\"
-.Dd June 13, 2014
+.Dd September 14, 2019
 .Dt SYSCTL 3
 .Os
 .Sh NAME
@@ -240,7 +240,7 @@ size_t len;
 mib[0] = CTL_KERN;
 mib[1] = KERN_MAXPROC;
 len = sizeof(maxproc);
-sysctl(mib, 2, \*[Am]maxproc, \*[Am]len, NULL, 0);
+sysctl(mib, 2, &maxproc, &len, NULL, 0);
 .Ed
 .sp
 To retrieve the standard search path for the system utilities -
@@ -252,9 +252,9 @@ char *p;
 .sp
 mib[0] = CTL_USER;
 mib[1] = USER_CS_PATH;
-sysctl(mib, 2, NULL, \*[Am]len, NULL, 0);
+sysctl(mib, 2, NULL, &len, NULL, 0);
 p = malloc(len);
-sysctl(mib, 2, p, \*[Am]len, NULL, 0);
+sysctl(mib, 2, p, &len, NULL, 0);
 .Ed
 .Pp
 The
@@ -288,7 +288,6 @@ The core interface to all of these meta-functions is the structure
 that the kernel uses to describe the tree internally, as defined in
 .In sys/sysctl.h
 as:
-.Pp
 .Bd -literal
 struct sysctlnode {
         uint32_t sysctl_flags;          /* flags and type */
@@ -330,7 +329,8 @@ Querying the tree to discover the name to number mapping permits
 dynamic discovery of all the data that the tree currently has
 instrumented.
 For example, to discover all the nodes below the
-CTL_VFS node:
+.Dv CTL_VFS
+node:
 .Pp
 .Bd -literal -offset indent -compact
 struct sysctlnode query, vfs[128];
@@ -339,10 +339,10 @@ size_t len;
 .sp
 mib[0] = CTL_VFS;
 mib[1] = CTL_QUERY;
-memset(\*[Am]query, 0, sizeof(query));
+memset(&query, 0, sizeof(query));
 query.sysctl_flags = SYSCTL_VERSION;
 len = sizeof(vfs);
-sysctl(mib, 2, \*[Am]vfs[0], \*[Am]len, \*[Am]query, sizeof(query));
+sysctl(mib, 2, &vfs[0], &len, &query, sizeof(query));
 .Ed
 .Pp
 Note that a reference to an empty node with
@@ -356,7 +356,12 @@ version be explicitly specified.
 .Pp
 Creation and destruction of nodes works by constructing part of a new
 node description (or a description of the existing node) and invoking
-CTL_CREATE (or CTL_CREATESYM) or CTL_DESTROY at the parent of the new
+.Dv CTL_CREATE
+(or
+.Dv CTL_CREATESYM )
+or
+.Dv CTL_DESTROY
+at the parent of the new
 node, with a pointer to the new node passed via the
 .Fa new
 and
@@ -374,7 +379,11 @@ The minimum requirements for creating a node are setting the
 .Fa sysctl_flags
 to indicate the new node's type,
 .Fa sysctl_num
-to either the new node's number (or CTL_CREATE or CTL_CREATESYM if a
+to either the new node's number (or
+.Dv CTL_CREATE
+or
+.Dv CTL_CREATESYM
+if a
 dynamically allocated MIB number is acceptable),
 .Fa sysctl_size
 to the size of the data to be instrumented (which must agree with the
@@ -389,7 +398,9 @@ will vary depending on what is to be instrumented.
 If existing kernel data is to be covered by this new node, its address
 should be given in
 .Fa sysctl_data
-or, if CTL_CREATESYM is used,
+or, if
+.Dv CTL_CREATESYM
+is used,
 .Fa sysctl_data
 should be set to a string containing its name from the kernel's symbol
 table.
@@ -398,10 +409,13 @@ the new integer or quad type data should be placed into either
 .Fa sysctl_idata
 or
 .Fa sysctl_qdata ,
-respectively, along with the SYSCTL_IMMEDIATE flag being set, or
+respectively, along with the
+.Dv CTLFLAG_IMMEDIATE
+flag being set, or
 .Fa sysctl_data
 should be set to point to a copy of the new data, and the
-SYSCTL_OWNDATA flag must be set.
+.Dv CTLFLAG_OWNDATA
+flag must be set.
 This latter method is the only way that new string and struct type
 nodes can be initialized.
 Invalid kernel addresses are accepted, but any attempt to access those
@@ -446,21 +460,21 @@ size_t len;
 .sp
 mib[0] = CTL_CREATE;		/* create at top-level */
 len = sizeof(node);
-memset(\*[Am]node, 0, len);
+memset(&node, 0, len);
 node.sysctl_flags = SYSCTL_VERSION|CTLFLAG_READWRITE|CTLTYPE_NODE;
 snprintf(node.sysctl_name, sizeof(node.sysctl_name), "local");
 node.sysctl_num = CTL_CREATE;	/* request dynamic MIB number */
-sysctl(\*[Am]mib[0], 1, \*[Am]node, \*[Am]len, \*[Am]node, len);
+sysctl(&mib[0], 1, &node, &len, &node, len);
 .sp
 mib[0] = node.sysctl_num;	/* use new MIB number */
 mib[1] = CTL_CREATESYM;		/* create at second level */
 len = sizeof(node);
-memset(\*[Am]node, 0, len);
+memset(&node, 0, len);
 node.sysctl_flags = SYSCTL_VERSION|CTLFLAG_READWRITE|CTLTYPE_INT;
 snprintf(node.sysctl_name, sizeof(node.sysctl_name), "audiodebug");
 node.sysctl_num = CTL_CREATE;
 node.sysctl_data = "audiodebug"; /* kernel symbol to be used */
-sysctl(\*[Am]mib[0], 2, NULL, NULL, \*[Am]node, len);
+sysctl(&mib[0], 2, NULL, NULL, &node, len);
 .Ed
 .Pp
 The process for deleting nodes is similar, but less data needs to
@@ -490,17 +504,17 @@ above example:
 int mib[2];
 .sp
 len = sizeof(node);
-memset(\*[Am]node, 0, len);
+memset(&node, 0, len);
 node.sysctl_flags = SYSCTL_VERSION;
 .sp
 mib[0] = 3214;			/* assumed number for "local" */
 mib[1] = CTL_DESTROY;
 node.sysctl_num = 3215;		/* assumed number for "audiodebug" */
-sysctl(\*[Am]mib[0], 2, NULL, NULL, \*[Am]node, len);
+sysctl(&mib[0], 2, NULL, NULL, &node, len);
 .sp
 mib[0] = CTL_DESTROY;
 node.sysctl_num = 3214;		/* now deleting "local" */
-sysctl(\*[Am]mib[0], 1, NULL, NULL, \*[Am]node, len);
+sysctl(&mib[0], 1, NULL, NULL, &node, len);
 .Ed
 .Pp
 Descriptions of each of the nodes can also be retrieved, if they are
@@ -521,7 +535,6 @@ will match the
 .Fa sysctl_ver
 value for a given node, so that descriptions for nodes whose number
 have been recycled can be detected and ignored or discarded.
-.Pp
 .Bd -literal
 struct sysctldesc {
         int32_t         descr_num;      /* mib number of node */
@@ -546,23 +559,23 @@ size_t len;
 /* retrieve kern-level descriptions */
 mib[0] = CTL_KERN;
 mib[1] = CTL_DESCRIBE;
-d = (struct sysctldesc *)\*[Am]buf[0];
+d = (struct sysctldesc *)&buf[0];
 len = sizeof(buf);
-sysctl(mib, 2, d, \*[Am]len, NULL, 0);
-while ((caddr_t)d \*[Lt] (caddr_t)\*[Am]buf[len]) {
-	printf("node %d: %.*s\\n", d-\*[Gt]descr_num, d-\*[Gt]descr_len,
-	    d-\*[Gt]descr_str);
+sysctl(mib, 2, d, &len, NULL, 0);
+while ((caddr_t)d < (caddr_t)&buf[len]) {
+	printf("node %d: %.*s\\n", d->descr_num, d->descr_len,
+	    d->descr_str);
 	d = NEXT_DESCR(d);
 }
 .sp
 /* retrieve description for kern.securelevel */
-memset(\*[Am]desc, 0, sizeof(desc));
+memset(&desc, 0, sizeof(desc));
 desc.sysctl_flags = SYSCTL_VERSION;
 desc.sysctl_num = KERN_SECURELEVEL;
-d = (struct sysctldesc *)\*[Am]buf[0];
+d = (struct sysctldesc *)&buf[0];
 len = sizeof(buf);
-sysctl(mib, 2, d, \*[Am]len, \*[Am]desc, sizeof(desc));
-printf("kern.securelevel: %.*s\\n", d-\*[Gt]descr_len, d-\*[Gt]descr_str);
+sysctl(mib, 2, d, &len, &desc, sizeof(desc));
+printf("kern.securelevel: %.*s\\n", d->descr_len, d->descr_str);
 .Ed
 .Pp
 Descriptions can also be set as follows, subject to the following rules:
@@ -586,11 +599,11 @@ int mib[2];
 /* presuming the given top-level node was just added... */
 mib[0] = 3214; /* mib numbers taken from previous examples */
 mib[1] = CTL_DESCRIBE;
-memset(\*[Am]desc, 0, sizeof(desc));
+memset(&desc, 0, sizeof(desc));
 desc.sysctl_flags = SYSCTL_VERSION;
 desc.sysctl_num = 3215;
 desc.sysctl_desc = "audio debug control knob";
-sysctl(mib, 2, NULL, NULL, \*[Am]desc, sizeof(desc));
+sysctl(mib, 2, NULL, NULL, &desc, sizeof(desc));
 .Ed
 .Pp
 Upon successfully setting a description, the new description will be
@@ -642,7 +655,7 @@ Otherwise \-1 is returned and
 .Va errno
 is set appropriately.
 .Sh FILES
-.Bl -tag -width \*[Lt]netinet6/udp6Xvar.h\*[Gt] -compact
+.Bl -tag -width <netinet6/udp6Xvar.h> -compact
 .It Aq Pa sys/sysctl.h
 definitions for top level identifiers, second level kernel and hardware
 identifiers, and user level identifiers
@@ -665,9 +678,9 @@ definitions for fourth level TCP identifiers
 definitions for fourth level UDP identifiers
 .It Aq Pa netinet6/udp6_var.h
 definitions for fourth level IPv6 UDP identifiers
-.It Aq Pa netinet6/ipsec.h
+.It Aq Pa netipsec/ipsec.h
 definitions for fourth level IPsec identifiers
-.It Aq Pa netkey/key_var.h
+.It Aq Pa netipsec/key_var.h
 definitions for third level PF_KEY identifiers
 .It Aq Pa machine/cpu.h
 definitions for second level machdep identifiers

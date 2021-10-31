@@ -1,4 +1,4 @@
-/*	$NetBSD: fcntl.h,v 1.47 2016/06/30 15:29:20 dholland Exp $	*/
+/*	$NetBSD: fcntl.h,v 1.54 2020/03/30 20:17:42 kamil Exp $	*/
 
 /*-
  * Copyright (c) 1983, 1990, 1993
@@ -48,9 +48,9 @@
 #ifndef _KERNEL
 #include <sys/featuretest.h>
 #include <sys/types.h>
-#if defined(_XOPEN_SOURCE) || defined(_NETBSD_SOURCE)
+#if defined(_XOPEN_SOURCE)
 #include <sys/stat.h>
-#endif /* _XOPEN_SOURCE || _NETBSD_SOURCE */
+#endif /* _XOPEN_SOURCE */
 #endif /* !_KERNEL */
 
 /*
@@ -90,7 +90,7 @@
     (_XOPEN_SOURCE - 0) >= 500 || defined(_NETBSD_SOURCE)
 #define	O_SYNC		0x00000080	/* synchronous writes */
 #endif
-#if defined(_NETBSD_SOURCE)
+#if (_POSIX_C_SOURCE - 0) >= 200809L || defined(_NETBSD_SOURCE)
 #define	O_NOFOLLOW	0x00000100	/* don't follow symlinks on the last */
 					/* path component */
 #endif
@@ -115,11 +115,13 @@
 #define	O_DIRECTORY	0x00200000	/* fail if not a directory */
 #define	O_CLOEXEC	0x00400000	/* set close on exec */
 #if (_POSIX_C_SOURCE - 0) >= 200809L || (_XOPEN_SOURCE - 0 >= 700) || \
-    defined(_INCOMPLETE_XOPEN_C063) || defined(_NETBSD_SOURCE)
+    defined(_NETBSD_SOURCE)
 #define	O_SEARCH	0x00800000	/* skip search permission checks */
 #endif
 #if defined(_NETBSD_SOURCE)
 #define	O_NOSIGPIPE	0x01000000	/* don't deliver sigpipe */
+#define	O_REGULAR	0x02000000	/* fail if not a regular file */
+#define	O_EXEC		0x04000000	/* open for executing only */
 #endif
 
 #ifdef _KERNEL
@@ -131,8 +133,9 @@
 #define	O_MASK		(O_ACCMODE|O_NONBLOCK|O_APPEND|O_SHLOCK|O_EXLOCK|\
 			 O_ASYNC|O_SYNC|O_CREAT|O_TRUNC|O_EXCL|O_DSYNC|\
 			 O_RSYNC|O_NOCTTY|O_ALT_IO|O_NOFOLLOW|O_DIRECT|\
-			 O_DIRECTORY|O_CLOEXEC|O_NOSIGPIPE)
+			 O_DIRECTORY|O_CLOEXEC|O_NOSIGPIPE|O_REGULAR|O_EXEC)
 
+#define	FEXEC		O_EXEC
 #define	FMARK		0x00001000	/* mark during gc() */
 #define	FDEFER		0x00002000	/* defer for next gc pass */
 #define	FHASLOCK	0x00004000	/* descriptor holds advisory lock */
@@ -143,7 +146,7 @@
 #define	FCNTLFLAGS	(FAPPEND|FASYNC|FFSYNC|FNONBLOCK|FDSYNC|FRSYNC|FALTIO|\
 			 FDIRECT|FNOSIGPIPE)
 /* bits to save after open(2) */
-#define	FMASK		(FREAD|FWRITE|FCNTLFLAGS)
+#define	FMASK		(FREAD|FWRITE|FCNTLFLAGS|FEXEC)
 #endif /* _KERNEL */
 
 /*
@@ -189,9 +192,14 @@
 #if defined(_NETBSD_SOURCE)
 #define	F_CLOSEM	10		/* close all fds >= to the one given */
 #define	F_MAXFD		11		/* return the max open fd */
+#endif
+#if (_POSIX_C_SOURCE - 0) >= 200809L || defined(_NETBSD_SOURCE)
 #define	F_DUPFD_CLOEXEC	12		/* close on exec duplicated fd */
+#endif
+#if defined(_NETBSD_SOURCE)
 #define	F_GETNOSIGPIPE	13		/* get SIGPIPE disposition */
 #define	F_SETNOSIGPIPE	14		/* set SIGPIPE disposition */
+#define	F_GETPATH	15		/* get pathname associated with fd */
 #endif
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
@@ -291,7 +299,7 @@ struct flock {
  * Constants for X/Open Extended API set 2 (a.k.a. C063)
  */
 #if (_POSIX_C_SOURCE - 0) >= 200809L || (_XOPEN_SOURCE - 0 >= 700) || \
-    defined(_INCOMPLETE_XOPEN_C063) || defined(_NETBSD_SOURCE)
+    defined(_NETBSD_SOURCE)
 #define	AT_FDCWD		-100	/* Use cwd for relative link target */
 #define	AT_EACCESS		0x100	/* Use euig/egid for access checks */
 #define	AT_SYMLINK_NOFOLLOW	0x200	/* Do not follow symlinks */
@@ -324,7 +332,7 @@ int	 posix_fallocate(int, off_t, off_t);
  * X/Open Extended API set 2 (a.k.a. C063)
  */
 #if (_POSIX_C_SOURCE - 0) >= 200809L || (_XOPEN_SOURCE - 0 >= 700) || \
-    defined(_INCOMPLETE_XOPEN_C063) || defined(_NETBSD_SOURCE)
+    defined(_NETBSD_SOURCE)
 int	openat(int, const char *, int, ...);
 #endif
 

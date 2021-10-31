@@ -1,4 +1,4 @@
-/*	$NetBSD: power.h,v 1.20 2015/01/06 15:39:54 bouyer Exp $	*/
+/*	$NetBSD: power.h,v 1.22 2021/05/29 16:49:57 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -114,6 +114,10 @@
 #define		PSWITCH_HK_VOLUME_UP		"volume-up"
 #define		PSWITCH_HK_VOLUME_DOWN		"volume-down"
 #define		PSWITCH_HK_VOLUME_MUTE		"volume-mute"
+#define		PSWITCH_HK_STAR_BUTTON		"star-button"
+#define		PSWITCH_HK_SCISSORS_BUTTON	"scissors-button"
+#define		PSWITCH_HK_BLUETOOTH_BUTTON	"bluetooth-button"
+#define		PSWITCH_HK_KEYBOARD_BUTTON	"keyboard-button"
 #endif /* THINKPAD_NORMAL_HOTKEYS */
 #define	PSWITCH_TYPE_RADIO	6	/* radio switch */
 
@@ -282,6 +286,13 @@ struct power_type {
 	char	power_type[32];
 };
 #define	POWER_IOC_GET_TYPE	_IOR('P', 0, struct power_type)
+
+#ifdef _KERNEL
+/*
+ * so the kernel can provide binary compat for applications
+ * built when POWER_IOC_GET_TYPE was incorrectly defined as:
+ */
 #define	POWER_IOC_GET_TYPE_WITH_LOSSAGE _IOR('P', 0, sizeof(struct power_type))
+#endif
 
 #endif /* _SYS_POWER_H_ */

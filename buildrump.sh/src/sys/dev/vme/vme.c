@@ -1,4 +1,4 @@
-/* $NetBSD: vme.c,v 1.26 2012/10/27 17:18:38 chs Exp $ */
+/* $NetBSD: vme.c,v 1.29 2021/08/07 16:19:17 thorpej Exp $ */
 
 /*
  * Copyright (c) 1999
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vme.c,v 1.26 2012/10/27 17:18:38 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vme.c,v 1.29 2021/08/07 16:19:17 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -147,8 +147,8 @@ vmesubmatch(device_t bus, cfdata_t dev, const int *ldesc, void *aux)
 	v.va_vct = sc->sc_vct;
 	v.va_bdt = sc->sc_bdt;
 
-	if (config_match(bus, dev, &v)) {
-		config_attach(bus, dev, &v, (cfprint_t)vmeprint);
+	if (config_probe(bus, dev, &v)) {
+		config_attach(bus, dev, &v, (cfprint_t)vmeprint, CFARGS_NONE);
 		return (1);
 	}
 	return (0);
@@ -201,9 +201,11 @@ vmeattach(device_t parent, device_t self, void *aux)
 	if (sc->slaveconfig) {
 		/* first get info about the bus master's slave side,
 		 if present */
-		config_search_ia(vmesubmatch1, self, "vme", 0);
+		config_search(self, NULL,
+		    CFARGS(.search = vmesubmatch1));
 	}
-	config_search_ia(vmesubmatch, self, "vme", 0);
+	config_search(self, NULL,
+	    CFARGS(.search = vmesubmatch));
 
 #ifdef VMEDEBUG
 	if (sc->vme32ext)
@@ -222,7 +224,7 @@ vmedetach(device_t dev)
 	struct vmebus_softc *sc = device_private(dev);
 
 	if (sc->slaveconfig) {
-		/* allow bus master to free its bus ressources */
+		/* allow bus master to free its bus resources */
 		(*sc->slaveconfig)(device_parent(dev), 0);
 	}
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: ptyfs_vnops.c,v 1.51 2015/06/23 10:41:06 hannken Exp $	*/
+/*	$NetBSD: ptyfs_vnops.c,v 1.66 2021/07/18 23:57:34 dholland Exp $	*/
 
 /*
  * Copyright (c) 1993, 1995
@@ -76,7 +76,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ptyfs_vnops.c,v 1.51 2015/06/23 10:41:06 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ptyfs_vnops.c,v 1.66 2021/07/18 23:57:34 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -114,8 +114,6 @@ MALLOC_DECLARE(M_PTYFSTMP);
  */
 
 int	ptyfs_lookup	(void *);
-#define	ptyfs_create	genfs_eopnotsupp
-#define	ptyfs_mknod	genfs_eopnotsupp
 int	ptyfs_open	(void *);
 int	ptyfs_close	(void *);
 int	ptyfs_access	(void *);
@@ -123,35 +121,15 @@ int	ptyfs_getattr	(void *);
 int	ptyfs_setattr	(void *);
 int	ptyfs_read	(void *);
 int	ptyfs_write	(void *);
-#define	ptyfs_fcntl	genfs_fcntl
 int	ptyfs_ioctl	(void *);
 int	ptyfs_poll	(void *);
 int	ptyfs_kqfilter	(void *);
-#define ptyfs_revoke	genfs_revoke
-#define	ptyfs_mmap	genfs_eopnotsupp
-#define	ptyfs_fsync	genfs_nullop
-#define	ptyfs_seek	genfs_nullop
-#define	ptyfs_remove	genfs_eopnotsupp
-#define	ptyfs_link	genfs_abortop
-#define	ptyfs_rename	genfs_eopnotsupp
-#define	ptyfs_mkdir	genfs_eopnotsupp
-#define	ptyfs_rmdir	genfs_eopnotsupp
-#define	ptyfs_symlink	genfs_abortop
 int	ptyfs_readdir	(void *);
-#define	ptyfs_readlink	genfs_eopnotsupp
-#define	ptyfs_abortop	genfs_abortop
 int	ptyfs_reclaim	(void *);
 int	ptyfs_inactive	(void *);
-#define	ptyfs_lock	genfs_lock
-#define	ptyfs_unlock	genfs_unlock
-#define	ptyfs_bmap	genfs_badop
-#define	ptyfs_strategy	genfs_badop
 int	ptyfs_print	(void *);
 int	ptyfs_pathconf	(void *);
-#define	ptyfs_islocked	genfs_islocked
 int	ptyfs_advlock	(void *);
-#define	ptyfs_bwrite	genfs_eopnotsupp
-#define ptyfs_putpages	genfs_null_putpages
 
 static int ptyfs_update(struct vnode *, const struct timespec *,
     const struct timespec *, int);
@@ -166,12 +144,14 @@ static int atoi(const char *, size_t);
 int (**ptyfs_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc ptyfs_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, ptyfs_lookup },		/* lookup */
-	{ &vop_create_desc, ptyfs_create },		/* create */
-	{ &vop_mknod_desc, ptyfs_mknod },		/* mknod */
+	{ &vop_create_desc, genfs_eopnotsupp },		/* create */
+	{ &vop_mknod_desc, genfs_eopnotsupp },		/* mknod */
 	{ &vop_open_desc, ptyfs_open },			/* open */
 	{ &vop_close_desc, ptyfs_close },		/* close */
 	{ &vop_access_desc, ptyfs_access },		/* access */
+	{ &vop_accessx_desc, genfs_accessx },		/* accessx */
 	{ &vop_getattr_desc, ptyfs_getattr },		/* getattr */
 	{ &vop_setattr_desc, ptyfs_setattr },		/* setattr */
 	{ &vop_read_desc, ptyfs_read },			/* read */
@@ -179,34 +159,34 @@ const struct vnodeopv_entry_desc ptyfs_vnodeop_entries[] = {
 	{ &vop_fallocate_desc, genfs_eopnotsupp },	/* fallocate */
 	{ &vop_fdiscard_desc, genfs_eopnotsupp },	/* fdiscard */
 	{ &vop_ioctl_desc, ptyfs_ioctl },		/* ioctl */
-	{ &vop_fcntl_desc, ptyfs_fcntl },		/* fcntl */
+	{ &vop_fcntl_desc, genfs_fcntl },		/* fcntl */
 	{ &vop_poll_desc, ptyfs_poll },			/* poll */
 	{ &vop_kqfilter_desc, ptyfs_kqfilter },		/* kqfilter */
-	{ &vop_revoke_desc, ptyfs_revoke },		/* revoke */
-	{ &vop_mmap_desc, ptyfs_mmap },			/* mmap */
-	{ &vop_fsync_desc, ptyfs_fsync },		/* fsync */
-	{ &vop_seek_desc, ptyfs_seek },			/* seek */
-	{ &vop_remove_desc, ptyfs_remove },		/* remove */
-	{ &vop_link_desc, ptyfs_link },			/* link */
-	{ &vop_rename_desc, ptyfs_rename },		/* rename */
-	{ &vop_mkdir_desc, ptyfs_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, ptyfs_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, ptyfs_symlink },		/* symlink */
+	{ &vop_revoke_desc, genfs_revoke },		/* revoke */
+	{ &vop_mmap_desc, genfs_eopnotsupp },		/* mmap */
+	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
+	{ &vop_seek_desc, genfs_nullop },		/* seek */
+	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
+	{ &vop_link_desc, genfs_eopnotsupp },		/* link */
+	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
+	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
+	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
+	{ &vop_symlink_desc, genfs_eopnotsupp },	/* symlink */
 	{ &vop_readdir_desc, ptyfs_readdir },		/* readdir */
-	{ &vop_readlink_desc, ptyfs_readlink },		/* readlink */
-	{ &vop_abortop_desc, ptyfs_abortop },		/* abortop */
+	{ &vop_readlink_desc, genfs_eopnotsupp },	/* readlink */
+	{ &vop_abortop_desc, genfs_abortop },		/* abortop */
 	{ &vop_inactive_desc, ptyfs_inactive },		/* inactive */
 	{ &vop_reclaim_desc, ptyfs_reclaim },		/* reclaim */
-	{ &vop_lock_desc, ptyfs_lock },			/* lock */
-	{ &vop_unlock_desc, ptyfs_unlock },		/* unlock */
-	{ &vop_bmap_desc, ptyfs_bmap },			/* bmap */
-	{ &vop_strategy_desc, ptyfs_strategy },		/* strategy */
+	{ &vop_lock_desc, genfs_lock },			/* lock */
+	{ &vop_unlock_desc, genfs_unlock },		/* unlock */
+	{ &vop_bmap_desc, genfs_eopnotsupp },		/* bmap */
+	{ &vop_strategy_desc, genfs_badop },		/* strategy */
 	{ &vop_print_desc, ptyfs_print },		/* print */
-	{ &vop_islocked_desc, ptyfs_islocked },		/* islocked */
+	{ &vop_islocked_desc, genfs_islocked },		/* islocked */
 	{ &vop_pathconf_desc, ptyfs_pathconf },		/* pathconf */
 	{ &vop_advlock_desc, ptyfs_advlock },		/* advlock */
-	{ &vop_bwrite_desc, ptyfs_bwrite },		/* bwrite */
-	{ &vop_putpages_desc, ptyfs_putpages },		/* putpages */
+	{ &vop_bwrite_desc, genfs_eopnotsupp },		/* bwrite */
+	{ &vop_putpages_desc, genfs_null_putpages },	/* putpages */
 	{ NULL, NULL }
 };
 const struct vnodeopv_desc ptyfs_vnodeop_opv_desc =
@@ -219,13 +199,13 @@ const struct vnodeopv_desc ptyfs_vnodeop_opv_desc =
 int
 ptyfs_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
-	struct ptyfsnode *ptyfs = VTOPTYFS(vp);
 
-	vcache_remove(vp->v_mount, &ptyfs->ptyfs_key, sizeof(ptyfs->ptyfs_key));
+	VOP_UNLOCK(vp);
+
 	vp->v_data = NULL;
 	return 0;
 }
@@ -233,7 +213,7 @@ ptyfs_reclaim(void *v)
 int
 ptyfs_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		bool *a_recycle;
 	} */ *ap = v;
@@ -242,7 +222,7 @@ ptyfs_inactive(void *v)
 
 	if (ptyfs->ptyfs_type == PTYFSptc)
 		ptyfs_clr_active(vp->v_mount, ptyfs->ptyfs_pty);
-	VOP_UNLOCK(vp);
+
 	return 0;
 }
 
@@ -281,7 +261,7 @@ ptyfs_pathconf(void *v)
 		*ap->a_retval = 1;
 		return 0;
 	default:
-		return EINVAL;
+		return genfs_pathconf(ap);
 	}
 }
 
@@ -405,7 +385,7 @@ ptyfs_setattr(void *v)
 	kauth_action_t action = KAUTH_VNODE_WRITE_FLAGS;
 	bool changing_sysflags = false;
 
-	if (vap->va_size != VNOVAL) {
+	if (vap->va_size != VNOVALSIZE) {
  		switch (ptyfs->ptyfs_type) {
  		case PTYFSroot:
  			return EISDIR;
@@ -417,7 +397,7 @@ ptyfs_setattr(void *v)
 		}
 	}
 
-	if (vap->va_flags != VNOVAL) {
+	if (vap->va_flags != VNOVALFLAGS) {
 		if (vp->v_mount->mnt_flag & MNT_RDONLY)
 			return EROFS;
 
@@ -435,7 +415,7 @@ ptyfs_setattr(void *v)
 		}
 
 		error = kauth_authorize_vnode(cred, action, vp, NULL,
-		    genfs_can_chflags(cred, vp->v_type, ptyfs->ptyfs_uid,
+		    genfs_can_chflags(vp, cred, ptyfs->ptyfs_uid,
 		    changing_sysflags));
 		if (error)
 			return error;
@@ -455,8 +435,6 @@ ptyfs_setattr(void *v)
 	if (vap->va_uid != (uid_t)VNOVAL || vap->va_gid != (gid_t)VNOVAL) {
 		if (vp->v_mount->mnt_flag & MNT_RDONLY)
 			return EROFS;
-		if (ptyfs->ptyfs_type == PTYFSroot)
-			return EPERM;
 		error = ptyfs_chown(vp, vap->va_uid, vap->va_gid, cred, l);
 		if (error)
 			return error;
@@ -469,8 +447,8 @@ ptyfs_setattr(void *v)
 		if ((ptyfs->ptyfs_flags & SF_SNAPSHOT) != 0)
 			return EPERM;
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_TIMES, vp,
-		    NULL, genfs_can_chtimes(vp, vap->va_vaflags,
-		    ptyfs->ptyfs_uid, cred));
+		    NULL, genfs_can_chtimes(vp, cred, ptyfs->ptyfs_uid,
+		    vap->va_vaflags));
 		if (error)
 			return (error);
 		if (vap->va_atime.tv_sec != VNOVAL)
@@ -491,8 +469,6 @@ ptyfs_setattr(void *v)
 	if (vap->va_mode != (mode_t)VNOVAL) {
 		if (vp->v_mount->mnt_flag & MNT_RDONLY)
 			return EROFS;
-		if (ptyfs->ptyfs_type == PTYFSroot)
-			return EPERM;
 		if ((ptyfs->ptyfs_flags & SF_SNAPSHOT) != 0 &&
 		    (vap->va_mode &
 		    (S_IXUSR|S_IWUSR|S_IXGRP|S_IWGRP|S_IXOTH|S_IWOTH)))
@@ -516,8 +492,8 @@ ptyfs_chmod(struct vnode *vp, mode_t mode, kauth_cred_t cred, struct lwp *l)
 	int error;
 
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_SECURITY, vp,
-	    NULL, genfs_can_chmod(vp->v_type, cred, ptyfs->ptyfs_uid,
-	    ptyfs->ptyfs_gid, mode));
+	    NULL, genfs_can_chmod(vp, cred, ptyfs->ptyfs_uid, ptyfs->ptyfs_gid,
+	    mode));
 	if (error)
 		return (error);
 
@@ -543,7 +519,7 @@ ptyfs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
 		gid = ptyfs->ptyfs_gid;
 
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_CHANGE_OWNERSHIP, vp,
-	    NULL, genfs_can_chown(cred, ptyfs->ptyfs_uid, ptyfs->ptyfs_gid,
+	    NULL, genfs_can_chown(vp, cred, ptyfs->ptyfs_uid, ptyfs->ptyfs_gid,
 	    uid, gid));
 	if (error)
 		return (error);
@@ -567,7 +543,7 @@ ptyfs_access(void *v)
 {
 	struct vop_access_args /* {
 		struct vnode *a_vp;
-		int a_mode;
+		accmode_t a_accmode;
 		kauth_cred_t a_cred;
 	} */ *ap = v;
 	struct vattr va;
@@ -577,9 +553,9 @@ ptyfs_access(void *v)
 		return error;
 
 	return kauth_authorize_vnode(ap->a_cred,
-	    KAUTH_ACCESS_ACTION(ap->a_mode, ap->a_vp->v_type, va.va_mode),
-	    ap->a_vp, NULL, genfs_can_access(va.va_type, va.va_mode, va.va_uid,
-	    va.va_gid, ap->a_mode, ap->a_cred));
+	    KAUTH_ACCESS_ACTION(ap->a_accmode, ap->a_vp->v_type, va.va_mode),
+	    ap->a_vp, NULL, genfs_can_access(ap->a_vp, ap->a_cred, va.va_uid,
+	    va.va_gid, va.va_mode, NULL, ap->a_accmode));
 }
 
 /*
@@ -710,7 +686,7 @@ ptyfs_readdir(void *v)
 		goto out;
 
 	if (ap->a_ncookies) {
-		ncookies = min(ncookies, (npty + 2 - i));
+		ncookies = uimin(ncookies, (npty + 2 - i));
 		cookies = malloc(ncookies * sizeof (off_t),
 		    M_TEMP, M_WAITOK);
 		*ap->a_cookies = cookies;
@@ -718,7 +694,7 @@ ptyfs_readdir(void *v)
 
 	for (; i < 2; i++) {
 		/* `.' and/or `..' */
-		dp->d_fileno = PTYFS_FILENO(0, PTYFSroot);
+		dp->d_fileno = PTYFS_FILENO(PTYFSroot, 0);
 		dp->d_namlen = i + 1;
 		(void)memcpy(dp->d_name, "..", dp->d_namlen);
 		dp->d_name[i + 1] = '\0';
@@ -734,7 +710,7 @@ ptyfs_readdir(void *v)
 		n = ptyfs_next_active(vp->v_mount, i - 2);
 		if (n < 0)
 			break;
-		dp->d_fileno = PTYFS_FILENO(n, PTYFSpts);
+		dp->d_fileno = PTYFS_FILENO(PTYFSpts, n);
 		dp->d_namlen = snprintf(dp->d_name, sizeof(dp->d_name),
 		    "%lld", (long long)(n));
 		dp->d_type = DT_CHR;
@@ -798,7 +774,7 @@ ptyfs_close(void *v)
 	struct ptyfsnode *ptyfs = VTOPTYFS(vp);
 
 	mutex_enter(vp->v_interlock);
-	if (vp->v_usecount > 1)
+	if (vrefcnt(vp) > 1)
 		PTYFS_ITIMES(ptyfs, NULL, NULL, NULL);
 	mutex_exit(vp->v_interlock);
 

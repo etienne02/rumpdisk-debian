@@ -1,4 +1,4 @@
-/*	$NetBSD: _env.c,v 1.9 2015/01/20 18:31:25 christos Exp $ */
+/*	$NetBSD: _env.c,v 1.11 2021/04/20 21:42:32 christos Exp $ */
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: _env.c,v 1.9 2015/01/20 18:31:25 christos Exp $");
+__RCSID("$NetBSD: _env.c,v 1.11 2021/04/20 21:42:32 christos Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #include "namespace.h"
@@ -44,6 +44,7 @@ __RCSID("$NetBSD: _env.c,v 1.9 2015/01/20 18:31:25 christos Exp $");
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#include "csu-common.h"
 
 #include "env.h"
 #include "local.h"
@@ -93,8 +94,6 @@ __warn_references(__findenv,
 
 /* Our initialization function. */
 void __libc_env_init(void);
-
-char **environ;
 
 /*ARGSUSED*/
 static signed int
@@ -257,13 +256,15 @@ __getenvslot(const char *name, size_t l_name, bool allocate)
 
 	/* Search for an existing environment variable of the given name. */
 	num_entries = 0;
-	while (environ[num_entries] != NULL) {
-		if (strncmp(environ[num_entries], name, l_name) == 0 &&
-		    environ[num_entries][l_name] == '=') {
-			/* We found a match. */
-			return num_entries;
+	if (environ != NULL) {
+		while (environ[num_entries] != NULL) {
+			if (strncmp(environ[num_entries], name, l_name) == 0 &&
+			    environ[num_entries][l_name] == '=') {
+				/* We found a match. */
+				return num_entries;
+			}
+			num_entries ++;
 		}
-		num_entries ++;
 	}
 
 	/* No match found, return if we don't want to allocate a new slot. */

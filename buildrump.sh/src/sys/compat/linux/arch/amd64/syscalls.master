@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.57 2016/07/24 13:22:01 njoly Exp $
+	$NetBSD: syscalls.master,v 1.62 2020/04/26 18:53:32 thorpej Exp $
 
 ;	@(#)syscalls.master	8.1 (Berkeley) 7/19/93
 
@@ -489,16 +489,23 @@
 			    linux_umode_t mode); }
 269	STD		{ int|linux_sys||faccessat(int fd, const char *path, \
 			    int amode); }
-270	UNIMPL		pselect6
+270	STD		{ int|linux_sys||pselect6(int nfds, fd_set *readfds, \
+			   fd_set *writefds, fd_set *exceptfds, \
+			   struct linux_timespec *timeout, \
+			   linux_sized_sigset_t *ss); }
 271	STD		{ int|linux_sys||ppoll(struct pollfd *fds, u_int nfds, \
 			    struct linux_timespec *timeout, \
 			    linux_sigset_t *sigset); }
 272	UNIMPL		unshare
-273	STD		{ int|linux_sys||set_robust_list( \
-			    struct linux_robust_list_head *head, size_t len); }
-274	STD		{ int|linux_sys||get_robust_list(int pid, \
-			    struct linux_robust_list_head **head, \
-			    size_t *len); }
+			;
+			; The NetBSD native robust list calls have different
+			; argument names / types, but they are ABI-compatible
+			; with Linux.
+			;
+273	NOARGS		{ int|sys||__futex_set_robust_list(void *head, \
+			    size_t len); }
+274	NOARGS		{ int|sys||__futex_get_robust_list(lwpid_t lwpid, \
+			    void **headp, size_t *lenp); }
 275	UNIMPL		splice
 276	UNIMPL		tee
 277	UNIMPL		sync_file_range
@@ -510,10 +517,13 @@
 282	UNIMPL		signalfd
 283	UNIMPL		timerfd_create
 284	UNIMPL		eventfd
-285	UNIMPL		fallocate
+285	STD		{ int|linux_sys||fallocate(int fd, int mode, \
+			    off_t offset, off_t len); }
 286	UNIMPL		timerfd_settime
 287	UNIMPL		timerfd_gettime
-288	UNIMPL		accept4
+288	STD		{ int|linux_sys||accept4(int s, \
+			    struct osockaddr *name, \
+			    int *anamelen, int flags); }
 289	UNIMPL		signalfd4
 290	UNIMPL		eventfd2
 291	UNIMPL		epoll_create1
@@ -524,7 +534,9 @@
 296	UNIMPL		pwritev
 297	UNIMPL		rt_tgsigqueueinfo
 298	UNIMPL		perf_counter_open
-299	UNIMPL		recvmmsg
+299	STD		{ int|linux_sys||recvmmsg(int s, \
+			    struct linux_mmsghdr *msgvec, unsigned int vlen, \
+			    unsigned int flags, struct timespec *timeout); }
 300	UNIMPL		fanotify_init
 301	UNIMPL		fanotify_mark
 302	UNIMPL		prlimit64
@@ -532,7 +544,9 @@
 304	UNIMPL		open_by_handle_at
 305	UNIMPL		clock_adjtime
 306	UNIMPL		syncfs
-307	UNIMPL		sendmmsg
+307	STD		{ int|linux_sys||sendmmsg(int s, \
+			    struct linux_mmsghdr *msgvec, unsigned int vlen, \
+			    unsigned int flags); }
 308	UNIMPL		setns
 309	UNIMPL		getcpu
 310	UNIMPL		process_vm_readv

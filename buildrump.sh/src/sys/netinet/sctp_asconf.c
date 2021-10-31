@@ -1,4 +1,4 @@
-/*	$NetBSD: sctp_asconf.c,v 1.5 2016/07/07 09:32:02 ozaki-r Exp $ */
+/*	$NetBSD: sctp_asconf.c,v 1.12 2019/06/25 15:33:56 rjs Exp $ */
 /*	$KAME: sctp_asconf.c,v 1.25 2005/06/16 20:44:24 jinmei Exp $	*/
 
 /*
@@ -30,7 +30,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp_asconf.c,v 1.5 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp_asconf.c,v 1.12 2019/06/25 15:33:56 rjs Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ipsec.h"
@@ -65,6 +65,7 @@ __KERNEL_RCSID(0, "$NetBSD: sctp_asconf.c,v 1.5 2016/07/07 09:32:02 ozaki-r Exp 
 #include <netinet/icmp6.h>
 #include <netinet6/nd6.h>
 #include <netinet6/scope6_var.h>
+#include <netinet6/nd6.h>
 #endif /* INET6 */
 
 #include <netinet/in_pcb.h>
@@ -75,6 +76,7 @@ __KERNEL_RCSID(0, "$NetBSD: sctp_asconf.c,v 1.5 2016/07/07 09:32:02 ozaki-r Exp 
 #include <netinet/sctputil.h>
 #include <netinet/sctp_output.h>
 #include <netinet/sctp_asconf.h>
+#include <netinet/sctp_route.h>
 
 /*
  * debug flags:
@@ -967,6 +969,9 @@ sctp_asconf_queue_add(struct sctp_tcb *stcb, struct ifaddr *ifa, uint16_t type)
 	/* correlation_id filled in during send routine later... */
 	if (ifa->ifa_addr->sa_family == AF_INET6) {
 		/* IPv6 address */
+#ifdef SCTP_DEBUG
+		char ip6buf[INET6_ADDRSTRLEN];
+#endif
 		struct sockaddr_in6 *sin6;
 
 		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
@@ -978,7 +983,7 @@ sctp_asconf_queue_add(struct sctp_tcb *stcb, struct ifaddr *ifa, uint16_t type)
 		memcpy(&aa->ap.addrp.addr, &sin6->sin6_addr,
 		    sizeof(struct in6_addr));
 #ifdef SCTP_DEBUG
-		strlcpy(buf, ip6_sprintf(&sin6->sin6_addr), sizeof(buf));
+		strlcpy(buf, IN6_PRINT(ip6buf, &sin6->sin6_addr), sizeof(buf));
 #endif /* SCTP_DEBUG */
 
 	} else if (ifa->ifa_addr->sa_family == AF_INET) {
@@ -1553,8 +1558,9 @@ sctp_is_desired_interface_type(struct ifaddr *ifa)
 static uint32_t
 sctp_is_scopeid_in_nets(struct sctp_tcb *stcb, struct sockaddr *sa)
 {
-	struct sockaddr_in6 *sin6 /* , *net6 */ ;
-	/*struct sctp_nets *net;*/
+	struct sockaddr_in6 *sin6;
+	const struct sockaddr_in6 *net6;
+	struct sctp_nets *net;
 
 	if (sa->sa_family != AF_INET6) {
 		/* wrong family */
@@ -1566,13 +1572,12 @@ sctp_is_scopeid_in_nets(struct sctp_tcb *stcb, struct sockaddr *sa)
 		/* not link local address */
 		return (0);
 	}
-#if 0
 	/* hunt through our destination nets list for this scope_id */
 	TAILQ_FOREACH(net, &stcb->asoc.nets, sctp_next) {
 		if ((rtcache_getdst(&net->ro))->sa_family !=
 		    AF_INET6)
 			continue;
-		net6 = (struct sockaddr_in6 *)rtcache_getdst(&net->ro);
+		net6 = (const struct sockaddr_in6 *)rtcache_getdst(&net->ro);
 		if (IN6_IS_ADDR_LINKLOCAL(&net6->sin6_addr) == 0)
 			continue;
 		if (sctp_is_same_scope(sin6, net6)) {
@@ -1580,7 +1585,6 @@ sctp_is_scopeid_in_nets(struct sctp_tcb *stcb, struct sockaddr *sa)
 			return (1);
 		}
 	}
-#endif
 	/* didn't find one */
 	return (0);
 }
@@ -1664,11 +1668,14 @@ sctp_addr_mgmt_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	 * note: this would leave the address on both inp and asoc lists
 	 */
 	if (ifa->ifa_addr->sa_family == AF_INET6) {
+#ifdef SCTP_DEBUG
+		char ip6buf[INET6_ADDRSTRLEN];
+#endif /* SCTP_DEBUG */
 		struct sockaddr_in6 *sin6;
 
 		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
 #ifdef SCTP_DEBUG
-		strlcpy(buf, ip6_sprintf(&sin6->sin6_addr), sizeof(buf));
+		strlcpy(buf, IN6_PRINT(ip6buf, &sin6->sin6_addr), sizeof(buf));
 #endif /* SCTP_DEBUG */
 		if (IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr)) {
 			/* we skip unspecifed addresses */

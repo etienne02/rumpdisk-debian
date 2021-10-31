@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_ww_mutex.c,v 1.2 2015/05/21 21:55:55 riastradh Exp $	*/
+/*	$NetBSD: linux_ww_mutex.c,v 1.7 2019/05/09 05:00:31 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_ww_mutex.c,v 1.2 2015/05/21 21:55:55 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_ww_mutex.c,v 1.7 2019/05/09 05:00:31 ozaki-r Exp $");
 
 #include <sys/types.h>
 #include <sys/atomic.h>
@@ -41,6 +41,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux_ww_mutex.c,v 1.2 2015/05/21 21:55:55 riastradh
 #include <sys/rbtree.h>
 
 #include <linux/ww_mutex.h>
+#include <linux/errno.h>
 
 #define	WW_WANTLOCK(WW)							      \
 	LOCKDEBUG_WANTLOCK((WW)->wwm_debug, (WW),			      \
@@ -92,7 +93,7 @@ ww_acquire_init(struct ww_acquire_ctx *ctx, struct ww_class *class)
 
 	ctx->wwx_class = class;
 	ctx->wwx_owner = curlwp;
-	ctx->wwx_ticket = atomic_inc_64_nv(&class->wwc_ticket);
+	ctx->wwx_ticket = atomic64_inc_return(&class->wwc_ticket);
 	ctx->wwx_acquired = 0;
 	ctx->wwx_acquire_done = false;
 }
@@ -122,40 +123,40 @@ ww_acquire_fini(struct ww_acquire_ctx *ctx)
 
 #ifdef LOCKDEBUG
 static void
-ww_dump(volatile void *cookie)
+ww_dump(const volatile void *cookie, lockop_printer_t pr)
 {
-	volatile struct ww_mutex *mutex = cookie;
+	const volatile struct ww_mutex *mutex = cookie;
 
-	printf_nolog("%-13s: ", "state");
+	pr("%-13s: ", "state");
 	switch (mutex->wwm_state) {
 	case WW_UNLOCKED:
-		printf_nolog("unlocked\n");
+		pr("unlocked\n");
 		break;
 	case WW_OWNED:
-		printf_nolog("owned by lwp\n");
-		printf_nolog("%-13s: %p\n", "owner", mutex->wwm_u.owner);
-		printf_nolog("%-13s: %s\n", "waiters",
-		    cv_has_waiters(__UNVOLATILE(&mutex->wwm_cv))
+		pr("owned by lwp\n");
+		pr("%-13s: %p\n", "owner", mutex->wwm_u.owner);
+		pr("%-13s: %s\n", "waiters",
+		    cv_has_waiters((void *)(intptr_t)&mutex->wwm_cv)
 			? "yes" : "no");
 		break;
 	case WW_CTX:
-		printf_nolog("owned via ctx\n");
-		printf_nolog("%-13s: %p\n", "context", mutex->wwm_u.ctx);
-		printf_nolog("%-13s: %p\n", "lwp",
+		pr("owned via ctx\n");
+		pr("%-13s: %p\n", "context", mutex->wwm_u.ctx);
+		pr("%-13s: %p\n", "lwp",
 		    mutex->wwm_u.ctx->wwx_owner);
-		printf_nolog("%-13s: %s\n", "waiters",
-		    cv_has_waiters(__UNVOLATILE(&mutex->wwm_cv))
+		pr("%-13s: %s\n", "waiters",
+		    cv_has_waiters((void *)(intptr_t)&mutex->wwm_cv)
 			? "yes" : "no");
 		break;
 	case WW_WANTOWN:
-		printf_nolog("owned via ctx\n");
-		printf_nolog("%-13s: %p\n", "context", mutex->wwm_u.ctx);
-		printf_nolog("%-13s: %p\n", "lwp",
+		pr("owned via ctx\n");
+		pr("%-13s: %p\n", "context", mutex->wwm_u.ctx);
+		pr("%-13s: %p\n", "lwp",
 		    mutex->wwm_u.ctx->wwx_owner);
-		printf_nolog("%-13s: %s\n", "waiters", "yes (noctx)");
+		pr("%-13s: %s\n", "waiters", "yes (noctx)");
 		break;
 	default:
-		printf_nolog("unknown\n");
+		pr("unknown\n");
 		break;
 	}
 }
@@ -250,6 +251,8 @@ ww_mutex_state_wait_sig(struct ww_mutex *mutex, enum ww_mutex_state state)
 	do {
 		/* XXX errno NetBSD->Linux */
 		ret = -cv_wait_sig(&mutex->wwm_cv, &mutex->wwm_lock);
+		if (ret == -ERESTART)
+			ret = -ERESTARTSYS;
 		if (ret)
 			break;
 	} while (mutex->wwm_state == state);
@@ -315,6 +318,8 @@ ww_mutex_lock_wait_sig(struct ww_mutex *mutex, struct ww_acquire_ctx *ctx)
 	do {
 		/* XXX errno NetBSD->Linux */
 		ret = -cv_wait_sig(&mutex->wwm_cv, &mutex->wwm_lock);
+		if (ret == -ERESTART)
+			ret = -ERESTARTSYS;
 		if (ret)
 			goto out;
 	} while (!(((mutex->wwm_state == WW_CTX) ||
@@ -334,7 +339,6 @@ retry:	switch (mutex->wwm_state) {
 	case WW_UNLOCKED:
 		mutex->wwm_state = WW_OWNED;
 		mutex->wwm_u.owner = curlwp;
-		WW_LOCKED(mutex);
 		break;
 	case WW_OWNED:
 		KASSERTMSG((mutex->wwm_u.owner != curlwp),
@@ -356,6 +360,7 @@ retry:	switch (mutex->wwm_state) {
 	}
 	KASSERT(mutex->wwm_state == WW_OWNED);
 	KASSERT(mutex->wwm_u.owner == curlwp);
+	WW_LOCKED(mutex);
 	mutex_exit(&mutex->wwm_lock);
 }
 
@@ -369,7 +374,6 @@ retry:	switch (mutex->wwm_state) {
 	case WW_UNLOCKED:
 		mutex->wwm_state = WW_OWNED;
 		mutex->wwm_u.owner = curlwp;
-		WW_LOCKED(mutex);
 		break;
 	case WW_OWNED:
 		KASSERTMSG((mutex->wwm_u.owner != curlwp),
@@ -395,6 +399,7 @@ retry:	switch (mutex->wwm_state) {
 	}
 	KASSERT(mutex->wwm_state == WW_OWNED);
 	KASSERT(mutex->wwm_u.owner == curlwp);
+	WW_LOCKED(mutex);
 	ret = 0;
 out:	mutex_exit(&mutex->wwm_lock);
 	return ret;
@@ -433,7 +438,6 @@ retry:	switch (mutex->wwm_state) {
 		WW_WANTLOCK(mutex);
 		mutex->wwm_state = WW_CTX;
 		mutex->wwm_u.ctx = ctx;
-		WW_LOCKED(mutex);
 		goto locked;
 	case WW_OWNED:
 		WW_WANTLOCK(mutex);
@@ -490,10 +494,11 @@ retry:	switch (mutex->wwm_state) {
 	 */
 	ww_mutex_lock_wait(mutex, ctx);
 
-locked:	ctx->wwx_acquired++;
-	KASSERT((mutex->wwm_state == WW_CTX) ||
+locked:	KASSERT((mutex->wwm_state == WW_CTX) ||
 	    (mutex->wwm_state == WW_WANTOWN));
 	KASSERT(mutex->wwm_u.ctx == ctx);
+	WW_LOCKED(mutex);
+	ctx->wwx_acquired++;
 	mutex_exit(&mutex->wwm_lock);
 	return 0;
 }
@@ -531,7 +536,6 @@ retry:	switch (mutex->wwm_state) {
 		WW_WANTLOCK(mutex);
 		mutex->wwm_state = WW_CTX;
 		mutex->wwm_u.ctx = ctx;
-		WW_LOCKED(mutex);
 		goto locked;
 	case WW_OWNED:
 		WW_WANTLOCK(mutex);
@@ -597,6 +601,7 @@ retry:	switch (mutex->wwm_state) {
 locked:	KASSERT((mutex->wwm_state == WW_CTX) ||
 	    (mutex->wwm_state == WW_WANTOWN));
 	KASSERT(mutex->wwm_u.ctx == ctx);
+	WW_LOCKED(mutex);
 	ctx->wwx_acquired++;
 	ret = 0;
 out:	mutex_exit(&mutex->wwm_lock);
@@ -634,7 +639,6 @@ retry:	switch (mutex->wwm_state) {
 	case WW_UNLOCKED:
 		mutex->wwm_state = WW_CTX;
 		mutex->wwm_u.ctx = ctx;
-		WW_LOCKED(mutex);
 		goto locked;
 	case WW_OWNED:
 		KASSERTMSG((mutex->wwm_u.owner != curlwp),
@@ -665,6 +669,7 @@ retry:	switch (mutex->wwm_state) {
 locked:	KASSERT((mutex->wwm_state == WW_CTX) ||
 	    (mutex->wwm_state == WW_WANTOWN));
 	KASSERT(mutex->wwm_u.ctx == ctx);
+	WW_LOCKED(mutex);
 	ctx->wwx_acquired++;
 	mutex_exit(&mutex->wwm_lock);
 }
@@ -699,7 +704,6 @@ retry:	switch (mutex->wwm_state) {
 	case WW_UNLOCKED:
 		mutex->wwm_state = WW_CTX;
 		mutex->wwm_u.ctx = ctx;
-		WW_LOCKED(mutex);
 		goto locked;
 	case WW_OWNED:
 		KASSERTMSG((mutex->wwm_u.owner != curlwp),
@@ -736,6 +740,7 @@ retry:	switch (mutex->wwm_state) {
 locked:	KASSERT((mutex->wwm_state == WW_CTX) ||
 	    (mutex->wwm_state == WW_WANTOWN));
 	KASSERT(mutex->wwm_u.ctx == ctx);
+	WW_LOCKED(mutex);
 	ctx->wwx_acquired++;
 	ret = 0;
 out:	mutex_exit(&mutex->wwm_lock);

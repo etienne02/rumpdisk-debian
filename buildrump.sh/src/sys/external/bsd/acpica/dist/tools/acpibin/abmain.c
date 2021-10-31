@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,7 +43,6 @@
 
 #define _DECLARE_GLOBALS
 #include "acpibin.h"
-#include "acapps.h"
 
 /* Local prototypes */
 
@@ -53,7 +52,7 @@ AbDisplayUsage (
 
 
 #define AB_UTILITY_NAME             "ACPI Binary Table Dump Utility"
-#define AB_SUPPORTED_OPTIONS        "c:d:h:s:tv"
+#define AB_SUPPORTED_OPTIONS        "a:c:d:h:o:s:tv^"
 
 
 /******************************************************************************
@@ -76,13 +75,15 @@ AbDisplayUsage (
 
     ACPI_USAGE_HEADER ("acpibin [options]");
 
-    ACPI_OPTION ("-c <File1> <File2>",      "Compare two binary AML files");
+    ACPI_OPTION ("-a <File1> <File2>",      "Compare two binary AML files, dump all mismatches");
+    ACPI_OPTION ("-c <File1> <File2>",      "Compare two binary AML files, dump first 100 mismatches");
     ACPI_OPTION ("-d <In> <Out>",           "Dump AML binary to text file");
-    ACPI_OPTION ("-e <Sig> <In> <Out>",     "Extract binary AML table from acpidump file");
+    ACPI_OPTION ("-o <Value>",              "Start comparison at this offset into second file");
     ACPI_OPTION ("-h <File>",               "Display table header for binary AML file");
     ACPI_OPTION ("-s <File>",               "Update checksum for binary AML file");
     ACPI_OPTION ("-t",                      "Terse mode");
     ACPI_OPTION ("-v",                      "Display version information");
+    ACPI_OPTION ("-vd",                     "Display build date and time");
 }
 
 
@@ -121,6 +122,12 @@ main (
 
     while ((j = AcpiGetopt (argc, argv, AB_SUPPORTED_OPTIONS)) != ACPI_OPT_END) switch(j)
     {
+    case 'a':   /* Compare Files, display all differences */
+
+        AbGbl_DisplayAllMiscompares = TRUE;
+
+        ACPI_FALLTHROUGH;
+
     case 'c':   /* Compare Files */
 
         if (argc < 4)
@@ -154,6 +161,11 @@ main (
         AbDisplayHeader (AcpiGbl_Optarg);
         return (0);
 
+    case 'o':
+
+        AbGbl_CompareOffset = atoi (AcpiGbl_Optarg);
+        continue;
+
     case 's':   /* Compute/update checksum */
 
         if (argc < 3)
@@ -172,7 +184,23 @@ main (
 
     case 'v': /* -v: (Version): signon already emitted, just exit */
 
-        return (0);
+        switch (AcpiGbl_Optarg[0])
+        {
+        case '^':  /* -v: (Version): signon already emitted, just exit */
+
+            return (1);
+
+        case 'd':
+
+            printf (ACPI_COMMON_BUILD_TIME);
+            return (1);
+
+        default:
+
+            printf ("Unknown option: -v%s\n", AcpiGbl_Optarg);
+            return (-1);
+        }
+        break;
 
     default:
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: reg.h,v 1.16 2016/01/24 16:13:19 christos Exp $	*/
+/*	$NetBSD: reg.h,v 1.19 2020/07/26 08:08:41 simonb Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,25 +39,47 @@
  */
 
 #ifndef _MIPS_REG_H_
-#define _MIPS_REG_H_
+#define	_MIPS_REG_H_
 
 
 struct reg {
 	__register_t	r_regs[38];
 };
 
+struct reg32 {
+	__register32_t	r_regs[38];
+};
+
+struct reg64 {
+	__register64_t	r_regs[38];
+};
+
 struct fpreg {
 	__fpregister_t	r_regs[33];
+};
+
+struct fpreg32 {
+	__fpregister32_t	r_regs[33];
+};
+
+struct fpreg64 {
+	__fpregister64_t	r_regs[33];
 };
 
 struct dspreg {
 	__register_t	r_regs[8];
 };
 
-#if defined(__mips_n32) || defined(__mips_n64)
+struct dspreg32 {
+	__register32_t	r_regs[8];
+};
+
+struct dspreg64 {
+	__register64_t	r_regs[8];
+};
+
 struct fpreg_oabi {
 	int32_t		r_regs[33];
 };
-#endif
 
 #endif /*_MIPS_REG_H_*/

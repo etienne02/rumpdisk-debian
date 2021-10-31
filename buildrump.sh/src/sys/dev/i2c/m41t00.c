@@ -1,4 +1,4 @@
-/*	$NetBSD: m41t00.c,v 1.19 2014/11/20 16:34:26 christos Exp $	*/
+/*	$NetBSD: m41t00.c,v 1.23 2020/01/02 19:11:12 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: m41t00.c,v 1.19 2014/11/20 16:34:26 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: m41t00.c,v 1.23 2020/01/02 19:11:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -55,6 +55,8 @@ __KERNEL_RCSID(0, "$NetBSD: m41t00.c,v 1.19 2014/11/20 16:34:26 christos Exp $")
 #include <dev/i2c/i2cvar.h>
 #include <dev/i2c/m41t00reg.h>
 
+#include "ioconf.h"
+
 struct m41t00_softc {
 	device_t sc_dev;
 	i2c_tag_t sc_tag;
@@ -68,7 +70,6 @@ static void m41t00_attach(device_t, device_t, void *);
 
 CFATTACH_DECL_NEW(m41trtc, sizeof(struct m41t00_softc),
 	m41t00_match, m41t00_attach, NULL, NULL);
-extern struct cfdriver m41trtc_cd;
 
 dev_type_open(m41t00_open);
 dev_type_close(m41t00_close);
@@ -90,10 +91,10 @@ const struct cdevsw m41t00_cdevsw = {
 	.d_flag = D_OTHER
 };
 
-static int m41t00_clock_read(struct m41t00_softc *, struct clock_ymdhms *);
-static int m41t00_clock_write(struct m41t00_softc *, struct clock_ymdhms *);
-static int m41t00_gettime(struct todr_chip_handle *, struct timeval *);
-static int m41t00_settime(struct todr_chip_handle *, struct timeval *);
+static int m41t00_gettime_ymdhms(struct todr_chip_handle *,
+				 struct clock_ymdhms *);
+static int m41t00_settime_ymdhms(struct todr_chip_handle *,
+				 struct clock_ymdhms *);
 
 int
 m41t00_match(device_t parent, cfdata_t cf, void *aux)
@@ -101,7 +102,7 @@ m41t00_match(device_t parent, cfdata_t cf, void *aux)
 	struct i2c_attach_args *ia = aux;
 
 	if (ia->ia_addr == M41T00_ADDR) {
-		return 1;
+		return I2C_MATCH_ADDRESS_ONLY;
 	}
 
 	return 0;
@@ -122,8 +123,10 @@ m41t00_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_open = 0;
 	sc->sc_todr.cookie = sc;
-	sc->sc_todr.todr_gettime = m41t00_gettime;
-	sc->sc_todr.todr_settime = m41t00_settime;
+	sc->sc_todr.todr_gettime = NULL;
+	sc->sc_todr.todr_settime = NULL;
+	sc->sc_todr.todr_gettime_ymdhms = m41t00_gettime_ymdhms;
+	sc->sc_todr.todr_settime_ymdhms = m41t00_settime_ymdhms;
 	sc->sc_todr.todr_setwen = NULL;
 
 	todr_attach(&sc->sc_todr);
@@ -237,35 +240,6 @@ m41t00_write(dev_t dev, struct uio *uio, int flags)
 	return error;
 }
 
-static int
-m41t00_gettime(struct todr_chip_handle *ch, struct timeval *tv)
-{
-	struct m41t00_softc *sc = ch->cookie;
-	struct clock_ymdhms dt;
-
-	if (m41t00_clock_read(sc, &dt) == 0)
-		return -1;
-
-	tv->tv_sec = clock_ymdhms_to_secs(&dt);
-	tv->tv_usec = 0;
-
-	return 0;
-}
-
-static int
-m41t00_settime(struct todr_chip_handle *ch, struct timeval *tv)
-{
-	struct m41t00_softc *sc = ch->cookie;
-	struct clock_ymdhms dt;
-
-	clock_secs_to_ymdhms(tv->tv_sec, &dt);
-
-	if (m41t00_clock_write(sc, &dt) == 0)
-		return -1;
-
-	return 0;
-}
-
 static int m41t00_rtc_offset[] = {
 	M41T00_SEC,
 	M41T00_MIN,
@@ -277,15 +251,16 @@ static int m41t00_rtc_offset[] = {
 };
 
 static int
-m41t00_clock_read(struct m41t00_softc *sc, struct clock_ymdhms *dt)
+m41t00_gettime_ymdhms(struct todr_chip_handle *ch, struct clock_ymdhms *dt)
 {
+	struct m41t00_softc *sc = ch->cookie;
 	u_int8_t bcd[M41T00_NBYTES], cmdbuf[1];
-	int i, n;
+	int i, n, error;
 
-	if (iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "m41t00_clock_read: failed to acquire I2C bus\n");
-		return 0;
+		return error;
 	}
 
 	/* Read each timekeeping register in order. */
@@ -293,20 +268,20 @@ m41t00_clock_read(struct m41t00_softc *sc, struct clock_ymdhms *dt)
 	for (i = 0; i < n ; i++) {
 		cmdbuf[0] = m41t00_rtc_offset[i];
 
-		if (iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
+		if ((error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
 			     sc->sc_address, cmdbuf, 1,
-			     &bcd[i], 1, I2C_F_POLL)) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+			     &bcd[i], 1, 0)) != 0) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "m41t00_clock_read: failed to read rtc "
 			    "at 0x%x\n",
 			    m41t00_rtc_offset[i]);
-			return 0;
+			return error;
 		}
 	}
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	/*
 	 * Convert the M41T00's register values into something useable
@@ -325,15 +300,16 @@ m41t00_clock_read(struct m41t00_softc *sc, struct clock_ymdhms *dt)
 	 */
 	dt->dt_year += 2000;
 
-	return 1;
+	return 0;
 }
 
 static int
-m41t00_clock_write(struct m41t00_softc *sc, struct clock_ymdhms *dt)
+m41t00_settime_ymdhms(struct todr_chip_handle *ch, struct clock_ymdhms *dt)
 {
+	struct m41t00_softc *sc = ch->cookie;
 	uint8_t bcd[M41T00_DATE_BYTES], cmdbuf[2];
 	uint8_t init_seconds, final_seconds;
-	int i;
+	int i, error;
 
 	/*
 	 * Convert our time representation into something the MAX6900
@@ -347,10 +323,10 @@ m41t00_clock_write(struct m41t00_softc *sc, struct clock_ymdhms *dt)
 	bcd[M41T00_MONTH] = bintobcd(dt->dt_mon);
 	bcd[M41T00_YEAR] = bintobcd(dt->dt_year % 100);
 
-	if (iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "m41t00_clock_write: failed to acquire I2C bus\n");
-		return 0;
+		return error;
 	}
 
 	/*
@@ -369,47 +345,48 @@ m41t00_clock_write(struct m41t00_softc *sc, struct clock_ymdhms *dt)
 	 */
  again:
 	cmdbuf[0] = M41T00_SEC;
-	if (iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP, sc->sc_address,
-		     cmdbuf, 1, &bcd[M41T00_SEC], 1, I2C_F_POLL)) {
-		iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	if ((error = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP,
+			      sc->sc_address, cmdbuf, 1, &bcd[M41T00_SEC], 1,
+			      0)) != 0) {
+		iic_release_bus(sc->sc_tag, 0);
 		aprint_error_dev(sc->sc_dev,
 		    "m41t00_clock_write: failed to write SECONDS\n");
-		return 0;
+		return error;
 	}
 
 	cmdbuf[0] = M41T00_SEC;
-	if (iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
-		     cmdbuf, 1, &init_seconds, 1, I2C_F_POLL)) {
-		iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	if ((error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
+		     cmdbuf, 1, &init_seconds, 1, 0)) != 0) {
+		iic_release_bus(sc->sc_tag, 0);
 		aprint_error_dev(sc->sc_dev,
 		    "m41t00_clock_write: failed to read "
 		    "INITIAL SECONDS\n");
-		return 0;
+		return error;
 	}
 	init_seconds = bcdtobin(init_seconds & M41T00_SEC_MASK);
 
 	for (i = 1; i < M41T00_DATE_BYTES; i++) {
 		cmdbuf[0] = m41t00_rtc_offset[i];
-		if (iic_exec(sc->sc_tag,
+		if ((error = iic_exec(sc->sc_tag,
 			     I2C_OP_WRITE_WITH_STOP, sc->sc_address,
-			     cmdbuf, 1, &bcd[i], 1, I2C_F_POLL)) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+			     cmdbuf, 1, &bcd[i], 1, 0)) != 0) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "m41t00_clock_write: failed to write rtc "
 			    " at 0x%x\n",
 			    m41t00_rtc_offset[i]);
-			return 0;
+			return error;
 		}
 	}
 
 	cmdbuf[0] = M41T00_SEC;
-	if (iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
-		     cmdbuf, 1, &final_seconds, 1, I2C_F_POLL)) {
-		iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	if ((error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
+		     cmdbuf, 1, &final_seconds, 1, 0)) != 0) {
+		iic_release_bus(sc->sc_tag, 0);
 		aprint_error_dev(sc->sc_dev,
 		    "m41t00_clock_write: failed to read "
 		    "FINAL SECONDS\n");
-		return 0;
+		return error;
 	}
 	final_seconds = bcdtobin(final_seconds & M41T00_SEC_MASK);
 
@@ -422,7 +399,7 @@ m41t00_clock_write(struct m41t00_softc *sc, struct clock_ymdhms *dt)
 		goto again;
 	}
 
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
-	return 1;
+	return 0;
 }

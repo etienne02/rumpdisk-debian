@@ -1,7 +1,7 @@
-/*	$NetBSD: ufs_vnops.c,v 1.232 2016/05/19 18:32:03 riastradh Exp $	*/
+/*	$NetBSD: ufs_vnops.c,v 1.259 2020/09/05 16:30:13 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -66,11 +66,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ufs_vnops.c,v 1.232 2016/05/19 18:32:03 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ufs_vnops.c,v 1.259 2020/09/05 16:30:13 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
 #include "opt_quota.h"
+#include "opt_uvmhist.h"
 #endif
 
 #include <sys/param.h>
@@ -84,18 +85,19 @@ __KERNEL_RCSID(0, "$NetBSD: ufs_vnops.c,v 1.232 2016/05/19 18:32:03 riastradh Ex
 #include <sys/proc.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
+#include <sys/fstrans.h>
 #include <sys/kmem.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <sys/lockf.h>
 #include <sys/kauth.h>
 #include <sys/wapbl.h>
-#include <sys/fstrans.h>
 
 #include <miscfs/specfs/specdev.h>
 #include <miscfs/fifofs/fifo.h>
 #include <miscfs/genfs/genfs.h>
 
+#include <ufs/ufs/acl.h>
 #include <ufs/ufs/inode.h>
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/ufsmount.h>
@@ -111,7 +113,11 @@ __KERNEL_RCSID(0, "$NetBSD: ufs_vnops.c,v 1.232 2016/05/19 18:32:03 riastradh Ex
 #include <ufs/lfs/lfs_extern.h>
 #include <ufs/lfs/lfs.h>
 
+#ifdef UVMHIST
 #include <uvm/uvm.h>
+#endif
+#include <uvm/uvm_extern.h>
+#include <uvm/uvm_stat.h>
 
 __CTASSERT(EXT2FS_MAXNAMLEN == FFS_MAXNAMLEN);
 __CTASSERT(LFS_MAXNAMLEN == FFS_MAXNAMLEN);
@@ -154,14 +160,11 @@ ufs_create(void *v)
 	 * UFS_WAPBL_BEGIN(dvp->v_mount) performed by successful
 	 * ufs_makeinode
 	 */
-	fstrans_start(dvp->v_mount, FSTRANS_SHARED);
 	error = ufs_makeinode(ap->a_vap, dvp, ulr, ap->a_vpp, ap->a_cnp);
 	if (error) {
-		fstrans_done(dvp->v_mount);
 		return (error);
 	}
 	UFS_WAPBL_END(dvp->v_mount);
-	fstrans_done(dvp->v_mount);
 	VN_KNOTE(dvp, NOTE_WRITE);
 	VOP_UNLOCK(*ap->a_vpp);
 	return (0);
@@ -197,7 +200,6 @@ ufs_mknod(void *v)
 	 * UFS_WAPBL_BEGIN(dvp->v_mount) performed by successful
 	 * ufs_makeinode
 	 */
-	fstrans_start(ap->a_dvp->v_mount, FSTRANS_SHARED);
 	if ((error = ufs_makeinode(vap, ap->a_dvp, ulr, vpp, ap->a_cnp)) != 0)
 		goto out;
 	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
@@ -207,7 +209,6 @@ ufs_mknod(void *v)
 	UFS_WAPBL_END(ap->a_dvp->v_mount);
 	VOP_UNLOCK(*vpp);
 out:
-	fstrans_done(ap->a_dvp->v_mount);
 	if (error != 0) {
 		*vpp = NULL;
 		return (error);
@@ -256,15 +257,13 @@ ufs_close(void *v)
 	struct vnode	*vp;
 
 	vp = ap->a_vp;
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
-	if (vp->v_usecount > 1)
+	if (vrefcnt(vp) > 1)
 		UFS_ITIMES(vp, NULL, NULL, NULL);
-	fstrans_done(vp->v_mount);
 	return (0);
 }
 
 static int
-ufs_check_possible(struct vnode *vp, struct inode *ip, mode_t mode,
+ufs_check_possible(struct vnode *vp, struct inode *ip, accmode_t accmode,
     kauth_cred_t cred)
 {
 #if defined(QUOTA) || defined(QUOTA2)
@@ -276,17 +275,15 @@ ufs_check_possible(struct vnode *vp, struct inode *ip, mode_t mode,
 	 * unless the file is a socket, fifo, or a block or
 	 * character device resident on the file system.
 	 */
-	if (mode & VWRITE) {
+	if (accmode & VMODIFY_PERMS) {
 		switch (vp->v_type) {
 		case VDIR:
 		case VLNK:
 		case VREG:
 			if (vp->v_mount->mnt_flag & MNT_RDONLY)
-				return (EROFS);
+				return EROFS;
 #if defined(QUOTA) || defined(QUOTA2)
-			fstrans_start(vp->v_mount, FSTRANS_SHARED);
 			error = chkdq(ip, 0, cred, 0);
-			fstrans_done(vp->v_mount);
 			if (error != 0)
 				return error;
 #endif
@@ -304,48 +301,94 @@ ufs_check_possible(struct vnode *vp, struct inode *ip, mode_t mode,
 
 	/* If it is a snapshot, nobody gets access to it. */
 	if ((ip->i_flags & SF_SNAPSHOT))
-		return (EPERM);
-	/* If immutable bit set, nobody gets to write it. */
-	if ((mode & VWRITE) && (ip->i_flags & IMMUTABLE))
-		return (EPERM);
+		return EPERM;
+	/*
+	 * If immutable bit set, nobody gets to write it.  "& ~VADMIN_PERMS"
+	 * permits the owner of the file to remove the IMMUTABLE flag.
+	 */
+	if ((accmode & (VMODIFY_PERMS & ~VADMIN_PERMS)) &&
+	    (ip->i_flags & IMMUTABLE))
+		return EPERM;
 
 	return 0;
 }
 
 static int
-ufs_check_permitted(struct vnode *vp, struct inode *ip, mode_t mode,
-    kauth_cred_t cred)
+ufs_check_permitted(struct vnode *vp, struct inode *ip,
+    struct acl *acl, accmode_t accmode, kauth_cred_t cred,
+    int (*func)(struct vnode *, kauth_cred_t, uid_t, gid_t, mode_t,
+    struct acl *, accmode_t))
 {
 
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(mode, vp->v_type,
-	    ip->i_mode & ALLPERMS), vp, NULL, genfs_can_access(vp->v_type,
-	    ip->i_mode & ALLPERMS, ip->i_uid, ip->i_gid, mode, cred));
+	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
+	    vp->v_type, ip->i_mode & ALLPERMS), vp, NULL, (*func)(vp, cred,
+	    ip->i_uid, ip->i_gid, ip->i_mode & ALLPERMS, acl, accmode));
 }
 
 int
-ufs_access(void *v)
+ufs_accessx(void *v)
 {
-	struct vop_access_args /* {
-		struct vnode	*a_vp;
-		int		a_mode;
-		kauth_cred_t	a_cred;
+	struct vop_accessx_args /* {
+		struct vnode *a_vp;
+		accmode_t a_accmode;
+		kauth_cred_t a_cred;
 	} */ *ap = v;
-	struct vnode	*vp;
-	struct inode	*ip;
-	mode_t		mode;
-	int		error;
+	struct vnode *vp = ap->a_vp;
+	struct inode *ip = VTOI(vp);
+	accmode_t accmode = ap->a_accmode;
+	int error;
+#ifdef UFS_ACL
+	struct acl *acl;
+	acl_type_t type;
+#endif
 
-	vp = ap->a_vp;
-	ip = VTOI(vp);
-	mode = ap->a_mode;
-
-	error = ufs_check_possible(vp, ip, mode, ap->a_cred);
+	error = ufs_check_possible(vp, ip, accmode, ap->a_cred);
 	if (error)
 		return error;
 
-	error = ufs_check_permitted(vp, ip, mode, ap->a_cred);
+#ifdef UFS_ACL
+	if ((vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_ACLS)) != 0) {
+		if (vp->v_mount->mnt_flag & MNT_ACLS)
+			type = ACL_TYPE_NFS4;
+		else
+			type = ACL_TYPE_ACCESS;
 
-	return error;
+		acl = acl_alloc(KM_SLEEP);
+		if (type == ACL_TYPE_NFS4)
+			error = ufs_getacl_nfs4_internal(vp, acl, curlwp);
+		else
+			error = VOP_GETACL(vp, type, acl, ap->a_cred);
+		if (!error) {
+			if (type == ACL_TYPE_NFS4) {
+				error = ufs_check_permitted(vp,
+				    ip, acl, accmode, ap->a_cred,
+				    genfs_can_access_acl_nfs4);
+			} else {
+				error = vfs_unixify_accmode(&accmode);
+				if (error == 0)
+					error = ufs_check_permitted(vp,
+					    ip, acl, accmode, ap->a_cred,
+					    genfs_can_access_acl_posix1e);
+			}
+			acl_free(acl);
+			return error;
+		}
+		if (error != EOPNOTSUPP)
+			printf("%s: Error retrieving ACL: %d\n",
+			    __func__, error);
+		/*
+		 * XXX: Fall back until debugged.  Should
+		 * eventually possibly log an error, and return
+		 * EPERM for safety.
+		 */
+		acl_free(acl);
+	}
+#endif /* !UFS_ACL */
+	error = vfs_unixify_accmode(&accmode);
+	if (error)
+		return error;
+	return ufs_check_permitted(vp, ip,
+	    NULL, accmode, ap->a_cred, genfs_can_access);
 }
 
 /* ARGSUSED */
@@ -364,7 +407,6 @@ ufs_getattr(void *v)
 	vp = ap->a_vp;
 	ip = VTOI(vp);
 	vap = ap->a_vap;
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
 	UFS_ITIMES(vp, NULL, NULL, NULL);
 
 	/*
@@ -430,7 +472,6 @@ ufs_getattr(void *v)
 		vap->va_blocksize = vp->v_mount->mnt_stat.f_iosize;
 	vap->va_type = vp->v_type;
 	vap->va_filerev = ip->i_modrev;
-	fstrans_done(vp->v_mount);
 	return (0);
 }
 
@@ -472,7 +513,7 @@ ufs_setattr(void *v)
 		return (EINVAL);
 	}
 
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
+	UFS_WAPBL_JUNLOCK_ASSERT(vp->v_mount);
 
 	if (vap->va_flags != VNOVAL) {
 		if (vp->v_mount->mnt_flag & MNT_RDONLY) {
@@ -498,8 +539,7 @@ ufs_setattr(void *v)
 		}
 
 		error = kauth_authorize_vnode(cred, action, vp, NULL,
-		    genfs_can_chflags(cred, vp->v_type, ip->i_uid,
-		    changing_sysflags));
+		    genfs_can_chflags(vp, cred, ip->i_uid, changing_sysflags));
 		if (error)
 			goto out;
 
@@ -568,7 +608,7 @@ ufs_setattr(void *v)
 				error = EPERM;
 				goto out;
 			}
-			error = ufs_truncate(vp, vap->va_size, cred);
+			error = ufs_truncate_retry(vp, 0, vap->va_size, cred);
 			if (error)
 				goto out;
 			break;
@@ -589,7 +629,8 @@ ufs_setattr(void *v)
 			goto out;
 		}
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_TIMES, vp,
-		    NULL, genfs_can_chtimes(vp, vap->va_vaflags, ip->i_uid, cred));
+		    NULL, genfs_can_chtimes(vp, cred, ip->i_uid,
+		    vap->va_vaflags));
 		if (error)
 			goto out;
 		error = UFS_WAPBL_BEGIN(vp->v_mount);
@@ -633,9 +674,35 @@ ufs_setattr(void *v)
 	}
 	VN_KNOTE(vp, NOTE_ATTRIB);
 out:
-	fstrans_done(vp->v_mount);
+	cache_enter_id(vp, ip->i_mode, ip->i_uid, ip->i_gid, !HAS_ACLS(ip));
 	return (error);
 }
+
+#ifdef UFS_ACL
+static int
+ufs_update_nfs4_acl_after_mode_change(struct vnode *vp, int mode,
+    int file_owner_id, kauth_cred_t cred, struct lwp *l)
+{
+	int error;
+	struct acl *aclp;
+
+	aclp = acl_alloc(KM_SLEEP);
+	error = ufs_getacl_nfs4_internal(vp, aclp, l);
+	/*
+	 * We don't have to handle EOPNOTSUPP here, as the filesystem claims
+	 * it supports ACLs.
+	 */
+	if (error)
+		goto out;
+
+	acl_nfs4_sync_acl_from_mode(aclp, mode, file_owner_id);
+	error = ufs_setacl_nfs4_internal(vp, aclp, l, false);
+
+out:
+	acl_free(aclp);
+	return (error);
+}
+#endif /* UFS_ACL */
 
 /*
  * Change the mode on a file.
@@ -651,18 +718,34 @@ ufs_chmod(struct vnode *vp, int mode, kauth_cred_t cred, struct lwp *l)
 
 	ip = VTOI(vp);
 
+#ifdef UFS_ACL
+	/*
+	 * To modify the permissions on a file, must possess VADMIN
+	 * for that file.
+	 */
+	if ((error = VOP_ACCESSX(vp, VWRITE_ACL, cred)) != 0)
+		return error;
+#endif
+
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_SECURITY, vp,
-	    NULL, genfs_can_chmod(vp->v_type, cred, ip->i_uid, ip->i_gid, mode));
+	    NULL, genfs_can_chmod(vp, cred, ip->i_uid, ip->i_gid, mode));
 	if (error)
 		return (error);
 
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
+#ifdef UFS_ACL
+	if ((vp->v_mount->mnt_flag & MNT_ACLS) != 0) {
+		error = ufs_update_nfs4_acl_after_mode_change(vp, mode,
+		    ip->i_uid, cred, l);
+		if (error)
+			return error;
+	}
+#endif
 	ip->i_mode &= ~ALLPERMS;
 	ip->i_mode |= (mode & ALLPERMS);
 	ip->i_flag |= IN_CHANGE;
 	DIP_ASSIGN(ip, mode, ip->i_mode);
 	UFS_WAPBL_UPDATE(vp, NULL, NULL, 0);
-	fstrans_done(vp->v_mount);
+	cache_enter_id(vp, ip->i_mode, ip->i_uid, ip->i_gid, !HAS_ACLS(ip));
 	return (0);
 }
 
@@ -689,12 +772,20 @@ ufs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
 	if (gid == (gid_t)VNOVAL)
 		gid = ip->i_gid;
 
+#ifdef UFS_ACL
+	/*
+	 * To modify the ownership of a file, must possess VADMIN for that
+	 * file.
+	 */
+	if ((error = VOP_ACCESSX(vp, VWRITE_OWNER, cred)) != 0)
+		return error;
+#endif
+
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_CHANGE_OWNERSHIP, vp,
-	    NULL, genfs_can_chown(cred, ip->i_uid, ip->i_gid, uid, gid));
+	    NULL, genfs_can_chown(vp, cred, ip->i_uid, ip->i_gid, uid, gid));
 	if (error)
 		return (error);
 
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
 #if defined(QUOTA) || defined(QUOTA2)
 	ogid = ip->i_gid;
 	ouid = ip->i_uid;
@@ -719,20 +810,19 @@ ufs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
 	DIP_ASSIGN(ip, uid, ouid);
 	(void) chkdq(ip, change, cred, FORCE);
 	(void) chkiq(ip, 1, cred, FORCE);
-	fstrans_done(vp->v_mount);
 	return (error);
  good:
 #endif /* QUOTA || QUOTA2 */
 	ip->i_flag |= IN_CHANGE;
 	UFS_WAPBL_UPDATE(vp, NULL, NULL, 0);
-	fstrans_done(vp->v_mount);
+	cache_enter_id(vp, ip->i_mode, ip->i_uid, ip->i_gid, !HAS_ACLS(ip));
 	return (0);
 }
 
 int
 ufs_remove(void *v)
 {
-	struct vop_remove_args /* {
+	struct vop_remove_v2_args /* {
 		struct vnode		*a_dvp;
 		struct vnode		*a_vp;
 		struct componentname	*a_cnp;
@@ -749,11 +839,21 @@ ufs_remove(void *v)
 	mp = dvp->v_mount;
 	KASSERT(mp == vp->v_mount); /* XXX Not stable without lock.  */
 
+#ifdef UFS_ACL
+#ifdef notyet
+	/* We don't do this because if the filesystem is mounted without ACLs
+	 * this goes through vfs_unixify_accmode() and we get EPERM.
+	 */
+	error = VOP_ACCESSX(vp, VDELETE, ap->a_cnp->cn_cred);
+	if (error)
+		goto err;
+#endif
+#endif
+
 	/* XXX should handle this material another way */
 	ulr = &VTOI(dvp)->i_crap;
 	UFS_CHECK_CRAPCOUNTER(VTOI(dvp));
 
-	fstrans_start(mp, FSTRANS_SHARED);
 	if (vp->v_type == VDIR || (ip->i_flags & (IMMUTABLE | APPEND)) ||
 	    (VTOI(dvp)->i_flags & APPEND))
 		error = EPERM;
@@ -767,12 +867,13 @@ ufs_remove(void *v)
 	}
 	VN_KNOTE(vp, NOTE_DELETE);
 	VN_KNOTE(dvp, NOTE_WRITE);
+#ifdef notyet
+err:
+#endif
 	if (dvp == vp)
 		vrele(vp);
 	else
 		vput(vp);
-	vput(dvp);
-	fstrans_done(mp);
 	return (error);
 }
 
@@ -804,7 +905,6 @@ ufs_link(void *v)
 	ulr = &VTOI(dvp)->i_crap;
 	UFS_CHECK_CRAPCOUNTER(VTOI(dvp));
 
-	fstrans_start(mp, FSTRANS_SHARED);
 	error = vn_lock(vp, LK_EXCLUSIVE);
 	if (error) {
 		VOP_ABORTOP(dvp, cnp);
@@ -848,7 +948,6 @@ ufs_link(void *v)
  out2:
 	VN_KNOTE(vp, NOTE_LINK);
 	VN_KNOTE(dvp, NOTE_WRITE);
-	fstrans_done(mp);
 	return (error);
 }
 
@@ -884,21 +983,23 @@ ufs_whiteout(void *v)
 
 	case CREATE:
 		/* create a new directory whiteout */
-		fstrans_start(dvp->v_mount, FSTRANS_SHARED);
 		error = UFS_WAPBL_BEGIN(dvp->v_mount);
 		if (error)
 			break;
-#ifdef DIAGNOSTIC
-		if (ump->um_maxsymlinklen <= 0)
-			panic("ufs_whiteout: old format filesystem");
-#endif
+
+		KASSERTMSG((ump->um_maxsymlinklen > 0),
+		    "ufs_whiteout: old format filesystem");
 
 		newdir = pool_cache_get(ufs_direct_cache, PR_WAITOK);
 		newdir->d_ino = UFS_WINO;
 		newdir->d_namlen = cnp->cn_namelen;
 		memcpy(newdir->d_name, cnp->cn_nameptr,
 		    (size_t)cnp->cn_namelen);
-		newdir->d_name[cnp->cn_namelen] = '\0';
+
+		/* NUL terminate and zero out padding */
+		memset(&newdir->d_name[cnp->cn_namelen], 0,
+		    UFS_NAMEPAD(cnp->cn_namelen));
+
 		newdir->d_type = DT_WHT;
 		error = ufs_direnter(dvp, ulr, NULL, newdir, cnp, NULL);
 		pool_cache_put(ufs_direct_cache, newdir);
@@ -906,14 +1007,12 @@ ufs_whiteout(void *v)
 
 	case DELETE:
 		/* remove an existing directory whiteout */
-		fstrans_start(dvp->v_mount, FSTRANS_SHARED);
 		error = UFS_WAPBL_BEGIN(dvp->v_mount);
 		if (error)
 			break;
-#ifdef DIAGNOSTIC
-		if (ump->um_maxsymlinklen <= 0)
-			panic("ufs_whiteout: old format filesystem");
-#endif
+
+		KASSERTMSG((ump->um_maxsymlinklen > 0),
+		    "ufs_whiteout: old format filesystem");
 
 		cnp->cn_flags &= ~DOWHITEOUT;
 		error = ufs_dirremove(dvp, ulr, NULL, cnp->cn_flags, 0);
@@ -923,9 +1022,195 @@ ufs_whiteout(void *v)
 		/* NOTREACHED */
 	}
 	UFS_WAPBL_END(dvp->v_mount);
-	fstrans_done(dvp->v_mount);
 	return (error);
 }
+
+#ifdef UFS_ACL
+static int
+ufs_do_posix1e_acl_inheritance_dir(struct vnode *dvp, struct vnode *tvp,
+    mode_t dmode, kauth_cred_t cred, struct lwp *l)
+{
+	int error;
+	struct inode *ip = VTOI(tvp);
+	struct acl *dacl, *acl;
+
+	acl = acl_alloc(KM_SLEEP);
+	dacl = acl_alloc(KM_SLEEP);
+
+	/*
+	 * Retrieve default ACL from parent, if any.
+	 */
+	error = VOP_GETACL(dvp, ACL_TYPE_DEFAULT, acl, cred);
+	switch (error) {
+	case 0:
+		/*
+		 * Retrieved a default ACL, so merge mode and ACL if
+		 * necessary.  If the ACL is empty, fall through to
+		 * the "not defined or available" case.
+		 */
+		if (acl->acl_cnt != 0) {
+			dmode = acl_posix1e_newfilemode(dmode, acl);
+			ip->i_mode = dmode;
+			DIP_ASSIGN(ip, mode, dmode);
+			*dacl = *acl;
+			ufs_sync_acl_from_inode(ip, acl);
+			break;
+		}
+		/* FALLTHROUGH */
+
+	case EOPNOTSUPP:
+		/*
+		 * Just use the mode as-is.
+		 */
+		ip->i_mode = dmode;
+		DIP_ASSIGN(ip, mode, dmode);
+		error = 0;
+		goto out;
+	
+	default:
+		goto out;
+	}
+
+	/*
+	 * XXX: If we abort now, will Soft Updates notify the extattr
+	 * code that the EAs for the file need to be released?
+	 */
+	UFS_WAPBL_END(tvp->v_mount);
+	error = ufs_setacl_posix1e(tvp, ACL_TYPE_ACCESS, acl, cred, l);
+	if (error == 0)
+		error = ufs_setacl_posix1e(tvp, ACL_TYPE_DEFAULT, dacl, cred,
+		    l);
+	UFS_WAPBL_BEGIN(tvp->v_mount);
+	switch (error) {
+	case 0:
+		break;
+
+	case EOPNOTSUPP:
+		/*
+		 * XXX: This should not happen, as EOPNOTSUPP above
+		 * was supposed to free acl.
+		 */
+		printf("ufs_mkdir: VOP_GETACL() but no VOP_SETACL()\n");
+		/*
+		panic("ufs_mkdir: VOP_GETACL() but no VOP_SETACL()");
+		 */
+		break;
+
+	default:
+		goto out;
+	}
+
+out:
+	acl_free(acl);
+	acl_free(dacl);
+
+	return (error);
+}
+
+static int
+ufs_do_posix1e_acl_inheritance_file(struct vnode *dvp, struct vnode *tvp,
+    mode_t mode, kauth_cred_t cred, struct lwp *l)
+{
+	int error;
+	struct inode *ip = VTOI(tvp);
+	struct acl *acl;
+
+	acl = acl_alloc(KM_SLEEP);
+
+	/*
+	 * Retrieve default ACL for parent, if any.
+	 */
+	error = VOP_GETACL(dvp, ACL_TYPE_DEFAULT, acl, cred);
+	switch (error) {
+	case 0:
+		/*
+		 * Retrieved a default ACL, so merge mode and ACL if
+		 * necessary.
+		 */
+		if (acl->acl_cnt != 0) {
+			/*
+			 * Two possible ways for default ACL to not
+			 * be present.  First, the EA can be
+			 * undefined, or second, the default ACL can
+			 * be blank.  If it's blank, fall through to
+			 * the it's not defined case.
+			 */
+			mode = acl_posix1e_newfilemode(mode, acl);
+			ip->i_mode = mode;
+			DIP_ASSIGN(ip, mode, mode);
+			ufs_sync_acl_from_inode(ip, acl);
+			break;
+		}
+		/* FALLTHROUGH */
+
+	case EOPNOTSUPP:
+		/*
+		 * Just use the mode as-is.
+		 */
+		ip->i_mode = mode;
+		DIP_ASSIGN(ip, mode, mode);
+		error = 0;
+		goto out;
+
+	default:
+		goto out;
+	}
+
+	UFS_WAPBL_END(tvp->v_mount);
+	/*
+	 * XXX: If we abort now, will Soft Updates notify the extattr
+	 * code that the EAs for the file need to be released?
+	 */
+	error = VOP_SETACL(tvp, ACL_TYPE_ACCESS, acl, cred);
+	UFS_WAPBL_BEGIN(tvp->v_mount);
+	switch (error) {
+	case 0:
+		break;
+
+	case EOPNOTSUPP:
+		/*
+		 * XXX: This should not happen, as EOPNOTSUPP above was
+		 * supposed to free acl.
+		 */
+		printf("%s: VOP_GETACL() but no VOP_SETACL()\n", __func__);
+		/* panic("%s: VOP_GETACL() but no VOP_SETACL()", __func__); */
+		break;
+
+	default:
+		goto out;
+	}
+
+out:
+	acl_free(acl);
+
+	return (error);
+}
+
+static int
+ufs_do_nfs4_acl_inheritance(struct vnode *dvp, struct vnode *tvp,
+    mode_t child_mode, kauth_cred_t cred, struct lwp *l)
+{
+	int error;
+	struct acl *parent_aclp, *child_aclp;
+
+	parent_aclp = acl_alloc(KM_SLEEP);
+	child_aclp = acl_alloc(KM_SLEEP);
+
+	error = ufs_getacl_nfs4_internal(dvp, parent_aclp, l);
+	if (error)
+		goto out;
+	acl_nfs4_compute_inherited_acl(parent_aclp, child_aclp,
+	    child_mode, VTOI(tvp)->i_uid, tvp->v_type == VDIR);
+	error = ufs_setacl_nfs4_internal(tvp, child_aclp, l, false);
+	if (error)
+		goto out;
+out:
+	acl_free(parent_aclp);
+	acl_free(child_aclp);
+
+	return (error);
+}
+#endif
 
 int
 ufs_mkdir(void *v)
@@ -948,8 +1233,6 @@ ufs_mkdir(void *v)
 	int			dirblksiz = ump->um_dirblksiz;
 	struct ufs_lookup_results *ulr;
 
-	fstrans_start(dvp->v_mount, FSTRANS_SHARED);
-
 	/* XXX should handle this material another way */
 	ulr = &dp->i_crap;
 	UFS_CHECK_CRAPCOUNTER(dp);
@@ -965,7 +1248,8 @@ ufs_mkdir(void *v)
 	 * but not have it entered in the parent directory. The entry is
 	 * made later after writing "." and ".." entries.
 	 */
-	error = vcache_new(dvp->v_mount, dvp, vap, cnp->cn_cred, ap->a_vpp);
+	error = vcache_new(dvp->v_mount, dvp, vap, cnp->cn_cred, NULL,
+	    ap->a_vpp);
 	if (error)
 		goto out;
 	error = vn_lock(*ap->a_vpp, LK_EXCLUSIVE);
@@ -1000,6 +1284,23 @@ ufs_mkdir(void *v)
 	dp->i_flag |= IN_CHANGE;
 	if ((error = UFS_UPDATE(dvp, NULL, NULL, UPDATE_DIROP)) != 0)
 		goto bad;
+
+#ifdef UFS_ACL
+	mode_t dmode = (vap->va_mode & 0777) | IFDIR;
+	struct lwp *l = curlwp;
+	if (dvp->v_mount->mnt_flag & MNT_POSIX1EACLS) {
+
+		error = ufs_do_posix1e_acl_inheritance_dir(dvp, tvp, dmode,
+		    cnp->cn_cred, l);
+		if (error)
+			goto bad;
+	} else if (dvp->v_mount->mnt_flag & MNT_ACLS) {
+		error = ufs_do_nfs4_acl_inheritance(dvp, tvp, dmode,
+		    cnp->cn_cred, l);
+		if (error)
+			goto bad;
+	}
+#endif /* !UFS_ACL */
 
 	/*
 	 * Initialize directory with "." and ".." from static template.
@@ -1070,14 +1371,13 @@ ufs_mkdir(void *v)
 		vput(tvp);
 	}
  out:
-	fstrans_done(dvp->v_mount);
 	return (error);
 }
 
 int
 ufs_rmdir(void *v)
 {
-	struct vop_rmdir_args /* {
+	struct vop_rmdir_v2_args /* {
 		struct vnode		*a_dvp;
 		struct vnode		*a_vp;
 		struct componentname	*a_cnp;
@@ -1094,6 +1394,17 @@ ufs_rmdir(void *v)
 	ip = VTOI(vp);
 	dp = VTOI(dvp);
 
+#ifdef UFS_ACL
+#ifdef notyet
+	/* We don't do this because if the filesystem is mounted without ACLs
+	 * this goes through vfs_unixify_accmode() and we get EPERM.
+	 */
+	error = VOP_ACCESSX(vp, VDELETE, cnp->cn_cred);
+	if (error)
+		goto err;
+#endif
+#endif
+
 	/* XXX should handle this material another way */
 	ulr = &dp->i_crap;
 	UFS_CHECK_CRAPCOUNTER(dp);
@@ -1102,15 +1413,9 @@ ufs_rmdir(void *v)
 	 * No rmdir "." or of mounted directories please.
 	 */
 	if (dp == ip || vp->v_mountedhere != NULL) {
-		if (dp == ip)
-			vrele(dvp);
-		else
-			vput(dvp);
-		vput(vp);
-		return (EINVAL);
+		error = EINVAL;
+		goto err;
 	}
-
-	fstrans_start(dvp->v_mount, FSTRANS_SHARED);
 
 	/*
 	 * Do not remove a directory that is in the process of being renamed.
@@ -1156,7 +1461,7 @@ ufs_rmdir(void *v)
 	ip->i_nlink--;
 	DIP_ASSIGN(ip, nlink, ip->i_nlink);
 	ip->i_flag |= IN_CHANGE;
-	error = UFS_TRUNCATE(vp, (off_t)0, IO_SYNC, cnp->cn_cred);
+	(void) UFS_TRUNCATE(vp, (off_t)0, IO_SYNC, cnp->cn_cred);
 	cache_purge(vp);
 	/*
 	 * Unlock the log while we still have reference to unlinked
@@ -1170,9 +1475,13 @@ ufs_rmdir(void *v)
  out:
 	VN_KNOTE(vp, NOTE_DELETE);
 	vput(vp);
-	fstrans_done(dvp->v_mount);
-	vput(dvp);
-	return (error);
+	return error;
+ err:
+	if (dp == ip)
+		vrele(vp);
+	else
+		vput(vp);
+	return error;
 }
 
 /*
@@ -1203,7 +1512,6 @@ ufs_symlink(void *v)
 	 * UFS_WAPBL_BEGIN(dvp->v_mount) performed by successful
 	 * ufs_makeinode
 	 */
-	fstrans_start(ap->a_dvp->v_mount, FSTRANS_SHARED);
 	KASSERT(ap->a_vap->va_type == VLNK);
 	error = ufs_makeinode(ap->a_vap, ap->a_dvp, ulr, vpp, ap->a_cnp);
 	if (error)
@@ -1237,7 +1545,6 @@ ufs_symlink(void *v)
 	if (error)
 		vrele(vp);
 out:
-	fstrans_done(ap->a_dvp->v_mount);
 	return (error);
 }
 
@@ -1257,19 +1564,11 @@ ufs_readdir(void *v)
 		kauth_cred_t	a_cred;
 		int		*a_eofflag;
 		off_t		**a_cookies;
-		int		*ncookies;
+		int		*a_ncookies;
 	} */ *ap = v;
+
+	/* vnode and fs */
 	struct vnode	*vp = ap->a_vp;
-	struct direct	*cdp, *ecdp;
-	struct dirent	*ndp;
-	char		*cdbuf, *ndbuf, *endp;
-	struct uio	auio, *uio;
-	struct iovec	aiov;
-	int		error;
-	size_t		count, ccount, rcount, cdbufsz, ndbufsz;
-	off_t		off, *ccp;
-	off_t		startoff;
-	size_t		skipbytes;
 	struct ufsmount	*ump = VFSTOUFS(vp->v_mount);
 	int nswap = UFS_MPNEEDSWAP(ump);
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -1277,116 +1576,249 @@ ufs_readdir(void *v)
 #else
 	int needswap = ump->um_maxsymlinklen <= 0 && nswap != 0;
 #endif
-	uio = ap->a_uio;
-	count = uio->uio_resid;
-	rcount = count - ((uio->uio_offset + count) & (ump->um_dirblksiz - 1));
+	/* caller's buffer */
+	struct uio	*calleruio = ap->a_uio;
+	off_t		startoffset, endoffset;
+	size_t		callerbytes;
+	off_t		curoffset;
+	/* dirent production buffer */
+	char		*direntbuf;
+	size_t		direntbufmax;
+	struct dirent	*dirent, *stopdirent;
+	/* output cookies array */
+	off_t		*cookies;
+	size_t		numcookies, maxcookies;
+	/* disk buffer */
+	off_t		physstart, physend;
+	size_t		skipstart, dropend;
+	char		*rawbuf;
+	size_t		rawbufmax, rawbytes;
+	struct uio	rawuio;
+	struct iovec	rawiov;
+	struct direct	*rawdp, *stoprawdp;
+	/* general */
+	int		error;
 
-	if (rcount < _DIRENT_MINSIZE(cdp) || count < _DIRENT_MINSIZE(ndp))
+	KASSERT(VOP_ISLOCKED(vp));
+
+	/*
+	 * Figure out where the user wants us to read and how much.
+	 *
+	 * XXX: there should probably be an upper bound on callerbytes
+	 * to avoid silliness trying to do large kernel allocations.
+	 */
+	callerbytes = calleruio->uio_resid;
+	startoffset = calleruio->uio_offset;
+	endoffset = startoffset + callerbytes;
+
+	if (callerbytes < _DIRENT_MINSIZE(dirent)) {
+		/* no room for even one struct dirent */
 		return EINVAL;
-
-	startoff = uio->uio_offset & ~(ump->um_dirblksiz - 1);
-	skipbytes = uio->uio_offset - startoff;
-	rcount += skipbytes;
-
-	auio.uio_iov = &aiov;
-	auio.uio_iovcnt = 1;
-	auio.uio_offset = startoff;
-	auio.uio_resid = rcount;
-	UIO_SETUP_SYSSPACE(&auio);
-	auio.uio_rw = UIO_READ;
-	cdbufsz = rcount;
-	cdbuf = kmem_alloc(cdbufsz, KM_SLEEP);
-	aiov.iov_base = cdbuf;
-	aiov.iov_len = rcount;
-	error = UFS_BUFRD(vp, &auio, 0, ap->a_cred);
-	if (error != 0) {
-		kmem_free(cdbuf, cdbufsz);
-		return error;
 	}
 
-	rcount -= auio.uio_resid;
+	/*
+	 * Now figure out where to actually start reading. Round the
+	 * start down to a block boundary: we need to start at the
+	 * beginning of a block in order to read the directory
+	 * correctly.
+	 *
+	 * We also want to always read a whole number of blocks so
+	 * that the copying code below doesn't have to worry about
+	 * partial entries. (It used to try at one point, and was a
+	 * horrible mess.)
+	 *
+	 * Furthermore, since blocks have to be scanned from the
+	 * beginning, if we go partially into another block now we'll
+	 * just have to rescan it on the next readdir call, which
+	 * doesn't really serve any useful purpose.
+	 *
+	 * So, round down the end as well. It's ok to underpopulate
+	 * the transfer buffer, as long as we send back at least one
+	 * dirent so as to avoid giving a bogus EOF indication.
+	 *
+	 * Note that because dirents are larger than ffs struct
+	 * directs, despite the rounding down we may not be able to
+	 * send all the entries in the blocks we read and may have to
+	 * rescan some of them on the next call anyway. Alternatively
+	 * if there's empty space on disk we might have actually been
+	 * able to fit the next block in, and so forth. None of this
+	 * actually matters that much in practice.
+	 *
+	 * XXX: what does ffs do if a directory block becomes
+	 * completely empty, and what happens if all the blocks we
+	 * read are completely empty even though we aren't at EOF? As
+	 * of this writing I (dholland) can't remember the details.
+	 */
+	physstart = rounddown2(startoffset, ump->um_dirblksiz);
+	physend = rounddown2(endoffset, ump->um_dirblksiz);
 
-	cdp = (struct direct *)(void *)cdbuf;
-	ecdp = (struct direct *)(void *)&cdbuf[rcount];
+	if (physstart >= physend) {
+		/* Need at least one block */
+		return EINVAL;
+	}
 
-	ndbufsz = count;
-	ndbuf = kmem_alloc(ndbufsz, KM_SLEEP);
-	ndp = (struct dirent *)(void *)ndbuf;
-	endp = &ndbuf[count];
+	/*
+	 * skipstart is the number of bytes we need to read in
+	 * (because we need to start at the beginning of a block) but
+	 * not transfer to the user.
+	 *
+	 * dropend is the number of bytes to ignore at the end of the
+	 * user's buffer.
+	 */
+	skipstart = startoffset - physstart;
+	dropend = endoffset - physend;
 
-	off = uio->uio_offset;
+	/*
+	 * Make a transfer buffer.
+	 *
+	 * Note: rawbufmax = physend - physstart. Proof:
+	 *
+	 * physend - physstart = physend - physstart
+	 *   = physend - physstart + startoffset - startoffset
+	 *   = physend + (startoffset - physstart) - startoffset
+	 *   = physend + skipstart - startoffset
+	 *   = physend + skipstart - startoffset + endoffset - endoffset
+	 *   = skipstart - startoffset + endoffset - (endoffset - physend)
+	 *   = skipstart - startoffset + endoffset - dropend
+	 *   = skipstart - startoffset + (startoffset + callerbytes) - dropend
+	 *   = skipstart + callerbytes - dropend
+	 *   = rawbufmax
+	 * Qed.
+	 *
+	 * XXX: this should just use physend - physstart.
+	 *
+	 * XXX: this should be rewritten to read the directs straight
+	 * out of bufferio buffers instead of copying twice. This would
+	 * also let us adapt better to the user's buffer size.
+	 */
+
+	/* Base buffer space for CALLERBYTES of new data */
+	rawbufmax = callerbytes + skipstart;
+	if (rawbufmax < callerbytes)
+		return EINVAL;
+	rawbufmax -= dropend;
+
+	if (rawbufmax < _DIRENT_MINSIZE(rawdp)) {
+		/* no room for even one struct direct */
+		return EINVAL;
+	}
+
+	/* read it */
+	rawbuf = kmem_alloc(rawbufmax, KM_SLEEP);
+	rawiov.iov_base = rawbuf;
+	rawiov.iov_len = rawbufmax;
+	rawuio.uio_iov = &rawiov;
+	rawuio.uio_iovcnt = 1;
+	rawuio.uio_offset = physstart;
+	rawuio.uio_resid = rawbufmax;
+	UIO_SETUP_SYSSPACE(&rawuio);
+	rawuio.uio_rw = UIO_READ;
+	error = UFS_BUFRD(vp, &rawuio, 0, ap->a_cred);
+	if (error != 0) {
+		kmem_free(rawbuf, rawbufmax);
+		return error;
+	}
+	rawbytes = rawbufmax - rawuio.uio_resid;
+
+	/* the raw entries to iterate over */
+	rawdp = (struct direct *)(void *)rawbuf;
+	stoprawdp = (struct direct *)(void *)&rawbuf[rawbytes];
+
+	/* allocate space to produce dirents into */
+	direntbufmax = callerbytes;
+	direntbuf = kmem_alloc(direntbufmax, KM_SLEEP);
+
+	/* the dirents to iterate over */
+	dirent = (struct dirent *)(void *)direntbuf;
+	stopdirent = (struct dirent *)(void *)&direntbuf[direntbufmax];
+
+	/* the output "cookies" (seek positions of directory entries) */
 	if (ap->a_cookies) {
-		ccount = rcount / _DIRENT_RECLEN(cdp, 1);
-		ccp = *(ap->a_cookies) = malloc(ccount * sizeof(*ccp),
+		numcookies = 0;
+		maxcookies = rawbytes / _DIRENT_RECLEN(rawdp, 1);
+		cookies = malloc(maxcookies * sizeof(*cookies),
 		    M_TEMP, M_WAITOK);
 	} else {
 		/* XXX: GCC */
-		ccount = 0;
-		ccp = NULL;
+		maxcookies = 0;
+		cookies = NULL;
 	}
 
-	while (cdp < ecdp) {
-		cdp->d_reclen = ufs_rw16(cdp->d_reclen, nswap);
-		if (skipbytes > 0) {
-			if (cdp->d_reclen <= skipbytes) {
-				skipbytes -= cdp->d_reclen;
-				cdp = _DIRENT_NEXT(cdp);
+	/* now produce the dirents */
+	curoffset = calleruio->uio_offset;
+	while (rawdp < stoprawdp) {
+		rawdp->d_reclen = ufs_rw16(rawdp->d_reclen, nswap);
+		if (skipstart > 0) {
+			/* drain skipstart */
+			if (rawdp->d_reclen <= skipstart) {
+				skipstart -= rawdp->d_reclen;
+				rawdp = _DIRENT_NEXT(rawdp);
 				continue;
 			}
-			/*
-			 * invalid cookie.
-			 */
+			/* caller's start position wasn't on an entry */
 			error = EINVAL;
 			goto out;
 		}
-		if (cdp->d_reclen == 0) {
-			struct dirent *ondp = ndp;
-			ndp->d_reclen = _DIRENT_MINSIZE(ndp);
-			ndp = _DIRENT_NEXT(ndp);
-			ondp->d_reclen = 0;
-			cdp = ecdp;
+		if (rawdp->d_reclen == 0) {
+			struct dirent *save = dirent;
+			dirent->d_reclen = _DIRENT_MINSIZE(dirent);
+			dirent = _DIRENT_NEXT(dirent);
+			save->d_reclen = 0;
+			rawdp = stoprawdp;
 			break;
 		}
+
+		/* copy the header */
 		if (needswap) {
-			ndp->d_type = cdp->d_namlen;
-			ndp->d_namlen = cdp->d_type;
+			dirent->d_type = rawdp->d_namlen;
+			dirent->d_namlen = rawdp->d_type;
 		} else {
-			ndp->d_type = cdp->d_type;
-			ndp->d_namlen = cdp->d_namlen;
+			dirent->d_type = rawdp->d_type;
+			dirent->d_namlen = rawdp->d_namlen;
 		}
-		ndp->d_reclen = _DIRENT_RECLEN(ndp, ndp->d_namlen);
-		if ((char *)(void *)ndp + ndp->d_reclen +
-		    _DIRENT_MINSIZE(ndp) > endp)
+		dirent->d_reclen = _DIRENT_RECLEN(dirent, dirent->d_namlen);
+
+		/* stop if there isn't room for the name AND another header */
+		if ((char *)(void *)dirent + dirent->d_reclen +
+		    _DIRENT_MINSIZE(dirent) > (char *)(void *)stopdirent)
 			break;
-		ndp->d_fileno = ufs_rw32(cdp->d_ino, nswap);
-		(void)memcpy(ndp->d_name, cdp->d_name, ndp->d_namlen);
-		memset(&ndp->d_name[ndp->d_namlen], 0,
-		    ndp->d_reclen - _DIRENT_NAMEOFF(ndp) - ndp->d_namlen);
-		off += cdp->d_reclen;
+
+		/* copy the name (and inode (XXX: why after the test?)) */
+		dirent->d_fileno = ufs_rw32(rawdp->d_ino, nswap);
+		(void)memcpy(dirent->d_name, rawdp->d_name, dirent->d_namlen);
+		memset(&dirent->d_name[dirent->d_namlen], 0,
+		    dirent->d_reclen - _DIRENT_NAMEOFF(dirent)
+		    - dirent->d_namlen);
+
+		/* onward */
+		curoffset += rawdp->d_reclen;
 		if (ap->a_cookies) {
-			KASSERT(ccp - *(ap->a_cookies) < ccount);
-			*(ccp++) = off;
+			KASSERT(numcookies < maxcookies);
+			cookies[numcookies++] = curoffset;
 		}
-		ndp = _DIRENT_NEXT(ndp);
-		cdp = _DIRENT_NEXT(cdp);
+		dirent = _DIRENT_NEXT(dirent);
+		rawdp = _DIRENT_NEXT(rawdp);
 	}
 
-	count = ((char *)(void *)ndp - ndbuf);
-	error = uiomove(ndbuf, count, uio);
+	/* transfer the dirents to the caller's buffer */
+	callerbytes = ((char *)(void *)dirent - direntbuf);
+	error = uiomove(direntbuf, callerbytes, calleruio);
+
 out:
+	calleruio->uio_offset = curoffset;
 	if (ap->a_cookies) {
 		if (error) {
-			free(*(ap->a_cookies), M_TEMP);
-			*(ap->a_cookies) = NULL;
-			*(ap->a_ncookies) = 0;
+			free(cookies, M_TEMP);
+			*ap->a_cookies = NULL;
+			*ap->a_ncookies = 0;
 		} else {
-			*ap->a_ncookies = ccp - *(ap->a_cookies);
+			*ap->a_cookies = cookies;
+			*ap->a_ncookies = numcookies;
 		}
 	}
-	uio->uio_offset = off;
-	kmem_free(ndbuf, ndbufsz);
-	kmem_free(cdbuf, cdbufsz);
-	*ap->a_eofflag = VTOI(vp)->i_size <= uio->uio_offset;
+	kmem_free(direntbuf, direntbufmax);
+	kmem_free(rawbuf, rawbufmax);
+	*ap->a_eofflag = VTOI(vp)->i_size <= calleruio->uio_offset;
 	return error;
 }
 
@@ -1443,6 +1875,7 @@ ufs_strategy(void *v)
 	ip = VTOI(vp);
 	if (vp->v_type == VBLK || vp->v_type == VCHR)
 		panic("ufs_strategy: spec");
+	KASSERT(fstrans_held(vp->v_mount));
 	KASSERT(bp->b_bcount != 0);
 	if (bp->b_blkno == bp->b_lblkno) {
 		error = VOP_BMAP(vp, bp->b_lblkno, NULL, &bp->b_blkno,
@@ -1574,7 +2007,7 @@ ufsspec_close(void *v)
 	struct vnode	*vp;
 
 	vp = ap->a_vp;
-	if (vp->v_usecount > 1)
+	if (vrefcnt(vp) > 1)
 		UFS_ITIMES(vp, NULL, NULL, NULL);
 	return (VOCALL (spec_vnodeop_p, VOFFSET(vop_close), ap));
 }
@@ -1635,7 +2068,7 @@ ufsfifo_close(void *v)
 	struct vnode	*vp;
 
 	vp = ap->a_vp;
-	if (ap->a_vp->v_usecount > 1)
+	if (vrefcnt(ap->a_vp) > 1)
 		UFS_ITIMES(vp, NULL, NULL, NULL);
 	return (VOCALL (fifo_vnodeop_p, VOFFSET(vop_close), ap));
 }
@@ -1671,6 +2104,30 @@ ufs_pathconf(void *v)
 	case _PC_NO_TRUNC:
 		*ap->a_retval = 1;
 		return (0);
+#ifdef UFS_ACL
+	case _PC_ACL_EXTENDED:
+		if (ap->a_vp->v_mount->mnt_flag & MNT_POSIX1EACLS)
+			*ap->a_retval = 1;
+		else
+			*ap->a_retval = 0;
+		return 0;
+	case _PC_ACL_NFS4:
+		if (ap->a_vp->v_mount->mnt_flag & MNT_ACLS)
+			*ap->a_retval = 1;
+		else
+			*ap->a_retval = 0;
+		return 0;
+#endif
+	case _PC_ACL_PATH_MAX:
+#ifdef UFS_ACL
+		if (ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_ACLS))
+			*ap->a_retval = ACL_MAX_ENTRIES;
+		else
+			*ap->a_retval = 3;
+#else
+		*ap->a_retval = 3;
+#endif
+		return 0;
 	case _PC_SYNC_IO:
 		*ap->a_retval = 1;
 		return (0);
@@ -1762,7 +2219,7 @@ ufs_vinit(struct mount *mntp, int (**specops)(void *), int (**fifoops)(void *),
 /*
  * Allocate a new inode.
  */
-int
+static int
 ufs_makeinode(struct vattr *vap, struct vnode *dvp,
 	const struct ufs_lookup_results *ulr,
 	struct vnode **vpp, struct componentname *cnp)
@@ -1774,7 +2231,7 @@ ufs_makeinode(struct vattr *vap, struct vnode *dvp,
 
 	UFS_WAPBL_JUNLOCK_ASSERT(dvp->v_mount);
 
-	error = vcache_new(dvp->v_mount, dvp, vap, cnp->cn_cred, &tvp);
+	error = vcache_new(dvp->v_mount, dvp, vap, cnp->cn_cred, NULL, &tvp);
 	if (error)
 		return error;
 	error = vn_lock(tvp, LK_EXCLUSIVE);
@@ -1795,8 +2252,9 @@ ufs_makeinode(struct vattr *vap, struct vnode *dvp,
 
 	/* Authorize setting SGID if needed. */
 	if (ip->i_mode & ISGID) {
-		error = kauth_authorize_vnode(cnp->cn_cred, KAUTH_VNODE_WRITE_SECURITY,
-		    tvp, NULL, genfs_can_chmod(tvp->v_type, cnp->cn_cred, ip->i_uid,
+		error = kauth_authorize_vnode(cnp->cn_cred,
+		    KAUTH_VNODE_WRITE_SECURITY,
+		    tvp, NULL, genfs_can_chmod(tvp, cnp->cn_cred, ip->i_uid,
 		    ip->i_gid, MAKEIMODE(vap->va_type, vap->va_mode)));
 		if (error) {
 			ip->i_mode &= ~ISGID;
@@ -1814,6 +2272,20 @@ ufs_makeinode(struct vattr *vap, struct vnode *dvp,
 	 */
 	if ((error = UFS_UPDATE(tvp, NULL, NULL, UPDATE_DIROP)) != 0)
 		goto bad;
+#ifdef UFS_ACL
+	struct lwp *l = curlwp;
+	if (dvp->v_mount->mnt_flag & MNT_POSIX1EACLS) {
+		error = ufs_do_posix1e_acl_inheritance_file(dvp, tvp,
+		    ip->i_mode, cnp->cn_cred, l);
+		if (error)
+			goto bad;
+	} else if (dvp->v_mount->mnt_flag & MNT_ACLS) {
+		error = ufs_do_nfs4_acl_inheritance(dvp, tvp, ip->i_mode,
+		    cnp->cn_cred, l);
+		if (error)
+			goto bad;
+	}
+#endif /* !UFS_ACL */
 	newdir = pool_cache_get(ufs_direct_cache, PR_WAITOK);
 	ufs_makedirentry(ip, cnp, newdir);
 	error = ufs_direnter(dvp, ulr, tvp, newdir, cnp, NULL);
@@ -1821,6 +2293,7 @@ ufs_makeinode(struct vattr *vap, struct vnode *dvp,
 	if (error)
 		goto bad;
 	*vpp = tvp;
+	cache_enter(dvp, *vpp, cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_flags);
 	return (0);
 
  bad:
@@ -1870,8 +2343,8 @@ ufs_gop_alloc(struct vnode *vp, off_t off, off_t len, int flags,
                  */
 
                 if (ip->i_size < off + bsize) {
-                        UVMHIST_LOG(ubchist, "vp %p old 0x%x new 0x%x",
-                            vp, ip->i_size, off + bsize, 0);
+                        UVMHIST_LOG(ubchist, "vp %#jx old 0x%jx new 0x%x",
+                            (uintptr_t)vp, ip->i_size, off + bsize, 0);
                         ip->i_size = off + bsize;
 			DIP_ASSIGN(ip, size, ip->i_size);
                 }

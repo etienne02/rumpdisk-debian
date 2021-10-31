@@ -1,4 +1,4 @@
-/*	$NetBSD: machfb.c,v 1.92 2016/07/11 11:31:51 msaitoh Exp $	*/
+/*	$NetBSD: machfb.c,v 1.106 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2002 Bang Jun-Young
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>
 __KERNEL_RCSID(0,
-	"$NetBSD: machfb.c,v 1.92 2016/07/11 11:31:51 msaitoh Exp $");
+	"$NetBSD: machfb.c,v 1.106 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -66,6 +66,13 @@ __KERNEL_RCSID(0,
 
 #include "opt_wsemul.h"
 #include "opt_machfb.h"
+#include "opt_glyphcache.h"
+
+#ifdef MACHFB_DEBUG
+#define DPRINTF printf
+#else
+#define DPRINTF while (0) printf
+#endif
 
 #define MACH64_REG_SIZE		0x800
 #define MACH64_REG_OFF		0x7ff800
@@ -119,11 +126,13 @@ struct mach64_softc {
 	int max_y;
 	int virt_x;
 	int virt_y;
+	int stride;	/* in pixels */
 	int color_depth;
 
 	int mem_freq;
 	int ramdac_freq;
 	int ref_freq;
+	int vclk_freq;
 
 	int ref_div;
 	int log2_vclk_post_div;
@@ -132,10 +141,14 @@ struct mach64_softc {
 	int mclk_post_div;
 	int mclk_fb_div;
 	int sc_clock;	/* which clock to use */
+	int minref, m;
 
 	struct videomode *sc_my_mode;
 	int sc_edid_size;
 	uint8_t sc_edid_data[1024];
+    	struct edid_info sc_ei;
+    	int sc_setmode;
+    	int sc_gen_cntl;
 
 	u_char sc_cmap_red[256];
 	u_char sc_cmap_green[256];
@@ -205,24 +218,6 @@ static const char *mach64_memtype_names[] = {
 	"(unknown type)"
 };
 
-static struct videomode mach64_modes[] = {
-	/* 640x400 @ 70 Hz, 31.5 kHz */
-	{ 25175, 640, 664, 760, 800, 400, 409, 411, 450, 0, NULL, },
-	/* 640x480 @ 72 Hz, 36.5 kHz */
-	{ 25175, 640, 664, 760, 800, 480, 491, 493, 525, 0, NULL, },
-	/* 800x600 @ 72 Hz, 48.0 kHz */
-	{ 50000, 800, 856, 976, 1040, 600, 637, 643, 666,
-	  VID_PHSYNC | VID_PVSYNC, NULL, },
-	/* 1024x768 @ 70 Hz, 56.5 kHz */
-	{ 75000, 1024, 1048, 1184, 1328, 768, 771, 777, 806,
-	  VID_NHSYNC | VID_NVSYNC, NULL, },
-	/* 1152x864 @ 70 Hz, 62.4 kHz */
-	{ 92000, 1152, 1208, 1368, 1474, 864, 865, 875, 895, 0, NULL, },
-	/* 1280x1024 @ 70 Hz, 74.59 kHz */
-	{ 126500, 1280, 1312, 1472, 1696, 1024, 1032, 1040, 1068,
-	  VID_NHSYNC | VID_NVSYNC, NULL, }
-};
-
 extern const u_char rasops_cmap[768];
 
 static int	mach64_match(device_t, cfdata_t, void *);
@@ -234,9 +229,11 @@ CFATTACH_DECL_NEW(machfb, sizeof(struct mach64_softc), mach64_match,
 static void	mach64_init(struct mach64_softc *);
 static int	mach64_get_memsize(struct mach64_softc *);
 static int	mach64_get_max_ramdac(struct mach64_softc *);
+static int	mach64_ref_freq(void);
 
-#if defined(__sparc__) || defined(__powerpc__)
+#ifdef MACHFB_DEBUG
 static void	mach64_get_mode(struct mach64_softc *, struct videomode *);
+static void	mach64_print_reg(struct mach64_softc *);
 #endif
 
 static int	mach64_calc_crtcregs(struct mach64_softc *,
@@ -256,8 +253,6 @@ static void	mach64_adjust_frame(struct mach64_softc *, int, int);
 static void	mach64_init_lut(struct mach64_softc *);
 
 static void	mach64_init_screen(void *, struct vcons_screen *, int, long *);
-static int 	mach64_set_screentype(struct mach64_softc *,
-				      const struct wsscreen_descr *);
 static int	mach64_is_console(struct mach64_softc *);
 
 static void	mach64_cursor(void *, int, int, int);
@@ -293,68 +288,13 @@ static struct wsscreen_descr mach64_defaultscreen = {
 	80, 30,
 	NULL,
 	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&default_mode
-}, mach64_80x25_screen = {
-	"80x25", 80, 25,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[0]
-}, mach64_80x30_screen = {
-	"80x30", 80, 30,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[1]
-}, mach64_80x40_screen = {
-	"80x40", 80, 40,
-	NULL,
-	8, 10,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[0]
-}, mach64_80x50_screen = {
-	"80x50", 80, 50,
-	NULL,
-	8, 8,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[0]
-}, mach64_100x37_screen = {
-	"100x37", 100, 37,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[2]
-}, mach64_128x48_screen = {
-	"128x48", 128, 48,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[3]
-}, mach64_144x54_screen = {
-	"144x54", 144, 54,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[4]
-}, mach64_160x64_screen = {
-	"160x54", 160, 64,
-	NULL,
-	8, 16,
-	WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
-	&mach64_modes[5]
+	WSSCREEN_WSCOLORS | WSSCREEN_HILIT | WSSCREEN_UNDERLINE
+	 | WSSCREEN_RESIZE ,
+	NULL
 };
 
 static const struct wsscreen_descr *_mach64_scrlist[] = {
 	&mach64_defaultscreen,
-	&mach64_80x25_screen,
-	&mach64_80x30_screen,
-	&mach64_80x40_screen,
-	&mach64_80x50_screen,
-	&mach64_100x37_screen,
-	&mach64_128x48_screen,
-	&mach64_144x54_screen,
-	&mach64_160x64_screen
 };
 
 static struct wsscreen_list mach64_screenlist = {
@@ -365,11 +305,6 @@ static struct wsscreen_list mach64_screenlist = {
 static int	mach64_ioctl(void *, void *, u_long, void *, int,
 		             struct lwp *);
 static paddr_t	mach64_mmap(void *, void *, off_t, int);
-
-#if 0
-static int	mach64_load_font(void *, void *, struct wsdisplay_font *);
-#endif
-
 
 static struct vcons_screen mach64_console_screen;
 
@@ -479,16 +414,15 @@ mach64_attach(device_t parent, device_t self, void *aux)
 	struct mach64_softc *sc = device_private(self);
 	struct pci_attach_args *pa = aux;
 	struct rasops_info *ri;
+	const char *mptr = NULL;
 	prop_data_t edid_data;
-#if defined(__sparc__) || defined(__powerpc__)
 	const struct videomode *mode = NULL;
-#endif
 	int bar, id, expected_id;
 	int is_gx;
 	const char **memtype_names;
 	struct wsemuldisplaydev_attach_args aa;
 	long defattr;
-	int setmode, width, height;
+	int width = 1024, height = 768;
 	pcireg_t screg;
 	uint32_t reg;
 	const pcireg_t enables = PCI_COMMAND_MEM_ENABLE;
@@ -506,6 +440,7 @@ mach64_attach(device_t parent, device_t self, void *aux)
 	sc->sc_iot = pa->pa_iot;
 	sc->sc_accessops.ioctl = mach64_ioctl;
 	sc->sc_accessops.mmap = mach64_mmap;
+	sc->sc_setmode = 0;
 
 	pci_aprint_devinfo(pa, "Graphics processor");
 #ifdef MACHFB_DEBUG
@@ -574,31 +509,42 @@ mach64_attach(device_t parent, device_t self, void *aux)
 
 	printf("%s: %d KB ROM at 0x%08x\n", device_xname(sc->sc_dev),
 	    (int)sc->sc_rom.vb_size >> 10, (uint32_t)sc->sc_rom.vb_base);
+#ifdef MACHFB_DEBUG
+	mach64_get_mode(sc, NULL);
+	mach64_print_reg(sc);
+#endif
 
 	prop_dictionary_get_uint32(device_properties(self), "width", &width);
 	prop_dictionary_get_uint32(device_properties(self), "height", &height);
 
-	if ((edid_data = prop_dictionary_get(device_properties(self), "EDID"))
-	    != NULL) {
-	    	struct edid_info ei;
+	default_mode.hdisplay = width;
+	default_mode.vdisplay = height;
 
-		sc->sc_edid_size = min(1024, prop_data_size(edid_data));
+	prop_dictionary_get_string(device_properties(sc->sc_dev),
+	    "videomode", &mptr);
+
+	memset(&sc->sc_ei, 0, sizeof(sc->sc_ei));
+	if (mptr == NULL &&
+	    (edid_data = prop_dictionary_get(device_properties(self), "EDID"))
+	    != NULL) {
+
+		sc->sc_edid_size = uimin(1024, prop_data_size(edid_data));
 		memset(sc->sc_edid_data, 0, sizeof(sc->sc_edid_data));
-		memcpy(sc->sc_edid_data, prop_data_data_nocopy(edid_data),
+		memcpy(sc->sc_edid_data, prop_data_value(edid_data),
 		    sc->sc_edid_size);
 
-		edid_parse(sc->sc_edid_data, &ei);
+		edid_parse(sc->sc_edid_data, &sc->sc_ei);
 
 #ifdef MACHFB_DEBUG
-		edid_print(&ei);
+		edid_print(&sc->sc_ei);
 #endif
 	}
-
 	is_gx = 0;
 	switch(mach64_chip_id) {
 		case PCI_PRODUCT_ATI_MACH64_GX:
 		case PCI_PRODUCT_ATI_MACH64_CX:
 			is_gx = 1;
+			/* FALLTHROUGH */
 		case PCI_PRODUCT_ATI_MACH64_CT:
 			sc->has_dsp = 0;
 			break;
@@ -608,7 +554,7 @@ mach64_attach(device_t parent, device_t self, void *aux)
 				sc->has_dsp = 0;
 				break;
 			}
-			/* Otherwise fall through. */
+			/* FALLTHROUGH */
 		default:
 			sc->has_dsp = 1;
 	}
@@ -622,32 +568,27 @@ mach64_attach(device_t parent, device_t self, void *aux)
 	else
 		sc->memtype = regr(sc, CONFIG_STAT0) & 0x07;
 
-	/*
-	 * XXX is there any way to calculate reference frequency from
-	 * known values?
-	 */
-	if ((mach64_chip_id == PCI_PRODUCT_ATI_RAGE_XL_PCI) ||
-	    ((mach64_chip_id >= PCI_PRODUCT_ATI_RAGE_LT_PRO_PCI) &&
-	    (mach64_chip_id <= PCI_PRODUCT_ATI_RAGE_LT_PRO))) {
-		aprint_normal_dev(sc->sc_dev, "ref_freq=29.498MHz\n");
-		sc->ref_freq = 29498;
-	} else
-		sc->ref_freq = 14318;
+	sc->ref_freq = mach64_ref_freq();
 
 	reg = regr(sc, CLOCK_CNTL);
-	aprint_debug("CLOCK_CNTL: %08x\n", reg);
 	sc->sc_clock = reg & 3;
-	aprint_debug("using clock %d\n", sc->sc_clock);
+	DPRINTF("using clock %d\n", sc->sc_clock);
 
+	DPRINTF("ref_freq: %d\n", sc->ref_freq);
 	sc->ref_div = regrb_pll(sc, PLL_REF_DIV);
-	aprint_debug("ref_div: %d\n", sc->ref_div);
+	DPRINTF("ref_div: %d\n", sc->ref_div);
 	sc->mclk_fb_div = regrb_pll(sc, MCLK_FB_DIV);
-	aprint_debug("mclk_fb_div: %d\n", sc->mclk_fb_div);
+	DPRINTF("mclk_fb_div: %d\n", sc->mclk_fb_div);
 	sc->mem_freq = (2 * sc->ref_freq * sc->mclk_fb_div) /
 	    (sc->ref_div * 2);
 	sc->mclk_post_div = (sc->mclk_fb_div * 2 * sc->ref_freq) /
 	    (sc->mem_freq * sc->ref_div);
 	sc->ramdac_freq = mach64_get_max_ramdac(sc);
+	{
+		sc->minref = sc->ramdac_freq / 510;
+		sc->m = sc->ref_freq / sc->minref;
+		DPRINTF("minref: %d m: %d\n", sc->minref, sc->m);
+	}
 	aprint_normal_dev(sc->sc_dev,
 	    "%ld KB %s %d.%d MHz, maximum RAMDAC clock %d MHz\n",
 	    (u_long)sc->memsize,
@@ -675,48 +616,98 @@ mach64_attach(device_t parent, device_t self, void *aux)
 	}
 
 	sc->sc_console = mach64_is_console(sc);
-	aprint_debug("gen_cntl: %08x\n", regr(sc, CRTC_GEN_CNTL));
-#if defined(__sparc__) || defined(__powerpc__)
-	if (sc->sc_console) {
-		if (mode != NULL) {
-			memcpy(&default_mode, mode, sizeof(struct videomode));
-			setmode = 1;
-		} else {
-			mach64_get_mode(sc, &default_mode);
-			setmode = 0;
+	sc->sc_gen_cntl = regr(sc, CRTC_GEN_CNTL);
+	aprint_debug("gen_cntl: %08x\n", sc->sc_gen_cntl);
+	sc->sc_gen_cntl &= CRTC_CSYNC_EN;
+	aprint_normal_dev(sc->sc_dev, "found composite sync %s\n",
+	    sc->sc_gen_cntl ? "enabled" : "disabled");
+
+#define MODE_IS_VALID(m) ((sc->ramdac_freq >= (m)->dot_clock) && \
+			  ((m)->hdisplay <= 1280))
+
+	/* no mode setting support on ancient chips with external clocks */
+	sc->sc_setmode = 0;
+	if (!is_gx) {
+		/*
+		 * Now pick a mode.
+		 */
+		if ((sc->sc_ei.edid_preferred_mode != NULL)) {
+			struct videomode *m = sc->sc_ei.edid_preferred_mode;
+			if (MODE_IS_VALID(m)) {
+				memcpy(&default_mode, m,
+				    sizeof(struct videomode));
+				sc->sc_setmode = 1;
+			} else {
+				aprint_normal_dev(sc->sc_dev,
+				    "unable to use EDID preferred mode "
+				    "(%d x %d)\n", m->hdisplay, m->vdisplay);
+			}
 		}
-		sc->sc_my_mode = &default_mode;
-	} else {
-		/* fill in default_mode if it's empty */
-		mach64_get_mode(sc, &default_mode);
-		if (default_mode.dot_clock == 0) {
-			memcpy(&default_mode, &mach64_modes[4],
-			    sizeof(default_mode));
+		/*
+		 * if we can't use the preferred mode go look for the
+		 * best one we can support
+		 */
+		if (sc->sc_setmode == 0) {
+			struct videomode *m = sc->sc_ei.edid_modes;
+
+			mode = NULL;
+			sort_modes(sc->sc_ei.edid_modes,
+			    &sc->sc_ei.edid_preferred_mode,
+			    sc->sc_ei.edid_nmodes);
+			for (int n = 0; n < sc->sc_ei.edid_nmodes; n++)
+				if (MODE_IS_VALID(&m[n])) {
+					mode = &m[n];
+					break;
+				}
+			if (mode != NULL) {
+				memcpy(&default_mode, mode,
+				    sizeof(struct videomode));
+				sc->sc_setmode = 1;
+			}
 		}
-		sc->sc_my_mode = &default_mode;
-		setmode = 1;
 	}
-#else
+
+	/* make sure my_mode points at something sensible if the above fails */
 	if (default_mode.dot_clock == 0) {
-		memcpy(&default_mode, &mach64_modes[0],
-		    sizeof(default_mode));
+		sc->sc_setmode = 0;
+		mode = pick_mode_by_ref(width, height, 60);
+		if (mode != NULL) {	
+			memcpy(&default_mode, mode, sizeof(default_mode));
+		} else if ((width > 0) && (height > 0)) {
+			default_mode.hdisplay = width;
+			default_mode.vdisplay = height;
+		} else {
+			/*
+			 * if we end up here we're probably dealing with
+			 * uninitialized hardware - try to set 1024x768@60 and
+			 * hope for the best...
+			 */ 
+			mode = pick_mode_by_ref(1024, 768, 60);
+			if (mode == NULL) return; 
+			memcpy(&default_mode, mode, sizeof(default_mode));
+			if (!is_gx) sc->sc_setmode = 1;
+		}			
 	}
-	sc->sc_my_mode = &mach64_modes[0];
-	setmode = 1;
-#endif
+
+	sc->sc_my_mode = &default_mode;
+
+	if ((width == sc->sc_my_mode->hdisplay) &&
+	    (height == sc->sc_my_mode->vdisplay))
+		sc->sc_setmode = 0;
 
 	sc->bits_per_pixel = 8;
 	sc->virt_x = sc->sc_my_mode->hdisplay;
 	sc->virt_y = sc->sc_my_mode->vdisplay;
+	sc->stride = (sc->virt_x + 7) & ~7;	/* hw needs multiples of 8 */
 	sc->max_x = sc->virt_x - 1;
 	sc->max_y = (sc->memsize * 1024) /
-	    (sc->virt_x * (sc->bits_per_pixel / 8)) - 1;
+	    (sc->stride * (sc->bits_per_pixel / 8)) - 1;
 
 	sc->color_depth = CRTC_PIX_WIDTH_8BPP;
 
 	mach64_init_engine(sc);
 
-	if (setmode)
+	if (sc->sc_setmode)
 		mach64_modeswitch(sc, sc->sc_my_mode);
 
 	aprint_normal_dev(sc->sc_dev,
@@ -726,8 +717,15 @@ mach64_attach(device_t parent, device_t self, void *aux)
 
 	wsfont_init();
 
+#ifdef GLYPHCACHE_DEBUG
+	/* shrink the screen so we can see part of the glyph cache */
+	sc->sc_my_mode->vdisplay -= 200;
+#endif
+
 	vcons_init(&sc->vd, sc, &mach64_defaultscreen, &sc->sc_accessops);
 	sc->vd.init_screen = mach64_init_screen;
+	sc->vd.show_screen_cookie = &sc->sc_gc;
+	sc->vd.show_screen_cb = glyphcache_adapt;
 
 	sc->sc_gc.gc_bitblt = mach64_bitblt;
 	sc->sc_gc.gc_blitcookie = sc;
@@ -745,9 +743,9 @@ mach64_attach(device_t parent, device_t self, void *aux)
 		mach64_defaultscreen.nrows = ri->ri_rows;
 		mach64_defaultscreen.ncols = ri->ri_cols;
 		glyphcache_init(&sc->sc_gc, sc->sc_my_mode->vdisplay + 5,
-		    ((sc->memsize * 1024) / sc->sc_my_mode->hdisplay) -
+		    ((sc->memsize * 1024) / sc->stride) -
 		      sc->sc_my_mode->vdisplay - 5,
-		    sc->sc_my_mode->hdisplay,
+		    sc->stride,
 		    ri->ri_font->fontwidth,
 		    ri->ri_font->fontheight,
 		    defattr);
@@ -757,7 +755,6 @@ mach64_attach(device_t parent, device_t self, void *aux)
 		 * since we're not the console we can postpone the rest
 		 * until someone actually allocates a screen for us
 		 */
-		mach64_modeswitch(sc, sc->sc_my_mode);
 		if (mach64_console_screen.scr_ri.ri_rows == 0) {
 			/* do some minimal setup to avoid weirdnesses later */
 			vcons_init_screen(&sc->vd, &mach64_console_screen, 1,
@@ -766,9 +763,9 @@ mach64_attach(device_t parent, device_t self, void *aux)
 			(*ri->ri_ops.allocattr)(ri, 0, 0, 0, &defattr);
 
 		glyphcache_init(&sc->sc_gc, sc->sc_my_mode->vdisplay + 5,
-		    ((sc->memsize * 1024) / sc->sc_my_mode->hdisplay) -
+		    ((sc->memsize * 1024) / sc->stride) -
 		      sc->sc_my_mode->vdisplay - 5,
-		    sc->sc_my_mode->hdisplay,
+		    sc->stride,
 		    ri->ri_font->fontwidth,
 		    ri->ri_font->fontheight,
 		    defattr);
@@ -788,7 +785,8 @@ mach64_attach(device_t parent, device_t self, void *aux)
 	aa.accessops = &sc->sc_accessops;
 	aa.accesscookie = &sc->vd;
 
-	config_found(self, &aa, wsemuldisplaydevprint);
+	config_found(self, &aa, wsemuldisplaydevprint,
+	    CFARGS(.iattr = "wsemuldisplaydev"));
 #if 0
 	/* XXX
 	 * turns out some firmware doesn't turn these back on when needed
@@ -809,7 +807,8 @@ mach64_attach(device_t parent, device_t self, void *aux)
 		regw(sc, BUS_CNTL, reg);
 	}
 #endif
-	config_found_ia(self, "drm", aux, machfb_drm_print);
+	config_found(self, aux, machfb_drm_print,
+	    CFARGS(.iattr = "drm"));
 }
 
 static int
@@ -827,30 +826,23 @@ mach64_init_screen(void *cookie, struct vcons_screen *scr, int existing,
 	struct mach64_softc *sc = cookie;
 	struct rasops_info *ri = &scr->scr_ri;
 
-/* XXX for now */
-#define setmode 0
-
 	ri->ri_depth = sc->bits_per_pixel;
 	ri->ri_width = sc->sc_my_mode->hdisplay;
 	ri->ri_height = sc->sc_my_mode->vdisplay;
-	ri->ri_stride = ri->ri_width;
+	ri->ri_stride = sc->stride;
 	ri->ri_flg = RI_CENTER | RI_FULLCLEAR;
 	if (ri->ri_depth == 8)
-		ri->ri_flg |= RI_8BIT_IS_RGB | RI_ENABLE_ALPHA;
+		ri->ri_flg |= RI_8BIT_IS_RGB | RI_ENABLE_ALPHA |
+			      RI_PREFER_ALPHA;
 
 #ifdef VCONS_DRAW_INTR
 	scr->scr_flags |= VCONS_DONT_READ;
 #endif
-
-	if (existing) {
-		if (setmode && mach64_set_screentype(sc, scr->scr_type)) {
-			panic("%s: failed to switch video mode",
-			    device_xname(sc->sc_dev));
-		}
-	}
+	scr->scr_flags |= VCONS_LOADFONT;
 
 	rasops_init(ri, 0, 0);
-	ri->ri_caps = WSSCREEN_WSCOLORS;
+	ri->ri_caps = WSSCREEN_WSCOLORS | WSSCREEN_HILIT | WSSCREEN_UNDERLINE |
+		      WSSCREEN_RESIZE;
 	rasops_reconfig(ri, sc->sc_my_mode->vdisplay / ri->ri_font->fontheight,
 		    sc->sc_my_mode->hdisplay / ri->ri_font->fontwidth);
 
@@ -919,32 +911,153 @@ mach64_get_max_ramdac(struct mach64_softc *sc)
 		return 80000;
 }
 
-#if defined(__sparc__) || defined(__powerpc__)
+static int
+mach64_ref_freq(void)
+{
+	/*
+	 * There doesn't seem to be any way to calculate the reference
+	 * frequency from known values
+	 */
+	if ((mach64_chip_id == PCI_PRODUCT_ATI_RAGE_XL_PCI) ||
+	    ((mach64_chip_id >= PCI_PRODUCT_ATI_RAGE_LT_PRO_PCI) &&
+	    (mach64_chip_id <= PCI_PRODUCT_ATI_RAGE_L_MOB_M1_PCI)))
+		return 29498;
+	else
+		return 14318;
+}
+
+#ifdef MACHFB_DEBUG
 static void
 mach64_get_mode(struct mach64_softc *sc, struct videomode *mode)
 {
-	struct mach64_crtcregs crtc;
+	int htotal, hdisplay, hsync_start, hsync_end;
+	int vtotal, vdisplay, vsync_start, vsync_end;
+	int clk_ctl, clock;
+	int ref_freq, ref_div, vclk_post_div, vclk_fb_div;
+	int nhsync, nvsync;
+	int post_div, dot_clock, vrefresh, vrefresh2;
 
-	crtc.h_total_disp = regr(sc, CRTC_H_TOTAL_DISP);
-	crtc.h_sync_strt_wid = regr(sc, CRTC_H_SYNC_STRT_WID);
-	crtc.v_total_disp = regr(sc, CRTC_V_TOTAL_DISP);
-	crtc.v_sync_strt_wid = regr(sc, CRTC_V_SYNC_STRT_WID);
+	hdisplay = regr(sc, CRTC_H_TOTAL_DISP);
+	hsync_end = regr(sc, CRTC_H_SYNC_STRT_WID);
+	vdisplay = regr(sc, CRTC_V_TOTAL_DISP);
+	vsync_end = regr(sc, CRTC_V_SYNC_STRT_WID);
+	clk_ctl = regr(sc, CLOCK_CNTL);
+	clock = clk_ctl & 3;
+	ref_div = regrb_pll(sc, PLL_REF_DIV);
+	vclk_post_div = regrb_pll(sc, VCLK_POST_DIV);
+	vclk_fb_div = regrb_pll(sc, VCLK0_FB_DIV + clock);
+	ref_freq = mach64_ref_freq();
 
-	mode->htotal = ((crtc.h_total_disp & 0xffff) + 1) << 3;
-	mode->hdisplay = ((crtc.h_total_disp >> 16) + 1) << 3;
-	mode->hsync_start = ((crtc.h_sync_strt_wid & 0xffff) + 1) << 3;
-	mode->hsync_end = ((crtc.h_sync_strt_wid >> 16) << 3) +
-	    mode->hsync_start;
-	mode->vtotal = (crtc.v_total_disp & 0xffff) + 1;
-	mode->vdisplay = (crtc.v_total_disp >> 16) + 1;
-	mode->vsync_start = (crtc.v_sync_strt_wid & 0xffff) + 1;
-	mode->vsync_end = (crtc.v_sync_strt_wid >> 16) + mode->vsync_start;
+	htotal = ((hdisplay & 0x01ff) + 1) << 3;
+	hdisplay = (((hdisplay & 0x1ff0000) >> 16) + 1) << 3;
+	if (hsync_end & CRTC_HSYNC_NEG)
+		nhsync = 1;
+	else
+		nhsync = 0;
+	hsync_start = (((hsync_end & 0xff) + 1) << 3) +
+	    ((hsync_end & 0x700) >> 8);
+	hsync_end = (((hsync_end & 0x1f0000) >> 16) << 3) + hsync_start;
 
-#ifdef MACHFB_DEBUG
-	printf("mach64_get_mode: %d %d %d %d %d %d %d %d\n",
-	    mode->hdisplay, mode->hsync_start, mode->hsync_end, mode->htotal,
-	    mode->vdisplay, mode->vsync_start, mode->vsync_end, mode->vtotal);
-#endif
+	vtotal = (vdisplay & 0x07ff) + 1;
+	vdisplay = ((vdisplay & 0x7ff0000) >> 16) + 1;
+	if (vsync_end & CRTC_VSYNC_NEG)
+		nvsync = 1;
+	else
+		nvsync = 0;
+	vsync_start = (vsync_end & 0x07ff) + 1;
+	vsync_end = ((vsync_end & 0x1f0000) >> 16) + vsync_start;
+
+	switch ((vclk_post_div >> (clock * 2)) & 3) {
+		case 3:
+			post_div = 8;
+			break;
+		case 2:
+			post_div = 4;
+			break;
+		case 1:
+			post_div = 2;
+			break;
+		default:
+			post_div = 1;
+			break;
+	}
+	dot_clock = (2 * ref_freq * vclk_fb_div) / (ref_div * post_div);
+	vrefresh = (dot_clock * 1000) / (htotal * vtotal);
+	vrefresh2 = ((dot_clock * 1000) - (vrefresh * htotal * vtotal)) * 100 /
+	    (htotal * vtotal);
+
+	aprint_normal_dev(sc->sc_dev, "Video mode:\n");
+	aprint_normal("\t%d" "x%d @ %d.%02dHz "
+	    "(%d %d %d %d %d %d %d %cH %cV)\n",
+	    hdisplay, vdisplay, vrefresh, vrefresh2, dot_clock,
+	    hsync_start, hsync_end, htotal, vsync_start, vsync_end, vtotal,
+	    nhsync == 1 ? '-' : '+', nvsync == 1 ? '-' : '+');
+
+	if (mode != NULL) {
+		mode->dot_clock = dot_clock;
+		mode->htotal = htotal;
+		mode->hdisplay = hdisplay;
+		mode->hsync_start = hsync_start;
+		mode->hsync_end = hsync_end;
+		mode->vtotal = vtotal;
+		mode->vdisplay = vdisplay;
+		mode->vsync_start = vsync_start;
+		mode->vsync_end = vsync_end;
+		mode->flags = 0;
+		if (nhsync)
+			mode->flags |= VID_NHSYNC;
+		if (nvsync)
+			mode->flags |= VID_NVSYNC;
+	}
+}
+
+static void
+mach64_print_reg(struct mach64_softc *sc)
+{
+	struct reglist {
+		int offset;
+		const char *name;
+	};
+	static const struct reglist reglist_tab[] = {
+		{ 0x0000, "CRTC_H_TOTAL_DISP" },
+		{ 0x0004, "CRTC_H_SYNC_STRT_WID" },
+		{ 0x0008, "CRTC_V_TOTAL_DISP" },
+		{ 0x000C, "CRTC_V_SYNC_STRT_WID" },
+		{ 0x0010, "CRTC_VLINE_CRNT_VLINE" },
+		{ 0x0014, "CRTC_OFF_PITCH" },
+		{ 0x001C, "CRTC_GEN_CNTL" },
+		{ 0x0090, "CLOCK_CNTL" },
+		{ 0, NULL }
+	};
+	static const struct reglist plllist_tab[] = {
+		{ 0x02, "PLL_REF_DIV" },
+		{ 0x03, "PLL_GEN_CNTL" },
+		{ 0x04, "MCLK_FB_DIV" },
+		{ 0x05, "PLL_VCLK_CNTL" },
+		{ 0x06, "VCLK_POST_DIV" },
+		{ 0x07, "VCLK0_FB_DIV" },
+		{ 0x08, "VCLK1_FB_DIV" },
+		{ 0x09, "VCLK2_FB_DIV" },
+		{ 0x0A, "VCLK3_FB_DIV" },
+		{ 0x0B, "PLL_XCLK_CNTL" },
+		{ 0x10, "LVDSPLL_CNTL0" },
+		{ 0x11, "LVDSPLL_CNTL0" },
+		{ 0x19, "EXT_VPLL_CNTL" },
+		{ 0x1A, "EXT_VPLL_REF_DIV" },
+		{ 0x1B, "EXT_VPLL_FB_DIV" },
+		{ 0x1C, "EXT_VPLL_MSB" },
+		{ 0, NULL }
+	};
+	const struct reglist *r;
+
+	aprint_normal("CRTC registers\n");
+	for (r = reglist_tab; r->name != NULL; r++)
+		aprint_normal("0x%04x 0x%08x %s\n", r->offset,
+		    regr(sc, r->offset), r->name);
+	aprint_normal("PLL registers\n");
+	for (r = plllist_tab; r->name != NULL; r++)
+		aprint_normal("0x%02x 0x%02x %s\n", r->offset,
+		    regrb_pll(sc, r->offset), r->name);
 }
 #endif
 
@@ -961,7 +1074,7 @@ mach64_calc_crtcregs(struct mach64_softc *sc, struct mach64_crtcregs *crtc,
 	    ((mode->htotal >> 3) - 1);
 	crtc->h_sync_strt_wid =
 	    (((mode->hsync_end - mode->hsync_start) >> 3) << 16) |
-	    ((mode->hsync_start >> 3) - 1);
+	    ((mode->hsync_start >> 3) - 1) | ((mode->hsync_start & 7) << 8);
 
 	crtc->v_total_disp = ((mode->vdisplay - 1) << 16) |
 	    (mode->vtotal - 1);
@@ -1005,6 +1118,10 @@ mach64_set_crtcregs(struct mach64_softc *sc, struct mach64_crtcregs *crtc)
 	if (sc->has_dsp)
 		mach64_set_dsp(sc);
 
+	DPRINTF("\th total: 0x%08x  h sync: 0x%08x\n",
+	    crtc->h_total_disp, crtc->h_sync_strt_wid);
+	DPRINTF("\tv total: 0x%08x  v sync: 0x%08x\n",
+	    crtc->v_total_disp, crtc->v_sync_strt_wid);
 	regw(sc, CRTC_H_TOTAL_DISP, crtc->h_total_disp);
 	regw(sc, CRTC_H_SYNC_STRT_WID, crtc->h_sync_strt_wid);
 	regw(sc, CRTC_V_TOTAL_DISP, crtc->v_total_disp);
@@ -1012,14 +1129,10 @@ mach64_set_crtcregs(struct mach64_softc *sc, struct mach64_crtcregs *crtc)
 
 	regw(sc, CRTC_VLINE_CRNT_VLINE, 0);
 
-	regw(sc, CRTC_OFF_PITCH, (sc->virt_x >> 3) << 22);
+	regw(sc, CRTC_OFF_PITCH, (sc->stride >> 3) << 22);
 
 	regw(sc, CRTC_GEN_CNTL, crtc->gen_cntl | crtc->color_depth |
-/* XXX this unconditionally enables composite sync on SPARC */
-#ifdef __sparc__
-	    CRTC_CSYNC_EN |
-#endif
-	    CRTC_EXT_DISP_EN | CRTC_EXT_EN);
+	    sc->sc_gen_cntl | CRTC_EXT_DISP_EN | CRTC_EXT_EN);
 }
 
 static int
@@ -1062,7 +1175,7 @@ mach64_init_engine(struct mach64_softc *sc)
 {
 	uint32_t pitch_value;
 
-	pitch_value = sc->virt_x;
+	pitch_value = sc->stride;
 
 	if (sc->bits_per_pixel == 24)
 		pitch_value *= 3;
@@ -1073,10 +1186,10 @@ mach64_init_engine(struct mach64_softc *sc)
 
 	regw(sc, CONTEXT_MASK, 0xffffffff);
 
-	regw(sc, DST_OFF_PITCH, (pitch_value / 8) << 22);
+	regw(sc, DST_OFF_PITCH, (pitch_value >> 3) << 22);
 
 	/* make sure the visible area starts where we're going to draw */
-	regw(sc, CRTC_OFF_PITCH, (sc->virt_x >> 3) << 22);
+	regw(sc, CRTC_OFF_PITCH, (sc->stride >> 3) << 22);
 
 	regw(sc, DST_Y_X, 0);
 	regw(sc, DST_HEIGHT, 0);
@@ -1087,7 +1200,7 @@ mach64_init_engine(struct mach64_softc *sc)
 	regw(sc, DST_CNTL, DST_LAST_PEL | DST_X_LEFT_TO_RIGHT |
 	    DST_Y_TOP_TO_BOTTOM);
 
-	regw(sc, SRC_OFF_PITCH, (pitch_value / 8) << 22);
+	regw(sc, SRC_OFF_PITCH, (pitch_value >> 3) << 22);
 
 	regw(sc, SRC_Y_X, 0);
 	regw(sc, SRC_HEIGHT1_WIDTH1, 1);
@@ -1149,7 +1262,7 @@ mach64_adjust_frame(struct mach64_softc *sc, int x, int y)
 {
 	int offset;
 
-	offset = ((x + y * sc->virt_x) * (sc->bits_per_pixel >> 3)) >> 3;
+	offset = ((x + y * sc->stride) * (sc->bits_per_pixel >> 3)) >> 3;
 
 	regw(sc, CRTC_OFF_PITCH, (regr(sc, CRTC_OFF_PITCH) & 0xfff00000) |
 	     offset);
@@ -1161,7 +1274,7 @@ mach64_set_dsp(struct mach64_softc *sc)
 {
 	uint32_t fifo_depth, page_size, dsp_precision, dsp_loop_latency;
 	uint32_t dsp_off, dsp_on, dsp_xclks_per_qw;
-	uint32_t xclks_per_qw, y;
+	uint32_t xclks_per_qw, xclks_per_qw_m, y;
 	uint32_t fifo_off, fifo_on;
 
 	aprint_normal_dev(sc->sc_dev, "initializing the DSP\n");
@@ -1180,9 +1293,18 @@ mach64_set_dsp(struct mach64_softc *sc)
 	}
 
 	dsp_precision = 0;
+
 	xclks_per_qw = (sc->mclk_fb_div * sc->vclk_post_div * 64 << 11) /
 	    (sc->vclk_fb_div * sc->mclk_post_div * sc->bits_per_pixel);
+
+	xclks_per_qw_m = (sc->mem_freq * 64 << 4) /
+		       (sc->vclk_freq * sc->bits_per_pixel);
+
+	DPRINTF("xclks_per_qw %d %d\n", xclks_per_qw >> 7, xclks_per_qw_m);
+	DPRINTF("mem %dkHz v %dkHz\n", sc->mem_freq, sc->vclk_freq);
+
 	y = (xclks_per_qw * fifo_depth) >> 11;
+		       
 	while (y) {
 		y >>= 1;
 		dsp_precision++;
@@ -1206,7 +1328,6 @@ mach64_set_dsp(struct mach64_softc *sc)
 		}
 		break;
 	case SDRAM:
-	case SGRAM:
 		if (sc->memsize > 1024) {
 			page_size = 8;
 			dsp_loop_latency += 8;
@@ -1214,6 +1335,10 @@ mach64_set_dsp(struct mach64_softc *sc)
 			page_size = 10;
 			dsp_loop_latency += 9;
 		}
+		break;
+	case SGRAM:
+		page_size = 8;
+		dsp_loop_latency = 8;
 		break;
 	default:
 		page_size = 10;
@@ -1230,20 +1355,21 @@ mach64_set_dsp(struct mach64_softc *sc)
 	dsp_on = fifo_on >> dsp_precision;
 	dsp_off = fifo_off >> dsp_precision;
 
-#ifdef MACHFB_DEBUG
-	printf("dsp_xclks_per_qw = %d, dsp_on = %d, dsp_off = %d,\n"
+	DPRINTF("dsp_xclks_per_qw = %d, dsp_on = %d, dsp_off = %d,\n"
 	    "dsp_precision = %d, dsp_loop_latency = %d,\n"
 	    "mclk_fb_div = %d, vclk_fb_div = %d,\n"
 	    "mclk_post_div = %d, vclk_post_div = %d\n",
 	    dsp_xclks_per_qw, dsp_on, dsp_off, dsp_precision, dsp_loop_latency,
 	    sc->mclk_fb_div, sc->vclk_fb_div,
 	    sc->mclk_post_div, sc->vclk_post_div);
-#endif
-
+	DPRINTF("DSP_ON_OFF %08x\n", regr(sc, DSP_ON_OFF));
+	DPRINTF("DSP_CONFIG %08x\n", regr(sc, DSP_CONFIG));
 	regw(sc, DSP_ON_OFF, ((dsp_on << 16) & DSP_ON) | (dsp_off & DSP_OFF));
 	regw(sc, DSP_CONFIG, ((dsp_precision << 20) & DSP_PRECISION) |
 	    ((dsp_loop_latency << 16) & DSP_LOOP_LATENCY) |
 	    (dsp_xclks_per_qw & DSP_XCLKS_PER_QW));
+	DPRINTF("DSP_ON_OFF %08x\n", regr(sc, DSP_ON_OFF));
+	DPRINTF("DSP_CONFIG %08x\n", regr(sc, DSP_CONFIG));
 }
 
 static void
@@ -1280,7 +1406,7 @@ mach64_set_pll(struct mach64_softc *sc, int clock)
 		sc->log2_vclk_post_div = 3;
 	}
 	sc->vclk_fb_div = q * sc->vclk_post_div / 100;
-	aprint_debug("post_div: %d log2_post_div: %d mclk_div: %d\n",
+	DPRINTF("post_div: %d log2_post_div: %d mclk_div: %d\n",
 	    sc->vclk_post_div, sc->log2_vclk_post_div, sc->mclk_fb_div);
 
 	vclk_ctl = regrb_pll(sc, PLL_VCLK_CNTL);
@@ -1288,6 +1414,10 @@ mach64_set_pll(struct mach64_softc *sc, int clock)
 	vclk_ctl |= PLL_VCLK_RESET;
 	regwb_pll(sc, PLL_VCLK_CNTL, vclk_ctl);
 
+	DPRINTF("target: %d output: %d\n", clock, 
+	    (2 * sc->ref_freq * sc->vclk_fb_div) / 
+	    (sc->ref_div * sc->vclk_post_div));
+	
 	regwb_pll(sc, MCLK_FB_DIV, sc->mclk_fb_div);
 	reg = regrb_pll(sc, VCLK_POST_DIV);
 	reg &= ~(3 << clockshift);
@@ -1302,6 +1432,7 @@ mach64_set_pll(struct mach64_softc *sc, int clock)
 	clockreg &= ~CLOCK_SEL;
 	clockreg |= sc->sc_clock | CLOCK_STROBE;
 	regw(sc, CLOCK_CNTL, clockreg);
+	sc->vclk_freq = clock;
 }
 
 static void
@@ -1404,19 +1535,6 @@ mach64_getcmap(struct mach64_softc *sc, struct wsdisplay_cmap *cm)
 }
 
 static int
-mach64_set_screentype(struct mach64_softc *sc, const struct wsscreen_descr *des)
-{
-	struct mach64_crtcregs regs;
-
-	if (mach64_calc_crtcregs(sc, &regs,
-	    (struct videomode *)des->modecookie))
-		return 1;
-
-	mach64_set_crtcregs(sc, &regs);
-	return 0;
-}
-
-static int
 mach64_is_console(struct mach64_softc *sc)
 {
 	bool console = 0;
@@ -1502,6 +1620,8 @@ mach64_putchar_mono(void *cookie, int row, int col, u_int c, long attr)
 			mach64_setup_mono(sc, x, y, wi, he, fg, bg);
 			mach64_feed_bytes(sc, ri->ri_fontscale, data);
 		}
+		if (attr & 1)
+			mach64_rectfill(sc, x, y + he - 2, wi, 1, fg);
 	}
 }
 
@@ -1512,7 +1632,7 @@ mach64_putchar_aa8(void *cookie, int row, int col, u_int c, long attr)
 	struct wsdisplay_font *font = PICK_FONT(ri, c);
 	struct vcons_screen *scr = ri->ri_hw;
 	struct mach64_softc *sc = scr->scr_cookie;
-	uint32_t bg, latch = 0, bg8, fg8, pixel;
+	uint32_t bg, fg, latch = 0, bg8, fg8, pixel;
 	int i, x, y, wi, he, r, g, b, aval;
 	int r1, g1, b1, r0, g0, b0, fgo, bgo;
 	uint8_t *data8;
@@ -1527,11 +1647,14 @@ mach64_putchar_aa8(void *cookie, int row, int col, u_int c, long attr)
 	wi = font->fontwidth;
 	he = font->fontheight;
 	bg = (u_char)ri->ri_devcmap[(attr >> 16) & 0x0f];
+	fg = (u_char)ri->ri_devcmap[(attr >> 24) & 0x0f];
 	x = ri->ri_xorigin + col * wi;
 	y = ri->ri_yorigin + row * he;
 
 	if (c == 0x20) {
 		mach64_rectfill(sc, x, y, wi, he, bg);
+		if (attr & 1)
+			mach64_rectfill(sc, x, y + he - 2, wi, 1, fg);
 		return;
 	}
 
@@ -1611,7 +1734,10 @@ mach64_putchar_aa8(void *cookie, int row, int col, u_int c, long attr)
 
 	if (rv == GC_ADD) {
 		glyphcache_add(&sc->sc_gc, c, x, y);
+	} else 	if (attr & 1) {
+		mach64_rectfill(sc, x, y + he - 2, wi, 1, fg);
 	}
+
 }
 
 static void
@@ -1702,8 +1828,13 @@ mach64_bitblt(void *cookie, int xs, int ys, int xd, int yd, int width,
 {
 	struct mach64_softc *sc = cookie;
 	uint32_t dest_ctl = 0;
-
+	
+#if 0
+	wait_for_idle(sc);
+#else
 	wait_for_fifo(sc, 10);
+#endif
+
 	regw(sc, DP_PIX_WIDTH, DST_8BPP | SRC_8BPP | HOST_8BPP);
 	regw(sc, DP_SRC, FRGD_SRC_BLIT);
 	regw(sc, DP_MIX, (rop & 0xffff) << 16);
@@ -1836,7 +1967,7 @@ mach64_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 		return 0;
 
 	case WSDISPLAYIO_LINEBYTES:
-		*(u_int *)data = sc->virt_x * sc->bits_per_pixel / 8;
+		*(u_int *)data = sc->stride * sc->bits_per_pixel / 8;
 		return 0;
 
 	case WSDISPLAYIO_GINFO:
@@ -1876,7 +2007,8 @@ mach64_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 				mach64_init(sc);
 				mach64_init_engine(sc);
 				mach64_init_lut(sc);
-				mach64_modeswitch(sc, sc->sc_my_mode);
+				if (sc->sc_setmode)
+					mach64_modeswitch(sc, sc->sc_my_mode);
 				mach64_clearscreen(sc);
 				glyphcache_wipe(&sc->sc_gc);
 				vcons_redraw_screen(ms);

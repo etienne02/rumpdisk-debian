@@ -1,4 +1,4 @@
-/*	$NetBSD: userret.h,v 1.9 2008/04/28 20:23:12 martin Exp $	*/
+/*	$NetBSD: userret.h,v 1.13 2018/07/26 09:29:08 maxv Exp $	*/
 
 /*
  * XXXfvdl same as i386 counterpart, but should probably be independent.
@@ -77,7 +77,6 @@ static __inline void userret(struct lwp *);
 static __inline void
 userret(struct lwp *l)
 {
-
 	/* Invoke MI userret code */
 	mi_userret(l);
 }

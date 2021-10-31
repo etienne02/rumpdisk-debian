@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_syscalls.c,v 1.157 2016/06/10 13:27:16 ozaki-r Exp $	*/
+/*	$NetBSD: nfs_syscalls.c,v 1.163 2021/06/04 10:44:58 hannken Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_syscalls.c,v 1.157 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_syscalls.c,v 1.163 2021/06/04 10:44:58 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,6 +61,8 @@ __KERNEL_RCSID(0, "$NetBSD: nfs_syscalls.c,v 1.157 2016/06/10 13:27:16 ozaki-r E
 #include <sys/kthread.h>
 #include <sys/kauth.h>
 #include <sys/syscallargs.h>
+#include <sys/cprng.h>
+#include <sys/rbtree.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -87,8 +89,10 @@ kmutex_t nfsd_lock;
 struct nfssvc_sockhead nfssvc_sockhead;
 kcondvar_t nfsd_initcv;
 struct nfssvc_sockhead nfssvc_sockpending;
-struct nfsdhead nfsd_head;
 struct nfsdidlehead nfsd_idle_head;
+
+static rb_tree_t nfsd_tree;
+static const rb_tree_ops_t nfsd_tree_ops;
 
 int nfssvc_sockhead_flag;
 int nfsd_head_flag;
@@ -102,11 +106,117 @@ static void nfsd_rt(int, struct nfsrv_descript *, int);
 static int nfssvc_nfsd(struct nfssvc_copy_ops *, struct nfsd_srvargs *, void *,
 		struct lwp *);
 
+static int nfsd_compare_nodes(void *, const void *, const void *);
+static int nfsd_compare_key(void *, const void *, const void *);
+
+static struct nfsd *nfsd_bake_cookie(struct nfsd *);
+static void nfsd_toss_cookie(struct nfsd *);
+static struct nfsd *nfsd_get(struct nfsd *);
+
 static int nfssvc_addsock_in(struct nfsd_args *, const void *);
 static int nfssvc_setexports_in(struct mountd_exports_list *, const void *);
 static int nfssvc_nsd_in(struct nfsd_srvargs *, const void *);
 static int nfssvc_nsd_out(void *, const struct nfsd_srvargs *);
 static int nfssvc_exp_in(struct export_args *, const void *, size_t);
+
+static const rb_tree_ops_t nfsd_tree_ops = {
+	.rbto_compare_nodes = nfsd_compare_nodes,
+	.rbto_compare_key = nfsd_compare_key,
+	.rbto_node_offset = offsetof(struct nfsd, nfsd_node),
+};
+
+static int
+nfsd_compare_nodes(void *cookie, const void *va, const void *vb)
+{
+	const struct nfsd *na = va;
+	const struct nfsd *nb = vb;
+
+	if (na->nfsd_cookie < nb->nfsd_cookie)
+		return -1;
+	if (na->nfsd_cookie > nb->nfsd_cookie)
+		return +1;
+	return 0;
+}
+
+static int
+nfsd_compare_key(void *cookie, const void *vn, const void *vk)
+{
+	const struct nfsd *n = vn;
+	const uint32_t *k = vk;
+
+	if (n->nfsd_cookie < *k)
+		return -1;
+	if (n->nfsd_cookie > *k)
+		return +1;
+	return 0;
+}
+
+/*
+ * nfsd_bake_cookie(nfsd)
+ *
+ *	Bake a cookie for nfsd, hang it on the tree of nfsds, and
+ *	return a userland-safe pointer nfsdu neatly packed for
+ *	transport in struct nfsd_srvargs::nsd_nfsd.
+ */
+static struct nfsd *
+nfsd_bake_cookie(struct nfsd *nfsd)
+{
+
+	KASSERT(mutex_owned(&nfsd_lock));
+
+	do {
+		nfsd->nfsd_cookie = cprng_fast32();
+	} while (nfsd->nfsd_cookie == 0 ||
+	    rb_tree_insert_node(&nfsd_tree, nfsd) != nfsd);
+
+	return (struct nfsd *)(uintptr_t)nfsd->nfsd_cookie;
+}
+
+/*
+ * nfsd_toss_cookie(nfsd)
+ *
+ *	Toss nfsd's cookie.
+ */
+static void
+nfsd_toss_cookie(struct nfsd *nfsd)
+{
+
+	KASSERT(mutex_owned(&nfsd_lock));
+	KASSERT(nfsd->nfsd_cookie != 0);
+
+	rb_tree_remove_node(&nfsd_tree, nfsd);
+	nfsd->nfsd_cookie = 0;	/* paranoia */
+}
+
+/*
+ * nfsd_get(nfsdu)
+ *
+ *	Return the struct nfsd pointer for the userland nfsdu cookie,
+ *	as stored in struct nfsd_srvargs::nsd_nfsd, or NULL if nfsdu is
+ *	not a current valid nfsd cookie.
+ *
+ *	Caller MUST NOT hold nfsd_lock.  Caller MUST NOT pass (struct
+ *	nfsd *)(uintptr_t)0, which is the sentinel value for no nfsd
+ *	cookie, for which the caller should check first.
+ */
+static struct nfsd *
+nfsd_get(struct nfsd *nfsdu)
+{
+	uintptr_t cookie = (uintptr_t)nfsdu;
+	uint32_t key;
+	struct nfsd *nfsd;
+
+	KASSERT(cookie != 0);
+	if (cookie > UINT32_MAX)
+		return NULL;
+	key = cookie;
+
+	mutex_enter(&nfsd_lock);
+	nfsd = rb_tree_find_node(&nfsd_tree, &key);
+	mutex_exit(&nfsd_lock);
+
+	return nfsd;
+}
 
 static int
 nfssvc_addsock_in(struct nfsd_args *nfsdarg, const void *argp)
@@ -184,7 +294,7 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 	struct mbuf *nam;
 	struct nfsd_args nfsdarg;
 	struct nfsd_srvargs nfsd_srvargs, *nsd = &nfsd_srvargs;
-	struct nfsd *nfsd;
+	struct nfsd *nfsd = NULL;
 	struct nfssvc_sock *slp;
 	struct nfsuid *nuidp;
 
@@ -222,7 +332,7 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 			nam = (struct mbuf *)0;
 		else {
 			error = sockargs(&nam, nfsdarg.name, nfsdarg.namelen,
-				MT_SONAME);
+				UIO_USERSPACE, MT_SONAME);
 			if (error) {
 				fd_putfile(nfsdarg.sock);
 				return (error);
@@ -230,7 +340,7 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 		}
 		error = nfssvc_addsock(fp, nam);
 		fd_putfile(nfsdarg.sock);
-	} else if (flag & NFSSVC_SETEXPORTSLIST) {
+	} else if (flag & (NFSSVC_SETEXPORTSLIST | NFSSVC_REPLACEEXPORTSLIST)) {
 		struct export_args *args;
 		struct mountd_exports_list mel;
 
@@ -247,15 +357,19 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 		}
 		mel.mel_exports = args;
 
-		error = mountd_set_exports_list(&mel, l, NULL);
+		error = mountd_set_exports_list(&mel, l, NULL,
+		    flag & (NFSSVC_SETEXPORTSLIST | NFSSVC_REPLACEEXPORTSLIST));
 
 		free(args, M_TEMP);
 	} else {
 		error = ops->nsd_in(nsd, argp);
 		if (error)
 			return (error);
+		if ((uintptr_t)nsd->nsd_nfsd != 0 &&
+		    (nfsd = nfsd_get(nsd->nsd_nfsd)) == NULL)
+			return (EINVAL);
 		if ((flag & NFSSVC_AUTHIN) &&
-		    ((nfsd = nsd->nsd_nfsd)) != NULL &&
+		    nfsd != NULL &&
 		    (nfsd->nfsd_slp->ns_flags & SLP_VALID)) {
 			slp = nfsd->nfsd_slp;
 
@@ -325,6 +439,7 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 					     M_COPYALL, M_WAIT);
 					break;
 				    default:
+					kmem_free(nuidp, sizeof(*nuidp));
 					return EAFNOSUPPORT;
 				    };
 				}
@@ -339,7 +454,7 @@ do_nfssvc(struct nfssvc_copy_ops *ops, struct lwp *l, int flag, void *argp, regi
 			}
 		}
 		if ((flag & NFSSVC_AUTHINFAIL) &&
-		    (nfsd = nsd->nsd_nfsd))
+		    nfsd != NULL)
 			nfsd->nfsd_flag |= NFSD_AUTHFAIL;
 		error = nfssvc_nfsd(ops, nsd, argp, l);
 	}
@@ -480,7 +595,7 @@ nfssvc_nfsd(struct nfssvc_copy_ops *ops, struct nfsd_srvargs *nsd,
 	struct timeval tv;
 	struct mbuf *m;
 	struct nfssvc_sock *slp;
-	struct nfsd *nfsd = nsd->nsd_nfsd;
+	struct nfsd *nfsd;
 	struct nfsrv_descript *nd = NULL;
 	struct mbuf *mreq;
 	u_quad_t cur_usec;
@@ -492,8 +607,12 @@ nfssvc_nfsd(struct nfssvc_copy_ops *ops, struct nfsd_srvargs *nsd,
 	cacherep = RC_DOIT;
 	writes_todo = 0;
 #endif
-	if (nfsd == NULL) {
-		nsd->nsd_nfsd = nfsd = kmem_alloc(sizeof(*nfsd), KM_SLEEP);
+	/*
+	 * If userland didn't provide an nfsd cookie, bake a fresh one;
+	 * if they did provide one, look it up.
+	 */
+	if ((uintptr_t)nsd->nsd_nfsd == 0) {
+		nfsd = kmem_alloc(sizeof(*nfsd), KM_SLEEP);
 		memset(nfsd, 0, sizeof (struct nfsd));
 		cv_init(&nfsd->nfsd_cv, "nfsd");
 		nfsd->nfsd_procp = p;
@@ -502,20 +621,23 @@ nfssvc_nfsd(struct nfssvc_copy_ops *ops, struct nfsd_srvargs *nsd,
 			KASSERT(nfs_numnfsd == 0);
 			cv_wait(&nfsd_initcv, &nfsd_lock);
 		}
-		TAILQ_INSERT_TAIL(&nfsd_head, nfsd, nfsd_chain);
+		nsd->nsd_nfsd = nfsd_bake_cookie(nfsd);
 		nfs_numnfsd++;
 		mutex_exit(&nfsd_lock);
+	} else if ((nfsd = nfsd_get(nsd->nsd_nfsd)) == NULL) {
+		return (EINVAL);
 	}
+	KASSERT(nfsd != NULL);
+	KASSERT(nsd->nsd_nfsd != (struct nfsd *)(uintptr_t)0);
+
 	/*
 	 * Loop getting rpc requests until SIGKILL.
 	 */
 	for (;;) {
 		bool dummy;
 
-		if ((curcpu()->ci_schedstate.spc_flags & SPCF_SHOULDYIELD)
-		    != 0) {
-			preempt();
-		}
+		preempt_point();
+
 		if (nfsd->nfsd_slp == NULL) {
 			mutex_enter(&nfsd_lock);
 			while (nfsd->nfsd_slp == NULL &&
@@ -681,6 +803,7 @@ nfssvc_nfsd(struct nfssvc_copy_ops *ops, struct nfsd_srvargs *nsd,
 					nfsrv_updatecache(nd, true, mreq);
 					nd->nd_mrep = NULL;
 				}
+				/* FALLTHROUGH */
 			case RC_REPLY:
 				m = mreq;
 				siz = 0;
@@ -758,14 +881,15 @@ nfssvc_nfsd(struct nfssvc_copy_ops *ops, struct nfsd_srvargs *nsd,
 	}
 done:
 	mutex_enter(&nfsd_lock);
-	TAILQ_REMOVE(&nfsd_head, nfsd, nfsd_chain);
+	nfsd_toss_cookie(nfsd);
 	doreinit = --nfs_numnfsd == 0;
 	if (doreinit)
 		nfssvc_sockhead_flag |= SLP_INIT;
 	mutex_exit(&nfsd_lock);
 	cv_destroy(&nfsd->nfsd_cv);
 	kmem_free(nfsd, sizeof(*nfsd));
-	nsd->nsd_nfsd = NULL;
+	KASSERT(nsd->nsd_nfsd != (struct nfsd *)(uintptr_t)0);
+	nsd->nsd_nfsd = (struct nfsd *)(uintptr_t)0;
 	if (doreinit)
 		nfsrv_init(true);	/* Reinitialize everything */
 	return (error);
@@ -894,7 +1018,7 @@ nfsrv_init(int terminating)
 
 	if (terminating) {
 		KASSERT(SLIST_EMPTY(&nfsd_idle_head));
-		KASSERT(TAILQ_EMPTY(&nfsd_head));
+		KASSERT(RB_TREE_MIN(&nfsd_tree) == NULL);
 		while ((slp = TAILQ_FIRST(&nfssvc_sockhead)) != NULL) {
 			mutex_exit(&nfsd_lock);
 			KASSERT(slp->ns_sref == 0);
@@ -914,7 +1038,7 @@ nfsrv_init(int terminating)
 	TAILQ_INIT(&nfssvc_sockhead);
 	TAILQ_INIT(&nfssvc_sockpending);
 
-	TAILQ_INIT(&nfsd_head);
+	rb_tree_init(&nfsd_tree, &nfsd_tree_ops);
 	SLIST_INIT(&nfsd_idle_head);
 	nfsd_head_flag &= ~NFSD_CHECKSLP;
 

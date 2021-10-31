@@ -1,4 +1,4 @@
-/*	$NetBSD: stic.c,v 1.51 2014/07/25 08:10:39 dholland Exp $	*/
+/*	$NetBSD: stic.c,v 1.57 2021/08/17 22:00:32 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: stic.c,v 1.51 2014/07/25 08:10:39 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: stic.c,v 1.57 2021/08/17 22:00:32 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -421,7 +421,7 @@ stic_attach(device_t self, struct stic_info *si, int console)
 
 	/*
 	 * Allocate backing for the console.  We could trawl back through
-	 * msgbuf and and fill the backing, but it's not worth the hassle.
+	 * msgbuf and fill the backing, but it's not worth the hassle.
 	 * We could also grab backing using pmap_steal_memory() early on,
 	 * but that's a little ugly.
 	 */
@@ -433,7 +433,7 @@ stic_attach(device_t self, struct stic_info *si, int console)
 	waa.accessops = &stic_accessops;
 	waa.accesscookie = si;
 
-	config_found(self, &waa, wsemuldisplaydevprint);
+	config_found(self, &waa, wsemuldisplaydevprint, CFARGS_NONE);
 }
 
 void
@@ -623,7 +623,7 @@ stic_setup_backing(struct stic_info *si, struct stic_screen *ss)
 	int size;
 
 	size = si->si_consw * si->si_consh * sizeof(*ss->ss_backing);
-	ss->ss_backing = malloc(size, M_DEVBUF, M_NOWAIT|M_ZERO);
+	ss->ss_backing = malloc(size, M_DEVBUF, M_WAITOK | M_ZERO);
 }
 
 static int
@@ -1305,7 +1305,7 @@ stic_set_cursor(struct stic_info *si, struct wsdisplay_cursor *p)
 	if ((v & WSDISPLAY_CURSOR_DOCMAP) != 0) {
 		index = p->cmap.index;
 		count = p->cmap.count;
-		if (index >= 2 || (index + count) > 2)
+		if (index >= 2 || count > 2 - index)
 			return (EINVAL);
 		error = copyin(p->cmap.red, &r[index], count);
 		if (error)
@@ -1422,7 +1422,7 @@ stic_set_hwcurpos(struct stic_info *si)
 }
 
 /*
- * STIC control inteface.  We have a separate device for mapping the board,
+ * STIC control interface.  We have a separate device for mapping the board,
  * because access to the DMA engine means that it's possible to circumvent
  * the securelevel mechanism.
  */

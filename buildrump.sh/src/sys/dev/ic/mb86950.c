@@ -1,4 +1,4 @@
-/*	$NetBSD: mb86950.c,v 1.24 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: mb86950.c,v 1.35 2021/07/31 14:36:33 andvar Exp $	*/
 
 /*
  * All Rights Reserved, Copyright (C) Fujitsu Limited 1995
@@ -67,7 +67,7 @@
   */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb86950.c,v 1.24 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb86950.c,v 1.35 2021/07/31 14:36:33 andvar Exp $");
 
 /*
  * Device driver for Fujitsu mb86950 based Ethernet cards.
@@ -136,6 +136,7 @@ __KERNEL_RCSID(0, "$NetBSD: mb86950.c,v 1.24 2016/06/10 13:27:13 ozaki-r Exp $")
 #include <net/if_types.h>
 #include <net/if_media.h>
 #include <net/if_ether.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -144,10 +145,6 @@ __KERNEL_RCSID(0, "$NetBSD: mb86950.c,v 1.24 2016/06/10 13:27:13 ozaki-r Exp $")
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/bus.h>
 
@@ -230,14 +227,13 @@ mb86950_stop(struct mb86950_softc *sc)
 	bus_space_write_1(bst, bsh, DLCR_RX_STAT, 0xff);
 
 	/* Clear DMA Bit */
-    bus_space_write_2(bst, bsh, BMPR_DMA, 0);
+	bus_space_write_2(bst, bsh, BMPR_DMA, 0);
 
-    /* accept no packets */
+	/* accept no packets */
 	bus_space_write_1(bst, bsh, DLCR_TX_MODE, 0);
 	bus_space_write_1(bst, bsh, DLCR_RX_MODE, 0);
 
-    mb86950_drain_fifo(sc);
-
+	mb86950_drain_fifo(sc);
 }
 
 void
@@ -260,8 +256,7 @@ mb86950_drain_fifo(struct mb86950_softc *sc)
  * Install interface into kernel networking data structures
  */
 void
-mb86950_config(struct mb86950_softc *sc, int *media,
-    int nmedia, int defmedia)
+mb86950_config(struct mb86950_softc *sc, int *media, int nmedia, int defmedia)
 {
 	struct ifnet *ifp = &sc->sc_ec.ec_if;
 	bus_space_tag_t bst = sc->sc_bst;
@@ -273,7 +268,7 @@ mb86950_config(struct mb86950_softc *sc, int *media,
 	ifp->if_start = mb86950_start;
 	ifp->if_ioctl = mb86950_ioctl;
 	ifp->if_watchdog = mb86950_watchdog;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX;
 
 	IFQ_SET_READY(&ifp->if_snd);
 
@@ -281,15 +276,19 @@ mb86950_config(struct mb86950_softc *sc, int *media,
 	/* XXX The Tiara LANCard uses board jumpers to change media.
 	 *       This code may have to be changed for other cards.
 	 */
-	ifmedia_init(&sc->sc_media, 0, mb86950_mediachange, mb86950_mediastatus);
+	sc->sc_ec.ec_ifmedia = &sc->sc_media;
+	ifmedia_init(&sc->sc_media, 0, mb86950_mediachange,
+	    mb86950_mediastatus);
 	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_MANUAL, 0, NULL);
 	ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_MANUAL);
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 
 	/* Feed the chip the station address. */
-	bus_space_write_region_1(bst, bsh, DLCR_NODE_ID, sc->sc_enaddr, ETHER_ADDR_LEN);
+	bus_space_write_region_1(bst, bsh, DLCR_NODE_ID, sc->sc_enaddr,
+	    ETHER_ADDR_LEN);
 
 	ether_ifattach(ifp, sc->sc_enaddr);
 
@@ -305,7 +304,7 @@ mb86950_config(struct mb86950_softc *sc, int *media,
 	sc->txb_size = 1024 * (2 << ((buf_config & 0x0c) ? (((buf_config & 0x0c) >> 2) - 1) : 0));
 	sc->txb_free = (sc->txb_size * sc->txb_count) / 1500;
 
-  	sc->rxb_size = ((8 << (buf_config & 3)) * 1024) - (sc->txb_size * sc->txb_count);
+	sc->rxb_size = ((8 << (buf_config & 3)) * 1024) - (sc->txb_size * sc->txb_count);
 	sc->rxb_max = sc->rxb_size / 64;
 
 	printf("mb86950: Buffer Size %dKB with %d transmit buffer(s) %dKB each.\n",
@@ -340,9 +339,9 @@ mb86950_mediachange(struct ifnet *ifp)
 	struct mb86950_softc *sc = ifp->if_softc;
 
 	if (sc->sc_mediachange)
-		return ((*sc->sc_mediachange)(sc));
+		return (*sc->sc_mediachange)(sc);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -391,8 +390,8 @@ mb86950_watchdog(struct ifnet *ifp)
 	bus_space_handle_t bsh = sc->sc_bsh;
 	u_int8_t tstat;
 
-	/* verbose watchdog messages for debugging timeouts */
-    if ((tstat = bus_space_read_1(bst, bsh, DLCR_TX_STAT)) != 0) {
+	/* Verbose watchdog messages for debugging timeouts */
+	if ((tstat = bus_space_read_1(bst, bsh, DLCR_TX_STAT)) != 0) {
 		if (tstat & TX_CR_LOST) {
 			if ((tstat & (TX_COL | TX_16COL)) == 0) {
 				 log(LOG_ERR, "%s: carrier lost\n",
@@ -409,17 +408,16 @@ mb86950_watchdog(struct ifnet *ifp)
 			log(LOG_ERR, "%s: transmit error\n",
 			    device_xname(sc->sc_dev));
 		}
-	} else {
+	} else
 		log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	}
 
-	/* Don't know how many packets are lost by this accident.
+	/*
+	 * Don't know how many packets are lost by this accident.
 	 *  ... So just errors = errors + 1
 	 */
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	mb86950_reset(sc);
-
 }
 
 /*
@@ -431,7 +429,6 @@ mb86950_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 {
 	struct mb86950_softc *sc = ifp->if_softc;
 	struct ifaddr *ifa = (struct ifaddr *)data;
-	struct ifreq *ifr = (struct ifreq *)data;
 
 	int s, error = 0;
 
@@ -507,18 +504,13 @@ mb86950_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 #endif
 		break;
 
-	case SIOCGIFMEDIA:
-	case SIOCSIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr, &sc->sc_media, cmd);
-		break;
-
 	default:
 		error = ether_ioctl(ifp, cmd, data);
 		break;
 	}
 
 	splx(s);
-	return (error);
+	return error;
 }
 
 /*
@@ -552,15 +544,14 @@ mb86950_init(struct mb86950_softc *sc)
 
 	/* ...and attempt to start output. */
 	mb86950_start(ifp);
-
 }
 
 void
 mb86950_start(struct ifnet *ifp)
 {
 	struct mb86950_softc *sc = ifp->if_softc;
-    bus_space_tag_t bst = sc->sc_bst;
-    bus_space_handle_t bsh = sc->sc_bsh;
+	bus_space_tag_t bst = sc->sc_bst;
+	bus_space_handle_t bsh = sc->sc_bsh;
 	struct mbuf *m;
 	int len;
 
@@ -572,15 +563,17 @@ mb86950_start(struct ifnet *ifp)
 		return;
 
 	/* Tap off here if there is a BPF listener. */
-	bpf_mtap(ifp, m);
+	bpf_mtap(ifp, m, BPF_D_OUT);
 
 	/* Send the packet to the mb86950 */
 	len = mb86950_put_fifo(sc,m);
 	m_freem(m);
 
 	/* XXX bus_space_barrier here ? */
-	if (bus_space_read_1(bst, bsh, DLCR_TX_STAT) & (TX_UNDERFLO | TX_BUS_WR_ERR)) {
-		log(LOG_ERR, "%s: tx fifo underflow/overflow\n", device_xname(sc->sc_dev));
+	if (bus_space_read_1(bst, bsh, DLCR_TX_STAT)
+	    & (TX_UNDERFLO | TX_BUS_WR_ERR)) {
+		log(LOG_ERR, "%s: tx fifo underflow/overflow\n",
+		    device_xname(sc->sc_dev));
 	}
 
 	bus_space_write_2(bst, bsh, BMPR_TX_LENGTH, len | TRANSMIT_START);
@@ -622,7 +615,8 @@ mb86950_put_fifo(struct mb86950_softc *sc, struct mbuf *m)
 			/* Finish the last word. */
 			if (wantbyte) {
 				savebyte[1] = *((u_char *)data);
-				bus_space_write_2(bst, bsh, BMPR_FIFO, *savebyte);
+				bus_space_write_2(bst, bsh, BMPR_FIFO,
+				    *savebyte);
 				data = (u_short *)((u_char *)data + 1);
 				len--;
 				wantbyte = 0;
@@ -630,7 +624,8 @@ mb86950_put_fifo(struct mb86950_softc *sc, struct mbuf *m)
 			/* Output contiguous words. */
 			if (len > 1) {
 				len1 = len/2;
-				bus_space_write_multi_stream_2(bst, bsh, BMPR_FIFO, data, len1);
+				bus_space_write_multi_stream_2(bst, bsh,
+				    BMPR_FIFO, data, len1);
 				data += len1;
 				len &= 1;
 			}
@@ -652,14 +647,15 @@ mb86950_put_fifo(struct mb86950_softc *sc, struct mbuf *m)
 		/* Fill the rest of the packet with zeros. */
 		/* XXX Replace this mess with something else, eats CPU */
 		/* The zero fill and last byte ought to be combined somehow */
-		for(len = totlen + 1; len < (ETHER_MIN_LEN - ETHER_CRC_LEN); len += 2)
-	  		bus_space_write_2(bst, bsh, BMPR_FIFO, 0);
+		for (len = totlen + 1; len < (ETHER_MIN_LEN - ETHER_CRC_LEN);
+		     len += 2)
+			bus_space_write_2(bst, bsh, BMPR_FIFO, 0);
 		/* XXX                                       */
 
 		totlen = (ETHER_MIN_LEN - ETHER_CRC_LEN);
 	}
 
-	return (totlen);
+	return totlen;
 }
 
 /*
@@ -679,7 +675,7 @@ mb86950_intr(void *arg)
 	tstat = bus_space_read_1(bst, bsh, DLCR_TX_STAT);
 	rstat = bus_space_read_1(bst, bsh, DLCR_RX_STAT);
 
-	if (tstat == 0 && rstat == 0) return (0);
+	if (tstat == 0 && rstat == 0) return 0;
 
 	/* Disable etherstar interrupts so that we won't miss anything. */
 	bus_space_write_1(bst, bsh, DLCR_TX_INT_EN, 0);
@@ -720,12 +716,12 @@ mb86950_intr(void *arg)
 	 */
 
 	if ((ifp->if_flags & IFF_OACTIVE) == 0)
-		mb86950_start(ifp);
+		if_schedule_deferred_start(ifp);
 
 	/* Set receive interrupts back */
 	bus_space_write_1(bst, bsh, DLCR_RX_INT_EN, RX_MASK);
 
-	return(1);
+	return 1;
 }
 
 /* Transmission interrupt handler */
@@ -739,28 +735,29 @@ mb86950_tint(struct mb86950_softc *sc, u_int8_t tstat)
 
 	if (tstat & (TX_UNDERFLO | TX_BUS_WR_ERR)) {
 		/* XXX What do we need to do here? reset ? */
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 	}
 
-	/* excessive collision */
+	/* Excessive collision */
 	if (tstat & TX_16COL) {
-		ifp->if_collisions += 16;
+		if_statadd(ifp, if_collisions, 16);
 		/* 16 collisions means that the packet has been thrown away. */
 		if (sc->txb_sched > 0)
 			sc->txb_sched--;
 	}
 
-	/* transmission complete. */
+	/* Transmission complete. */
 	if (tstat & TX_DONE) {
-		/* successfully transmitted packets ++. */
-		ifp->if_opackets++;
+		/* Successfully transmitted packets ++. */
+		if_statinc(ifp, if_opackets);
 		if (sc->txb_sched > 0)
 			sc->txb_sched--;
 
 		/* Collision count valid only when TX_DONE is set */
 		if (tstat & TX_COL) {
-			col = (bus_space_read_1(bst, bsh, DLCR_TX_MODE) & COL_MASK) >> 4;
-			ifp->if_collisions = ifp->if_collisions + col;
+			col = (bus_space_read_1(bst, bsh, DLCR_TX_MODE)
+			    & COL_MASK) >> 4;
+			if_statadd(ifp, if_collisions, col);
 		}
 	}
 
@@ -771,7 +768,7 @@ mb86950_tint(struct mb86950_softc *sc, u_int8_t tstat)
 	}
 }
 
-/* receiver interrupt. */
+/* Receiver interrupt. */
 void
 mb86950_rint(struct mb86950_softc *sc, u_int8_t rstat)
 {
@@ -784,11 +781,12 @@ mb86950_rint(struct mb86950_softc *sc, u_int8_t rstat)
 	 /* Update statistics if this interrupt is caused by an error. */
 	 if (rstat & RX_ERR_MASK) {
 
-		/* tried to read past end of fifo, should be harmless
+		/*
+		 * Tried to read past end of fifo, should be harmless
 		 * count everything else
 		 */
 		if ((rstat & RX_BUS_RD_ERR) == 0) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 		}
 	}
 
@@ -797,22 +795,22 @@ mb86950_rint(struct mb86950_softc *sc, u_int8_t rstat)
 	 * We just loop checking the flag to pull out all received
 	 * packets.
 	 *
-	 * We limit the number of iterrations to avoid infinite loop.
+	 * We limit the number of iterations to avoid infinite loop.
 	 * It can be caused by a very slow CPU (some broken
 	 * peripheral may insert incredible number of wait cycles)
 	 * or, worse, by a broken mb86950 chip.
 	 */
 	for (i = 0; i < sc->rxb_num_pkt; i++) {
-		/* Stop the iterration if 86950 indicates no packets. */
+		/* Stop the iteration if 86950 indicates no packets. */
 		if (bus_space_read_1(bst, bsh, DLCR_RX_MODE) & RX_BUF_EMTY)
 			break;
 
-		/* receive packet status */
+		/* Receive packet status */
 		status = bus_space_read_2(bst, bsh, BMPR_FIFO);
 
-		/* bad packet? */
+		/* Bad packet? */
 		if ((status & GOOD_PKT) == 0) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			mb86950_drain_fifo(sc);
 			continue;
 		}
@@ -820,28 +818,26 @@ mb86950_rint(struct mb86950_softc *sc, u_int8_t rstat)
 		/* Length valid ? */
 		len = bus_space_read_2(bst, bsh, BMPR_FIFO);
 
-		if (len > (ETHER_MAX_LEN - ETHER_CRC_LEN) || len < ETHER_HDR_LEN) {
-			ifp->if_ierrors++;
+		if (len > (ETHER_MAX_LEN - ETHER_CRC_LEN)
+		    || len < ETHER_HDR_LEN) {
+			if_statinc(ifp, if_ierrors);
 			mb86950_drain_fifo(sc);
 			continue;
 		}
 
 		if (mb86950_get_fifo(sc, len) != 0) {
 			/* No mbufs? Drop packet. */
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			mb86950_drain_fifo(sc);
 			return;
 		}
-
-		/* Successfully received a packet.  Update stat. */
-		ifp->if_ipackets++;
 	}
 }
 
 /*
  * Receive packet.
  * Retrieve packet from receive buffer and send to the next level up via
- * ether_input(). If there is a BPF listener, give a copy to BPF, too.
+ * ether_input().
  * Returns 0 if success, -1 if error (i.e., mbuf allocation failure).
  */
 int
@@ -855,11 +851,9 @@ mb86950_get_fifo(struct mb86950_softc *sc, u_int len)
 	/* Allocate a header mbuf. */
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == 0)
-		return (-1);
+		return -1;
 
-	/*
-	 * Round len to even value.
-	 */
+	/* Round len to even value. */
 	if (len & 1)
 		len++;
 
@@ -886,7 +880,7 @@ mb86950_get_fifo(struct mb86950_softc *sc, u_int len)
 		MCLGET(m, M_DONTWAIT);
 		if ((m->m_flags & M_EXT) == 0) {
 			m_freem(m);
-			return (-1);
+			return -1;
 		}
 	}
 
@@ -900,16 +894,11 @@ mb86950_get_fifo(struct mb86950_softc *sc, u_int len)
 	m->m_len = len;
 
 	/* Get a packet. */
-	bus_space_read_multi_stream_2(bst, bsh, BMPR_FIFO, mtod(m, u_int16_t *), (len + 1) >> 1);
-
-	/*
-	 * Check if there's a BPF listener on this interface.  If so, hand off
-	 * the raw packet to bpf.
-	 */
-	bpf_mtap(ifp, m);
+	bus_space_read_multi_stream_2(bst, bsh, BMPR_FIFO,
+	    mtod(m, u_int16_t *), (len + 1) >> 1);
 
 	if_percpuq_enqueue(ifp->if_percpuq, m);
-	return (0);
+	return 0;
 }
 
 /*
@@ -922,12 +911,12 @@ mb86950_enable(struct mb86950_softc *sc)
 	if ((sc->sc_stat & ESTAR_STAT_ENABLED) == 0 && sc->sc_enable != NULL) {
 		if ((*sc->sc_enable)(sc) != 0) {
 			aprint_error_dev(sc->sc_dev, "device enable failed\n");
-			return (EIO);
+			return EIO;
 		}
 	}
 
 	sc->sc_stat |= ESTAR_STAT_ENABLED;
-	return (0);
+	return 0;
 }
 
 /*
@@ -974,10 +963,7 @@ mb86950_detach(struct mb86950_softc *sc)
 
 	/* Succeed now if there's no work to do. */
 	if ((sc->sc_stat & ESTAR_STAT_ATTACHED) == 0)
-		return (0);
-
-	/* Delete all media. */
-	ifmedia_delete_instance(&sc->sc_media, IFM_INST_ANY);
+		return 0;
 
 	/* Unhook the entropy source. */
 	rnd_detach_source(&sc->rnd_source);
@@ -985,7 +971,10 @@ mb86950_detach(struct mb86950_softc *sc)
 	ether_ifdetach(ifp);
 	if_detach(ifp);
 
-	return (0);
+	/* Delete all media. */
+	ifmedia_fini(&sc->sc_media);
+
+	return 0;
 }
 
 #if ESTAR_DEBUG >= 1

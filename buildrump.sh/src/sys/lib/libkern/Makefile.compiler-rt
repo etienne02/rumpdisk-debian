@@ -1,6 +1,7 @@
-# $NetBSD: Makefile.compiler-rt,v 1.5 2014/08/10 05:57:31 matt Exp $
+# $NetBSD: Makefile.compiler-rt,v 1.13 2021/06/16 05:21:09 rin Exp $
 
-COMPILER_RT_SRCDIR=	${NETBSDSRCDIR}/sys/external/bsd/compiler_rt/dist
+COMPILER_RT_DIR=	${NETBSDSRCDIR}/sys/external/bsd/compiler_rt
+COMPILER_RT_SRCDIR=	${COMPILER_RT_DIR}/dist
 
 .if ${MACHINE_ARCH} == "powerpc"
 COMPILER_RT_CPU_DIR=	${COMPILER_RT_SRCDIR}/lib/builtins/ppc
@@ -62,7 +63,8 @@ GENERIC_SRCS+= \
 	ctzsi2.c
 .endif
 
-.if ${MACHINE_CPU} != "aarch64" && ${MACHINE} != "alpha"
+.if ${MACHINE_CPU} != "aarch64" && ${MACHINE} != "alpha" && \
+    ${MACHINE_ARCH} != "m68k"
 GENERIC_SRCS+= \
 	divmodsi4.c \
 	divsi3.c \
@@ -72,7 +74,7 @@ GENERIC_SRCS+= \
 	umodsi3.c
 .endif
 
-.if ${MACHINE_CPU} != "aarch64" && ${MACHINE} != "alpha"
+.if ${MACHINE_CPU} != "aarch64"
 GENERIC_SRCS+= \
 	clzdi2.c \
 	ctzdi2.c \
@@ -126,3 +128,13 @@ COPTS.${src}+=	-Wno-missing-prototypes \
 .endfor
 
 CPPFLAGS.int_util.c+=	-DKERNEL_USE
+
+# XXX Explicit divide by zero in udivmoddi4.c -> abort().
+.if defined(HAVE_GCC) && ${HAVE_GCC} >= 7 && ${ACTIVE_CC} == "gcc"
+. if ${MACHINE_CPU} != "arm"
+COPTS.udivmoddi4.c+=	-fnon-call-exceptions
+. endif
+.endif
+
+# XXX This makes no binary changes at the moment.
+.include "${COMPILER_RT_DIR}/abi.mk"

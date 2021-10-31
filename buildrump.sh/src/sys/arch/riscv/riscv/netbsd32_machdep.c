@@ -1,3 +1,5 @@
+/*	$NetBSD: netbsd32_machdep.c,v 1.5 2020/11/04 07:09:46 skrll Exp $	*/
+
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -29,7 +31,7 @@
 
 #include <sys/cdefs.h>
 
-__RCSID("$NetBSD: netbsd32_machdep.c,v 1.2 2015/11/26 13:15:34 martin Exp $");
+__RCSID("$NetBSD: netbsd32_machdep.c,v 1.5 2020/11/04 07:09:46 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/ucontext.h>
@@ -51,7 +53,7 @@ netbsd32_setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 	setregs(l, pack, stack);
 }
 
-/* 
+/*
  * Start a new LWP
  */
 void
@@ -92,12 +94,12 @@ cpu_getmcontext32(struct lwp *l, mcontext32_t *mcp, unsigned int *flags)
 
 	/* Save floating point register context, if any. */
 	KASSERT(l == curlwp);
-	if (fpu_valid_p()) {
+	if (fpu_valid_p(l)) {
 		/*
 		 * If this process is the current FP owner, dump its
 		 * context to the PCB first.
 		 */
-		fpu_save();
+		fpu_save(l);
 
 		struct pcb * const pcb = lwp_getpcb(l);
 		*(struct fpreg *)mcp->__fregs = pcb->pcb_fpregs;
@@ -149,7 +151,7 @@ cpu_setmcontext32(struct lwp *l, const mcontext32_t *mcp, unsigned int flags)
 	if (flags & _UC_FPU) {
 		KASSERT(l == curlwp);
 		/* Tell PCU we are replacing the FPU contents. */
-		fpu_replace();
+		fpu_replace(l);
 
 		/*
 		 * The PCB FP regs struct includes the FP CSR, so use the
@@ -179,10 +181,9 @@ netbsd32_sysarch(struct lwp *l, const struct netbsd32_sysarch_args *uap,
 vaddr_t
 netbsd32_vm_default_addr(struct proc *p, vaddr_t base, vsize_t size,
     int topdown)
-{          
+{
 	if (topdown)
 		return VM_DEFAULT_ADDRESS32_TOPDOWN(base, size);
 	else
 		return VM_DEFAULT_ADDRESS32_BOTTOMUP(base, size);
 }
-

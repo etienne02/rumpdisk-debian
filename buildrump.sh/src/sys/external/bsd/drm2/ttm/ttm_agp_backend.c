@@ -1,4 +1,4 @@
-/*	$NetBSD: ttm_agp_backend.c,v 1.5 2015/10/17 21:05:57 jmcneill Exp $	*/
+/*	$NetBSD: ttm_agp_backend.c,v 1.8 2018/08/28 03:41:40 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ttm_agp_backend.c,v 1.5 2015/10/17 21:05:57 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ttm_agp_backend.c,v 1.8 2018/08/28 03:41:40 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/kmem.h>
@@ -42,7 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD: ttm_agp_backend.c,v 1.5 2015/10/17 21:05:57 jmcneill
 #include <ttm/ttm_bo_driver.h>
 #include <ttm/ttm_page_alloc.h>
 
-#if __OS_HAS_AGP
+#if CONFIG_AGP
 
 struct ttm_agp {
 	struct ttm_dma_tt ttm_dma;
@@ -78,9 +78,9 @@ int
 ttm_agp_tt_populate(struct ttm_tt *ttm)
 {
 
-	if (ttm->state != tt_unpopulated)
-		return 0;
-
+	KASSERTMSG((ttm->state == tt_unpopulated),
+	    "ttm_agp_tt_populate: ttm %p state is not tt_unpopulated: %d",
+	    ttm, (int)ttm->state);
 	return ttm_bus_dma_populate(container_of(ttm, struct ttm_dma_tt, ttm));
 }
 
@@ -88,6 +88,9 @@ void
 ttm_agp_tt_unpopulate(struct ttm_tt *ttm)
 {
 
+	KASSERTMSG((ttm->state == tt_unbound),
+	    "ttm_agp_tt_unpopulate: ttm %p state is not tt_unbound: %d",
+	    ttm, (int)ttm->state);
 	ttm_bus_dma_unpopulate(container_of(ttm, struct ttm_dma_tt, ttm));
 }
 
@@ -113,7 +116,7 @@ ttm_agp_bind(struct ttm_tt *ttm, struct ttm_mem_reg *bo_mem)
 		if (ret)
 			goto fail;
 	}
-	agp_flush_cache();
+	drm_agp_flush();
 	AGP_FLUSH_TLB(sc);
 
 	/* Success!  */

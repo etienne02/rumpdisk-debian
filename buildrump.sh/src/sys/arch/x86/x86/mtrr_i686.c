@@ -1,4 +1,4 @@
-/*	$NetBSD: mtrr_i686.c,v 1.28 2014/05/29 19:08:30 plunky Exp $ */
+/*	$NetBSD: mtrr_i686.c,v 1.31 2020/01/31 08:21:11 maxv Exp $ */
 
 /*-
  * Copyright (c) 2000, 2011 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mtrr_i686.c,v 1.28 2014/05/29 19:08:30 plunky Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mtrr_i686.c,v 1.31 2020/01/31 08:21:11 maxv Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -124,7 +124,7 @@ static struct mtrr_state *mtrr_fixed_raw;
 static struct mtrr *mtrr_fixed;
 static struct mtrr *mtrr_var;
 
-struct mtrr_funcs i686_mtrr_funcs = {
+const struct mtrr_funcs i686_mtrr_funcs = {
 	i686_mtrr_init_cpu,
 	i686_mtrr_reload_cpu,
 	i686_mtrr_clean,
@@ -170,7 +170,7 @@ i686_mtrr_reload(int synch)
 	 * much. Need to change the prototypes of l/rcr0 too if you
 	 * want to correct it. */
 	uint32_t cr0;
-	vaddr_t cr3, cr4;
+	vaddr_t cr4;
 	uint32_t origcr0;
 	vaddr_t origcr4;
 
@@ -221,8 +221,7 @@ i686_mtrr_reload(int synch)
 	 * to CR3)
 	 */
 
-	cr3 = rcr3();
-	lcr3(cr3);
+	tlbflush();
 
 	/*
 	 * 8. Disable all range registers (by clearing the E flag in
@@ -262,7 +261,7 @@ i686_mtrr_reload(int synch)
 	 */
 
 	wbinvd();
-	lcr3(cr3);
+	tlbflush();
 
 	/*
 	 * 12. Enter the normal cache mode to reenable caching (set the CD and
@@ -334,12 +333,10 @@ i686_mtrr_init_first(void)
 
 	mtrr_fixed =
 	    kmem_zalloc(MTRR_I686_NFIXED_SOFT * sizeof(struct mtrr), KM_SLEEP);
-	KASSERT(mtrr_fixed != NULL);
 
 	if (i686_mtrr_vcnt) {
 		mtrr_var =
 		    kmem_zalloc(i686_mtrr_vcnt * sizeof(struct mtrr), KM_SLEEP);
-		KASSERT(mtrr_var != NULL);
 	}
 
 	mtrr_var_raw = &mtrr_raw[0];

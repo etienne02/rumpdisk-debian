@@ -1,4 +1,4 @@
-/*	$NetBSD: i82586.c,v 1.74 2016/07/14 10:19:06 msaitoh Exp $	*/
+/*	$NetBSD: i82586.c,v 1.89 2020/03/19 14:10:56 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -137,7 +137,7 @@ Mode of operation:
 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82586.c,v 1.74 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82586.c,v 1.89 2020/03/19 14:10:56 thorpej Exp $");
 
 
 #include <sys/param.h>
@@ -148,62 +148,59 @@ __KERNEL_RCSID(0, "$NetBSD: i82586.c,v 1.74 2016/07/14 10:19:06 msaitoh Exp $");
 #include <sys/errno.h>
 #include <sys/syslog.h>
 #include <sys/device.h>
+#include <sys/bus.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_media.h>
 #include <net/if_ether.h>
-
 #include <net/bpf.h>
-#include <net/bpfdesc.h>
-
-#include <sys/bus.h>
 
 #include <dev/ic/i82586reg.h>
 #include <dev/ic/i82586var.h>
 
-void	 	i82586_reset(struct ie_softc *, int);
-void 		i82586_watchdog(struct ifnet *);
-int 		i82586_init(struct ifnet *);
-int 		i82586_ioctl(struct ifnet *, u_long, void *);
-void 		i82586_start(struct ifnet *);
-void 		i82586_stop(struct ifnet *, int);
+void		i82586_reset(struct ie_softc *, int);
+void		i82586_watchdog(struct ifnet *);
+int		i82586_init(struct ifnet *);
+int		i82586_ioctl(struct ifnet *, u_long, void *);
+void		i82586_start(struct ifnet *);
+void		i82586_stop(struct ifnet *, int);
 
 
-int 		i82586_rint(struct ie_softc *, int);
-int 		i82586_tint(struct ie_softc *, int);
+int		i82586_rint(struct ie_softc *, int);
+int		i82586_tint(struct ie_softc *, int);
 
-int     	i82586_mediachange(struct ifnet *);
-void    	i82586_mediastatus(struct ifnet *, struct ifmediareq *);
+int		i82586_mediachange(struct ifnet *);
+void		i82586_mediastatus(struct ifnet *, struct ifmediareq *);
 
-static int 	ie_readframe(struct ie_softc *, int);
+static int	ie_readframe(struct ie_softc *, int);
 static struct mbuf *ieget(struct ie_softc *, int, int);
 static int	i82586_get_rbd_list(struct ie_softc *,
-					     u_int16_t *, u_int16_t *, int *);
+					     uint16_t *, uint16_t *, int *);
 static void	i82586_release_rbd_list(struct ie_softc *,
-					     u_int16_t, u_int16_t);
+					     uint16_t, uint16_t);
 static int	i82586_drop_frames(struct ie_softc *);
 static int	i82586_chk_rx_ring(struct ie_softc *);
 
-static inline void 	ie_ack(struct ie_softc *, u_int);
-static inline void 	iexmit(struct ie_softc *);
-static void 		i82586_start_transceiver(struct ie_softc *);
+static inline void ie_ack(struct ie_softc *, u_int);
+static inline void iexmit(struct ie_softc *);
+static void	i82586_start_transceiver(struct ie_softc *);
 
 static void	i82586_count_errors(struct ie_softc *);
 static void	i82586_rx_errors(struct ie_softc *, int, int);
-static void 	i82586_setup_bufs(struct ie_softc *);
+static void	i82586_setup_bufs(struct ie_softc *);
 static void	setup_simple_command(struct ie_softc *, int, int);
-static int 	ie_cfg_setup(struct ie_softc *, int, int, int);
+static int	ie_cfg_setup(struct ie_softc *, int, int, int);
 static int	ie_ia_setup(struct ie_softc *, int);
-static void 	ie_run_tdr(struct ie_softc *, int);
-static int 	ie_mc_setup(struct ie_softc *, int);
-static void 	ie_mc_reset(struct ie_softc *);
-static int 	i82586_start_cmd(struct ie_softc *, int, int, int, int);
+static void	ie_run_tdr(struct ie_softc *, int);
+static int	ie_mc_setup(struct ie_softc *, int);
+static void	ie_mc_reset(struct ie_softc *);
+static int	i82586_start_cmd(struct ie_softc *, int, int, int, int);
 static int	i82586_cmd_wait(struct ie_softc *);
 
 #if I82586_DEBUG
-void 		print_rbd(struct ie_softc *, int);
+void		print_rbd(struct ie_softc *, int);
 #endif
 
 static char* padbuf = NULL;
@@ -231,7 +228,7 @@ static char* padbuf = NULL;
  *
  */
 void
-i82586_attach(struct ie_softc *sc, const char *name, u_int8_t *etheraddr,
+i82586_attach(struct ie_softc *sc, const char *name, uint8_t *etheraddr,
     int *media, int nmedia, int defmedia)
 {
 	int i;
@@ -244,33 +241,29 @@ i82586_attach(struct ie_softc *sc, const char *name, u_int8_t *etheraddr,
 	ifp->if_init = i82586_init;
 	ifp->if_stop = i82586_stop;
 	ifp->if_watchdog = i82586_watchdog;
-	ifp->if_flags =
-		IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS | IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	IFQ_SET_READY(&ifp->if_snd);
 
-        /* Initialize media goo. */
-        ifmedia_init(&sc->sc_media, 0, i82586_mediachange, i82586_mediastatus);
-        if (media != NULL) {
-                for (i = 0; i < nmedia; i++)
-                        ifmedia_add(&sc->sc_media, media[i], 0, NULL);
-                ifmedia_set(&sc->sc_media, defmedia);
-        } else {
-                ifmedia_add(&sc->sc_media, IFM_ETHER|IFM_MANUAL, 0, NULL);
-                ifmedia_set(&sc->sc_media, IFM_ETHER|IFM_MANUAL);
-        }
+	/* Initialize media goo. */
+	sc->sc_ethercom.ec_ifmedia = &sc->sc_media;
+	ifmedia_init(&sc->sc_media, 0, i82586_mediachange, i82586_mediastatus);
+	if (media != NULL) {
+		for (i = 0; i < nmedia; i++)
+			ifmedia_add(&sc->sc_media, media[i], 0, NULL);
+		ifmedia_set(&sc->sc_media, defmedia);
+	} else {
+		ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_MANUAL, 0, NULL);
+		ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_MANUAL);
+	}
 
 	if (padbuf == NULL) {
 		padbuf = malloc(ETHER_MIN_LEN - ETHER_CRC_LEN, M_DEVBUF,
-		    M_ZERO | M_NOWAIT);
-		if (padbuf == NULL) {
-			 aprint_error_dev(sc->sc_dev,
-			     "can't allocate pad buffer\n");
-			 return;
-		}
+		    M_ZERO | M_WAITOK);
 	}
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, etheraddr);
 
 	aprint_normal(" address %s, type %s\n", ether_sprintf(etheraddr),name);
@@ -288,7 +281,7 @@ i82586_watchdog(struct ifnet *ifp)
 	struct ie_softc *sc = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	++ifp->if_oerrors;
+	if_statinc(ifp, if_oerrors);
 
 	i82586_reset(sc, 1);
 }
@@ -298,7 +291,7 @@ i82586_cmd_wait(struct ie_softc *sc)
 {
 	/* spin on i82586 command acknowledge; wait at most 0.9 (!) seconds */
 	int i, off;
-	u_int16_t cmd;
+	uint16_t cmd;
 
 	for (i = 0; i < 900000; i++) {
 		/* Read the command word */
@@ -408,11 +401,11 @@ i82586_count_errors(struct ie_softc *sc)
 {
 	int scb = sc->scb;
 
-	sc->sc_ethercom.ec_if.if_ierrors +=
+	if_statadd(&sc->sc_ethercom.ec_if, if_ierrors,
 	    sc->ie_bus_read16(sc, IE_SCB_ERRCRC(scb)) +
 	    sc->ie_bus_read16(sc, IE_SCB_ERRALN(scb)) +
 	    sc->ie_bus_read16(sc, IE_SCB_ERRRES(scb)) +
-	    sc->ie_bus_read16(sc, IE_SCB_ERROVR(scb));
+	    sc->ie_bus_read16(sc, IE_SCB_ERROVR(scb)));
 
 	/* Clear error counters */
 	sc->ie_bus_write16(sc, IE_SCB_ERRCRC(scb), 0);
@@ -440,9 +433,9 @@ i82586_intr(void *v)
 	u_int status;
 	int off;
 
-        /*
-         * Implementation dependent interrupt handling.
-         */
+	/*
+	 * Implementation dependent interrupt handling.
+	 */
 	if (sc->intrhook)
 		(sc->intrhook)(sc, INTR_ENTER);
 
@@ -575,7 +568,7 @@ static	int timesthru = 1024;
 
 		/* Put fence at this frame (the head) */
 		off = IE_RFRAME_LAST(sc->rframes, i);
-		sc->ie_bus_write16(sc, off, IE_FD_EOL|IE_FD_SUSP);
+		sc->ie_bus_write16(sc, off, IE_FD_EOL | IE_FD_SUSP);
 
 		/* and clear RBD field */
 		off = IE_RFRAME_BUFDESC(sc->rframes, i);
@@ -595,7 +588,7 @@ static	int timesthru = 1024;
 			i82586_drop_frames(sc);
 			if ((status & IE_FD_RNR) != 0)
 				sc->rnr_expect = 1;
-			sc->sc_ethercom.ec_if.if_ierrors++;
+			if_statinc(&sc->sc_ethercom.ec_if, if_ierrors);
 		} else if (ie_readframe(sc, i) != 0)
 			return (1);
 	}
@@ -645,13 +638,13 @@ static	int timesthru = 1024;
 				return (1);
 
 			i82586_start_transceiver(sc);
-			sc->sc_ethercom.ec_if.if_ierrors++;
+			if_statinc(&sc->sc_ethercom.ec_if, if_ierrors);
 			return (0);
 		} else
 			printf("%s: receiver not ready; scbstatus=0x%x\n",
 				device_xname(sc->sc_dev), scbstatus);
 
-		sc->sc_ethercom.ec_if.if_ierrors++;
+		if_statinc(&sc->sc_ethercom.ec_if, if_ierrors);
 		return (1);	/* Ask for a reset */
 	}
 
@@ -670,7 +663,6 @@ i82586_tint(struct ie_softc *sc, int scbstatus)
 	int status;
 
 	ifp->if_timer = 0;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 #if I82586_DEBUG
 	if (sc->xmit_busy <= 0) {
@@ -696,10 +688,10 @@ i82586_tint(struct ie_softc *sc, int scbstatus)
 	}
 
 	if (status & IE_STAT_OK) {
-		ifp->if_opackets++;
-		ifp->if_collisions += (status & IE_XS_MAXCOLL);
+		if_statadd2(ifp, if_opackets, 1,
+		    if_collisions, status & IE_XS_MAXCOLL);
 	} else {
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 		/*
 		 * Check SQE and DEFERRED?
 		 * What if more than one bit is set?
@@ -714,7 +706,7 @@ i82586_tint(struct ie_softc *sc, int scbstatus)
 			aprint_error_dev(sc->sc_dev, "DMA underrun\n");
 		else if (status & IE_XS_EXCMAX) {
 			aprint_error_dev(sc->sc_dev, "too many collisions\n");
-			sc->sc_ethercom.ec_if.if_collisions += 16;
+			if_statadd(&sc->sc_ethercom.ec_if, if_collisions, 16);
 		}
 	}
 
@@ -736,7 +728,7 @@ i82586_tint(struct ie_softc *sc, int scbstatus)
 	if (sc->xmit_busy > 0)
 		iexmit(sc);
 
-	i82586_start(ifp);
+	if_schedule_deferred_start(ifp);
 	return (0);
 }
 
@@ -744,7 +736,7 @@ i82586_tint(struct ie_softc *sc, int scbstatus)
  * Get a range of receive buffer descriptors that represent one packet.
  */
 static int
-i82586_get_rbd_list(struct ie_softc *sc, u_int16_t *start, u_int16_t *end,
+i82586_get_rbd_list(struct ie_softc *sc, uint16_t *start, uint16_t *end,
     int *pktlen)
 {
 	int	off, rbbase = sc->rbds;
@@ -788,7 +780,7 @@ i82586_get_rbd_list(struct ie_softc *sc, u_int16_t *start, u_int16_t *end,
  * Release a range of receive buffer descriptors after we've copied the packet.
  */
 static void
-i82586_release_rbd_list(struct ie_softc *sc, u_int16_t start, u_int16_t end)
+i82586_release_rbd_list(struct ie_softc *sc, uint16_t start, uint16_t end)
 {
 	int	off, rbbase = sc->rbds;
 	int	rbindex = start;
@@ -804,7 +796,7 @@ i82586_release_rbd_list(struct ie_softc *sc, u_int16_t start, u_int16_t end)
 	/* Mark EOL at new tail */
 	rbindex = ((rbindex == 0) ? sc->nrxbuf : rbindex) - 1;
 	off = IE_RBD_BUFLEN(rbbase, rbindex);
-	sc->ie_bus_write16(sc, off, IE_RBUF_SIZE|IE_RBD_EOL);
+	sc->ie_bus_write16(sc, off, IE_RBUF_SIZE | IE_RBD_EOL);
 
 	/* Remove EOL from current tail */
 	off = IE_RBD_BUFLEN(rbbase, sc->rbtail);
@@ -825,7 +817,7 @@ i82586_release_rbd_list(struct ie_softc *sc, u_int16_t start, u_int16_t end)
 static int
 i82586_drop_frames(struct ie_softc *sc)
 {
-	u_int16_t bstart, bend;
+	uint16_t bstart, bend;
 	int pktlen;
 
 	if (i82586_get_rbd_list(sc, &bstart, &bend, &pktlen) == 0)
@@ -865,7 +857,8 @@ i82586_chk_rx_ring(struct ie_softc *sc)
 	for (n = 0; n < sc->nframes; n++) {
 		off = IE_RFRAME_LAST(sc->rframes, n);
 		val = sc->ie_bus_read16(sc, off);
-		if ((n == sc->rftail) ^ ((val & (IE_FD_EOL|IE_FD_SUSP)) != 0)) {
+		if ((n == sc->rftail) ^ ((val & (IE_FD_EOL | IE_FD_SUSP))
+		    != 0)) {
 			/* `rftail' and EOL flag out of sync */
 			log(LOG_ERR,
 			    "%s: rx frame list out of sync at %d\n",
@@ -931,7 +924,7 @@ ieget(struct ie_softc *sc, int head, int totlen)
 			m->m_data = newdata;
 		}
 
-		m->m_len = len = min(totlen, len);
+		m->m_len = len = uimin(totlen, len);
 
 		totlen -= len;
 		if (totlen > 0) {
@@ -962,10 +955,10 @@ ieget(struct ie_softc *sc, int head, int totlen)
 	while (resid > 0) {
 		int thisrblen = IE_RBUF_SIZE - thisrboff,
 		    thismblen = m->m_len - thismboff;
-		len = min(thisrblen, thismblen);
+		len = uimin(thisrblen, thismblen);
 
 		(sc->memcopyin)(sc, mtod(m, char *) + thismboff,
-				IE_RBUF_ADDR(sc,head) + thisrboff,
+				IE_RBUF_ADDR(sc, head) + thisrboff,
 				(u_int)len);
 		resid -= len;
 
@@ -1010,11 +1003,11 @@ ie_readframe(
     int num)		/* frame number to read */
 {
 	struct mbuf *m;
-	u_int16_t bstart, bend;
+	uint16_t bstart, bend;
 	int pktlen;
 
 	if (i82586_get_rbd_list(sc, &bstart, &bend, &pktlen) == 0) {
-		sc->sc_ethercom.ec_if.if_ierrors++;
+		if_statinc(&sc->sc_ethercom.ec_if, if_ierrors);
 		return (1);
 	}
 
@@ -1022,7 +1015,7 @@ ie_readframe(
 	i82586_release_rbd_list(sc, bstart, bend);
 
 	if (m == 0) {
-		sc->sc_ethercom.ec_if.if_ierrors++;
+		if_statinc(&sc->sc_ethercom.ec_if, if_ierrors);
 		return (0);
 	}
 
@@ -1038,14 +1031,10 @@ ie_readframe(
 	}
 #endif
 
-	/* Pass it up. */
-	bpf_mtap(&sc->sc_ethercom.ec_if, m);
-
 	/*
 	 * Finally pass this packet up to higher layers.
 	 */
 	if_percpuq_enqueue((&sc->sc_ethercom.ec_if)->if_percpuq, m);
-	sc->sc_ethercom.ec_if.if_ipackets++;
 	return (0);
 }
 
@@ -1107,11 +1096,11 @@ iexmit(struct ie_softc *sc)
 			i82586_start_transceiver(sc);
 		}
 	} else {
-		sc->ie_bus_write16(sc, IE_CMD_XMIT_LINK(sc->xmit_cmds,cur),
+		sc->ie_bus_write16(sc, IE_CMD_XMIT_LINK(sc->xmit_cmds, cur),
 				       0xffff);
 
 		sc->ie_bus_write16(sc, IE_CMD_XMIT_CMD(sc->xmit_cmds, cur),
-				       IE_CMD_XMIT | IE_CMD_INTR | IE_CMD_LAST);
+		    IE_CMD_XMIT | IE_CMD_INTR | IE_CMD_LAST);
 
 		off = IE_SCB_CMDLST(sc->scb);
 		sc->ie_bus_write16(sc, off, IE_CMD_XMIT_ADDR(sc->xmit_cmds,
@@ -1139,15 +1128,10 @@ i82586_start(struct ifnet *ifp)
 	u_short	len;
 	int	s;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) != IFF_RUNNING)
 		return;
 
-	for (;;) {
-		if (sc->xmit_busy == NTXBUF) {
-			ifp->if_flags |= IFF_OACTIVE;
-			break;
-		}
-
+	while (sc->xmit_busy < NTXBUF) {
 		head = sc->xchead;
 		xbase = sc->xbds;
 
@@ -1160,7 +1144,7 @@ i82586_start(struct ifnet *ifp)
 			panic("i82586_start: no header mbuf");
 
 		/* Tap off here if there is a BPF listener. */
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 #if I82586_DEBUG
 		if (sc->sc_debug & IED_ENQ)
@@ -1254,9 +1238,7 @@ i82586_reset(struct ie_softc *sc, int hard)
 	if (hard)
 		printf("%s: reset\n", device_xname(sc->sc_dev));
 
-	/* Clear OACTIVE in case we're called from watchdog (frozen xmit). */
 	sc->sc_ethercom.ec_if.if_timer = 0;
-	sc->sc_ethercom.ec_if.if_flags &= ~IFF_OACTIVE;
 
 	/*
 	 * Stop i82586 dead in its tracks.
@@ -1352,7 +1334,7 @@ static void
 i82586_setup_bufs(struct ie_softc *sc)
 {
 	int	ptr = sc->buf_area;	/* memory pool */
-	int     n, r;
+	int	n, r;
 
 	/*
 	 * step 0: zero memory and figure out how many recv buffers and
@@ -1420,19 +1402,19 @@ i82586_setup_bufs(struct ie_softc *sc)
 		int m = (n == sc->nframes - 1) ? 0 : n + 1;
 
 		/* Clear status */
-		sc->ie_bus_write16(sc, IE_RFRAME_STATUS(sc->rframes,n), 0);
+		sc->ie_bus_write16(sc, IE_RFRAME_STATUS(sc->rframes, n), 0);
 
 		/* RBD link = NULL */
-		sc->ie_bus_write16(sc, IE_RFRAME_BUFDESC(sc->rframes,n),
+		sc->ie_bus_write16(sc, IE_RFRAME_BUFDESC(sc->rframes, n),
 				       0xffff);
 
 		/* Make a circular list */
-		sc->ie_bus_write16(sc, IE_RFRAME_NEXT(sc->rframes,n),
-				       IE_RFRAME_ADDR(sc->rframes,m));
+		sc->ie_bus_write16(sc, IE_RFRAME_NEXT(sc->rframes, n),
+				       IE_RFRAME_ADDR(sc->rframes, m));
 
 		/* Mark last as EOL */
-		sc->ie_bus_write16(sc, IE_RFRAME_LAST(sc->rframes,n),
-				       ((m==0)? (IE_FD_EOL|IE_FD_SUSP) : 0));
+		sc->ie_bus_write16(sc, IE_RFRAME_LAST(sc->rframes, n),
+				       ((m==0)? (IE_FD_EOL | IE_FD_SUSP) : 0));
 	}
 
 	/*
@@ -1442,16 +1424,16 @@ i82586_setup_bufs(struct ie_softc *sc)
 		int m = (n == sc->nrxbuf - 1) ? 0 : n + 1;
 
 		/* Clear status */
-		sc->ie_bus_write16(sc, IE_RBD_STATUS(sc->rbds,n), 0);
+		sc->ie_bus_write16(sc, IE_RBD_STATUS(sc->rbds, n), 0);
 
 		/* Make a circular list */
-		sc->ie_bus_write16(sc, IE_RBD_NEXT(sc->rbds,n),
-				       IE_RBD_ADDR(sc->rbds,m));
+		sc->ie_bus_write16(sc, IE_RBD_NEXT(sc->rbds, n),
+				       IE_RBD_ADDR(sc->rbds, m));
 
 		/* Link to data buffers */
 		sc->ie_bus_write24(sc, IE_RBD_BUFADDR(sc->rbds, n),
 				       IE_RBUF_ADDR(sc, n));
-		sc->ie_bus_write16(sc, IE_RBD_BUFLEN(sc->rbds,n),
+		sc->ie_bus_write16(sc, IE_RBD_BUFLEN(sc->rbds, n),
 				       IE_RBUF_SIZE | ((m==0)?IE_RBD_EOL:0));
 	}
 
@@ -1505,20 +1487,20 @@ static int
 ie_cfg_setup(struct ie_softc *sc, int cmd, int promiscuous, int manchester)
 {
 	int cmdresult, status;
-	u_int8_t buf[IE_CMD_CFG_SZ]; /* XXX malloc? */
+	uint8_t buf[IE_CMD_CFG_SZ]; /* XXX malloc? */
 
-	*IE_CMD_CFG_CNT(buf)       = 0x0c;
-	*IE_CMD_CFG_FIFO(buf)      = 8;
-        *IE_CMD_CFG_SAVEBAD(buf)   = 0x40;
+	*IE_CMD_CFG_CNT(buf)	   = 0x0c;
+	*IE_CMD_CFG_FIFO(buf)	   = 8;
+	*IE_CMD_CFG_SAVEBAD(buf)   = 0x40;
 	*IE_CMD_CFG_ADDRLEN(buf)   = 0x2e;
 	*IE_CMD_CFG_PRIORITY(buf)  = 0;
-	*IE_CMD_CFG_IFS(buf)       = 0x60;
+	*IE_CMD_CFG_IFS(buf)	   = 0x60;
 	*IE_CMD_CFG_SLOT_LOW(buf)  = 0;
 	*IE_CMD_CFG_SLOT_HIGH(buf) = 0xf2;
 	*IE_CMD_CFG_PROMISC(buf)   = (!!promiscuous) | manchester << 2;
-	*IE_CMD_CFG_CRSCDT(buf)    = 0;
-	*IE_CMD_CFG_MINLEN(buf)    = 64;
-	*IE_CMD_CFG_JUNK(buf)      = 0xff;
+	*IE_CMD_CFG_CRSCDT(buf)	   = 0;
+	*IE_CMD_CFG_MINLEN(buf)	   = 64;
+	*IE_CMD_CFG_JUNK(buf)	   = 0xff;
 	sc->memcopyout(sc, buf, cmd, IE_CMD_CFG_SZ);
 	setup_simple_command(sc, IE_CMD_CONFIG, cmd);
 	IE_BUS_BARRIER(sc, cmd, IE_CMD_CFG_SZ, BUS_SPACE_BARRIER_WRITE);
@@ -1667,7 +1649,6 @@ i82586_init(struct ifnet *ifp)
 		(sc->hwinit)(sc);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	if (NTXBUF < 2)
 		sc->do_xmitnopchain = 0;
@@ -1686,15 +1667,16 @@ i82586_start_transceiver(struct ie_softc *sc)
 	/*
 	 * Start RU at current position in frame & RBD lists.
 	 */
-	sc->ie_bus_write16(sc, IE_RFRAME_BUFDESC(sc->rframes,sc->rfhead),
+	sc->ie_bus_write16(sc, IE_RFRAME_BUFDESC(sc->rframes, sc->rfhead),
 			       IE_RBD_ADDR(sc->rbds, sc->rbhead));
 
 	sc->ie_bus_write16(sc, IE_SCB_RCVLST(sc->scb),
-			       IE_RFRAME_ADDR(sc->rframes,sc->rfhead));
+			       IE_RFRAME_ADDR(sc->rframes, sc->rfhead));
 
 	if (sc->do_xmitnopchain) {
 		/* Stop transmit command chain */
-		if (i82586_start_cmd(sc, IE_CUC_SUSPEND|IE_RUC_SUSPEND, 0, 0, 0))
+		if (i82586_start_cmd(sc, IE_CUC_SUSPEND | IE_RUC_SUSPEND,
+		    0, 0, 0))
 			aprint_error_dev(sc->sc_dev,
 			    "CU/RU stop command timed out\n");
 
@@ -1706,7 +1688,7 @@ i82586_start_transceiver(struct ie_softc *sc)
 					sc->nop_cmds,
 					(sc->xctail + NTXBUF - 1) % NTXBUF));
 
-		if (i82586_start_cmd(sc, IE_CUC_START|IE_RUC_START, 0, 0, 0))
+		if (i82586_start_cmd(sc, IE_CUC_START | IE_RUC_START, 0, 0, 0))
 			aprint_error_dev(sc->sc_dev,
 			    "CU/RU command timed out\n");
 	} else {
@@ -1729,15 +1711,10 @@ int
 i82586_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 {
 	struct ie_softc *sc = ifp->if_softc;
-	struct ifreq *ifr = (struct ifreq *)data;
 	int s, error = 0;
 
 	s = splnet();
-	switch(cmd) {
-        case SIOCGIFMEDIA:
-        case SIOCSIFMEDIA:
-                error = ifmedia_ioctl(ifp, ifr, &sc->sc_media, cmd);
-                break;
+	switch (cmd) {
 	default:
 		error = ether_ioctl(ifp, cmd, data);
 		if (error == ENETRESET) {
@@ -1762,6 +1739,7 @@ i82586_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 static void
 ie_mc_reset(struct ie_softc *sc)
 {
+	struct ethercom *ec = &sc->sc_ethercom;
 	struct ether_multi *enm;
 	struct ether_multistep step;
 	int size;
@@ -1772,18 +1750,20 @@ ie_mc_reset(struct ie_softc *sc)
 again:
 	size = 0;
 	sc->mcast_count = 0;
-	ETHER_FIRST_MULTI(step, &sc->sc_ethercom, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm) {
 		size += 6;
 		if (sc->mcast_count >= IE_MAXMCAST ||
 		    memcmp(enm->enm_addrlo, enm->enm_addrhi, 6) != 0) {
-			sc->sc_ethercom.ec_if.if_flags |= IFF_ALLMULTI;
-			i82586_ioctl(&sc->sc_ethercom.ec_if,
-				     SIOCSIFFLAGS, NULL);
+			ec->ec_if.if_flags |= IFF_ALLMULTI;
+			i82586_ioctl(&ec->ec_if, SIOCSIFFLAGS, NULL);
+			ETHER_UNLOCK(ec);
 			return;
 		}
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 
 	if (size > sc->mcast_addrs_size) {
 		/* Need to allocate more space */
@@ -1797,15 +1777,19 @@ again:
 	/*
 	 * We've got the space; now copy the addresses
 	 */
-	ETHER_FIRST_MULTI(step, &sc->sc_ethercom, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm) {
-		if (sc->mcast_count >= IE_MAXMCAST)
+		if (sc->mcast_count >= IE_MAXMCAST) {
+			ETHER_UNLOCK(ec);
 			goto again; /* Just in case */
+		}
 
 		memcpy(&sc->mcast_addrs[sc->mcast_count], enm->enm_addrlo, 6);
 		sc->mcast_count++;
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 	sc->want_mcsetup = 1;
 }
 
@@ -1815,11 +1799,11 @@ again:
 int
 i82586_mediachange(struct ifnet *ifp)
 {
-        struct ie_softc *sc = ifp->if_softc;
+	struct ie_softc *sc = ifp->if_softc;
 
-        if (sc->sc_mediachange)
-                return ((*sc->sc_mediachange)(sc));
-        return (0);
+	if (sc->sc_mediachange)
+		return ((*sc->sc_mediachange)(sc));
+	return (0);
 }
 
 /*
@@ -1828,10 +1812,10 @@ i82586_mediachange(struct ifnet *ifp)
 void
 i82586_mediastatus(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
-        struct ie_softc *sc = ifp->if_softc;
+	struct ie_softc *sc = ifp->if_softc;
 
-        if (sc->sc_mediastatus)
-                (*sc->sc_mediastatus)(sc, ifmr);
+	if (sc->sc_mediastatus)
+		(*sc->sc_mediastatus)(sc, ifmr);
 }
 
 #if I82586_DEBUG
@@ -1839,11 +1823,11 @@ void
 print_rbd(struct ie_softc *sc, int n)
 {
 
-	printf("RBD at %08x:\n  status %04x, next %04x, buffer %lx\n"
-		"length/EOL %04x\n", IE_RBD_ADDR(sc->rbds,n),
-		sc->ie_bus_read16(sc, IE_RBD_STATUS(sc->rbds,n)),
-		sc->ie_bus_read16(sc, IE_RBD_NEXT(sc->rbds,n)),
+	printf("RBD at %08x:\n	status %04x, next %04x, buffer %lx\n"
+		"length/EOL %04x\n", IE_RBD_ADDR(sc->rbds, n),
+		sc->ie_bus_read16(sc, IE_RBD_STATUS(sc->rbds, n)),
+		sc->ie_bus_read16(sc, IE_RBD_NEXT(sc->rbds, n)),
 		(u_long)0,/*bus_space_read_4(sc->bt, sc->bh, IE_RBD_BUFADDR(sc->rbds,n)),-* XXX */
-		sc->ie_bus_read16(sc, IE_RBD_BUFLEN(sc->rbds,n)));
+		sc->ie_bus_read16(sc, IE_RBD_BUFLEN(sc->rbds, n)));
 }
 #endif

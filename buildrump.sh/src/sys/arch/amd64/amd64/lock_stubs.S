@@ -1,6 +1,6 @@
-/*	$NetBSD: lock_stubs.S,v 1.26 2016/04/11 14:14:27 bouyer Exp $	*/
+/*	$NetBSD: lock_stubs.S,v 1.36 2020/04/25 15:26:16 bouyer Exp $	*/
 
-/*-
+/*
  * Copyright (c) 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -29,15 +29,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * AMD64 lock stubs.  Calling convention:
- *
- * %rdi		arg 1
- * %rsi		arg 2
- * %rdx		arg 3
- * %rax		return value
- */
-
 #include "opt_multiprocessor.h"
 #include "opt_lockdebug.h"
 
@@ -46,26 +37,30 @@
 
 #include "assym.h"
 
-#define	ENDLABEL(name,a) .align	a; LABEL(name)
-#define	LOCK(num)	.Lpatch ## num: lock
-#define	RET(num)	.Lret ## num: ret; nop; nop; ret
+#define LOCK	\
+	HOTPATCH(HP_NAME_NOLOCK, 1)	; \
+	lock
+#define RET	\
+	HOTPATCH(HP_NAME_RETFENCE, 3)	; \
+	ret; nop; nop			; \
+	ret
 
 #ifndef LOCKDEBUG
+
+	.align	64
 
 /*
  * void mutex_enter(kmutex_t *mtx);
  *
  * Acquire a mutex and post a load fence.
  */
-	.align	64
-
 ENTRY(mutex_enter)
 	movq	CPUVAR(CURLWP), %rcx
 	xorq	%rax, %rax
-	LOCK(1)
+	LOCK
 	cmpxchgq %rcx, (%rdi)
 	jnz	1f
-	RET(1)
+	RET
 1:
 	jmp	_C_LABEL(mutex_vector_enter)
 END(mutex_enter)
@@ -109,7 +104,7 @@ ENTRY(mutex_spin_enter)
 	testb	%al, %al
 	jnz	1f
 #endif
-	RET(2)
+	RET
 1:
 	jmp	_C_LABEL(mutex_spin_retry)	/* failed; hard case */
 END(mutex_spin_enter)
@@ -188,11 +183,11 @@ ENTRY(rw_enter)
 0:
 	testb	$(RW_WRITE_LOCKED|RW_WRITE_WANTED), %al
 	jnz	3f
-	leaq	RW_READ_INCR(%rax), %rdx 
-	LOCK(2)
+	leaq	RW_READ_INCR(%rax), %rdx
+	LOCK
 	cmpxchgq %rdx, (%rdi)
 	jnz	1f
-	RET(3)
+	RET
 1:
 	jmp	0b
 
@@ -202,10 +197,10 @@ ENTRY(rw_enter)
 2:	movq	CPUVAR(CURLWP), %rcx
 	xorq	%rax, %rax
 	orq	$RW_WRITE_LOCKED, %rcx
-	LOCK(3)
+	LOCK
 	cmpxchgq %rcx, (%rdi)
 	jnz	3f
-	RET(4)
+	RET
 3:
 	jmp	_C_LABEL(rw_vector_enter)
 END(rw_enter)
@@ -228,7 +223,7 @@ ENTRY(rw_exit)
 	cmpq	$RW_READ_INCR, %rax
 	jb	3f
 	leaq	-RW_READ_INCR(%rax), %rdx
-	LOCK(4)
+	LOCK
 	cmpxchgq %rdx, (%rdi)
 	jnz	1f
 	ret
@@ -241,7 +236,7 @@ ENTRY(rw_exit)
 2:	leaq	-RW_WRITE_LOCKED(%rax), %rdx
 	subq	CPUVAR(CURLWP), %rdx
 	jnz	3f
-	LOCK(5)
+	LOCK
 	cmpxchgq %rdx, (%rdi)
 	jnz	3f
 	ret
@@ -265,12 +260,12 @@ ENTRY(rw_tryenter)
 0:
 	testb	$(RW_WRITE_LOCKED|RW_WRITE_WANTED), %al
 	jnz	4f
-	leaq	RW_READ_INCR(%rax), %rdx 
-	LOCK(8)
+	leaq	RW_READ_INCR(%rax), %rdx
+	LOCK
 	cmpxchgq %rdx, (%rdi)
 	jnz	1f
 	movl	%edx, %eax			/* nonzero */
-	RET(5)
+	RET
 1:
 	jmp	0b
 
@@ -280,12 +275,12 @@ ENTRY(rw_tryenter)
 2:	movq	CPUVAR(CURLWP), %rcx
 	xorq	%rax, %rax
 	orq	$RW_WRITE_LOCKED, %rcx
-	LOCK(9)
+	LOCK
 	cmpxchgq %rcx, (%rdi)
 	movl	$0, %eax
 	setz	%al
 3:
-	RET(6)
+	RET
 	ret
 4:
 	xorl	%eax, %eax
@@ -302,13 +297,13 @@ ENTRY(__cpu_simple_lock_init)
 	ret
 END(__cpu_simple_lock_init)
 
-NENTRY(__cpu_simple_lock)
+ENTRY(__cpu_simple_lock)
 	movl	$0x0100, %eax
 1:
-	LOCK(6)
+	LOCK
 	cmpxchgb %ah, (%rdi)
 	jnz	2f
-	RET(7)
+	RET
 2:
 	movl	$0x0100, %eax
 	pause
@@ -319,38 +314,18 @@ NENTRY(__cpu_simple_lock)
 	jmp	2b
 END(__cpu_simple_lock)
 
-NENTRY(__cpu_simple_unlock)
+ENTRY(__cpu_simple_unlock)
 	movb	$0, (%rdi)
 	ret
 END(__cpu_simple_unlock)
 
 ENTRY(__cpu_simple_lock_try)
 	movl	$0x0100, %eax
-	LOCK(7)
+	LOCK
 	cmpxchgb %ah, (%rdi)
 	movl	$0, %eax
 	setz	%al
-	RET(8)
+	KMSAN_INIT_RET(4)
+	RET
 END(__cpu_simple_lock_try)
 
-/*
- * Patchpoints to replace with NOP when ncpu == 1.
- */
-#ifndef LOCKDEBUG
-	.type	_C_LABEL(x86_lockpatch), @object
-LABEL(x86_lockpatch)
-	.quad	.Lpatch1, .Lpatch2, .Lpatch3, .Lpatch4
-	.quad	.Lpatch5, .Lpatch6, .Lpatch7, .Lpatch8
-	.quad	.Lpatch9
-	.quad	0
-END(x86_lockpatch)
-#endif
-
-	.type	_C_LABEL(x86_retpatch), @object
-LABEL(x86_retpatch)
-#ifndef LOCKDEBUG
-	.quad	.Lret1, .Lret2, .Lret3, .Lret4, .Lret5, .Lret6
-#endif
-	.quad	.Lret7, .Lret8
-	.quad	0
-END(x86_retpatch)

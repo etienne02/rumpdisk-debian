@@ -1,4 +1,4 @@
-/* $NetBSD: pipe.h,v 1.33 2016/01/22 23:38:45 dholland Exp $ */
+/* $NetBSD: pipe.h,v 1.38 2021/01/25 19:21:11 dholland Exp $ */
 
 /*
  * Copyright (c) 1996 John S. Dyson
@@ -43,10 +43,9 @@
 #endif
 
 /*
- * Maximum size of kva for direct write transfer. If the amount
+ * Maximum size of transfer for direct write transfer. If the amount
  * of data in buffer is larger, it would be transferred in chunks of this
- * size. This kva memory is freed after use if amount of pipe kva memory
- * is bigger than limitpipekva.
+ * size.
  */
 #ifndef PIPE_DIRECT_CHUNK
 #define PIPE_DIRECT_CHUNK	(1*1024*1024)
@@ -74,29 +73,14 @@ struct pipebuf {
 };
 
 /*
- * Information to support direct transfers between processes for pipes.
- */
-struct pipemapping {
-	vaddr_t		kva;		/* kernel virtual address */
-	vsize_t		cnt;		/* number of chars in buffer */
-	voff_t		pos;		/* current position within page */
-	int		npages;		/* how many pages allocated */
-	struct vm_page	**pgs;		/* pointers to the pages */
-	u_int		egen;		/* emap generation number */
-};
-
-/*
  * Bits in pipe_state.
  */
 #define PIPE_ASYNC	0x001	/* Async I/O */
 #define PIPE_EOF	0x010	/* Pipe is in EOF condition */
 #define PIPE_SIGNALR	0x020	/* Do selwakeup() on read(2) */
-#define PIPE_DIRECTW	0x040	/* Pipe in direct write mode setup */
-#define PIPE_DIRECTR	0x080	/* Pipe direct read request (setup complete) */
 #define	PIPE_LOCKFL	0x100	/* Process has exclusive access to
 				   pointers/data. */
-#define	PIPE_LWANT	0x200	/* Process wants exclusive access to
-				   pointers/data. */
+/*	unused  	0x200	*/
 #define	PIPE_RESTART	0x400	/* Return ERESTART to blocked syscalls */
 
 /*
@@ -110,12 +94,12 @@ struct pipe {
 	kcondvar_t pipe_draincv;	/* cv for close */
 	kcondvar_t pipe_lkcv;		/* locking */
 	struct	pipebuf pipe_buffer;	/* data storage */
-	struct	pipemapping pipe_map;	/* pipe mapping for direct I/O */
 	struct	selinfo pipe_sel;	/* for compat with select */
 	struct	timespec pipe_atime;	/* time of last access */
 	struct	timespec pipe_mtime;	/* time of last modify */
 	struct	timespec pipe_btime;	/* time of creation */
 	pid_t	pipe_pgid;		/* process group for sigio */
+	u_int	pipe_waiters;		/* number of waiters pending */
 	struct	pipe *pipe_peer;	/* link with other direction */
 	u_int	pipe_state;		/* pipe status info */
 	int	pipe_busy;		/* busy flag, to handle rundown */
@@ -125,21 +109,11 @@ struct pipe {
 /*
  * KERN_PIPE subtypes
  */
-#define	KERN_PIPE_MAXKVASZ		1	/* maximum kva size */
-#define	KERN_PIPE_LIMITKVA		2	/* */
+#define	KERN_PIPE_MAXKVASZ		1	/* maximum kva size (obsolete) */
+#define	KERN_PIPE_LIMITKVA		2	/* limit kva for laons (obsolete) */
 #define	KERN_PIPE_MAXBIGPIPES		3	/* maximum # of "big" pipes */
 #define	KERN_PIPE_NBIGPIPES		4	/* current number of "big" p. */
 #define	KERN_PIPE_KVASIZE		5	/* current pipe kva size */
-#define	KERN_PIPE_MAXID			6
-
-#define	CTL_PIPE_NAMES { \
-	{ 0, 0 }, \
-	{ "maxkvasz", CTLTYPE_INT }, \
-	{ "maxloankvasz", CTLTYPE_INT }, \
-	{ "maxbigpipes", CTLTYPE_INT }, \
-	{ "nbigpipes", CTLTYPE_INT }, \
-	{ "kvasize", CTLTYPE_INT }, \
-}
 
 #ifdef _KERNEL
 int	sysctl_dopipe(int *, u_int, void *, size_t *, void *, size_t);

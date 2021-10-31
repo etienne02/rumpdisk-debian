@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.303 2016/07/07 06:55:38 msaitoh Exp $	*/
+/*	$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $	*/
 /*
  *
  * Copyright (C) 1996-1999 Eduardo Horvath.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.303 2016/07/07 06:55:38 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $");
 
 #undef	NO_VCACHE /* Don't forget the locked TLB in dostart */
 #define	HWREF
@@ -135,7 +135,7 @@ struct pool_cache pmap_pv_cache;
 
 pv_entry_t	pmap_remove_pv(struct pmap *, vaddr_t, struct vm_page *);
 void	pmap_enter_pv(struct pmap *, vaddr_t, paddr_t, struct vm_page *,
-			   pv_entry_t);
+			   pv_entry_t *);
 void	pmap_page_cache(struct pmap *, paddr_t, int);
 
 /*
@@ -193,12 +193,6 @@ pmap_has_ctx(struct pmap *p)
 
 	return false;
 }
-
-#ifdef MULTIPROCESSOR
-#define pmap_ctx(PM)	((PM)->pm_ctx[cpu_number()])
-#else
-#define pmap_ctx(PM)	((PM)->pm_ctx[0])
-#endif
 
 /*
  * Check if this pmap has a live mapping on some MMU.
@@ -560,7 +554,8 @@ pmap_mp_init(void)
 				1, /* cache */
 				1, /* aliased */
 				1, /* valid */
-				0 /* ie */);
+				0, /* ie */
+				0  /* wc */);
 		tp[i].data |= TLB_L | TLB_CV;
 
 		if (i >= kernel_itlb_slots) {
@@ -575,7 +570,7 @@ pmap_mp_init(void)
 	}
 
 	for (i = 0; i < PAGE_SIZE; i += sizeof(long))
-		flush(v + i);
+		sparc_flush_icache(v + i);
 
 	cpu_spinup_trampoline = (vaddr_t)v;
 }
@@ -764,7 +759,7 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 
 		m_len = mdesc_get_len();
 		m_va = kdata_alloc(m_len, 16);
-		m_pa = kdatap + (m_va - kdata);
+		m_pa = pmap_kextract(m_va);
 		mdesc_init(m_va, m_pa, m_len);
 	}
 
@@ -777,7 +772,7 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 	 */
 	uvmexp.pagesize = NBPG;
 	uvmexp.ncolors = pmap_calculate_colors();
-	uvm_setpagesize();
+	uvm_md_init();
 
 	/*
 	 * Get hold or the message buffer.
@@ -1076,7 +1071,8 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 			1 /* Cacheable */,
 			FORCE_ALIAS /* ALIAS -- Disable D$ */,
 			1 /* valid */,
-			0 /* IE */);
+			0 /* IE */,
+			0 /* wc */);
 		pmap_enter_kpage(va, data);
 		va += PAGE_SIZE;
 		msgbufsiz -= PAGE_SIZE;
@@ -1137,7 +1133,8 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 				1 /* Cacheable */,
 				FORCE_ALIAS /* ALIAS -- Disable D$ */,
 				1 /* valid */,
-				0 /* IE */);
+				0 /* ei */,
+				0 /* WC */);
 			pmap_enter_kpage(vmmap, data1);
 			vmmap += PAGE_SIZE;
 		}
@@ -1179,7 +1176,8 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 				1 /* Cacheable */,
 				FORCE_ALIAS /* ALIAS -- Disable D$ */,
 				1 /* valid */,
-				0 /* IE */);
+				0 /* IE */,
+				0 /* wc */);
 			pmap_enter_kpage(vmmap, data1);
 			vmmap += PAGE_SIZE;
 			pa += PAGE_SIZE;
@@ -1198,7 +1196,7 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend)
 		cpus->ci_spinup = main; /* Call main when we're running. */
 		cpus->ci_paddr = cpu0paddr;
 		if (CPU_ISSUN4V) {
-			cpus->ci_mmfsa = cpu0paddr;
+			cpus->ci_mmufsa = cpu0paddr;
 			cpus->ci_tsb_desc = NULL;
 		}
 		cpus->ci_cpcb = (struct pcb *)u0va;
@@ -1366,7 +1364,8 @@ pmap_init(void)
 			1 /* Cacheable */,
 			FORCE_ALIAS /* ALIAS -- Disable D$ */,
 			1 /* valid */,
-			0 /* IE */);
+			0 /* IE */,
+			0 /* wc */);
 		pmap_enter_kpage(va, data);
 		va += PAGE_SIZE;
 	}
@@ -1474,10 +1473,8 @@ pmap_create(void)
 	memset(pm, 0, sizeof *pm);
 	DPRINTF(PDB_CREATE, ("pmap_create(): created %p\n", pm));
 
-	mutex_init(&pm->pm_obj_lock, MUTEX_DEFAULT, IPL_NONE);
-	uvm_obj_init(&pm->pm_obj, NULL, false, 1);
-	uvm_obj_setlock(&pm->pm_obj, &pm->pm_obj_lock);
-
+	pm->pm_refs = 1;
+	TAILQ_INIT(&pm->pm_ptps);
 	if (pm != pmap_kernel()) {
 		while (!pmap_get_page(&pm->pm_physaddr)) {
 			uvm_wait("pmap_create");
@@ -1511,7 +1508,7 @@ pmap_destroy(struct pmap *pm)
 #else
 #define pmap_cpus_active 0
 #endif
-	struct vm_page *pg, *nextpg;
+	struct vm_page *pg;
 
 	if ((int)atomic_dec_uint_nv(&pm->pm_refs) > 0) {
 		return;
@@ -1539,22 +1536,18 @@ pmap_destroy(struct pmap *pm)
 #endif
 
 	/* we could be a little smarter and leave pages zeroed */
-	for (pg = TAILQ_FIRST(&pm->pm_obj.memq); pg != NULL; pg = nextpg) {
+	while ((pg = TAILQ_FIRST(&pm->pm_ptps)) != NULL) {
 #ifdef DIAGNOSTIC
 		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
 #endif
 
-		KASSERT((pg->flags & PG_MARKER) == 0);
-		nextpg = TAILQ_NEXT(pg, listq.queue);
-		TAILQ_REMOVE(&pm->pm_obj.memq, pg, listq.queue);
+		TAILQ_REMOVE(&pm->pm_ptps, pg, pageq.queue);
 		KASSERT(md->mdpg_pvh.pv_pmap == NULL);
 		dcache_flush_page_cpuset(VM_PAGE_TO_PHYS(pg), pmap_cpus_active);
 		uvm_pagefree(pg);
 	}
 	pmap_free_page((paddr_t)(u_long)pm->pm_segs, pmap_cpus_active);
 
-	uvm_obj_destroy(&pm->pm_obj, false);
-	mutex_destroy(&pm->pm_obj_lock);
 	pool_cache_put(&pmap_cache, pm);
 }
 
@@ -1656,7 +1649,8 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	tte.data = TSB_DATA(0, PGSZ_8K, pa, 1 /* Privileged */,
 			    (VM_PROT_WRITE & prot),
-			    !(pa & PMAP_NC), pa & (PMAP_NVC), 1, 0);
+			    !(pa & PMAP_NC), pa & (PMAP_NVC), 1,
+			    pa & (PMAP_LITTLE), pa & PMAP_WC);
 	/* We don't track mod/ref here. */
 	if (prot & VM_PROT_WRITE)
 		tte.data |= TLB_REAL_W|TLB_W;
@@ -1777,13 +1771,13 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	pte_t tte;
 	int64_t data;
 	paddr_t opa = 0, ptp; /* XXX: gcc */
-	pv_entry_t pvh, npv = NULL, freepv;
+	pv_entry_t pvh, opv = NULL, npv;
 	struct vm_page *pg, *opg, *ptpg;
 	int s, i, uncached = 0, error = 0;
 	int size = PGSZ_8K; /* PMAP_SZ_TO_TTE(pa); */
 	bool wired = (flags & PMAP_WIRED) != 0;
-	bool wasmapped = FALSE;
-	bool dopv = TRUE;
+	bool wasmapped = false;
+	bool dopv = true;
 
 	/*
 	 * Is this part of the permanent mappings?
@@ -1791,14 +1785,12 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	KASSERT(pm != pmap_kernel() || va < INTSTACK || va > EINTSTACK);
 	KASSERT(pm != pmap_kernel() || va < kdata || va > ekdata);
 
-	/* Grab a spare PV. */
-	freepv = pool_cache_get(&pmap_pv_cache, PR_NOWAIT);
-	if (__predict_false(freepv == NULL)) {
-		if (flags & PMAP_CANFAIL)
-			return (ENOMEM);
-		panic("pmap_enter: no pv entries available");
-	}
-	freepv->pv_next = NULL;
+	/*
+	 * Grab a spare PV.  Keep going even if this fails since we don't
+	 * yet know if we will need it.
+	 */
+
+	npv = pool_cache_get(&pmap_pv_cache, PR_NOWAIT);
 
 	/*
 	 * If a mapping at this address already exists, check if we're
@@ -1813,7 +1805,7 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		if (opa != pa) {
 			opg = PHYS_TO_VM_PAGE(opa);
 			if (opg != NULL) {
-				npv = pmap_remove_pv(pm, va, opg);
+				opv = pmap_remove_pv(pm, va, opg);
 			}
 		}
 	}
@@ -1843,31 +1835,21 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		/*
 		 * make sure we have a pv entry ready if we need one.
 		 */
-		if (pvh->pv_pmap == NULL || (wasmapped && opa == pa)) {
-			if (npv != NULL) {
-				/* free it */
-				npv->pv_next = freepv;
-				freepv = npv;
-				npv = NULL;
-			}
-			if (wasmapped && opa == pa) {
-				dopv = FALSE;
-			}
+		if (wasmapped && opa == pa) {
+			dopv = false;
 		} else if (npv == NULL) {
-			/* use the pre-allocated pv */
-			npv = freepv;
-			freepv = freepv->pv_next;
+			npv = opv;
+			opv = NULL;
+			if (npv == NULL) {
+				mutex_exit(&pmap_lock);
+				error = ENOMEM;
+				goto out;
+			}
 		}
 		ENTER_STAT(managed);
 	} else {
 		ENTER_STAT(unmanaged);
-		dopv = FALSE;
-		if (npv != NULL) {
-			/* free it */
-			npv->pv_next = freepv;
-			freepv = npv;
-			npv = NULL;
-		}
+		dopv = false;
 	}
 
 #ifndef NO_VCACHE
@@ -1879,7 +1861,7 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	}
 	tte.data = TSB_DATA(0, size, pa, pm == pmap_kernel(),
 		flags & VM_PROT_WRITE, !(pa & PMAP_NC),
-		uncached, 1, pa & PMAP_LITTLE);
+		uncached, 1, pa & PMAP_LITTLE, pa & PMAP_WC);
 #ifdef HWREF
 	if (prot & VM_PROT_WRITE)
 		tte.data |= TLB_REAL_W;
@@ -1916,7 +1898,7 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		ptpg = PHYS_TO_VM_PAGE(ptp);
 		if (ptpg) {
 			ptpg->offset = (uint64_t)va & (0xfffffLL << 23);
-			TAILQ_INSERT_TAIL(&pm->pm_obj.memq, ptpg, listq.queue);
+			TAILQ_INSERT_TAIL(&pm->pm_ptps, ptpg, pageq.queue);
 		} else {
 			KASSERT(pm == pmap_kernel());
 		}
@@ -1928,7 +1910,7 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		ptpg = PHYS_TO_VM_PAGE(ptp);
 		if (ptpg) {
 			ptpg->offset = (((uint64_t)va >> 43) & 0x3ffLL) << 13;
-			TAILQ_INSERT_TAIL(&pm->pm_obj.memq, ptpg, listq.queue);
+			TAILQ_INSERT_TAIL(&pm->pm_ptps, ptpg, pageq.queue);
 		} else {
 			KASSERT(pm == pmap_kernel());
 		}
@@ -1939,11 +1921,6 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		if (!pmap_get_page(&ptp)) {
 			mutex_exit(&pmap_lock);
 			if (flags & PMAP_CANFAIL) {
-				if (npv != NULL) {
-					/* free it */
-					npv->pv_next = freepv;
-					freepv = npv;
-				}
 				error = ENOMEM;
 				goto out;
 			} else {
@@ -1960,7 +1937,7 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		pmap_free_page_noflush(ptp);
 	}
 	if (dopv) {
-		pmap_enter_pv(pm, va, pa, pg, npv);
+		pmap_enter_pv(pm, va, pa, pg, &npv);
 	}
 
 	mutex_exit(&pmap_lock);
@@ -2033,15 +2010,15 @@ pmap_enter(struct pmap *pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	/* We will let the fast mmu miss interrupt load the new translation */
 	pv_check();
  out:
-	/* Catch up on deferred frees. */
-	for (; freepv != NULL; freepv = npv) {
-		npv = freepv->pv_next;
-		pool_cache_put(&pmap_pv_cache, freepv);
-	}
+	if (opv)
+		pool_cache_put(&pmap_pv_cache, opv);
+	if (npv)
+		pool_cache_put(&pmap_pv_cache, npv);
+
 	return error;
 }
 
-void
+bool
 pmap_remove_all(struct pmap *pm)
 {
 #ifdef MULTIPROCESSOR
@@ -2050,7 +2027,7 @@ pmap_remove_all(struct pmap *pm)
 #endif
 
 	if (pm == pmap_kernel()) {
-		return;
+		return false;
 	}
 	write_user_windows();
 	pm->pm_refs = 0;
@@ -2086,6 +2063,7 @@ pmap_remove_all(struct pmap *pm)
 	 * only flush the right context on each CPU?
 	 */
 	blast_dcache();
+	return false;
 }
 
 /*
@@ -3296,14 +3274,16 @@ ctx_free(struct pmap *pm, struct cpu_info *ci)
  * physical to virtual map table.
  *
  * We enter here with the pmap locked.
+ * The pv_entry_t in *npvp is replaced with NULL if this function
+ * uses it, otherwise the caller needs to free it.
  */
 
 void
 pmap_enter_pv(struct pmap *pmap, vaddr_t va, paddr_t pa, struct vm_page *pg,
-	      pv_entry_t npv)
+	      pv_entry_t *npvp)
 {
 	struct vm_page_md * const md = VM_PAGE_TO_MD(pg);
-	pv_entry_t pvh;
+	pv_entry_t pvh, npv;
 
 	KASSERT(mutex_owned(&pmap_lock));
 
@@ -3321,7 +3301,6 @@ pmap_enter_pv(struct pmap *pmap, vaddr_t va, paddr_t pa, struct vm_page *pg,
 		PV_SETVA(pvh, va);
 		pvh->pv_pmap = pmap;
 		pvh->pv_next = NULL;
-		KASSERT(npv == NULL);
 	} else {
 		if (pg->loan_count == 0 && !(pvh->pv_va & PV_ALIAS)) {
 
@@ -3346,6 +3325,8 @@ pmap_enter_pv(struct pmap *pmap, vaddr_t va, paddr_t pa, struct vm_page *pg,
 
 		DPRINTF(PDB_ENTER, ("pmap_enter: new pv: pmap %p va %lx\n",
 		    pmap, va));
+		npv = *npvp;
+		*npvp = NULL;
 		npv->pv_pmap = pmap;
 		npv->pv_va = va & PV_VAMASK;
 		npv->pv_next = pvh->pv_next;
@@ -3837,7 +3818,8 @@ pmap_setup_intstack_sun4v(paddr_t pa)
 	    1 /* Cacheable */,
 	    FORCE_ALIAS /* ALIAS -- Disable D$ */,
 	    1 /* valid */,
-	    0 /* IE */);
+	    0 /* IE */,
+	    0 /* wc */);
 	hv_rc = hv_mmu_map_perm_addr(INTSTACK, data, MAP_DTLB);
 	if ( hv_rc != H_EOK ) {
 		panic("hv_mmu_map_perm_addr() failed - rc = %" PRId64 "\n",

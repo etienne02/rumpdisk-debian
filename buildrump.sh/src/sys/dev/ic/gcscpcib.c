@@ -1,4 +1,4 @@
-/* $NetBSD: gcscpcib.c,v 1.3 2012/03/02 12:56:51 nonaka Exp $ */
+/* $NetBSD: gcscpcib.c,v 1.5 2021/08/07 16:19:12 thorpej Exp $ */
 /* $OpenBSD: gcscpcib.c,v 1.6 2007/11/17 17:02:47 mbalmer Exp $	*/
 
 /*
@@ -24,7 +24,7 @@
  * AMD CS5535/CS5536 series LPC bridge also containing timer, watchdog and GPIO.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gcscpcib.c,v 1.3 2012/03/02 12:56:51 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gcscpcib.c,v 1.5 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "gpio.h"
 
@@ -190,7 +190,8 @@ gpio:
 #if NGPIO > 0
 	/* Attach GPIO framework */
 	if (gpio)
-                config_found_ia(self, "gpiobus", &gba, gpiobus_print);
+                config_found(self, &gba, gpiobus_print,
+		    CFARGS(.iattr = "gpiobus"));
 #endif
 
 	/* Register Watchdog timer to SMW */

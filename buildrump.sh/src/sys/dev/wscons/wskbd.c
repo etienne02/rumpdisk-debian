@@ -1,4 +1,4 @@
-/* $NetBSD: wskbd.c,v 1.136 2015/08/24 22:50:33 pooka Exp $ */
+/* $NetBSD: wskbd.c,v 1.144 2020/12/27 16:09:33 tsutsui Exp $ */
 
 /*
  * Copyright (c) 1996, 1997 Christopher G. Demetriou.  All rights reserved.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wskbd.c,v 1.136 2015/08/24 22:50:33 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wskbd.c,v 1.144 2020/12/27 16:09:33 tsutsui Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -142,10 +142,14 @@ __KERNEL_RCSID(0, "$NetBSD: wskbd.c,v 1.136 2015/08/24 22:50:33 pooka Exp $");
 #include <dev/wscons/wsdisplayvar.h>
 #include <dev/wscons/wseventvar.h>
 #include <dev/wscons/wscons_callbacks.h>
+#include <dev/wscons/wsbelldata.h>
+#include <dev/wscons/wsmuxvar.h>
 
 #ifdef KGDB
 #include <sys/kgdb.h>
 #endif
+
+#include "ioconf.h"
 
 #ifdef WSKBD_DEBUG
 #define DPRINTF(x)	if (wskbddebug) printf x
@@ -153,8 +157,6 @@ int	wskbddebug = 0;
 #else
 #define DPRINTF(x)
 #endif
-
-#include <dev/wscons/wsmuxvar.h>
 
 struct wskbd_internal {
 	const struct wskbd_mapdata *t_keymap;
@@ -289,8 +291,6 @@ static int wskbd_do_ioctl(device_t, u_long, void *, int, struct lwp *);
 CFATTACH_DECL_NEW(wskbd, sizeof (struct wskbd_softc),
     wskbd_match, wskbd_attach, wskbd_detach, wskbd_activate);
 
-extern struct cfdriver wskbd_cd;
-
 dev_type_open(wskbdopen);
 dev_type_close(wskbdclose);
 dev_type_read(wskbdread);
@@ -311,23 +311,6 @@ const struct cdevsw wskbd_cdevsw = {
 	.d_kqfilter = wskbdkqfilter,
 	.d_discard = nodiscard,
 	.d_flag = D_OTHER
-};
-
-#ifndef WSKBD_DEFAULT_BELL_PITCH
-#define	WSKBD_DEFAULT_BELL_PITCH	1500	/* 1500Hz */
-#endif
-#ifndef WSKBD_DEFAULT_BELL_PERIOD
-#define	WSKBD_DEFAULT_BELL_PERIOD	100	/* 100ms */
-#endif
-#ifndef WSKBD_DEFAULT_BELL_VOLUME
-#define	WSKBD_DEFAULT_BELL_VOLUME	50	/* 50% volume */
-#endif
-
-struct wskbd_bell_data wskbd_default_bell_data = {
-	WSKBD_BELL_DOALL,
-	WSKBD_DEFAULT_BELL_PITCH,
-	WSKBD_DEFAULT_BELL_PERIOD,
-	WSKBD_DEFAULT_BELL_VOLUME,
 };
 
 #ifdef WSDISPLAY_SCROLLSUPPORT
@@ -1075,17 +1058,6 @@ wskbd_displayioctl(device_t dev, u_long cmd, void *data, int flag,
 	int len, error;
 
 	switch (cmd) {
-#define	SETBELL(dstp, srcp, dfltp)					\
-    do {								\
-	(dstp)->pitch = ((srcp)->which & WSKBD_BELL_DOPITCH) ?		\
-	    (srcp)->pitch : (dfltp)->pitch;				\
-	(dstp)->period = ((srcp)->which & WSKBD_BELL_DOPERIOD) ?	\
-	    (srcp)->period : (dfltp)->period;				\
-	(dstp)->volume = ((srcp)->which & WSKBD_BELL_DOVOLUME) ?	\
-	    (srcp)->volume : (dfltp)->volume;				\
-	(dstp)->which = WSKBD_BELL_DOALL;				\
-    } while (0)
-
 	case WSKBDIO_BELL:
 		if ((flag & FWRITE) == 0)
 			return (EACCES);
@@ -1412,11 +1384,11 @@ wskbd_cngetc(dev_t dev)
 	keysym_t ks;
 
 	if (!wskbd_console_initted)
-		return 0;
+		return -1;
 
 	if (wskbd_console_device != NULL &&
 	    !wskbd_console_device->sc_translating)
-		return 0;
+		return -1;
 
 	for(;;) {
 		if (num-- > 0) {
@@ -1427,6 +1399,10 @@ wskbd_cngetc(dev_t dev)
 			(*wskbd_console_data.t_consops->getc)
 				(wskbd_console_data.t_consaccesscookie,
 				 &type, &data);
+			if (type == 0) {
+				/* No data returned */
+				return -1;
+			}
 			if (type == WSCONS_EVENT_ASCII) {
 				/*
 				 * We assume that when the driver falls back
@@ -1570,7 +1546,9 @@ internal_command(struct wskbd_softc *sc, u_int *type, keysym_t ksym,
 			} else {
 				return (0);
 			}
-		}
+		} else
+			update_modifier(sc->id, *type, 0, MOD_COMMAND);
+		break;
 
 	case KS_Cmd_ScrollSlowUp:
 	case KS_Cmd_ScrollSlowDown:
@@ -1589,7 +1567,9 @@ internal_command(struct wskbd_softc *sc, u_int *type, keysym_t ksym,
 			} else {
 				return (0);
 			}
-		}
+		} else
+			update_modifier(sc->id, *type, 0, MOD_COMMAND);
+		break;
 #endif
 
 	case KS_Cmd:

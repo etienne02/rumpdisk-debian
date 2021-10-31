@@ -1,7 +1,7 @@
-/*	$NetBSD: netbsd32_compat_60.c,v 1.2 2014/08/21 06:40:35 maxv Exp $	*/
+/*	$NetBSD: netbsd32_compat_60.c,v 1.6 2020/01/29 15:47:52 ad Exp $	*/
 
 /*-
- * Copyright (c) 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -36,20 +29,21 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_60.c,v 1.2 2014/08/21 06:40:35 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_60.c,v 1.6 2020/01/29 15:47:52 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/module.h>
 #include <sys/time.h>
 #include <sys/dirent.h>
 #include <sys/lwp.h>
 #include <sys/syscallargs.h>
+#include <sys/syscallvar.h>
 
 #include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_syscall.h>
 #include <compat/netbsd32/netbsd32_syscallargs.h>
 #include <compat/netbsd32/netbsd32_conv.h>
-
-
 
 int
 compat_60_netbsd32__lwp_park(struct lwp *l,
@@ -71,16 +65,42 @@ compat_60_netbsd32__lwp_park(struct lwp *l,
 		error = copyin(SCARG_P32(uap, ts), &ts32, sizeof ts32);
 		if (error != 0)
 			return error;
+		netbsd32_to_timespec(&ts32, &ts);
 		tsp = &ts;
 	}
 
 	if (SCARG(uap, unpark) != 0) {
-		error = lwp_unpark(SCARG(uap, unpark),
-		    SCARG_P32(uap, unparkhint));
+		error = lwp_unpark(&SCARG(uap, unpark), 1);
 		if (error != 0)
 			return error;
 	}
 
-	return lwp_park(CLOCK_REALTIME, TIMER_ABSTIME, tsp,
-	    SCARG_P32(uap, hint));
+	return lwp_park(CLOCK_REALTIME, TIMER_ABSTIME, tsp);
+}
+
+static struct syscall_package compat_netbsd32_60_syscalls[] = {
+	{ NETBSD32_SYS_compat_60_netbsd32__lwp_park, 0,
+	    (sy_call_t *)compat_60_netbsd32__lwp_park },
+	{ 0, 0, NULL }
+}; 
+
+
+MODULE(MODULE_CLASS_EXEC, compat_netbsd32_60, "compat_netbsd32_80,compat_60");
+
+static int
+compat_netbsd32_60_modcmd(modcmd_t cmd, void *arg)
+{
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		return syscall_establish(&emul_netbsd32,
+		    compat_netbsd32_60_syscalls);
+
+	case MODULE_CMD_FINI:
+		return syscall_disestablish(&emul_netbsd32,
+		    compat_netbsd32_60_syscalls);
+
+	default:
+		return ENOTTY;
+	}
 }

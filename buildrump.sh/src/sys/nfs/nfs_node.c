@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_node.c,v 1.118 2014/05/30 08:47:45 hannken Exp $	*/
+/*	$NetBSD: nfs_node.c,v 1.126 2020/05/01 08:43:00 hannken Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_node.c,v 1.118 2014/05/30 08:47:45 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_node.c,v 1.126 2020/05/01 08:43:00 hannken Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs.h"
@@ -64,8 +64,6 @@ struct pool nfs_node_pool;
 struct pool nfs_vattr_pool;
 static struct workqueue *nfs_sillyworkq;
 
-extern int prtactive;
-
 static void nfs_gop_size(struct vnode *, off_t, off_t *, int);
 static int nfs_gop_alloc(struct vnode *, off_t, off_t, int, kauth_cred_t);
 static int nfs_gop_write(struct vnode *, struct vm_page **, int, int);
@@ -75,6 +73,7 @@ static const struct genfs_ops nfs_genfsops = {
 	.gop_size = nfs_gop_size,
 	.gop_alloc = nfs_gop_alloc,
 	.gop_write = nfs_gop_write,
+	.gop_putrange = genfs_gop_putrange,
 };
 
 /*
@@ -138,7 +137,7 @@ nfs_loadvnode(struct mount *mp, struct vnode *vp,
 	/* Initialize genfs node. */
 	genfs_node_init(vp, &nfs_genfsops);
 	/*
-	 * Initalize read/write creds to useful values. VOP_OPEN will
+	 * Initialize read/write creds to useful values. VOP_OPEN will
 	 * overwrite these.
 	 */
 	np->n_rcred = curlwp->l_cred;
@@ -179,13 +178,16 @@ nfs_nget1(struct mount *mntp, nfsfh_t *fhp, int fhsize, struct nfsnode **npp,
 int
 nfs_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		bool *a_recycle;
 	} */ *ap = v;
 	struct nfsnode *np;
 	struct sillyrename *sp;
 	struct vnode *vp = ap->a_vp;
+
+	/* If we have a delayed truncation, do it now. */
+	nfs_delayedtruncate(vp);
 
 	np = VTONFS(vp);
 	if (vp->v_type != VDIR) {
@@ -203,8 +205,6 @@ nfs_inactive(void *v)
 		nfs_invaldircache(vp,
 		    NFS_INVALDIRCACHE_FORCE | NFS_INVALDIRCACHE_KEEPEOF);
 
-	VOP_UNLOCK(vp);
-
 	if (sp != NULL) {
 		workqueue_enqueue(nfs_sillyworkq, &sp->s_work, NULL);
 	}
@@ -218,16 +218,13 @@ nfs_inactive(void *v)
 int
 nfs_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
 
-	if (prtactive && vp->v_usecount > 1)
-		vprint("nfs_reclaim: pushing active", vp);
-
-	vcache_remove(vp->v_mount, np->n_fhp, np->n_fhsize);
+	VOP_UNLOCK(vp);
 
 	/*
 	 * Free up any directory cookie structures and
@@ -279,11 +276,11 @@ nfs_gop_write(struct vnode *vp, struct vm_page **pgs, int npages, int flags)
 {
 	int i;
 
-	mutex_enter(vp->v_interlock);
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	for (i = 0; i < npages; i++) {
 		pmap_page_protect(pgs[i], VM_PROT_READ);
 	}
-	mutex_exit(vp->v_interlock);
+	rw_exit(vp->v_uobj.vmobjlock);
 
 	return genfs_gop_write(vp, pgs, npages, flags);
 }

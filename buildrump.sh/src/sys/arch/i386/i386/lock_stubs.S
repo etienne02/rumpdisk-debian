@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs.S,v 1.26 2014/01/12 20:31:50 joerg Exp $	*/
+/*	$NetBSD: lock_stubs.S,v 1.35 2020/05/01 09:40:47 maxv Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -35,18 +35,25 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: lock_stubs.S,v 1.26 2014/01/12 20:31:50 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lock_stubs.S,v 1.35 2020/05/01 09:40:47 maxv Exp $");
 
 #include "opt_lockdebug.h"
 
 #include <machine/cputypes.h>
+#include <machine/frameasm.h>
 
 #include "assym.h"
 
 #define	ALIGN64		.align	64
 #define	ALIGN32		.align	32
-#define	LOCK(num)	.Lpatch ## num:	lock
-#define	RET(num)	.Lret ## num: ret; nop; nop; ret
+#define	LOCK(num)	\
+	HOTPATCH(HP_NAME_NOLOCK, 1)	; \
+	lock
+#define	RET(num)	\
+	HOTPATCH(HP_NAME_RETFENCE, 3)	; \
+	ret; nop; nop			; \
+	ret
+
 #define	ENDLABEL(name,a) .align	a; LABEL(name)
 
 #if !defined(LOCKDEBUG)
@@ -216,7 +223,6 @@ ENTRY(rw_tryenter)
 	jmp	3b
 END(rw_tryenter)
 
-#ifndef __XEN__
 
 /*
  * void mutex_spin_enter(kmutex_t *mtx);
@@ -247,10 +253,12 @@ ENTRY(mutex_spin_enter)
 LABEL(mutex_spin_enter_end)
 END(mutex_spin_enter)
 
+#ifndef XENPV
 /*
- * Release a spin mutex and post a store fence.
+ * Release a spin mutex and post a store fence. Must occupy 96 bytes.
  */
 ENTRY(mutex_spin_exit)
+	HOTPATCH(HP_NAME_MUTEX_EXIT, 96)
 	movl	4(%esp), %edx
 	movl	CPUVAR(MTX_OLDSPL), %ecx
 	incl	CPUVAR(MTX_COUNT)
@@ -264,14 +272,16 @@ ENTRY(mutex_spin_exit)
 	movl	%ecx, CPUVAR(ILEVEL)
 	sti
 1:	ret
-	.space 32
+	.space	32, 0xCC
 	.align	32
-LABEL(mutex_spin_exit_end)
 END(mutex_spin_exit)
+#else  /* XENPV */
+STRONG_ALIAS(mutex_spin_exit, i686_mutex_spin_exit)
+#endif	/* !XENPV */
 
 /*
  * Patch for i686 CPUs where cli/sti is prohibitively expensive.
- * Must be the same size as mutex_spin_exit().
+ * Must be the same size as mutex_spin_exit(), that is, 96 bytes.
  */
 ENTRY(i686_mutex_spin_exit)
 	mov	4(%esp),%edx
@@ -293,23 +303,15 @@ ENTRY(i686_mutex_spin_exit)
 2:
 	popl	%ebx
 	movl	%ecx,4(%esp)
-LABEL(i686_mutex_spin_exit_patch)
-	jmp	_C_LABEL(Xspllower)
-	.space 16
+
+	/* The reference must be absolute, hence the indirect jump. */
+	movl	$Xspllower,%eax
+	jmp	*%eax
+
+	.space	16, 0xCC
 	.align	32
 LABEL(i686_mutex_spin_exit_end)
 END(i686_mutex_spin_exit)
-
-#else	/* !__XEN__ */
-
-/* For now; strong alias not working for some reason. */
-ENTRY(mutex_spin_enter)
-	jmp	_C_LABEL(mutex_vector_enter)
-
-ENTRY(mutex_spin_exit)
-	jmp	_C_LABEL(mutex_vector_exit)
-
-#endif	/* !__XEN__ */
 
 #endif	/* !LOCKDEBUG */
 
@@ -322,7 +324,7 @@ ENTRY(__cpu_simple_lock_init)
 	ret
 END(__cpu_simple_lock_init)
 
-NENTRY(__cpu_simple_lock)
+ENTRY(__cpu_simple_lock)
 	movl	4(%esp), %edx
 	movl	$0x0100, %eax
 1:
@@ -356,25 +358,3 @@ ENTRY(__cpu_simple_lock_try)
 	RET(8)
 END(__cpu_simple_lock_try)
 
-/*
- * Patchpoints to replace with NOP when ncpu == 1.
- */
-	.data
-
-#ifndef LOCKDEBUG
-LABEL(x86_lockpatch)
-	.long	.Lpatch1, .Lpatch2, .Lpatch3, .Lpatch4
-	.long	.Lpatch5, .Lpatch6, .Lpatch7, .Lpatch12
-	.long	.Lpatch13
-	.long	0
-#endif
-
-LABEL(x86_retpatch)
-#ifndef LOCKDEBUG
-	.long	.Lret1, .Lret2, .Lret3, .Lret4, .Lret5
-#ifndef __XEN__
-	.long	.Lret6
-#endif
-#endif
-	.long	.Lret7, .Lret8
-	.long	0

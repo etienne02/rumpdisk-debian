@@ -1,4 +1,5 @@
-/*	$NetBSD: ubsa.c,v 1.32 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: ubsa.c,v 1.43 2021/08/07 16:19:17 thorpej Exp $	*/
+
 /*-
  * Copyright (c) 2002, Alexander Kabaev <kan.FreeBSD.org>.
  * All rights reserved.
@@ -54,7 +55,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ubsa.c,v 1.32 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ubsa.c,v 1.43 2021/08/07 16:19:17 thorpej Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -94,47 +99,44 @@ int		ubsadebug = 0;
 #endif
 #define	DPRINTF(x) DPRINTFN(0, x)
 
-struct	ucom_methods ubsa_methods = {
+static const struct	ucom_methods ubsa_methods = {
 	.ucom_get_status = ubsa_get_status,
 	.ucom_set = ubsa_set,
 	.ucom_param = ubsa_param,
-	.ucom_ioctl = NULL,
 	.ucom_open = ubsa_open,
 	.ucom_close = ubsa_close,
-	.ucom_read = NULL,
-	.ucom_write = NULL
 };
 
-Static const struct usb_devno ubsa_devs[] = {
+Static const struct ubsa_type {
+	struct usb_devno ubsa_dev;
+	int ubsa_quadumts;
+} ubsa_devs[] = {
 	/* BELKIN F5U103 */
-	{ USB_VENDOR_BELKIN, USB_PRODUCT_BELKIN_F5U103 },
+	{ { USB_VENDOR_BELKIN, USB_PRODUCT_BELKIN_F5U103 }, 0 },
 	/* BELKIN F5U120 */
-	{ USB_VENDOR_BELKIN, USB_PRODUCT_BELKIN_F5U120 },
+	{ { USB_VENDOR_BELKIN, USB_PRODUCT_BELKIN_F5U120 }, 0 },
 	/* GoHubs GO-COM232 */
-	{ USB_VENDOR_ETEK, USB_PRODUCT_ETEK_1COM },
+	{ { USB_VENDOR_ETEK, USB_PRODUCT_ETEK_1COM }, 0 },
 	/* GoHubs GO-COM232 */
-	{ USB_VENDOR_GOHUBS, USB_PRODUCT_GOHUBS_GOCOM232 },
+	{ { USB_VENDOR_GOHUBS, USB_PRODUCT_GOHUBS_GOCOM232 }, 0 },
 	/* Peracom */
-	{ USB_VENDOR_PERACOM, USB_PRODUCT_PERACOM_SERIAL1 },
+	{ { USB_VENDOR_PERACOM, USB_PRODUCT_PERACOM_SERIAL1 }, 0 },
 	/* Option N.V. */
-	{ USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_MC3G },
-	{ USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_QUADUMTS2 },
-	{ USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_QUADUMTS },
-	/* AnyDATA ADU-E100H */
-	{ USB_VENDOR_ANYDATA, USB_PRODUCT_ANYDATA_ADU_E100H },
+	{ { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_MC3G }, 0 },
+	{ { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_QUADUMTS2 }, 1 },
+	{ { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_QUADUMTS }, 1 },
+	{ { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_QUADPLUSUMTS }, 1 },
+	{ { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_HSDPA }, 1 },
 };
-#define ubsa_lookup(v, p) usb_lookup(ubsa_devs, v, p)
+#define ubsa_lookup(v, p) ((const struct ubsa_type *)usb_lookup(ubsa_devs, v, p))
 
 int ubsa_match(device_t, cfdata_t, void *);
 void ubsa_attach(device_t, device_t, void *);
 void ubsa_childdet(device_t, device_t);
 int ubsa_detach(device_t, int);
-int ubsa_activate(device_t, enum devact);
-
-extern struct cfdriver ubsa_cd;
 
 CFATTACH_DECL2_NEW(ubsa, sizeof(struct ubsa_softc),
-    ubsa_match, ubsa_attach, ubsa_detach, ubsa_activate, NULL, ubsa_childdet);
+    ubsa_match, ubsa_attach, ubsa_detach, NULL, NULL, ubsa_childdet);
 
 int
 ubsa_match(device_t parent, cfdata_t match, void *aux)
@@ -160,6 +162,7 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 	int i;
 
 	sc->sc_dev = self;
+	sc->sc_dying = false;
 
 	aprint_naive("\n");
 	aprint_normal("\n");
@@ -183,15 +186,7 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 	 * Quad UMTS cards use different requests to
 	 * control com settings and only some.
 	 */
-	sc->sc_quadumts = 0;
-	if (uaa->uaa_vendor == USB_VENDOR_OPTIONNV) {
-		switch (uaa->uaa_product) {
-		case USB_PRODUCT_OPTIONNV_QUADUMTS:
-		case USB_PRODUCT_OPTIONNV_QUADUMTS2:
-			sc->sc_quadumts = 1;
-			break;
-		}
-	}
+	sc->sc_quadumts = ubsa_lookup(uaa->uaa_vendor, uaa->uaa_product)->ubsa_quadumts;
 
 	DPRINTF(("ubsa attach: sc = %p\n", sc));
 
@@ -201,7 +196,6 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self,
 		    "failed to set configuration: %s\n",
 		    usbd_errstr(err));
-		sc->sc_dying = 1;
 		goto error;
 	}
 
@@ -211,7 +205,6 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 	if (cdesc == NULL) {
 		aprint_error_dev(self,
 		    "failed to get configuration descriptor\n");
-		sc->sc_dying = 1;
 		goto error;
 	}
 
@@ -223,7 +216,6 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 			 &sc->sc_iface[0]);
 	if (err) {
 		/* can not get main interface */
-		sc->sc_dying = 1;
 		goto error;
 	}
 
@@ -259,19 +251,16 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 
 	if (sc->sc_intr_number == -1) {
 		aprint_error_dev(self, "Could not find interrupt in\n");
-		sc->sc_dying = 1;
 		goto error;
 	}
 
 	if (ucaa.ucaa_bulkin == -1) {
 		aprint_error_dev(self, "Could not find data bulk in\n");
-		sc->sc_dying = 1;
 		goto error;
 	}
 
 	if (ucaa.ucaa_bulkout == -1) {
 		aprint_error_dev(self, "Could not find data bulk out\n");
-		sc->sc_dying = 1;
 		goto error;
 	}
 
@@ -284,16 +273,17 @@ ubsa_attach(device_t parent, device_t self, void *aux)
 	ucaa.ucaa_methods = &ubsa_methods;
 	ucaa.ucaa_arg = sc;
 	ucaa.ucaa_info = NULL;
-	DPRINTF(("ubsa: int#=%d, in = 0x%x, out = 0x%x, intr = 0x%x\n",
-    		i, ucaa.ucaa_bulkin, ucaa.ucaa_bulkout, sc->sc_intr_number));
-	sc->sc_subdevs[0] = config_found_sm_loc(self, "ucombus", NULL, &ucaa,
-				    ucomprint, ucomsubmatch);
+	DPRINTF(("ubsa: int#=%d, in = %#x, out = %#x, intr = %#x\n",
+	    i, ucaa.ucaa_bulkin, ucaa.ucaa_bulkout, sc->sc_intr_number));
+	sc->sc_subdevs[0] = config_found(self, &ucaa, ucomprint,
+	    CFARGS(.submatch = ucomsubmatch));
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, sc->sc_udev, sc->sc_dev);
 
 	return;
 
 error:
+	sc->sc_dying = true;
 	return;
 }
 
@@ -319,37 +309,20 @@ ubsa_detach(device_t self, int flags)
 	int i;
 	int rv = 0;
 
-
 	DPRINTF(("ubsa_detach: sc = %p\n", sc));
 
-	if (sc->sc_intr_pipe != NULL) {
-		usbd_abort_pipe(sc->sc_intr_pipe);
-		usbd_close_pipe(sc->sc_intr_pipe);
-		kmem_free(sc->sc_intr_buf, sc->sc_isize);
-		sc->sc_intr_pipe = NULL;
-	}
+	sc->sc_dying = true;
 
-	sc->sc_dying = 1;
+	ubsa_close_pipe(sc);
+
 	for (i = 0; i < sc->sc_numif; i++) {
-		if (sc->sc_subdevs[i] != NULL)
+		if (sc->sc_subdevs[i] != NULL) {
 			rv |= config_detach(sc->sc_subdevs[i], flags);
+			sc->sc_subdevs[i] = NULL;
+		}
 	}
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
 
-	return (rv);
-}
-
-int
-ubsa_activate(device_t self, enum devact act)
-{
-	struct ubsa_softc *sc = device_private(self);
-
-	switch (act) {
-	case DVACT_DEACTIVATE:
-		sc->sc_dying = 1;
-		return 0;
-	default:
-		return EOPNOTSUPP;
-	}
+	return rv;
 }

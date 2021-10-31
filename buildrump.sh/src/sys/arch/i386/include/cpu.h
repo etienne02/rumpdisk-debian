@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.178 2011/12/30 17:57:49 cherry Exp $	*/
+/*	$NetBSD: cpu.h,v 1.182 2019/11/21 19:24:00 ad Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -68,21 +68,15 @@ x86_curlwp(void)
 	    (*(struct cpu_info * const *)offsetof(struct cpu_info, ci_curlwp)));
 	return l;
 }
-
-__inline static void __unused
-cpu_set_curpri(int pri)
-{
-
-	__asm volatile(
-	    "movl %1, %%fs:%0" :
-	    "=m" (*(struct cpu_info *)offsetof(struct cpu_info, ci_schedstate.spc_curpriority)) :
-	    "r" (pri)
-	);
-}
 #endif
 
-#define	CLKF_USERMODE(frame)	USERMODE((frame)->cf_if.if_cs, (frame)->cf_if.if_eflags)
+#ifdef XENPV
+#define	CLKF_USERMODE(frame)	(curcpu()->ci_xen_clockf_usermode)
+#define CLKF_PC(frame)		(curcpu()->ci_xen_clockf_pc)
+#else /* XENPV */
+#define	CLKF_USERMODE(frame)	USERMODE((frame)->cf_if.if_cs)
 #define	CLKF_PC(frame)		((frame)->cf_if.if_eip)
+#endif /* XENPV */
 #define	CLKF_INTR(frame)	(curcpu()->ci_idepth > 0)
 #define	LWP_PC(l)		((l)->l_md.md_regs->tf_eip)
 

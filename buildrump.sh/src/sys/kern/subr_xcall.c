@@ -1,7 +1,7 @@
-/*	$NetBSD: subr_xcall.c,v 1.18 2013/11/26 21:13:05 rmind Exp $	*/
+/*	$NetBSD: subr_xcall.c,v 1.34 2020/12/22 01:57:29 ad Exp $	*/
 
 /*-
- * Copyright (c) 2007-2010 The NetBSD Foundation, Inc.
+ * Copyright (c) 2007-2010, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -48,12 +48,12 @@
  *	prohibitive, another way must be found.
  *
  *	Cross calls help to solve these types of problem by allowing
- *	any CPU in the system to request that an arbitrary function be
- *	executed on any other CPU.
+ *	any LWP in the system to request that an arbitrary function be
+ *	executed on a specific CPU.
  *
  * Implementation
  *
- *	A slow mechanism for making 'low priority' cross calls is
+ *	A slow mechanism for making low priority cross calls is
  *	provided.  The function to be executed runs on the remote CPU
  *	within a bound kthread.  No queueing is provided, and the
  *	implementation uses global state.  The function being called may
@@ -64,17 +64,17 @@
  *	CPU, and so has exclusive access to the CPU.  Since this facility
  *	is heavyweight, it's expected that it will not be used often.
  *
- *	Cross calls must not allocate memory, as the pagedaemon uses
- *	them (and memory allocation may need to wait on the pagedaemon).
+ *	Cross calls must not allocate memory, as the pagedaemon uses cross
+ *	calls (and memory allocation may need to wait on the pagedaemon).
  *
  *	A low-overhead mechanism for high priority calls (XC_HIGHPRI) is
- *	also provided.  The function to be executed runs on a software
- *	interrupt context, at IPL_SOFTSERIAL level, and is expected to
+ *	also provided.  The function to be executed runs in software
+ *	interrupt context at IPL_SOFTSERIAL level, and is expected to
  *	be very lightweight, e.g. avoid blocking.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_xcall.c,v 1.18 2013/11/26 21:13:05 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_xcall.c,v 1.34 2020/12/22 01:57:29 ad Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -84,6 +84,7 @@ __KERNEL_RCSID(0, "$NetBSD: subr_xcall.c,v 1.18 2013/11/26 21:13:05 rmind Exp $"
 #include <sys/evcnt.h>
 #include <sys/kthread.h>
 #include <sys/cpu.h>
+#include <sys/atomic.h>
 
 #ifdef _RUMPKERNEL
 #include "rump_private.h"
@@ -98,6 +99,7 @@ typedef struct {
 	void *		xc_arg2;
 	uint64_t	xc_headp;
 	uint64_t	xc_donep;
+	unsigned int	xc_ipl;
 } xc_state_t;
 
 /* Bit indicating high (1) or low (0) priority. */
@@ -105,11 +107,10 @@ typedef struct {
 
 /* Low priority xcall structures. */
 static xc_state_t	xc_low_pri	__cacheline_aligned;
-static uint64_t		xc_tailp	__cacheline_aligned;
 
 /* High priority xcall structures. */
 static xc_state_t	xc_high_pri	__cacheline_aligned;
-static void *		xc_sih		__cacheline_aligned;
+static void *		xc_sihs[4]	__cacheline_aligned;
 
 /* Event counters. */
 static struct evcnt	xc_unicast_ev	__cacheline_aligned;
@@ -118,8 +119,23 @@ static struct evcnt	xc_broadcast_ev	__cacheline_aligned;
 static void		xc_init(void);
 static void		xc_thread(void *);
 
-static inline uint64_t	xc_highpri(xcfunc_t, void *, void *, struct cpu_info *);
+static inline uint64_t	xc_highpri(xcfunc_t, void *, void *, struct cpu_info *,
+			    unsigned int);
 static inline uint64_t	xc_lowpri(xcfunc_t, void *, void *, struct cpu_info *);
+
+/* The internal form of IPL */
+#define XC_IPL_MASK		0xff00
+/*
+ * Assign 0 to XC_IPL_SOFTSERIAL to treat IPL_SOFTSERIAL as the default value
+ * (just XC_HIGHPRI).
+ */
+#define XC_IPL_SOFTSERIAL	0
+#define XC_IPL_SOFTNET		1
+#define XC_IPL_SOFTBIO		2
+#define XC_IPL_SOFTCLOCK	3
+#define XC_IPL_MAX		XC_IPL_SOFTCLOCK
+
+CTASSERT(XC_IPL_MAX <= __arraycount(xc_sihs));
 
 /*
  * xc_init:
@@ -134,19 +150,79 @@ xc_init(void)
 	memset(xclo, 0, sizeof(xc_state_t));
 	mutex_init(&xclo->xc_lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&xclo->xc_busy, "xclocv");
-	xc_tailp = 0;
 
 	memset(xchi, 0, sizeof(xc_state_t));
 	mutex_init(&xchi->xc_lock, MUTEX_DEFAULT, IPL_SOFTSERIAL);
 	cv_init(&xchi->xc_busy, "xchicv");
-	xc_sih = softint_establish(SOFTINT_SERIAL | SOFTINT_MPSAFE,
-	    xc__highpri_intr, NULL);
-	KASSERT(xc_sih != NULL);
+
+	/* Set up a softint for each IPL_SOFT*. */
+#define SETUP_SOFTINT(xipl, sipl) do {					\
+		xc_sihs[(xipl)] = softint_establish( (sipl) | SOFTINT_MPSAFE,\
+		    xc__highpri_intr, NULL);				\
+		KASSERT(xc_sihs[(xipl)] != NULL);			\
+	} while (0)
+
+	SETUP_SOFTINT(XC_IPL_SOFTSERIAL, SOFTINT_SERIAL);
+	/*
+	 * If a IPL_SOFTXXX have the same value of the previous, we don't use
+	 * the IPL (see xc_encode_ipl).  So we don't need to allocate a softint
+	 * for it.
+	 */
+#if IPL_SOFTNET != IPL_SOFTSERIAL
+	SETUP_SOFTINT(XC_IPL_SOFTNET, SOFTINT_NET);
+#endif
+#if IPL_SOFTBIO != IPL_SOFTNET
+	SETUP_SOFTINT(XC_IPL_SOFTBIO, SOFTINT_BIO);
+#endif
+#if IPL_SOFTCLOCK != IPL_SOFTBIO
+	SETUP_SOFTINT(XC_IPL_SOFTCLOCK, SOFTINT_CLOCK);
+#endif
+
+#undef SETUP_SOFTINT
 
 	evcnt_attach_dynamic(&xc_unicast_ev, EVCNT_TYPE_MISC, NULL,
 	   "crosscall", "unicast");
 	evcnt_attach_dynamic(&xc_broadcast_ev, EVCNT_TYPE_MISC, NULL,
 	   "crosscall", "broadcast");
+}
+
+/*
+ * Encode an IPL to a form that can be embedded into flags of xc_broadcast
+ * or xc_unicast.
+ */
+unsigned int
+xc_encode_ipl(int ipl)
+{
+
+	switch (ipl) {
+	case IPL_SOFTSERIAL:
+		return __SHIFTIN(XC_IPL_SOFTSERIAL, XC_IPL_MASK);
+	/* IPL_SOFT* can be the same value (e.g., on sparc or mips). */
+#if IPL_SOFTNET != IPL_SOFTSERIAL
+	case IPL_SOFTNET:
+		return __SHIFTIN(XC_IPL_SOFTNET, XC_IPL_MASK);
+#endif
+#if IPL_SOFTBIO != IPL_SOFTNET
+	case IPL_SOFTBIO:
+		return __SHIFTIN(XC_IPL_SOFTBIO, XC_IPL_MASK);
+#endif
+#if IPL_SOFTCLOCK != IPL_SOFTBIO
+	case IPL_SOFTCLOCK:
+		return __SHIFTIN(XC_IPL_SOFTCLOCK, XC_IPL_MASK);
+#endif
+	}
+
+	panic("Invalid IPL: %d", ipl);
+}
+
+/*
+ * Extract an XC_IPL from flags of xc_broadcast or xc_unicast.
+ */
+static inline unsigned int
+xc_extract_ipl(unsigned int flags)
+{
+
+	return __SHIFTOUT(flags, XC_IPL_MASK);
 }
 
 /*
@@ -178,16 +254,44 @@ xc_init_cpu(struct cpu_info *ci)
  *	Trigger a call on all CPUs in the system.
  */
 uint64_t
-xc_broadcast(u_int flags, xcfunc_t func, void *arg1, void *arg2)
+xc_broadcast(unsigned int flags, xcfunc_t func, void *arg1, void *arg2)
 {
 
 	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
+	ASSERT_SLEEPABLE();
+
+	if (__predict_false(!mp_online)) {
+		(*func)(arg1, arg2);
+		return 0;
+	}
 
 	if ((flags & XC_HIGHPRI) != 0) {
-		return xc_highpri(func, arg1, arg2, NULL);
+		int ipl = xc_extract_ipl(flags);
+		return xc_highpri(func, arg1, arg2, NULL, ipl);
 	} else {
 		return xc_lowpri(func, arg1, arg2, NULL);
 	}
+}
+
+static void
+xc_nop(void *arg1, void *arg2)
+{
+
+	return;
+}
+
+/*
+ * xc_barrier:
+ *
+ *	Broadcast a nop to all CPUs in the system.
+ */
+void
+xc_barrier(unsigned int flags)
+{
+	uint64_t where;
+
+	where = xc_broadcast(flags, xc_nop, NULL, NULL);
+	xc_wait(where);
 }
 
 /*
@@ -196,15 +300,26 @@ xc_broadcast(u_int flags, xcfunc_t func, void *arg1, void *arg2)
  *	Trigger a call on one CPU.
  */
 uint64_t
-xc_unicast(u_int flags, xcfunc_t func, void *arg1, void *arg2,
+xc_unicast(unsigned int flags, xcfunc_t func, void *arg1, void *arg2,
 	   struct cpu_info *ci)
 {
+	int s;
 
 	KASSERT(ci != NULL);
 	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
+	ASSERT_SLEEPABLE();
+
+	if (__predict_false(!mp_online)) {
+		KASSERT(ci == curcpu());
+		s = splsoftserial();
+		(*func)(arg1, arg2);
+		splx(s);
+		return 0;
+	}
 
 	if ((flags & XC_HIGHPRI) != 0) {
-		return xc_highpri(func, arg1, arg2, ci);
+		int ipl = xc_extract_ipl(flags);
+		return xc_highpri(func, arg1, arg2, ci, ipl);
 	} else {
 		return xc_lowpri(func, arg1, arg2, ci);
 	}
@@ -221,6 +336,11 @@ xc_wait(uint64_t where)
 	xc_state_t *xc;
 
 	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
+	ASSERT_SLEEPABLE();
+
+	if (__predict_false(!mp_online)) {
+		return;
+	}
 
 	/* Determine whether it is high or low priority cross-call. */
 	if ((where & XC_PRI_BIT) != 0) {
@@ -230,10 +350,12 @@ xc_wait(uint64_t where)
 		xc = &xc_low_pri;
 	}
 
+#ifdef __HAVE_ATOMIC64_LOADSTORE
 	/* Fast path, if already done. */
-	if (xc->xc_donep >= where) {
+	if (atomic_load_acquire(&xc->xc_donep) >= where) {
 		return;
 	}
+#endif
 
 	/* Slow path: block until awoken. */
 	mutex_enter(&xc->xc_lock);
@@ -256,7 +378,7 @@ xc_lowpri(xcfunc_t func, void *arg1, void *arg2, struct cpu_info *ci)
 	uint64_t where;
 
 	mutex_enter(&xc->xc_lock);
-	while (xc->xc_headp != xc_tailp) {
+	while (xc->xc_headp != xc->xc_donep) {
 		cv_wait(&xc->xc_busy, &xc->xc_lock);
 	}
 	xc->xc_arg1 = arg1;
@@ -277,7 +399,7 @@ xc_lowpri(xcfunc_t func, void *arg1, void *arg2, struct cpu_info *ci)
 		ci->ci_data.cpu_xcall_pending = true;
 		cv_signal(&ci->ci_data.cpu_xcall);
 	}
-	KASSERT(xc_tailp < xc->xc_headp);
+	KASSERT(xc->xc_donep < xc->xc_headp);
 	where = xc->xc_headp;
 	mutex_exit(&xc->xc_lock);
 
@@ -302,7 +424,7 @@ xc_thread(void *cookie)
 	mutex_enter(&xc->xc_lock);
 	for (;;) {
 		while (!ci->ci_data.cpu_xcall_pending) {
-			if (xc->xc_headp == xc_tailp) {
+			if (xc->xc_headp == xc->xc_donep) {
 				cv_broadcast(&xc->xc_busy);
 			}
 			cv_wait(&ci->ci_data.cpu_xcall, &xc->xc_lock);
@@ -312,14 +434,17 @@ xc_thread(void *cookie)
 		func = xc->xc_func;
 		arg1 = xc->xc_arg1;
 		arg2 = xc->xc_arg2;
-		xc_tailp++;
 		mutex_exit(&xc->xc_lock);
 
 		KASSERT(func != NULL);
 		(*func)(arg1, arg2);
 
 		mutex_enter(&xc->xc_lock);
+#ifdef __HAVE_ATOMIC64_LOADSTORE
+		atomic_store_release(&xc->xc_donep, xc->xc_donep + 1);
+#else
 		xc->xc_donep++;
+#endif
 	}
 	/* NOTREACHED */
 }
@@ -332,8 +457,13 @@ xc_thread(void *cookie)
 void
 xc_ipi_handler(void)
 {
+	xc_state_t *xc = & xc_high_pri;
+
+	KASSERT(xc->xc_ipl < __arraycount(xc_sihs));
+	KASSERT(xc_sihs[xc->xc_ipl] != NULL);
+
 	/* Executes xc__highpri_intr() via software interrupt. */
-	softint_schedule(xc_sih);
+	softint_schedule(xc_sihs[xc->xc_ipl]);
 }
 
 /*
@@ -348,12 +478,12 @@ xc__highpri_intr(void *dummy)
 	void *arg1, *arg2;
 	xcfunc_t func;
 
-	KASSERT(!cpu_intr_p());
+	KASSERTMSG(!cpu_intr_p(), "high priority xcall for function %p",
+	    xc->xc_func);
 	/*
 	 * Lock-less fetch of function and its arguments.
 	 * Safe since it cannot change at this point.
 	 */
-	KASSERT(xc->xc_donep < xc->xc_headp);
 	func = xc->xc_func;
 	arg1 = xc->xc_arg1;
 	arg2 = xc->xc_arg2;
@@ -366,7 +496,13 @@ xc__highpri_intr(void *dummy)
 	 * cross-call has been processed - notify waiters, if any.
 	 */
 	mutex_enter(&xc->xc_lock);
-	if (++xc->xc_donep == xc->xc_headp) {
+	KASSERT(xc->xc_donep < xc->xc_headp);
+#ifdef __HAVE_ATOMIC64_LOADSTORE
+	atomic_store_release(&xc->xc_donep, xc->xc_donep + 1);
+#else
+	xc->xc_donep++;
+#endif
+	if (xc->xc_donep == xc->xc_headp) {
 		cv_broadcast(&xc->xc_busy);
 	}
 	mutex_exit(&xc->xc_lock);
@@ -378,7 +514,8 @@ xc__highpri_intr(void *dummy)
  *	Trigger a high priority call on one or more CPUs.
  */
 static inline uint64_t
-xc_highpri(xcfunc_t func, void *arg1, void *arg2, struct cpu_info *ci)
+xc_highpri(xcfunc_t func, void *arg1, void *arg2, struct cpu_info *ci,
+    unsigned int ipl)
 {
 	xc_state_t *xc = &xc_high_pri;
 	uint64_t where;
@@ -391,6 +528,7 @@ xc_highpri(xcfunc_t func, void *arg1, void *arg2, struct cpu_info *ci)
 	xc->xc_arg1 = arg1;
 	xc->xc_arg2 = arg2;
 	xc->xc_headp += (ci ? 1 : ncpu);
+	xc->xc_ipl = ipl;
 	where = xc->xc_headp;
 	mutex_exit(&xc->xc_lock);
 

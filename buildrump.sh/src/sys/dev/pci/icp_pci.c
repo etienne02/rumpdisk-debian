@@ -1,4 +1,4 @@
-/*	$NetBSD: icp_pci.c,v 1.22 2014/03/29 19:28:24 christos Exp $	*/
+/*	$NetBSD: icp_pci.c,v 1.24 2018/12/09 11:14:02 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -69,7 +69,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: icp_pci.c,v 1.22 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: icp_pci.c,v 1.24 2018/12/09 11:14:02 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -157,6 +157,7 @@ __KERNEL_RCSID(0, "$NetBSD: icp_pci.c,v 1.22 2014/03/29 19:28:24 christos Exp $"
 
 int	icp_pci_match(device_t, cfdata_t, void *);
 void	icp_pci_attach(device_t, device_t, void *);
+int	icp_pci_rescan(device_t, const char *, const int *);
 void	icp_pci_enable_intr(struct icp_softc *);
 int	icp_pci_find_class(struct pci_attach_args *);
 
@@ -181,8 +182,8 @@ void	icp_mpr_release_event(struct icp_softc *, struct icp_ccb *);
 void	icp_mpr_set_sema0(struct icp_softc *);
 int	icp_mpr_test_busy(struct icp_softc *);
 
-CFATTACH_DECL_NEW(icp_pci, sizeof(struct icp_softc),
-    icp_pci_match, icp_pci_attach, NULL, NULL);
+CFATTACH_DECL3_NEW(icp_pci, sizeof(struct icp_softc),
+    icp_pci_match, icp_pci_attach, NULL, NULL, icp_pci_rescan, NULL, 0);
 
 struct icp_pci_ident {
 	u_short	gpi_vendor;
@@ -549,7 +550,8 @@ icp_pci_attach(device_t parent, device_t self, void *aux)
 		goto bail_out;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	icp->icp_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO, icp_intr, icp);
+	icp->icp_ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO, icp_intr,
+	    icp, device_xname(self));
 	if (icp->icp_ih == NULL) {
 		aprint_error("couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -585,6 +587,14 @@ icp_pci_attach(device_t parent, device_t self, void *aux)
 		bus_space_unmap(iot, ioh, iosize);
 	if ((status & INTR_ESTABLISHED) != 0)
 		pci_intr_disestablish(pa->pa_pc, icp->icp_ih);
+}
+
+int
+icp_pci_rescan(device_t self, const char *attr, const int *flags)
+{
+
+	icp_rescan_all(device_private(self));
+	return 0;
 }
 
 /*

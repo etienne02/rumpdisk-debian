@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_syscall.c,v 1.11 2015/03/07 16:38:49 christos Exp $	*/
+/*	$NetBSD: sys_syscall.c,v 1.13 2020/02/08 07:07:07 maxv Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_syscall.c,v 1.11 2015/03/07 16:38:49 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_syscall.c,v 1.13 2020/02/08 07:07:07 maxv Exp $");
 
 #include <sys/syscall_stats.h>
 #include <sys/syscallvar.h>

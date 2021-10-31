@@ -1,4 +1,4 @@
-/*	$NetBSD: if_inarp.h,v 1.49 2016/04/19 04:13:56 ozaki-r Exp $	*/
+/*	$NetBSD: if_inarp.h,v 1.52 2020/09/11 15:16:00 roy Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -69,20 +69,19 @@ struct sockaddr_inarp {
 #define RATE_LIMIT_INTERVAL     60
 #define DEFEND_INTERVAL         10
 
-#include <sys/malloc.h>
-MALLOC_DECLARE(M_IPARP);
-
 extern struct ifqueue arpintrq;
 void arp_ifinit(struct ifnet *, struct ifaddr *);
 void arp_rtrequest(int, struct rtentry *, const struct rt_addrinfo *);
 int arpresolve(struct ifnet *, const struct rtentry *, struct mbuf *,
     const struct sockaddr *, void *, size_t);
 void arpintr(void);
-void arprequest(struct ifnet *, const struct in_addr *, const struct in_addr *,
-    const u_int8_t *);
+void arpannounce(struct ifnet *, struct ifaddr *, const uint8_t *);
+struct llentry *arplookup(struct ifnet *,
+    const struct in_addr *, const struct sockaddr *, int);
 void arp_drain(void);
 int arpioctl(u_long, void *);
 void arpwhohas(struct ifnet *, struct in_addr *);
+void arp_nud_hint(struct rtentry *);
 
 void revarpinput(struct mbuf *);
 int revarpwhoarewe(struct ifnet *, struct in_addr *, struct in_addr *);

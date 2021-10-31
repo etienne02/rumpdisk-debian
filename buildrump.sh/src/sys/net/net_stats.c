@@ -1,4 +1,4 @@
-/*	$NetBSD: net_stats.c,v 1.4 2008/05/04 07:22:14 thorpej Exp $	*/
+/*	$NetBSD: net_stats.c,v 1.6 2020/02/07 12:35:33 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -30,12 +30,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: net_stats.c,v 1.4 2008/05/04 07:22:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: net_stats.c,v 1.6 2020/02/07 12:35:33 thorpej Exp $");
 
 #include <sys/types.h>
 #include <sys/systm.h>
 #include <sys/sysctl.h>
 #include <sys/kmem.h>
+#include <sys/xcall.h>
 
 #include <net/net_stats.h>
 
@@ -77,13 +78,11 @@ netstat_sysctl(percpu_t *stat, u_int ncounters, SYSCTLFN_ARGS)
 	countersize = sizeof(uint64_t) * ncounters;
 
 	counters = kmem_zalloc(countersize, KM_SLEEP);
-	if (counters == NULL)
-		return (ENOMEM);
-
 	ctx.ctx_counters = counters;
 	ctx.ctx_ncounters = ncounters;
 
-	percpu_foreach(stat, netstat_convert_to_user_cb, &ctx);
+	percpu_foreach_xcall(stat, XC_HIGHPRI_IPL(IPL_SOFTNET),
+	    netstat_convert_to_user_cb, &ctx);
 
 	node = *rnode;
 	node.sysctl_data = counters;

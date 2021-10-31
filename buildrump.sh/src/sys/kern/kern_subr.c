@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_subr.c,v 1.217 2016/05/12 02:24:16 ozaki-r Exp $	*/
+/*	$NetBSD: kern_subr.c,v 1.229 2020/11/21 08:10:27 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2002, 2007, 2008 The NetBSD Foundation, Inc.
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_subr.c,v 1.217 2016/05/12 02:24:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_subr.c,v 1.229 2020/11/21 08:10:27 mlelstv Exp $");
 
 #include "opt_ddb.h"
 #include "opt_md.h"
@@ -107,9 +107,16 @@ __KERNEL_RCSID(0, "$NetBSD: kern_subr.c,v 1.217 2016/05/12 02:24:16 ozaki-r Exp 
 
 /* XXX these should eventually move to subr_autoconf.c */
 static device_t finddevice(const char *);
-static device_t getdisk(char *, int, int, dev_t *, int);
-static device_t parsedisk(char *, int, int, dev_t *);
+static device_t getdisk(const char *, int, int, dev_t *, int);
+static device_t parsedisk(const char *, int, int, dev_t *);
 static const char *getwedgename(const char *, int);
+
+static void setroot_nfs(device_t);
+static void setroot_md(device_t *);
+static void setroot_ask(device_t, int);
+static void setroot_root(device_t, int);
+static void setroot_dump(device_t, device_t);
+
 
 #ifdef TFTPROOT
 int tftproot_dhcpboot(device_t);
@@ -154,89 +161,117 @@ int md_is_root = 0;
 
 /*
  * The device and partition that we booted from.
+ *
+ * This data might be initialized by MD code, but is defined here.
  */
 device_t booted_device;
+const char *booted_method;
 int booted_partition;
 daddr_t booted_startblk;
 uint64_t booted_nblks;
 char *bootspec;
 
 /*
- * Use partition letters if it's a disk class but not a wedge.
- * XXX Check for wedge is kinda gross.
+ * Use partition letters if it's a disk class but not a wedge or flash.
+ * XXX Check for wedge/flash is kinda gross.
  */
 #define	DEV_USES_PARTITIONS(dv)						\
 	(device_class((dv)) == DV_DISK &&				\
-	 !device_is_a((dv), "dk"))
+	 !device_is_a((dv), "dk") &&					\
+	 !device_is_a((dv), "flash"))
 
 void
 setroot(device_t bootdv, int bootpartition)
 {
-	device_t dv;
-	deviter_t di;
-	int len, majdev;
-	dev_t nrootdev;
-	dev_t ndumpdev = NODEV;
-	char buf[128];
-	const char *rootdevname;
-	const char *dumpdevname;
-	device_t rootdv = NULL;		/* XXX gcc -Wuninitialized */
-	device_t dumpdv = NULL;
-	struct ifnet *ifp;
-	const char *deffsname;
-	struct vfsops *vops;
-
-#ifdef TFTPROOT
-	if (tftproot_dhcpboot(bootdv) != 0)
-		boothowto |= RB_ASKNAME;
-#endif
 
 	/*
-	 * For root on md0 we have to force the attachment of md0.
+	 * Let bootcode augment "rootspec", ensure that
+	 * rootdev is invalid to avoid confusion.
 	 */
-	if (md_is_root) {
-		int md_major;
-		dev_t md_dev;
-
-		bootdv = NULL;
-		md_major = devsw_name2blk("md", NULL, 0);
-		if (md_major >= 0) {
-			md_dev = MAKEDISKDEV(md_major, 0, RAW_PART);
-			if (bdev_open(md_dev, FREAD, S_IFBLK, curlwp) == 0)
-				bootdv = device_find_by_xname("md0");
-		}
-		if (bootdv == NULL)
-			panic("Cannot open \"md0\" (root)");
+	if (rootspec == NULL) {
+		rootspec = bootspec;
+		rootdev = NODEV;
 	}
 
 	/*
-	 * Let bootcode augment "rootspec".
+	 * force boot device to md0
 	 */
-	if (rootspec == NULL)
-		rootspec = bootspec;
+	if (md_is_root)
+		setroot_md(&bootdv);
+
+#ifdef TFTPROOT
+	/*
+	 * XXX
+	 * if rootspec specifies an interface
+	 * sets root_device to that interface
+	 * reuses NFS init code to set up network
+	 * fetch image into ram disk
+	 *
+	 * if successful, we change boot device
+	 */
+	if (tftproot_dhcpboot(bootdv) == 0)
+		setroot_md(&bootdv);
+#endif
+	
+	/*
+	 * quirk for
+	 *  evbarm/mini2440
+	 *  hpcarm
+	 *  hpcmips
+	 *  hpcsh
+	 *
+	 * if rootfstype is set to NFS and the
+	 * kernel supports NFS and the boot device
+	 * is unknown or not a network interface
+ 	 * -> chose the first network interface you find
+	 *
+	 * hp300 has similar MD code
+	 */
+	setroot_nfs(bootdv);
 
 	/*
-	 * If NFS is specified as the file system, and we found
-	 * a DV_DISK boot device (or no boot device at all), then
-	 * find a reasonable network interface for "rootspec".
+	 * If no bootdv was found by MD code and no
+	 * root specified ask the user.
 	 */
+	if (rootspec == NULL && bootdv == NULL)
+		boothowto |= RB_ASKNAME;
+
+	/*
+	 * loop until a root device is specified
+	 */
+	do {
+		if (boothowto & RB_ASKNAME)
+			setroot_ask(bootdv, bootpartition);
+		else
+			setroot_root(bootdv, bootpartition);
+
+		if (root_device == NULL)
+			boothowto |= RB_ASKNAME;
+	} while (root_device == NULL);
+}
+
+/*
+ * If NFS is specified as the file system, and we found
+ * a DV_DISK boot device (or no boot device at all), then
+ * find a reasonable network interface for "rootspec".
+ */
+static void
+setroot_nfs(device_t dv)
+{
+	struct vfsops *vops;
+	struct ifnet *ifp;
+
 	vops = vfs_getopsbyname(MOUNT_NFS);
 	if (vops != NULL && strcmp(rootfstype, MOUNT_NFS) == 0 &&
 	    rootspec == NULL &&
-	    (bootdv == NULL || device_class(bootdv) != DV_IFNET)) {
+	    (dv == NULL || device_class(dv) != DV_IFNET)) {
 		int s = pserialize_read_enter();
 		IFNET_READER_FOREACH(ifp) {
 			if ((ifp->if_flags &
 			     (IFF_LOOPBACK|IFF_POINTOPOINT)) == 0)
 				break;
 		}
-		if (ifp == NULL) {
-			/*
-			 * Can't find a suitable interface; ask the
-			 * user.
-			 */
-			boothowto |= RB_ASKNAME;
-		} else {
+		if (ifp != NULL) {
 			/*
 			 * Have a suitable interface; behave as if
 			 * the user specified this interface.
@@ -247,152 +282,202 @@ setroot(device_t bootdv, int bootpartition)
 	}
 	if (vops != NULL)
 		vfs_delref(vops);
+}
 
-	/*
-	 * If wildcarded root and we the boot device wasn't determined,
-	 * ask the user.
-	 */
-	if (rootspec == NULL && bootdv == NULL)
-		boothowto |= RB_ASKNAME;
+/*
+ * Change boot device to md0
+ *
+ * md0 only exists when it is opened once.
+ */
+static void
+setroot_md(device_t *dvp)
+{
+	int md_major;
+	dev_t md_dev;
 
- top:
-	if (boothowto & RB_ASKNAME) {
-		device_t defdumpdv;
+	md_major = devsw_name2blk("md", NULL, 0);
+	if (md_major >= 0) {
+		md_dev = MAKEDISKDEV(md_major, 0, RAW_PART);
+		if (bdev_open(md_dev, FREAD, S_IFBLK, curlwp) == 0)
+			*dvp = device_find_by_xname("md0");
+	}
+}
 
-		for (;;) {
-			printf("root device");
-			if (bootdv != NULL) {
-				printf(" (default %s", device_xname(bootdv));
-				if (DEV_USES_PARTITIONS(bootdv))
-					printf("%c", bootpartition + 'a');
-				printf(")");
-			}
-			printf(": ");
-			len = cngetsn(buf, sizeof(buf));
-			if (len == 0 && bootdv != NULL) {
-				strlcpy(buf, device_xname(bootdv), sizeof(buf));
-				len = strlen(buf);
-			}
-			if (len > 0 && buf[len - 1] == '*') {
-				buf[--len] = '\0';
-				dv = getdisk(buf, len, 1, &nrootdev, 0);
-				if (dv != NULL) {
-					rootdv = dv;
-					break;
-				}
-			}
-			dv = getdisk(buf, len, bootpartition, &nrootdev, 0);
+static void
+setroot_ask(device_t bootdv, int bootpartition)
+{
+	device_t dv, defdumpdv, rootdv, dumpdv;
+	dev_t nrootdev, ndumpdev;
+	struct vfsops *vops;
+	const char *deffsname;
+	int len;
+	char buf[128];
+
+	for (;;) {
+		printf("root device");
+		if (bootdv != NULL) {
+			printf(" (default %s", device_xname(bootdv));
+			if (DEV_USES_PARTITIONS(bootdv))
+				printf("%c", bootpartition + 'a');
+			printf(")");
+		}
+		printf(": ");
+		len = cngetsn(buf, sizeof(buf));
+		if (len == 0 && bootdv != NULL) {
+			strlcpy(buf, device_xname(bootdv), sizeof(buf));
+			len = strlen(buf);
+		}
+		if (len > 0 && buf[len - 1] == '*') {
+			buf[--len] = '\0';
+			dv = getdisk(buf, len, 1, &nrootdev, 0);
 			if (dv != NULL) {
 				rootdv = dv;
 				break;
 			}
 		}
-
-		/*
-		 * Set up the default dump device.  If root is on
-		 * a network device, there is no default dump
-		 * device, since we don't support dumps to the
-		 * network.
-		 */
-		if (DEV_USES_PARTITIONS(rootdv) == 0)
-			defdumpdv = NULL;
-		else
-			defdumpdv = rootdv;
-
-		for (;;) {
-			printf("dump device");
-			if (defdumpdv != NULL) {
-				/*
-				 * Note, we know it's a disk if we get here.
-				 */
-				printf(" (default %sb)", device_xname(defdumpdv));
-			}
-			printf(": ");
-			len = cngetsn(buf, sizeof(buf));
-			if (len == 0) {
-				if (defdumpdv != NULL) {
-					ndumpdev = MAKEDISKDEV(major(nrootdev),
-					    DISKUNIT(nrootdev), 1);
-				}
-				dumpdv = defdumpdv;
-				break;
-			}
-			if (len == 4 && strcmp(buf, "none") == 0) {
-				dumpdv = NULL;
-				break;
-			}
-			dv = getdisk(buf, len, 1, &ndumpdev, 1);
-			if (dv != NULL) {
-				dumpdv = dv;
-				break;
-			}
-		}
-
-		rootdev = nrootdev;
-		dumpdev = ndumpdev;
-
-		for (vops = LIST_FIRST(&vfs_list); vops != NULL;
-		     vops = LIST_NEXT(vops, vfs_list)) {
-			if (vops->vfs_mountroot != NULL &&
-			    strcmp(rootfstype, vops->vfs_name) == 0)
+		dv = getdisk(buf, len, bootpartition, &nrootdev, 0);
+		if (dv != NULL) {
+			rootdv = dv;
 			break;
 		}
+	}
+	rootdev = nrootdev;
 
-		if (vops == NULL) {
-			deffsname = "generic";
-		} else
-			deffsname = vops->vfs_name;
+	/*
+	 * Set up the default dump device.  If root is on
+	 * a network device or a disk without partitions,
+	 * there is no default dump device.
+	 */
+	if (DEV_USES_PARTITIONS(rootdv) == 0)
+		defdumpdv = NULL;
+	else
+		defdumpdv = rootdv;
 
-		for (;;) {
-			printf("file system (default %s): ", deffsname);
-			len = cngetsn(buf, sizeof(buf));
-			if (len == 0) {
-				if (strcmp(deffsname, "generic") == 0)
-					rootfstype = ROOT_FSTYPE_ANY;
-				break;
-			}
-			if (len == 4 && strcmp(buf, "halt") == 0)
-				cpu_reboot(RB_HALT, NULL);
-			else if (len == 6 && strcmp(buf, "reboot") == 0)
-				cpu_reboot(0, NULL);
-#if defined(DDB)
-			else if (len == 3 && strcmp(buf, "ddb") == 0) {
-				console_debugger();
-			}
-#endif
-			else if (len == 7 && strcmp(buf, "generic") == 0) {
-				rootfstype = ROOT_FSTYPE_ANY;
-				break;
-			}
-			vops = vfs_getopsbyname(buf);
-			if (vops == NULL || vops->vfs_mountroot == NULL) {
-				printf("use one of: generic");
-				for (vops = LIST_FIRST(&vfs_list);
-				     vops != NULL;
-				     vops = LIST_NEXT(vops, vfs_list)) {
-					if (vops->vfs_mountroot != NULL)
-						printf(" %s", vops->vfs_name);
-				}
-				if (vops != NULL)
-					vfs_delref(vops);
-#if defined(DDB)
-				printf(" ddb");
-#endif
-				printf(" halt reboot\n");
-			} else {
-				/*
-				 * XXX If *vops gets freed between here and
-				 * the call to mountroot(), rootfstype will
-				 * point to something unexpected.  But in
-				 * this case the system will fail anyway.
-				 */
-				rootfstype = vops->vfs_name;
-				vfs_delref(vops);
-				break;
-			}
+	ndumpdev = NODEV;
+	for (;;) {
+		printf("dump device");
+		if (defdumpdv != NULL) {
+			/*
+			 * Note, we know it's a disk if we get here.
+			 */
+			printf(" (default %sb)", device_xname(defdumpdv));
 		}
+		printf(": ");
+		len = cngetsn(buf, sizeof(buf));
+		if (len == 0) {
+			if (defdumpdv != NULL) {
+				ndumpdev = MAKEDISKDEV(major(nrootdev),
+				    DISKUNIT(nrootdev), 1);
+			}
+			dumpdv = defdumpdv;
+			break;
+		}
+		if (len == 4 && strcmp(buf, "none") == 0) {
+			dumpdv = NULL;
+			break;
+		}
+		dv = getdisk(buf, len, 1, &ndumpdev, 1);
+		if (dv != NULL) {
+			dumpdv = dv;
+			break;
+		}
+	}
+	dumpdev = ndumpdev;
 
-	} else if (rootspec == NULL) {
+	for (vops = LIST_FIRST(&vfs_list); vops != NULL;
+	     vops = LIST_NEXT(vops, vfs_list)) {
+		if (vops->vfs_mountroot != NULL &&
+		    strcmp(rootfstype, vops->vfs_name) == 0)
+		break;
+	}
+
+	if (vops == NULL) {
+		deffsname = "generic";
+	} else
+		deffsname = vops->vfs_name;
+
+	for (;;) {
+		printf("file system (default %s): ", deffsname);
+		len = cngetsn(buf, sizeof(buf));
+		if (len == 0) {
+			if (strcmp(deffsname, "generic") == 0)
+				rootfstype = ROOT_FSTYPE_ANY;
+			break;
+		}
+		if (len == 4 && strcmp(buf, "halt") == 0)
+			kern_reboot(RB_HALT, NULL);
+		else if (len == 6 && strcmp(buf, "reboot") == 0)
+			kern_reboot(0, NULL);
+#if defined(DDB)
+		else if (len == 3 && strcmp(buf, "ddb") == 0) {
+			console_debugger();
+		}
+#endif
+		else if (len == 7 && strcmp(buf, "generic") == 0) {
+			rootfstype = ROOT_FSTYPE_ANY;
+			break;
+		}
+		vops = vfs_getopsbyname(buf);
+		if (vops == NULL || vops->vfs_mountroot == NULL) {
+			printf("use one of: generic");
+			for (vops = LIST_FIRST(&vfs_list);
+			     vops != NULL;
+			     vops = LIST_NEXT(vops, vfs_list)) {
+				if (vops->vfs_mountroot != NULL)
+					printf(" %s", vops->vfs_name);
+			}
+			if (vops != NULL)
+				vfs_delref(vops);
+#if defined(DDB)
+			printf(" ddb");
+#endif
+			printf(" halt reboot\n");
+		} else {
+			/*
+			 * XXX If *vops gets freed between here and
+			 * the call to mountroot(), rootfstype will
+			 * point to something unexpected.  But in
+			 * this case the system will fail anyway.
+			 */
+			rootfstype = vops->vfs_name;
+			vfs_delref(vops);
+			break;
+		}
+	}
+
+	switch (device_class(rootdv)) {
+	case DV_IFNET:
+	case DV_DISK:
+		aprint_normal("root on %s", device_xname(rootdv));
+		if (DEV_USES_PARTITIONS(rootdv))
+			aprint_normal("%c", (int)DISKPART(rootdev) + 'a');
+		break;
+	default:
+		printf("can't determine root device\n");
+		return;
+	}
+
+	root_device = rootdv;
+	setroot_dump(rootdv, dumpdv);
+}
+
+/*
+ * configure
+ *   device_t root_device
+ *   dev_t rootdev (for disks)
+ * 
+ */
+static void
+setroot_root(device_t bootdv, int bootpartition)
+{
+	device_t rootdv;
+	int majdev;
+	const char *rootdevname;
+	char buf[128];
+	dev_t nrootdev;
+
+	if (rootspec == NULL) {
+
 		/*
 		 * Wildcarded root; use the boot device.
 		 */
@@ -421,27 +506,22 @@ setroot(device_t bootdv, int bootpartition)
 		 */
 
 		/*
-		 * If it's a network interface, we can bail out
-		 * early.
+		 * If rootspec can be parsed, just use it.
 		 */
-		dv = finddevice(rootspec);
-		if (dv != NULL && device_class(dv) == DV_IFNET) {
-			rootdv = dv;
+		rootdv = parsedisk(rootspec, strlen(rootspec), 0, &nrootdev);
+		if (rootdv != NULL) {
+			rootdev = nrootdev;
 			goto haveroot;
 		}
 
-		if (rootdev == NODEV &&
-		    dv != NULL && device_class(dv) == DV_DISK &&
-		    device_is_a(dv, "dk") &&
-		    (majdev = devsw_name2blk(device_xname(dv), NULL, 0)) >= 0)
-			rootdev = makedev(majdev, device_unit(dv));
-
+		/*
+		 * Fall back to rootdev, compute rootdv for it
+		 */
 		rootdevname = devsw_blk2name(major(rootdev));
 		if (rootdevname == NULL) {
 			printf("unknown device major 0x%llx\n",
 			    (unsigned long long)rootdev);
-			boothowto |= RB_ASKNAME;
-			goto top;
+			return;
 		}
 		memset(buf, 0, sizeof(buf));
 		snprintf(buf, sizeof(buf), "%s%llu", rootdevname,
@@ -451,15 +531,11 @@ setroot(device_t bootdv, int bootpartition)
 		if (rootdv == NULL) {
 			printf("device %s (0x%llx) not configured\n",
 			    buf, (unsigned long long)rootdev);
-			boothowto |= RB_ASKNAME;
-			goto top;
+			return;
 		}
 	}
 
- haveroot:
-
-	root_device = rootdv;
-
+haveroot:
 	switch (device_class(rootdv)) {
 	case DV_IFNET:
 	case DV_DISK:
@@ -467,12 +543,30 @@ setroot(device_t bootdv, int bootpartition)
 		if (DEV_USES_PARTITIONS(rootdv))
 			aprint_normal("%c", (int)DISKPART(rootdev) + 'a');
 		break;
-
 	default:
 		printf("can't determine root device\n");
-		boothowto |= RB_ASKNAME;
-		goto top;
+		return;
 	}
+
+	root_device = rootdv;
+	setroot_dump(rootdv, NULL);
+}
+
+/*
+ * configure
+ *   dev_t dumpdev
+ *   dev_t dumpcdev
+ *
+ * set to NODEV if device not found
+ */
+static void
+setroot_dump(device_t rootdv, device_t dumpdv)
+{
+	device_t dv;
+	deviter_t di;
+	const char *dumpdevname;
+	int majdev;
+	char buf[128];
 
 	/*
 	 * Now configure the dump device.
@@ -566,10 +660,21 @@ finddevice(const char *name)
 }
 
 static device_t
-getdisk(char *str, int len, int defpart, dev_t *devp, int isdump)
+getdisk(const char *str, int len, int defpart, dev_t *devp, int isdump)
 {
 	device_t dv;
 	deviter_t di;
+
+	if (len == 4 && strcmp(str, "halt") == 0)
+		kern_reboot(RB_HALT, NULL);
+	else if (len == 6 && strcmp(str, "reboot") == 0)
+		kern_reboot(0, NULL);
+#if defined(DDB)
+	else if (len == 3 && strcmp(str, "ddb") == 0) {
+		console_debugger();
+		return NULL;
+	}
+#endif
 
 	if ((dv = parsedisk(str, len, defpart, devp)) == NULL) {
 		printf("use one of:");
@@ -598,45 +703,48 @@ getdisk(char *str, int len, int defpart, dev_t *devp, int isdump)
 static const char *
 getwedgename(const char *name, int namelen)
 {
-	const char *wpfx = "wedge:";
-	const int wpfxlen = strlen(wpfx);
+	const char *wpfx1 = "wedge:";
+	const char *wpfx2 = "NAME=";
+	const int wpfx1len = strlen(wpfx1);
+	const int wpfx2len = strlen(wpfx2);
 
-	if (namelen < wpfxlen || strncmp(name, wpfx, wpfxlen) != 0)
-		return NULL;
+	if (namelen > wpfx1len && strncmp(name, wpfx1, wpfx1len) == 0)
+		return name + wpfx1len;
 
-	return name + wpfxlen;
+	if (namelen > wpfx2len && strncasecmp(name, wpfx2, wpfx2len) == 0)
+		return name + wpfx2len;
+
+	return NULL;
 }
 
 static device_t
-parsedisk(char *str, int len, int defpart, dev_t *devp)
+parsedisk(const char *str, int len, int defpart, dev_t *devp)
 {
 	device_t dv;
 	const char *wname;
-	char *cp, c;
+	char c;
 	int majdev, part;
+	char xname[16]; /* same size as dv_xname */
+
 	if (len == 0)
 		return (NULL);
-
-	if (len == 4 && strcmp(str, "halt") == 0)
-		cpu_reboot(RB_HALT, NULL);
-	else if (len == 6 && strcmp(str, "reboot") == 0)
-		cpu_reboot(0, NULL);
-#if defined(DDB)
-	else if (len == 3 && strcmp(str, "ddb") == 0)
-		console_debugger();
-#endif
-
-	cp = str + len - 1;
-	c = *cp;
 
 	if ((wname = getwedgename(str, len)) != NULL) {
 		if ((dv = dkwedge_find_by_wname(wname)) == NULL)
 			return NULL;
 		part = defpart;
 		goto gotdisk;
-	} else if (c >= 'a' && c <= ('a' + MAXPARTITIONS - 1)) {
+	}
+
+	c = str[len-1];
+	if (c >= 'a' && c <= ('a' + MAXPARTITIONS - 1)) {
 		part = c - 'a';
-		*cp = '\0';
+		len--;
+		if (len > sizeof(xname)-1)
+			return NULL;
+		memcpy(xname, str, len);
+		xname[len] = '\0';
+		str = xname;
 	} else
 		part = defpart;
 
@@ -658,6 +766,5 @@ parsedisk(char *str, int len, int defpart, dev_t *devp)
 			*devp = NODEV;
 	}
 
-	*cp = c;
 	return (dv);
 }

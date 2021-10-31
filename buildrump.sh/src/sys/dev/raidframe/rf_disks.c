@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_disks.c,v 1.87 2014/10/18 08:33:28 snj Exp $	*/
+/*	$NetBSD: rf_disks.c,v 1.92 2019/12/08 12:14:40 mlelstv Exp $	*/
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -60,7 +60,7 @@
  ***************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_disks.c,v 1.87 2014/10/18 08:33:28 snj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_disks.c,v 1.92 2019/12/08 12:14:40 mlelstv Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -321,19 +321,17 @@ rf_AllocDiskStructures(RF_Raid_t *raidPtr, RF_Config_t *cfgPtr)
 
 	/* We allocate RF_MAXSPARE on the first row so that we
 	   have room to do hot-swapping of spares */
-	RF_MallocAndAdd(raidPtr->Disks, (raidPtr->numCol + RF_MAXSPARE) *
-			sizeof(RF_RaidDisk_t), (RF_RaidDisk_t *),
-			raidPtr->cleanupList);
+	raidPtr->Disks = RF_MallocAndAdd((raidPtr->numCol + RF_MAXSPARE) *
+	    sizeof(*raidPtr->Disks), raidPtr->cleanupList);
 	if (raidPtr->Disks == NULL) {
 		ret = ENOMEM;
 		goto fail;
 	}
 
 	/* get space for device specific stuff.. */
-	RF_MallocAndAdd(raidPtr->raid_cinfo,
-			(raidPtr->numCol + RF_MAXSPARE) *
-			sizeof(struct raidcinfo), (struct raidcinfo *),
-			raidPtr->cleanupList);
+	raidPtr->raid_cinfo = RF_MallocAndAdd(
+	    (raidPtr->numCol + RF_MAXSPARE) * sizeof(*raidPtr->raid_cinfo),
+	    raidPtr->cleanupList);
 
 	if (raidPtr->raid_cinfo == NULL) {
 		ret = ENOMEM;
@@ -606,10 +604,10 @@ rf_ConfigureDisk(RF_Raid_t *raidPtr, char *bf, RF_RaidDisk_t *diskPtr,
 		       diskPtr->devname);
 		return ENOMEM;
 	}
-	error = dk_lookup(pb, curlwp, &vp);
+	error = vn_bdev_openpath(pb, &vp, curlwp);
 	pathbuf_destroy(pb);
 	if (error) {
-		printf("dk_lookup on device: %s failed!\n", diskPtr->devname);
+		printf("open device: %s failed!\n", diskPtr->devname);
 		if (error == ENXIO) {
 			/* the component isn't there... must be dead :-( */
 			diskPtr->status = rf_ds_failed;
@@ -700,6 +698,25 @@ static int rf_check_label_vitals(RF_Raid_t *raidPtr, int row, int column,
 }
 
 
+static void
+rf_handle_hosed(RF_Raid_t *raidPtr, RF_Config_t *cfgPtr, int hosed_column,
+    int again)
+{
+	printf("Hosed component: %s\n", &cfgPtr->devnames[0][hosed_column][0]);
+	if (cfgPtr->force)
+		return;
+
+	/* we'll fail this component, as if there are
+	   other major errors, we aren't forcing things
+	   and we'll abort the config anyways */
+	if (again && raidPtr->Disks[hosed_column].status == rf_ds_failed)
+		return;
+
+	raidPtr->Disks[hosed_column].status = rf_ds_failed;
+	raidPtr->numFailures++;
+	raidPtr->status = rf_rs_degraded;
+}
+
 /*
 
    rf_CheckLabels() - check all the component labels for consistency.
@@ -727,11 +744,9 @@ rf_CheckLabels(RF_Raid_t *raidPtr, RF_Config_t *cfgPtr)
 	int hosed_column;
 	int too_fatal;
 	int parity_good;
-	int force;
 
 	hosed_column = -1;
 	too_fatal = 0;
-	force = cfgPtr->force;
 
 	/*
 	   We're going to try to be a little intelligent here.  If one
@@ -823,17 +838,9 @@ rf_CheckLabels(RF_Raid_t *raidPtr, RF_Config_t *cfgPtr)
 					break;
 				}
 			}
-			printf("Hosed component: %s\n",
-			       &cfgPtr->devnames[0][hosed_column][0]);
-			if (!force) {
-				/* we'll fail this component, as if there are
-				   other major errors, we arn't forcing things
-				   and we'll abort the config anyways */
-				raidPtr->Disks[hosed_column].status
-					= rf_ds_failed;
-				raidPtr->numFailures++;
-				raidPtr->status = rf_rs_degraded;
-			}
+			if (hosed_column != -1)
+				rf_handle_hosed(raidPtr, cfgPtr, hosed_column,
+				    0);
 		} else {
 			too_fatal = 1;
 		}
@@ -889,19 +896,9 @@ rf_CheckLabels(RF_Raid_t *raidPtr, RF_Config_t *cfgPtr)
 					}
 				}
 			}
-			printf("Hosed component: %s\n",
-			       &cfgPtr->devnames[0][hosed_column][0]);
-			if (!force) {
-				/* we'll fail this component, as if there are
-				   other major errors, we arn't forcing things
-				   and we'll abort the config anyways */
-				if (raidPtr->Disks[hosed_column].status != rf_ds_failed) {
-					raidPtr->Disks[hosed_column].status
-						= rf_ds_failed;
-					raidPtr->numFailures++;
-					raidPtr->status = rf_rs_degraded;
-				}
-			}
+			if (hosed_column != -1)
+				rf_handle_hosed(raidPtr, cfgPtr, hosed_column,
+				    1);
 		} else {
 			too_fatal = 1;
 		}

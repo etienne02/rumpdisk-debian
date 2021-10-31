@@ -1,4 +1,4 @@
-/*	$NetBSD: isareg.h,v 1.9 2005/12/11 12:22:02 christos Exp $	*/
+/*	$NetBSD: isareg.h,v 1.11 2019/12/27 09:50:27 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -55,7 +55,7 @@
 #define	IO_PPI		0x061		/* Programmable Peripheral Interface */
 #define	IO_RTC		0x070		/* RTC */
 #define	IO_NMI		IO_RTC		/* NMI Control */
-#define	IO_DMAPG	0x080		/* DMA Page Registers */
+#define	IO_DMAPG	0x081		/* DMA Page Registers */
 #define	IO_ICU2		0x0A0		/* 8259A Interrupt Controller #2 */
 #define	IO_DMA2		0x0C0		/* 8237A DMA Controller #2 */
 #define	IO_NPX		0x0F0		/* Numeric Coprocessor */
@@ -133,7 +133,7 @@
 #define	IO_COMSIZE	8	/* 8250, 16X50 com controllers */
 #define	IO_CGASIZE	16	/* CGA controllers */
 #define	IO_DMASIZE	16	/* 8237 DMA controllers */
-#define	IO_DPGSIZE	32	/* 74LS612 DMA page reisters */
+#define	IO_DPGSIZE	32	/* 74LS612 DMA page registers */
 #define	IO_FDCSIZE	8	/* Nec765 floppy controllers */
 #define	IO_WDCSIZE	8	/* WD compatible disk controller */
 #define	IO_GAMSIZE	16	/* AT compatible game controller */

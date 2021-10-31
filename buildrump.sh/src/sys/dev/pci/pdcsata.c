@@ -1,4 +1,4 @@
-/*	$NetBSD: pdcsata.c,v 1.27 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: pdcsata.c,v 1.31 2019/02/03 03:19:27 mrg Exp $	*/
 
 /*
  * Copyright (c) 2004, Manuel Bouyer.
@@ -25,10 +25,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pdcsata.c,v 1.27 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pdcsata.c,v 1.31 2019/02/03 03:19:27 mrg Exp $");
 
 #include <sys/types.h>
-#include <sys/malloc.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 
@@ -240,9 +239,11 @@ pdcsata_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 		    "couldn't map interrupt\n");
 		return;
 	}
-	intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf, sizeof(intrbuf));
-	sc->sc_pci_ih = pci_intr_establish(pa->pa_pc,
-	    intrhandle, IPL_BIO, pdcsata_pci_intr, sc);
+	intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf,
+	    sizeof(intrbuf));
+	sc->sc_pci_ih = pci_intr_establish_xname(pa->pa_pc,
+	    intrhandle, IPL_BIO, pdcsata_pci_intr, sc,
+	    device_xname(sc->sc_wdcdev.sc_atac.atac_dev));
 
 	if (sc->sc_pci_ih == NULL) {
 		aprint_error_dev(sc->sc_wdcdev.sc_atac.atac_dev,
@@ -354,6 +355,7 @@ pdcsata_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 		    2;
 		sc->sc_wdcdev.sc_atac.atac_probe = wdc_drvprobe;
 
+		/* FALLTHROUGH */
 	default:
 		aprint_error("unknown promise product 0x%x\n",
 		    sc->sc_pp->ide_product);
@@ -375,15 +377,7 @@ pdcsata_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 		cp->name = NULL;
 		cp->ata_channel.ch_channel = channel;
 		cp->ata_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-		cp->ata_channel.ch_queue =
-		    malloc(sizeof(struct ata_queue), M_DEVBUF, M_NOWAIT);
-		if (cp->ata_channel.ch_queue == NULL) {
-			aprint_error("%s channel %d: "
-			    "can't allocate memory for command queue\n",
-			    device_xname(sc->sc_wdcdev.sc_atac.atac_dev),
-			    channel);
-			goto next_channel;
-		}
+
 		wdc_cp = &cp->ata_channel;
 		wdr = CHAN_TO_WDC_REGS(wdc_cp);
 
@@ -406,7 +400,7 @@ pdcsata_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 				goto next_channel;
 			}
 		}
-		wdc_init_shadow_regs(wdc_cp);
+		wdc_init_shadow_regs(wdr);
 
 		/*
 		 * subregion de busmaster registers. They're spread all over

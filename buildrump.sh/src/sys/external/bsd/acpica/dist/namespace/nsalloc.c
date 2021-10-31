@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -123,6 +123,11 @@ AcpiNsDeleteNode (
 
     ACPI_FUNCTION_NAME (NsDeleteNode);
 
+
+    if (!Node)
+    {
+        return_VOID;
+    }
 
     /* Detach an object if there is one */
 
@@ -310,7 +315,7 @@ AcpiNsInstallNode (
     Node->Type = (UINT8) Type;
 
     ACPI_DEBUG_PRINT ((ACPI_DB_NAMES,
-        "%4.4s (%s) [Node %p Owner %X] added to %4.4s (%s) [Node %p]\n",
+        "%4.4s (%s) [Node %p Owner %3.3X] added to %4.4s (%s) [Node %p]\n",
         AcpiUtGetNodeName (Node), AcpiUtGetTypeName (Node->Type), Node, OwnerId,
         AcpiUtGetNodeName (ParentNode), AcpiUtGetTypeName (ParentNode->Type),
         ParentNode));
@@ -368,7 +373,7 @@ AcpiNsDeleteChildren (
         NodeToDelete = NextNode;
         NextNode = NextNode->Peer;
         AcpiNsDeleteNode (NodeToDelete);
-    };
+    }
 
     /* Clear the parent's child pointer */
 

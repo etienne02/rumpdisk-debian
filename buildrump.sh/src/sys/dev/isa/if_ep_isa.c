@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ep_isa.c,v 1.45 2016/07/14 10:19:06 msaitoh Exp $	*/
+/*	$NetBSD: if_ep_isa.c,v 1.47 2019/12/27 04:50:41 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ep_isa.c,v 1.45 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ep_isa.c,v 1.47 2019/12/27 04:50:41 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -143,7 +143,7 @@ epaddcard(int bus, int iobase, int irq, int model)
 /*
  * 3c509 cards on the ISA bus are probed in ethernet address order.
  * The probe sequence requires careful orchestration, and we'd like
- * like to allow the irq and base address to be wildcarded. So, we
+ * to allow the irq and base address to be wildcarded. So, we
  * probe all the cards the first time epprobe() is called. On subsequent
  * calls we look for matching cards.
  */
@@ -177,11 +177,7 @@ ep_isa_probe(device_t parent, cfdata_t match, void *aux)
 	/*
 	 * Mark this bus so we don't probe it again.
 	 */
-	er = (struct ep_isa_done_probe *)
-	    malloc(sizeof(struct ep_isa_done_probe), M_DEVBUF, M_NOWAIT);
-	if (er == NULL)
-		panic("ep_isa_probe: can't allocate state storage");
-
+	er = malloc(sizeof(struct ep_isa_done_probe), M_DEVBUF, M_WAITOK);
 	er->er_bus = bus;
 	LIST_INSERT_HEAD(&ep_isa_all_probes, er, er_link);
 

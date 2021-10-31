@@ -1,4 +1,4 @@
-/*	$NetBSD: btkbd.c,v 1.17 2014/11/16 16:20:00 ozaki-r Exp $	*/
+/*	$NetBSD: btkbd.c,v 1.21 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btkbd.c,v 1.17 2014/11/16 16:20:00 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btkbd.c,v 1.21 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -81,7 +81,7 @@ __KERNEL_RCSID(0, "$NetBSD: btkbd.c,v 1.17 2014/11/16 16:20:00 ozaki-r Exp $");
 #include <dev/bluetooth/bthid.h>
 #include <dev/bluetooth/bthidev.h>
 
-#include <dev/usb/hid.h>
+#include <dev/hid/hid.h>
 #include <dev/usb/usb.h>
 #include <dev/usb/usbhid.h>
 
@@ -163,10 +163,10 @@ static const struct wskbd_accessops btkbd_accessops = {
 };
 
 /* wskbd(4) keymap data */
-extern const struct wscons_keydesc ukbd_keydesctab[];
+extern const struct wscons_keydesc hidkbd_keydesctab[];
 
 const struct wskbd_mapdata btkbd_keymapdata = {
-	ukbd_keydesctab,
+	hidkbd_keydesctab,
 #if defined(BTKBD_LAYOUT)
 	BTKBD_LAYOUT,
 #elif defined(PCKBD_LAYOUT)
@@ -236,7 +236,7 @@ btkbd_attach(device_t parent, device_t self, void *aux)
 	wska.accessops = &btkbd_accessops;
 	wska.accesscookie = sc;
 
-	sc->sc_wskbd = config_found(self, &wska, wskbddevprint);
+	sc->sc_wskbd = config_found(self, &wska, wskbddevprint, CFARGS_NONE);
 
 	pmf_device_register(self, NULL, NULL);
 }
@@ -281,8 +281,10 @@ btkbd_parse_desc(struct btkbd_softc *sc, int id, const void *desc, int dlen)
 			continue;
 
 		if (h.flags & HIO_VARIABLE) {
-			if (h.loc.size != 1)
+			if (h.loc.size != 1) {
+				hid_end_parse(d);
 				return ("bad modifier size");
+			}
 
 			/* Single item */
 			if (imod < MAXMOD) {
@@ -290,22 +292,28 @@ btkbd_parse_desc(struct btkbd_softc *sc, int id, const void *desc, int dlen)
 				sc->sc_mods[imod].mask = 1 << imod;
 				sc->sc_mods[imod].key = HID_GET_USAGE(h.usage);
 				imod++;
-			} else
+			} else {
+				hid_end_parse(d);
 				return ("too many modifier keys");
+			}
 		} else {
 			/* Array */
-			if (h.loc.size != 8)
+			if (h.loc.size != 8) {
+				hid_end_parse(d);
 				return ("key code size != 8");
-
-			if (h.loc.count > MAXKEYCODE)
+			}
+			if (h.loc.count > MAXKEYCODE) {
+				hid_end_parse(d);
 				return ("too many key codes");
-
-			if (h.loc.pos % 8 != 0)
+			}
+			if (h.loc.pos % 8 != 0) {
+				hid_end_parse(d);
 				return ("key codes not on byte boundary");
-
-			if (sc->sc_nkeycode != 0)
+			}
+			if (sc->sc_nkeycode != 0) {
+				hid_end_parse(d);
 				return ("multiple key code arrays\n");
-
+			}
 			sc->sc_keycodeloc = h.loc;
 			sc->sc_nkeycode = h.loc.count;
 		}

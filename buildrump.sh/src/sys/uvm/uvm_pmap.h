@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_pmap.h,v 1.38 2013/02/02 14:06:58 matt Exp $	*/
+/*	$NetBSD: uvm_pmap.h,v 1.41 2021/03/07 08:16:58 skrll Exp $	*/
 
 /*
  * Copyright (c) 1991, 1993
@@ -181,7 +181,7 @@ void		pmap_page_protect(struct vm_page *, vm_prot_t);
 paddr_t		pmap_phys_address(paddr_t);
 #endif
 #if !defined(pmap_mmap_flags)
-#define pmap_mmap_flags(x)	0
+#define		pmap_mmap_flags(x)	0
 #endif
 void		pmap_protect(pmap_t, vaddr_t, vaddr_t, vm_prot_t);
 #if !defined(pmap_reference)
@@ -190,7 +190,7 @@ void		pmap_reference(pmap_t);
 #if !defined(pmap_remove)
 void		pmap_remove(pmap_t, vaddr_t, vaddr_t);
 #endif
-void		pmap_remove_all(struct pmap *);
+bool		pmap_remove_all(struct pmap *);
 #if !defined(pmap_update)
 void		pmap_update(pmap_t);
 #endif
@@ -212,6 +212,13 @@ vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 #if defined(PMAP_FORK)
 void		pmap_fork(pmap_t, pmap_t);
 #endif
+
+#if defined(PMAP_DIRECT)
+int		pmap_direct_process(paddr_t, voff_t, size_t,
+		    int (*)(void *, size_t, void *),
+		    void *);
+#endif
+
 #endif	/* kernel*/
 #endif  /* PMAP_EXCLUDE_DECLS */
 

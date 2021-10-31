@@ -1,5 +1,5 @@
 /*	$KAME: sctp_input.c,v 1.28 2005/04/21 18:36:21 nishida Exp $	*/
-/*	$NetBSD: sctp_input.c,v 1.3 2016/06/10 13:31:44 ozaki-r Exp $	*/
+/*	$NetBSD: sctp_input.c,v 1.14 2019/05/28 08:59:35 msaitoh Exp $	*/
 
 /*
  * Copyright (C) 2002, 2003, 2004 Cisco Systems Inc,
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp_input.c,v 1.3 2016/06/10 13:31:44 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp_input.c,v 1.14 2019/05/28 08:59:35 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ipsec.h"
@@ -87,8 +87,6 @@ __KERNEL_RCSID(0, "$NetBSD: sctp_input.c,v 1.3 2016/06/10 13:31:44 ozaki-r Exp $
 #include <netipsec/ipsec.h>
 #include <netipsec/key.h>
 #endif /*IPSEC*/
-
-#include <net/net_osdep.h>
 
 #ifdef SCTP_DEBUG
 extern u_int32_t sctp_debug_on;
@@ -684,6 +682,7 @@ sctp_process_unrecog_chunk(struct sctp_tcb *stcb, struct sctp_paramhdr *phdr,
 			printf("Strange peer, snds ASCONF but does not recongnize asconf-ack?\n");
 		}
 #endif
+		/* FALLTHROUGH */
 	case SCTP_ASCONF:
 #ifdef SCTP_DEBUG
 		if (sctp_debug_on & SCTP_DEBUG_INPUT2) {
@@ -831,7 +830,7 @@ sctp_handle_error(struct sctp_chunkhdr *ch,
 			 * IPv4 for that matter) it does not matter. If they
 			 * don't support that type of address, they can NOT
 			 * possibly get that packet type... i.e. with no IPv6
-			 * you can't recieve a IPv6 packet. so we can safely
+			 * you can't receive a IPv6 packet. so we can safely
 			 * ignore this one. If we ever added support for
 			 * HOSTNAME Addresses, then we would need to do
 			 * something here.
@@ -1158,6 +1157,7 @@ sctp_process_cookie_existing(struct mbuf *m, int iphlen, int offset,
 #endif
 				return (NULL);
 			}
+			/* FALLTHROUGH */
 			/* intentional fall through to below... */
 
 		case SCTP_STATE_COOKIE_ECHOED:
@@ -1729,19 +1729,6 @@ sctp_handle_cookie_echo(struct mbuf *m, int iphlen, int offset,
 	cookie_offset = offset + sizeof(struct sctp_chunkhdr);
 	cookie_len = ntohs(cp->ch.chunk_length);
 
-	if ((cookie->peerport != sh->src_port) &&
-	    (cookie->myport != sh->dest_port) &&
-	    (cookie->my_vtag != sh->v_tag)) {
-		/*
-		 * invalid ports or bad tag.  Note that we always leave
-		 * the v_tag in the header in network order and when we
-		 * stored it in the my_vtag slot we also left it in network
-		 * order. This maintians the match even though it may be in
-		 * the opposite byte order of the machine :->
-		 */
-		return (NULL);
-	}
-
 	/* compute size of packet */
 	if (m->m_flags & M_PKTHDR) {
 		size_of_pkt = m->m_pkthdr.len;
@@ -1767,6 +1754,20 @@ sctp_handle_cookie_echo(struct mbuf *m, int iphlen, int offset,
 #endif /* SCTP_DEBUG */
 		return (NULL);
 	}
+
+	if ((cookie->peerport != sh->src_port) &&
+	    (cookie->myport != sh->dest_port) &&
+	    (cookie->my_vtag != sh->v_tag)) {
+		/*
+		 * invalid ports or bad tag.  Note that we always leave
+		 * the v_tag in the header in network order and when we
+		 * stored it in the my_vtag slot we also left it in network
+		 * order. This maintians the match even though it may be in
+		 * the opposite byte order of the machine :->
+		 */
+		return (NULL);
+	}
+
 	/*
 	 * split off the signature into its own mbuf (since it
 	 * should not be calculated in the sctp_hash_digest_m() call).
@@ -2989,7 +2990,7 @@ sctp_handle_packet_dropped(struct sctp_pktdrop_chunk *cp,
 			 * Take 1/4 of the space left or
 			 * max burst up .. whichever is less.
 			 */
-			incr = min((bw_avail - on_queue) >> 2,
+			incr = uimin((bw_avail - on_queue) >> 2,
 			    (int)stcb->asoc.max_burst * (int)net->mtu);
 			net->cwnd += incr;
 		}
@@ -3187,7 +3188,7 @@ sctp_process_control(struct mbuf *m, int iphlen, int *offset, int length,
 #ifdef SCTP_DEBUG
 			if (sctp_debug_on & SCTP_DEBUG_INPUT3) {
 				printf("sctp_process_control: chunk length invalid! *offset:%u, chk_length:%u > length:%u\n",
-				    *offset, length, chk_length);
+				    *offset, chk_length, length);
 			}
 #endif /* SCTP_DEBUG */
 			*offset = length;
@@ -4050,7 +4051,7 @@ sctp_saveopt(struct sctp_inpcb *inp, struct mbuf **mp, struct ip *ip,
 extern int sctp_no_csum_on_loopback;
 
 void
-sctp_input(struct mbuf *m, ...)
+sctp_input(struct mbuf *m, int off, int proto)
 {
 	int iphlen;
 	u_int8_t ecn_bits;
@@ -4070,12 +4071,7 @@ sctp_input(struct mbuf *m, ...)
 	int refcount_up = 0;
 	int length, mlen, offset;
 
-	int off;
-	va_list ap;
-
-	va_start(ap, m);
-	iphlen = off = va_arg(ap, int);
-	va_end(ap);
+	iphlen = off;
 
 	net = NULL;
 	sctp_pegs[SCTP_INPKTS]++;
@@ -4237,7 +4233,7 @@ sctp_input(struct mbuf *m, ...)
 	 * I very much doubt any of the IPSEC stuff will work but I have
 	 * no idea, so I will leave it in place.
 	 */
-	if (ipsec_used && ipsec4_in_reject_so(m, inp->ip_inp.inp.inp_socket)) {
+	if (ipsec_used && ipsec_in_reject(m, (struct inpcb *)inp)) {
 #if 0
 		ipsecstat.in_polvio++;
 #endif

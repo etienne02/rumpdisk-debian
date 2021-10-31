@@ -1,4 +1,4 @@
-/*	$NetBSD: db_sym.c,v 1.64 2012/02/10 02:14:04 christos Exp $	*/
+/*	$NetBSD: db_sym.c,v 1.67 2021/04/12 02:49:02 mrg Exp $	*/
 
 /*
  * Mach Operating System
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_sym.c,v 1.64 2012/02/10 02:14:04 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_sym.c,v 1.67 2021/04/12 02:49:02 mrg Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddbparam.h"
@@ -50,7 +50,6 @@ static void		db_symsplit(char *, char **, char **);
 
 const db_symformat_t *db_symformat;
 static db_forall_func_t db_sift;
-extern db_symformat_t db_symformat_aout;
 extern db_symformat_t db_symformat_elf;
 #endif
 
@@ -112,12 +111,12 @@ db_value_of_name(const char *name, db_expr_t *valuep)
 	(void)strlcpy(symbol, name, sizeof(symbol));
 	db_symsplit(symbol, &mod, &sym);
 #ifdef _KERNEL
-	if (ksyms_getval_unlocked(mod, sym, &uval, KSYMS_EXTERN) == 0) {
+	if (ksyms_getval_unlocked(mod, sym, NULL, &uval, KSYMS_EXTERN) == 0) {
 		val = (long) uval;
 		*valuep = (db_expr_t)val;
 		return true;
 	}
-	if (ksyms_getval_unlocked(mod, sym, &uval, KSYMS_ANY) == 0) {
+	if (ksyms_getval_unlocked(mod, sym, NULL, &uval, KSYMS_ANY) == 0) {
 		val = (long) uval;
 		*valuep = (db_expr_t)val;
 		return true;
@@ -225,7 +224,8 @@ db_search_symbol(db_addr_t val, db_strategy_t strategy, db_expr_t *offp)
 		db_expr_t newdiff;
 		db_sym_t ssym;
 
-		newdiff = diff = ~0;
+		diff = ~0u;
+		newdiff = ~0;
 		ssym = (*db_symformat->sym_search)
 		    (NULL, val, strategy, &newdiff);
 		if ((unsigned int) newdiff < diff) {
@@ -239,7 +239,7 @@ db_search_symbol(db_addr_t val, db_strategy_t strategy, db_expr_t *offp)
 
 #ifdef _KERNEL
 	if (ksyms_getname(&mod, &sym, (vaddr_t)val, strategy) == 0) {
-		(void)ksyms_getval_unlocked(mod, sym, &naddr, KSYMS_ANY);
+		(void)ksyms_getval_unlocked(mod, sym, NULL, &naddr, KSYMS_ANY);
 		diff = val - (db_addr_t)naddr;
 		ret = (db_sym_t)naddr;
 	} else
@@ -346,7 +346,7 @@ db_symstr(char *buf, size_t buflen, db_expr_t off, db_strategy_t strategy)
 #ifdef _KERNEL
 	if (ksyms_getname(&mod, &name, (vaddr_t)off,
 	    strategy|KSYMS_CLOSEST) == 0) {
-		(void)ksyms_getval_unlocked(mod, name, &val, KSYMS_ANY);
+		(void)ksyms_getval_unlocked(mod, name, NULL, &val, KSYMS_ANY);
 		if (((off - val) < db_maxoff) && val) {
 			snprintf(buf, buflen, "%s:%s", mod, name);
 			if (off - val) {
@@ -417,7 +417,7 @@ db_printsym(db_expr_t off, db_strategy_t strategy,
 #ifdef _KERNEL
 	if (ksyms_getname(&mod, &name, (vaddr_t)off,
 	    strategy|KSYMS_CLOSEST) == 0) {
-		(void)ksyms_getval_unlocked(mod, name, &uval, KSYMS_ANY);
+		(void)ksyms_getval_unlocked(mod, name, NULL, &uval, KSYMS_ANY);
 		val = (long) uval;
 		if (((off - val) < db_maxoff) && val) {
 			(*pr)("%s:%s", mod, name);

@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_ftp_pxy.c,v 1.5 2014/03/20 20:43:12 christos Exp $	*/
+/*	$NetBSD: ip_ftp_pxy.c,v 1.7 2018/06/03 10:37:23 maxv Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -12,7 +12,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: ip_ftp_pxy.c,v 1.5 2014/03/20 20:43:12 christos Exp $");
+__KERNEL_RCSID(1, "$NetBSD: ip_ftp_pxy.c,v 1.7 2018/06/03 10:37:23 maxv Exp $");
 
 #define	IPF_FTP_PROXY
 
@@ -120,7 +120,7 @@ void ipf_p_ftp_setpending(ipf_main_softc_t *, ftpinfo_t *);
 
 static	int	ipf_p_ftp_proxy_init = 0;
 static	frentry_t	ftppxyfr;
-static	ipftuneable_t	ipf_ftp_tuneables[] = {
+static	const ipftuneable_t	ipf_ftp_tuneables[] = {
 	{ { (void *)offsetof(ipf_ftp_softc_t, ipf_p_ftp_debug) },
 		"ftp_debug",	0,	0x7f,
 		stsizeof(ipf_ftp_softc_t, ipf_p_ftp_debug),
@@ -497,8 +497,8 @@ ipf_p_ftp_addport(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip, nat_t *nat,
 	 * Add skeleton NAT entry for connection which will come back the
 	 * other way.
 	 */
-	if (nat->nat_v[0] == 6) {
 #ifdef USE_INET6
+	if (nat->nat_v[0] == 6) {
 		if (nat->nat_dir == NAT_OUTBOUND) {
 			nat2 = ipf_nat6_outlookup(&fi, IPN_TCP|NAT_SEARCH,
 						  nat->nat_pr[1],
@@ -510,8 +510,9 @@ ipf_p_ftp_addport(ipf_ftp_softc_t *softf, fr_info_t *fin, ip_t *ip, nat_t *nat,
 						 &nat->nat_odst6.in6,
 						 &nat->nat_osrc6.in6);
 		}
+	} else
 #endif
-	} else {
+	{
 		if (nat->nat_dir == NAT_OUTBOUND) {
 			nat2 = ipf_nat_outlookup(&fi, IPN_TCP|NAT_SEARCH,
 						 nat->nat_pr[1],

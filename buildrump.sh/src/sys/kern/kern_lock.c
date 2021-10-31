@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_lock.c,v 1.157 2015/04/11 15:24:25 skrll Exp $	*/
+/*	$NetBSD: kern_lock.c,v 1.172 2020/12/22 01:57:29 ad Exp $	*/
 
 /*-
- * Copyright (c) 2002, 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2002, 2006, 2007, 2008, 2009, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,7 +31,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_lock.c,v 1.157 2015/04/11 15:24:25 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_lock.c,v 1.172 2020/12/22 01:57:29 ad Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_lockdebug.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -43,6 +47,11 @@ __KERNEL_RCSID(0, "$NetBSD: kern_lock.c,v 1.157 2015/04/11 15:24:25 skrll Exp $"
 #include <sys/syslog.h>
 #include <sys/atomic.h>
 #include <sys/lwp.h>
+#include <sys/pserialize.h>
+
+#if defined(DIAGNOSTIC) && !defined(LOCKDEBUG)
+#include <sys/ksyms.h>
+#endif
 
 #include <machine/lock.h>
 
@@ -74,7 +83,9 @@ assert_sleepable(void)
 	 */
 	do {
 		pctr = lwp_pctr();
+		__insn_barrier();
 		idle = CURCPU_IDLE_P();
+		__insn_barrier();
 	} while (pctr != lwp_pctr());
 
 	reason = NULL;
@@ -87,6 +98,9 @@ assert_sleepable(void)
 	}
 	if (cpu_softintr_p()) {
 		reason = "softint";
+	}
+	if (!pserialize_not_in_read_section()) {
+		reason = "pserialize";
 	}
 
 	if (reason) {
@@ -101,7 +115,7 @@ assert_sleepable(void)
  */
 
 #define	_KERNEL_LOCK_ABORT(msg)						\
-    LOCKDEBUG_ABORT(kernel_lock, &_kernel_lock_ops, __func__, msg)
+    LOCKDEBUG_ABORT(__func__, __LINE__, kernel_lock, &_kernel_lock_ops, msg)
 
 #ifdef LOCKDEBUG
 #define	_KERNEL_LOCK_ASSERT(cond)					\
@@ -113,12 +127,12 @@ do {									\
 #define	_KERNEL_LOCK_ASSERT(cond)	/* nothing */
 #endif
 
-void	_kernel_lock_dump(volatile void *);
+static void	_kernel_lock_dump(const volatile void *, lockop_printer_t);
 
 lockops_t _kernel_lock_ops = {
-	"Kernel lock",
-	LOCKOPS_SPIN,
-	_kernel_lock_dump
+	.lo_name = "Kernel lock",
+	.lo_type = LOCKOPS_SPIN,
+	.lo_dump = _kernel_lock_dump,
 };
 
 /*
@@ -137,19 +151,24 @@ CTASSERT(CACHE_LINE_SIZE >= sizeof(__cpu_simple_lock_t));
 /*
  * Print debugging information about the kernel lock.
  */
-void
-_kernel_lock_dump(volatile void *junk)
+static void
+_kernel_lock_dump(const volatile void *junk, lockop_printer_t pr)
 {
 	struct cpu_info *ci = curcpu();
 
 	(void)junk;
 
-	printf_nolog("curcpu holds : %18d wanted by: %#018lx\n",
+	pr("curcpu holds : %18d wanted by: %#018lx\n",
 	    ci->ci_biglock_count, (long)ci->ci_biglock_wanted);
 }
 
 /*
  * Acquire 'nlocks' holds on the kernel lock.
+ *
+ * Although it may not look it, this is one of the most central, intricate
+ * routines in the kernel, and tons of code elsewhere depends on its exact
+ * behaviour.  If you change something in here, expect it to bite you in the
+ * rear.
  */
 void
 _kernel_lock(int nlocks)
@@ -158,7 +177,9 @@ _kernel_lock(int nlocks)
 	LOCKSTAT_TIMER(spintime);
 	LOCKSTAT_FLAG(lsflag);
 	struct lwp *owant;
-	u_int spins;
+#ifdef LOCKDEBUG
+	u_int spins = 0;
+#endif
 	int s;
 	struct lwp *l = curlwp;
 
@@ -178,7 +199,7 @@ _kernel_lock(int nlocks)
 	LOCKDEBUG_WANTLOCK(kernel_lock_dodebug, kernel_lock, RETURN_ADDRESS,
 	    0);
 
-	if (__cpu_simple_lock_try(kernel_lock)) {
+	if (__predict_true(__cpu_simple_lock_try(kernel_lock))) {
 		ci->ci_biglock_count = nlocks;
 		l->l_blcnt = nlocks;
 		LOCKDEBUG_LOCKED(kernel_lock_dodebug, kernel_lock, NULL,
@@ -198,6 +219,9 @@ _kernel_lock(int nlocks)
 	membar_producer();
 	owant = ci->ci_biglock_wanted;
 	ci->ci_biglock_wanted = l;
+#if defined(DIAGNOSTIC) && !defined(LOCKDEBUG)
+	l->l_ld_wanted = __builtin_return_address(0);
+#endif
 
 	/*
 	 * Spin until we acquire the lock.  Once we have it, record the
@@ -206,17 +230,18 @@ _kernel_lock(int nlocks)
 	LOCKSTAT_ENTER(lsflag);
 	LOCKSTAT_START_TIMER(lsflag, spintime);
 
-	spins = 0;
 	do {
 		splx(s);
 		while (__SIMPLELOCK_LOCKED_P(kernel_lock)) {
+#ifdef LOCKDEBUG
 			if (SPINLOCK_SPINOUT(spins)) {
 				extern int start_init_exec;
-				if (!start_init_exec)
+				if (start_init_exec)
 					_KERNEL_LOCK_ABORT("spinout");
 			}
 			SPINLOCK_BACKOFF_HOOK;
 			SPINLOCK_SPIN_HOOK;
+#endif
 		}
 		s = splvm();
 	} while (!__cpu_simple_lock_try(kernel_lock));
@@ -251,7 +276,9 @@ _kernel_lock(int nlocks)
 	 * prevents stores from a following mutex_exit() being reordered
 	 * to occur before our store to ci_biglock_wanted above.
 	 */
+#ifndef __HAVE_ATOMIC_AS_MEMBAR
 	membar_enter();
+#endif
 }
 
 /*

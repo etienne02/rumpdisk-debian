@@ -1,4 +1,4 @@
-/*	$NetBSD: wmi_acpi.c,v 1.14 2012/08/14 14:38:02 jruoho Exp $	*/
+/*	$NetBSD: wmi_acpi.c,v 1.19 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2009, 2010 Jukka Ruohonen <jruohonen@iki.fi>
@@ -27,7 +27,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wmi_acpi.c,v 1.14 2012/08/14 14:38:02 jruoho Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wmi_acpi.c,v 1.19 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -61,7 +61,7 @@ static void		acpi_wmi_childdet(device_t, device_t);
 static int		acpi_wmi_print(void *, const char *);
 static bool		acpi_wmi_init(struct acpi_wmi_softc *);
 static void		acpi_wmi_init_ec(struct acpi_wmi_softc *);
-static bool		acpi_wmi_add(struct acpi_wmi_softc *, ACPI_OBJECT *);
+static void		acpi_wmi_add(struct acpi_wmi_softc *, ACPI_OBJECT *);
 static void		acpi_wmi_del(struct acpi_wmi_softc *);
 static void		acpi_wmi_dump(struct acpi_wmi_softc *);
 static ACPI_STATUS	acpi_wmi_guid_get(struct acpi_wmi_softc *,
@@ -77,10 +77,10 @@ static ACPI_STATUS	acpi_wmi_enable_event(ACPI_HANDLE, uint8_t, bool);
 static ACPI_STATUS	acpi_wmi_enable_collection(ACPI_HANDLE, const char *, bool);
 static bool		acpi_wmi_input(struct wmi_t *, uint8_t, uint8_t);
 
-const char * const acpi_wmi_ids[] = {
-	"PNP0C14",
-	"pnp0c14",
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "PNP0C14" },
+	{ .compat = "pnp0c14" },
+	DEVICE_COMPAT_EOL
 };
 
 CFATTACH_DECL2_NEW(acpiwmi, sizeof(struct acpi_wmi_softc),
@@ -92,10 +92,7 @@ acpi_wmi_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct acpi_attach_args *aa = aux;
 
-	if (aa->aa_node->ad_type != ACPI_TYPE_DEVICE)
-		return 0;
-
-	return acpi_match_hid(aa->aa_node->ad_devinfo, acpi_wmi_ids);
+	return acpi_compatible_match(aa, compat_data);
 }
 
 static void
@@ -152,9 +149,10 @@ acpi_wmi_rescan(device_t self, const char *ifattr, const int *locators)
 {
 	struct acpi_wmi_softc *sc = device_private(self);
 
-	if (ifattr_match(ifattr, "acpiwmibus") && sc->sc_child == NULL)
-		sc->sc_child = config_found_ia(self, "acpiwmibus",
-		    NULL, acpi_wmi_print);
+	if (sc->sc_child == NULL) {
+		sc->sc_child =
+		    config_found(self, NULL, acpi_wmi_print, CFARGS_NONE);
+	}
 
 	return 0;
 }
@@ -213,7 +211,8 @@ acpi_wmi_init(struct acpi_wmi_softc *sc)
 		goto fail;
 	}
 
-	return acpi_wmi_add(sc, obj);
+	acpi_wmi_add(sc, obj);
+	return true;
 
 fail:
 	aprint_error_dev(sc->sc_dev, "failed to evaluate _WDG: %s\n",
@@ -225,7 +224,7 @@ fail:
 	return false;
 }
 
-static bool
+static void
 acpi_wmi_add(struct acpi_wmi_softc *sc, ACPI_OBJECT *obj)
 {
 	struct wmi_t *wmi;
@@ -238,9 +237,7 @@ acpi_wmi_add(struct acpi_wmi_softc *sc, ACPI_OBJECT *obj)
 
 	for (i = offset = 0; i < n; ++i) {
 
-		if ((wmi = kmem_zalloc(sizeof(*wmi), KM_SLEEP)) == NULL)
-			goto fail;
-
+		wmi = kmem_zalloc(sizeof(*wmi), KM_SLEEP);
 		(void)memcpy(&wmi->guid, obj->Buffer.Pointer + offset, siz);
 
 		wmi->eevent = false;
@@ -250,14 +247,6 @@ acpi_wmi_add(struct acpi_wmi_softc *sc, ACPI_OBJECT *obj)
 	}
 
 	ACPI_FREE(obj);
-
-	return true;
-
-fail:
-	ACPI_FREE(obj);
-	acpi_wmi_del(sc);
-
-	return false;
 }
 
 static void
@@ -332,7 +321,7 @@ acpi_wmi_guid_get(struct acpi_wmi_softc *sc,
 	struct wmi_t *wmi;
 	struct guid_t *guid;
 	char bin[16];
-	char hex[2];
+	char hex[3];
 	const char *ptr;
 	uint8_t i;
 
@@ -345,6 +334,7 @@ acpi_wmi_guid_get(struct acpi_wmi_softc *sc,
 			ptr++;
 
 		(void)memcpy(hex, ptr, 2);
+		hex[2] = '\0';
 
 		if (HEXCHAR(hex[0]) == 0 || HEXCHAR(hex[1]) == 0)
 			return AE_BAD_HEX_CONSTANT;
@@ -622,8 +612,10 @@ acpi_wmi_enable_collection(ACPI_HANDLE hdl, const char *oid, bool flag)
 static bool
 acpi_wmi_input(struct wmi_t *wmi, uint8_t flag, uint8_t idx)
 {
-
-	if ((wmi->guid.flags & flag) == 0)
+	/* A data block may have no flags at all */
+	if ((wmi->guid.flags & flag) == 0 &&
+	    (flag == ACPI_WMI_FLAG_DATA  &&
+	     (wmi->guid.flags & ~ACPI_WMI_FLAG_EXPENSIVE) != 0))
 		return false;
 
 	if (wmi->guid.count == 0x00)

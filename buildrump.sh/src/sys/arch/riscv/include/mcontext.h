@@ -1,4 +1,4 @@
-/* $NetBSD: mcontext.h,v 1.4 2015/04/01 21:55:33 matt Exp $ */
+/* $NetBSD: mcontext.h,v 1.6 2020/03/14 16:12:16 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
 #define	_NFREG	33		/* F0-31, FCSR */
 
 /*
- * This fragment is common to <riscv/mcontext.h> and <riscv/reg.h>  
+ * This fragment is common to <riscv/mcontext.h> and <riscv/reg.h>
  */
 #ifndef _BSD_FPREG_T_
 union __fpreg {
@@ -118,6 +118,7 @@ typedef struct {
 #define	_UC_TLSBASE	0x00080000	/* see <sys/ucontext.h> */
 
 #define _UC_MACHINE_SP(uc)	((uc)->uc_mcontext.__gregs[_REG_SP])
+#define _UC_MACHINE_FP(uc)	((uc)->uc_mcontext.__gregs[_REG_S0])
 #define _UC_MACHINE_PC(uc)	((uc)->uc_mcontext.__gregs[_REG_PC])
 #define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[_REG_RV])
 

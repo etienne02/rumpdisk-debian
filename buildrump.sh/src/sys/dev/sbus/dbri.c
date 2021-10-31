@@ -1,4 +1,4 @@
-/*	$NetBSD: dbri.c,v 1.35 2013/10/19 21:00:32 mrg Exp $	*/
+/*	$NetBSD: dbri.c,v 1.45 2021/02/06 13:02:28 isaki Exp $	*/
 
 /*
  * Copyright (C) 1997 Rudolf Koenig (rfkoenig@immd4.informatik.uni-erlangen.de)
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dbri.c,v 1.35 2013/10/19 21:00:32 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dbri.c,v 1.45 2021/02/06 13:02:28 isaki Exp $");
 
 #include "audio.h"
 #if NAUDIO > 0
@@ -54,8 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: dbri.c,v 1.35 2013/10/19 21:00:32 mrg Exp $");
 #include <machine/autoconf.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
-#include <dev/auconv.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/ic/cs4215reg.h>
 #include <dev/ic/cs4215var.h>
@@ -132,9 +131,10 @@ static void	pipe_ts_link(struct dbri_softc *, int, enum io, int, int, int);
 static int	pipe_active(struct dbri_softc *, int);
 
 /* audio(9) stuff */
-static int	dbri_query_encoding(void *, struct audio_encoding *);
-static int	dbri_set_params(void *, int, int, struct audio_params *,
-    struct audio_params *,stream_filter_list_t *, stream_filter_list_t *);
+static int	dbri_query_format(void *, audio_format_query_t *);
+static int	dbri_set_format(void *, int,
+    const audio_params_t *, const audio_params_t *,
+    audio_filter_reg_t *, audio_filter_reg_t *);
 static int	dbri_round_blocksize(void *, int, int, const audio_params_t *);
 static int	dbri_halt_output(void *);
 static int	dbri_halt_input(void *);
@@ -142,7 +142,6 @@ static int	dbri_getdev(void *, struct audio_device *);
 static int	dbri_set_port(void *, mixer_ctrl_t *);
 static int	dbri_get_port(void *, mixer_ctrl_t *);
 static int	dbri_query_devinfo(void *, mixer_devinfo_t *);
-static size_t	dbri_round_buffersize(void *, int, size_t);
 static int	dbri_get_props(void *);
 static int	dbri_open(void *, int);
 static void	dbri_close(void *);
@@ -160,11 +159,11 @@ static void	dbri_get_locks(void *, kmutex_t **, kmutex_t **);
 
 static void	*dbri_malloc(void *, int, size_t);
 static void	dbri_free(void *, void *, size_t);
-static paddr_t	dbri_mappage(void *, void *, off_t, int);
 static void	dbri_set_power(struct dbri_softc *, int);
 static void	dbri_bring_up(struct dbri_softc *);
 static bool	dbri_suspend(device_t, const pmf_qual_t *);
 static bool	dbri_resume(device_t, const pmf_qual_t *);
+static int	dbri_commit(void *);
 
 /* stupid support routines */
 static uint32_t	reverse_bytes(uint32_t, int);
@@ -178,8 +177,8 @@ struct audio_device dbri_device = {
 struct audio_hw_if dbri_hw_if = {
 	.open			= dbri_open,
 	.close			= dbri_close,
-	.query_encoding		= dbri_query_encoding,
-	.set_params		= dbri_set_params,
+	.query_format		= dbri_query_format,
+	.set_format		= dbri_set_format,
 	.round_blocksize	= dbri_round_blocksize,
 	.halt_output		= dbri_halt_output,
 	.halt_input		= dbri_halt_input,
@@ -189,41 +188,31 @@ struct audio_hw_if dbri_hw_if = {
 	.query_devinfo		= dbri_query_devinfo,
 	.allocm			= dbri_malloc,
 	.freem			= dbri_free,
-	.round_buffersize	= dbri_round_buffersize,
-	.mappage		= dbri_mappage,
 	.get_props		= dbri_get_props,
 	.trigger_output		= dbri_trigger_output,
 	.trigger_input		= dbri_trigger_input,
 	.get_locks		= dbri_get_locks,
+	.commit_settings	= dbri_commit,
 };
 
 CFATTACH_DECL_NEW(dbri, sizeof(struct dbri_softc),
     dbri_match_sbus, dbri_attach_sbus, NULL, NULL);
 
-#define DBRI_NFORMATS		4
-static const struct audio_format dbri_formats[DBRI_NFORMATS] = {
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_SLINEAR_BE, 16, 16,
-	 2, AUFMT_STEREO, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
-/*	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ULAW, 8, 8,
-	 2, AUFMT_STEREO, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ALAW, 8, 8,
-	 2, AUFMT_STEREO, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ULINEAR, 8, 8,
-	 2, AUFMT_STEREO, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},*/
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ULAW, 8, 8,
-	 1, AUFMT_MONAURAL, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ALAW, 8, 8,
-	 1, AUFMT_MONAURAL, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
-	{NULL, AUMODE_PLAY | AUMODE_RECORD, AUDIO_ENCODING_ULINEAR, 8, 8,
-	 1, AUFMT_MONAURAL, 8, {8000, 9600, 11025, 16000, 22050, 32000, 44100, 
-	 48000}},
+/* The HW actually supports more encodings/frequencies, but it's enough. */
+static const struct audio_format dbri_formats[] = {
+	{
+		.mode		= AUMODE_PLAY | AUMODE_RECORD,
+		.encoding	= AUDIO_ENCODING_SLINEAR_BE,
+		.validbits	= 16,
+		.precision	= 16,
+		.channels	= 2,
+		.channel_mask	= AUFMT_STEREO,
+		.frequency_type	= 8,
+		.frequency	=
+		    { 8000, 9600, 11025, 16000, 22050, 32000, 44100, 48000 },
+	},
 };
+#define DBRI_NFORMATS	__arraycount(dbri_formats)
 
 enum {
 	DBRI_OUTPUT_CLASS,
@@ -277,6 +266,8 @@ dbri_attach_sbus(device_t parent, device_t self, void *aux)
 	sc->sc_dmat = sa->sa_dmatag;
 	sc->sc_powerstate = 1;
 
+	sc->sc_whack_codec = 0;
+
 	pwr = prom_getpropint(sa->sa_node,"pwr-on-auxio",0);
 	aprint_normal(": rev %s\n", ver);
 
@@ -302,6 +293,7 @@ dbri_attach_sbus(device_t parent, device_t self, void *aux)
 	for (i = 0; i < DBRI_NUM_DESCRIPTORS; i++) {
 		sc->sc_desc[i].softint = softint_establish(SOFTINT_SERIAL,
 		    dbri_softint, &sc->sc_desc[i]);
+		sc->sc_desc[i].sc = sc;
 	}
 
 	if (sa->sa_npromvaddrs)
@@ -365,18 +357,21 @@ dbri_attach_sbus(device_t parent, device_t self, void *aux)
 	sc->sc_bufsiz = size;
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
-	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);
+	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_AUDIO);
 
-	bus_intr_establish(sa->sa_bustag, sa->sa_pri, IPL_SCHED, dbri_intr,
+#ifndef DBRI_SPIN
+	cv_init(&sc->sc_cv, "dbricv");
+#endif
+
+	bus_intr_establish(sa->sa_bustag, sa->sa_pri, IPL_AUDIO, dbri_intr,
 	    sc);
 
 	sc->sc_locked = 0;
 	sc->sc_desc_used = 0;
-	sc->sc_refcount = 0;
 	sc->sc_playing = 0;
 	sc->sc_recording = 0;
 	sc->sc_init_done = 0;
-	config_finalize_register(self, &dbri_config_interrupts);
+	config_finalize_register(self, dbri_config_interrupts);
 
 	return;
 }
@@ -444,23 +439,32 @@ dbri_config_interrupts(device_t dev)
 {
 	struct dbri_softc *sc = device_private(dev);
 
-	if (sc->sc_init_done != 0)
+	mutex_spin_enter(&sc->sc_intr_lock);
+	if (sc->sc_init_done != 0) {
+		mutex_spin_exit(&sc->sc_intr_lock);
 		return 0;
-
+	}
 	sc->sc_init_done = 1;
 
 	dbri_init(sc);
+
+	/* talking to the codec needs working interrupts */
 	if (mmcodec_init(sc) == -1) {
+		mutex_spin_exit(&sc->sc_intr_lock);
 		printf("%s: no codec detected, aborting\n",
 		    device_xname(dev));
 		return 0;
 	}
+	mutex_spin_exit(&sc->sc_intr_lock);
 
 	/* Attach ourselves to the high level audio interface */
 	audio_attach_mi(&dbri_hw_if, sc, sc->sc_dev);
 
 	/* power down until open() */
+	mutex_spin_enter(&sc->sc_intr_lock);
 	dbri_set_power(sc, 0);
+	mutex_spin_exit(&sc->sc_intr_lock);
+
 	return 0;
 }
 
@@ -517,9 +521,12 @@ static void
 dbri_softint(void *cookie)
 {
 	struct dbri_desc *dd = cookie;
+	struct dbri_softc *sc = dd->sc;
 
+	mutex_spin_enter(&sc->sc_intr_lock);
 	if (dd->callback != NULL)
 		dd->callback(dd->callback_args);
+	mutex_spin_exit(&sc->sc_intr_lock);
 }
 
 static int
@@ -532,7 +539,10 @@ dbri_init(struct dbri_softc *sc)
 	bus_addr_t dmaaddr;
 	int n;
 
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
 	dbri_reset(sc);
+	sc->sc_mm.status = 0;
 
 	cmd = dbri_command_lock(sc);
 
@@ -548,7 +558,6 @@ dbri_init(struct dbri_softc *sc)
 		sc->sc_dma->intr[n] = 0;
 	}
 
-	/* Disable all SBus bursts */
 	/* XXX 16 byte bursts cause errors, the rest works */
 	reg = bus_space_read_4(iot, ioh, DBRI_REG0);
 
@@ -562,6 +571,7 @@ dbri_init(struct dbri_softc *sc)
 	*(cmd++) = dmaaddr;
 
 	dbri_command_send(sc, cmd);
+
 	return (0);
 }
 
@@ -603,7 +613,7 @@ dbri_command_send(struct dbri_softc *sc, volatile uint32_t *cmd)
 	bus_space_tag_t iot = sc->sc_iot;
 	int maxloops = 1000000;
 
-	mutex_spin_enter(&sc->sc_intr_lock);
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
 
 	sc->sc_locked--;
 
@@ -641,8 +651,6 @@ dbri_command_send(struct dbri_softc *sc, volatile uint32_t *cmd)
 		}
 	}
 
-	mutex_spin_exit(&sc->sc_intr_lock);
-
 	return;
 }
 
@@ -650,6 +658,9 @@ static void
 dbri_process_interrupt_buffer(struct dbri_softc *sc)
 {
 	int32_t i;
+	int orig_irqp = sc->sc_irqp;
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
 
 	while ((i = sc->sc_dma->intr[sc->sc_irqp]) != 0) {
 		sc->sc_dma->intr[sc->sc_irqp] = 0;
@@ -661,6 +672,10 @@ dbri_process_interrupt_buffer(struct dbri_softc *sc)
 			sc->sc_irqp++;
 
 		dbri_process_interrupt(sc, i);
+
+		/* don't loop more than once. */
+		if (orig_irqp == sc->sc_irqp)
+			break;
 	}
 
 	return;
@@ -688,6 +703,7 @@ dbri_process_interrupt(struct dbri_softc *sc, int32_t i)
 		int td;
 		struct dbri_desc *dd;
 
+		DPRINTF("%s:%d tx complete\n", __func__, channel);
 		td = sc->sc_pipe[channel].desc;
 		dd = &sc->sc_desc[td];
 
@@ -696,18 +712,15 @@ dbri_process_interrupt(struct dbri_softc *sc, int32_t i)
 		break;
 	}
 	case DBRI_INTR_FXDT:		/* fixed data change */
-		DPRINTF("dbri_intr: Fixed data change (%d: %x)\n", channel,
+		DPRINTF("%s:%d: Fixed data change: %x\n", __func__, channel,
 		    val);
-#if 0
-		printf("reg: %08x\n", sc->sc_mm.status);
-#endif
 		if (sc->sc_pipe[channel].sdp & DBRI_SDP_MSB)
 			val = reverse_bytes(val, sc->sc_pipe[channel].length);
 		if (sc->sc_pipe[channel].prec)
 			*(sc->sc_pipe[channel].prec) = val;
 #ifndef DBRI_SPIN
-		DPRINTF("%s: wakeup %p\n", device_xname(sc->sc_dev), sc);
-		wakeup(sc);
+		DPRINTF("%s: cv_broadcast %p\n", device_xname(sc->sc_dev), sc);
+		cv_broadcast(&sc->sc_cv);
 #endif
 		break;
 	case DBRI_INTR_SBRI:
@@ -718,6 +731,7 @@ dbri_process_interrupt(struct dbri_softc *sc, int32_t i)
 		int td;
 		struct dbri_desc *dd;
 
+		DPRINTF("dbri_intr: buffer ready (%d)\n", channel);
 		td = sc->sc_pipe[channel].desc;
 		dd = &sc->sc_desc[td];
 
@@ -859,10 +873,12 @@ mmcodec_init_data(struct dbri_softc *sc)
 	pipe_ts_link(sc, 20, PIPEoutput, 16, 32, sc->sc_mm.offset + 32);
 	pipe_ts_link(sc, 4, PIPEoutput, 16, data_width, sc->sc_mm.offset);
 	pipe_ts_link(sc, 6, PIPEinput, 16, data_width, sc->sc_mm.offset);
+#if 0
+	/* readback for the mixer registers - we don't use that */
 	pipe_ts_link(sc, 21, PIPEinput, 16, 32, sc->sc_mm.offset + 32);
 
-	pipe_receive_fixed(sc, 21, &sc->sc_mm.status);
-
+	pipe_receive_fixed(sc, 21, &sc->sc_mm.d.ldata);
+#endif
 	mmcodec_setgain(sc, 0);
 
 	tmp = bus_space_read_4(iot, ioh, DBRI_REG0);
@@ -879,13 +895,12 @@ mmcodec_pipe_init(struct dbri_softc *sc)
 	pipe_setup(sc, 4, DBRI_SDP_MEM | DBRI_SDP_TO_SER | DBRI_SDP_MSB);
 	pipe_setup(sc, 20, DBRI_SDP_FIXED | DBRI_SDP_TO_SER | DBRI_SDP_MSB);
 	pipe_setup(sc, 6, DBRI_SDP_MEM | DBRI_SDP_FROM_SER | DBRI_SDP_MSB);
+#if 0
 	pipe_setup(sc, 21, DBRI_SDP_FIXED | DBRI_SDP_FROM_SER | DBRI_SDP_MSB);
-
+#endif
 	pipe_setup(sc, 17, DBRI_SDP_FIXED | DBRI_SDP_TO_SER | DBRI_SDP_MSB);
 	pipe_setup(sc, 18, DBRI_SDP_FIXED | DBRI_SDP_FROM_SER | DBRI_SDP_MSB);
 	pipe_setup(sc, 19, DBRI_SDP_FIXED | DBRI_SDP_FROM_SER | DBRI_SDP_MSB);
-
-	sc->sc_mm.status = 0;
 
 	pipe_receive_fixed(sc, 18, &sc->sc_mm.status);
 	pipe_receive_fixed(sc, 19, &sc->sc_mm.version);
@@ -925,7 +940,7 @@ mmcodec_default(struct dbri_softc *sc)
 	 * 2: serial enable, CHI master, 128 bits per frame, clock 1
 	 * 3: tests disabled
 	 */
-	mm->c.bcontrol[0] = CS4215_RSRVD_1 | CS4215_MLB;
+	mm->c.bcontrol[0] = CS4215_ONE | CS4215_MLB;
 	mm->c.bcontrol[1] = CS4215_DFR_ULAW | CS4215_FREQ[0].csval;
 	mm->c.bcontrol[2] = CS4215_XCLK | CS4215_BSEL_128 | CS4215_FREQ[0].xtal;
 	mm->c.bcontrol[3] = 0;
@@ -970,10 +985,14 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 	bus_space_handle_t ioh = sc->sc_ioh;
 	uint32_t val;
 	uint32_t tmp;
-	int bail = 0;
-#if DBRI_SPIN
+	int ret = 0;
+#ifdef DBRI_SPIN
 	int i;
+#else
+	int error, bail = 0;
 #endif
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
 
 	/*
 	 * Temporarily mute outputs and wait 125 us to make sure that it
@@ -981,6 +1000,10 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 	 */
 	mmcodec_setgain(sc, 1);
 	delay(125);
+
+	tmp = bus_space_read_4(iot, ioh, DBRI_REG0);
+	tmp &= ~(DBRI_CHI_ACTIVATE);	/* disable CHI */
+	bus_space_write_4(iot, ioh, DBRI_REG0, tmp);
 
 	bus_space_write_4(iot, ioh, DBRI_REG2, 0);
 	delay(125);
@@ -992,7 +1015,6 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 	val |= (sc->sc_mm.onboard ? DBRI_PIO0 : DBRI_PIO2);
 
 	bus_space_write_4(iot, ioh, DBRI_REG2, val);
-
 	delay(34);
 
 	/*
@@ -1013,6 +1035,8 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 	pipe_ts_link(sc, 18, PIPEinput, 16, 8, sc->sc_mm.offset);
 	pipe_ts_link(sc, 19, PIPEinput, 16, 8, sc->sc_mm.offset + 48);
 
+	pipe_receive_fixed(sc, 18, &sc->sc_mm.status);
+
 	/* wait for the chip to echo back CLB as zero */
 	sc->sc_mm.c.bcontrol[0] &= ~CS4215_CLB;
 	pipe_transmit_fixed(sc, 17, sc->sc_mm.c.lcontrol);
@@ -1021,34 +1045,44 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 	tmp |= DBRI_CHI_ACTIVATE;
 	bus_space_write_4(iot, ioh, DBRI_REG0, tmp);
 
-#if DBRI_SPIN
+#ifdef DBRI_SPIN
 	i = 1024;
-	while (((sc->sc_mm.status & 0xe4) != 0x20) && --i) {
+	while (((sc->sc_mm.status & 0xe4) != CS4215_ONE) && (i > 0)) {
+		i--;
 		delay(125);
 	}
 
 	if (i == 0) {
 		DPRINTF("%s: cs4215 didn't respond to CLB (0x%02x)\n",
 		    device_xname(sc->sc_dev), sc->sc_mm.status);
-		return (-1);
+		ret = -1;
+		goto fail;
 	}
 #else
-	while (((sc->sc_mm.status & 0xe4) != 0x20) && (bail < 10)) {
-		DPRINTF("%s: tsleep %p\n", device_xname(sc->sc_dev), sc);
-		tsleep(sc, PCATCH | PZERO, "dbrifxdt", hz);
+	while (((sc->sc_mm.status & 0xe4) != CS4215_ONE) && (bail < 10)) {
+		DPRINTF("%s: cv_wait_sig %p\n", device_xname(sc->sc_dev), sc);
+		error = cv_timedwait_sig(&sc->sc_cv, &sc->sc_intr_lock, hz);
+		if (error == EINTR) {
+			DPRINTF("%s: interrupted\n", device_xname(sc->sc_dev));
+			ret = -1;
+			goto fail;
+		}
 		bail++;
 	}
-#endif
 	if (bail >= 10) {
-		DPRINTF("%s: switching to control mode timed out (%x %x)\n",
+		aprint_error("%s: switching to control mode timed out (%x %x)\n",
 		    device_xname(sc->sc_dev), sc->sc_mm.status,
 		    bus_space_read_4(iot, ioh, DBRI_REG2));
-		return -1;
+		ret = -1;
+		goto fail;
 	}
+#endif
 
 	/* copy the version information before it becomes unreadable again */
 	sc->sc_version = sc->sc_mm.version;
+	sc->sc_whack_codec = 0;
 
+fail:
 	/* terminate cs4215 control mode */
 	sc->sc_mm.c.bcontrol[0] |= CS4215_CLB;
 	pipe_transmit_fixed(sc, 17, sc->sc_mm.c.lcontrol);
@@ -1058,7 +1092,7 @@ mmcodec_setcontrol(struct dbri_softc *sc)
 
 	mmcodec_setgain(sc, 0);
 
-	return (0);
+	return ret;
 
 }
 
@@ -1324,8 +1358,6 @@ setup_ring_xmit(struct dbri_softc *sc, int pipe, int which, int num, int blksz,
 	dd->callback = callback;
 	dd->callback_args = callback_args;
 
-	mutex_spin_enter(&sc->sc_intr_lock);
-
 	/* the pipe shouldn't be active */
 	if (pipe_active(sc, pipe)) {
 		aprint_error("pipe active (CDP)\n");
@@ -1359,8 +1391,6 @@ setup_ring_xmit(struct dbri_softc *sc, int pipe, int which, int num, int blksz,
 		dbri_command_send(sc, cmd);
 		DPRINTF("%s: starting DMA\n", __func__);
 	}
-
-	mutex_spin_exit(&sc->sc_intr_lock);
 
 	return;
 }
@@ -1421,8 +1451,6 @@ setup_ring_recv(struct dbri_softc *sc, int pipe, int which, int num, int blksz,
 	dd->callback = callback;
 	dd->callback_args = callback_args;
 
-	mutex_spin_enter(&sc->sc_intr_lock);
-
 	/* the pipe shouldn't be active */
 	if (pipe_active(sc, pipe)) {
 		aprint_error("pipe active (CDP)\n");
@@ -1456,8 +1484,6 @@ setup_ring_recv(struct dbri_softc *sc, int pipe, int which, int num, int blksz,
 		dbri_command_send(sc, cmd);
 		DPRINTF("%s: starting DMA\n", __func__);
 	}
-
-	mutex_spin_exit(&sc->sc_intr_lock);
 
 	return;
 }
@@ -1563,135 +1589,28 @@ pipe_active(struct dbri_softc *sc, int pipe)
  */
 
 static int
-dbri_query_encoding(void *hdl, struct audio_encoding *ae)
+dbri_query_format(void *hdl, audio_format_query_t *afp)
 {
 
-	switch (ae->index) {
-	case 0:
-		strcpy(ae->name, AudioEulinear);
-		ae->encoding = AUDIO_ENCODING_ULINEAR;
-		ae->precision = 8;
-		ae->flags = 0;
-		break;
-	case 1:
-		strcpy(ae->name, AudioEmulaw);
-		ae->encoding = AUDIO_ENCODING_ULAW;
-		ae->precision = 8;
-		ae->flags = 0;
-		break;
-	case 2:
-		strcpy(ae->name, AudioEalaw);
-		ae->encoding = AUDIO_ENCODING_ALAW;
-		ae->precision = 8;
-		ae->flags = 0;
-		break;
-	case 3:
-		strcpy(ae->name, AudioEslinear);
-		ae->encoding = AUDIO_ENCODING_SLINEAR;
-		ae->precision = 8;
-		ae->flags = AUDIO_ENCODINGFLAG_EMULATED;
-		break;
-	case 4:
-		strcpy(ae->name, AudioEslinear_le);
-		ae->encoding = AUDIO_ENCODING_SLINEAR_LE;
-		ae->precision = 16;
-		ae->flags = AUDIO_ENCODINGFLAG_EMULATED;
-		break;
-	case 5:
-		strcpy(ae->name, AudioEulinear_le);
-		ae->encoding = AUDIO_ENCODING_ULINEAR_LE;
-		ae->precision = 16;
-		ae->flags = AUDIO_ENCODINGFLAG_EMULATED;
-		break;
-	case 6:
-		strcpy(ae->name, AudioEslinear_be);
-		ae->encoding = AUDIO_ENCODING_SLINEAR_BE;
-		ae->precision = 16;
-		ae->flags = 0;
-		break;
-	case 7:
-		strcpy(ae->name, AudioEulinear_be);
-		ae->encoding = AUDIO_ENCODING_ULINEAR_BE;
-		ae->precision = 16;
-		ae->flags = AUDIO_ENCODINGFLAG_EMULATED;
-		break;
-	case 8:
-		strcpy(ae->name, AudioEslinear);
-		ae->encoding = AUDIO_ENCODING_SLINEAR;
-		ae->precision = 16;
-		ae->flags = 0;
-		break;
-	default:
-		return (EINVAL);
-	}
-
-	return (0);
+	return audio_query_format(dbri_formats, DBRI_NFORMATS, afp);
 }
 
 static int
-dbri_set_params(void *hdl, int setmode, int usemode,
-		struct audio_params *play, struct audio_params *rec,
-		stream_filter_list_t *pfil, stream_filter_list_t *rfil)
+dbri_set_format(void *hdl, int setmode,
+		const audio_params_t *play, const audio_params_t *rec,
+		audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
 {
 	struct dbri_softc *sc = hdl;
 	int rate;
-	audio_params_t *p = NULL;
-	stream_filter_list_t *fil;
-	int mode;
 
-	/*
-	 * This device only has one clock, so make the sample rates match.
-	 */
-	if (play->sample_rate != rec->sample_rate &&
-	    usemode == (AUMODE_PLAY | AUMODE_RECORD)) {
-		if (setmode == AUMODE_PLAY) {
-			rec->sample_rate = play->sample_rate;
-			setmode |= AUMODE_RECORD;
-		} else if (setmode == AUMODE_RECORD) {
-			play->sample_rate = rec->sample_rate;
-			setmode |= AUMODE_PLAY;
-		} else
-			return EINVAL;
-	}
-
-	for (mode = AUMODE_RECORD; mode != -1;
-	     mode = mode == AUMODE_RECORD ? AUMODE_PLAY : -1) {
-		if ((setmode & mode) == 0)
-			continue;
-
-		p = mode == AUMODE_PLAY ? play : rec;
-		if (p->sample_rate < 4000 || p->sample_rate > 50000) {
-			DPRINTF("dbri_set_params: invalid rate %d\n", 
-			    p->sample_rate);
-			return EINVAL;
-		}
-
-		fil = mode == AUMODE_PLAY ? pfil : rfil;
-	DPRINTF("requested enc: %d rate: %d prec: %d chan: %d\n", p->encoding,
-	    p->sample_rate, p->precision, p->channels); 
-		if (auconv_set_converter(dbri_formats, DBRI_NFORMATS,
-					 mode, p, true, fil) < 0) {
-			aprint_debug("dbri_set_params: auconv_set_converter failed\n");
-			return EINVAL;
-		}
-		if (fil->req_size > 0)
-			p = &fil->filters[0].param;
-	}
-
-	if (p == NULL) {
-		DPRINTF("dbri_set_params: no parameters to set\n");
-		return 0;
-	}
-
-	DPRINTF("native enc: %d rate: %d prec: %d chan: %d\n", p->encoding,
-	    p->sample_rate, p->precision, p->channels); 
+	/* *play and *rec are the identical because !AUDIO_PROP_INDEPENDENT. */
 
 	for (rate = 0; CS4215_FREQ[rate].freq; rate++)
-		if (CS4215_FREQ[rate].freq == p->sample_rate)
+		if (CS4215_FREQ[rate].freq == play->sample_rate)
 			break;
 
 	if (CS4215_FREQ[rate].freq == 0)
-		return (EINVAL);
+		return EINVAL;
 
 	/* set frequency */
 	sc->sc_mm.c.bcontrol[1] &= ~0x38;
@@ -1699,40 +1618,15 @@ dbri_set_params(void *hdl, int setmode, int usemode,
 	sc->sc_mm.c.bcontrol[2] &= ~0x70;
 	sc->sc_mm.c.bcontrol[2] |= CS4215_FREQ[rate].xtal;
 
-	switch (p->encoding) {
-	case AUDIO_ENCODING_ULAW:
-		sc->sc_mm.c.bcontrol[1] &= ~3;
-		sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_ULAW;
-		break;
-	case AUDIO_ENCODING_ALAW:
-		sc->sc_mm.c.bcontrol[1] &= ~3;
-		sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_ALAW;
-		break;
-	case AUDIO_ENCODING_ULINEAR:
-		sc->sc_mm.c.bcontrol[1] &= ~3;
-		if (p->precision == 8) {
-			sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_LINEAR8;
-		} else {
-			sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_LINEAR16;
-		}
-		break;
-	case AUDIO_ENCODING_SLINEAR_BE:
-	case AUDIO_ENCODING_SLINEAR:
-		sc->sc_mm.c.bcontrol[1] &= ~3;
-		sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_LINEAR16;
-		break;
-	}
+	/* set encoding */
+	sc->sc_mm.c.bcontrol[1] &= ~3;
+	sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_LINEAR16;
 
-	switch (p->channels) {
-	case 1:
-		sc->sc_mm.c.bcontrol[1] &= ~CS4215_DFR_STEREO;
-		break;
-	case 2:
-		sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_STEREO;
-		break;
-	}
+	/* set channel */
+	sc->sc_mm.c.bcontrol[1] |= CS4215_DFR_STEREO;
 
-	return (0);
+	sc->sc_whack_codec = 1;
+	return 0;
 }
 
 static int
@@ -1740,12 +1634,9 @@ dbri_round_blocksize(void *hdl, int bs, int mode,
 			const audio_params_t *param)
 {
 
-	/*
-	 * DBRI DMA segment size can be up to 0x1fff, sixes that are not powers
-	 * of two seem to confuse the upper audio layer so we're going with
-	 * 0x1000 here
-	 */
-	return 0x1000;
+	if (bs > 0x1ffc)
+		return 0x1ffc;
+	return bs;
 }
 
 static int
@@ -1778,9 +1669,9 @@ dbri_set_port(void *hdl, mixer_ctrl_t *mc)
 	switch (mc->dev) {
 	    case DBRI_VOL_OUTPUT:	/* master volume */
 		latt = (latt & 0xc0) | (63 -
-		    min(mc->un.value.level[AUDIO_MIXER_LEVEL_LEFT] >> 2, 63));
+		    uimin(mc->un.value.level[AUDIO_MIXER_LEVEL_LEFT] >> 2, 63));
 		ratt = (ratt & 0xc0) | (63 -
-		    min(mc->un.value.level[AUDIO_MIXER_LEVEL_RIGHT] >> 2, 63));
+		    uimin(mc->un.value.level[AUDIO_MIXER_LEVEL_RIGHT] >> 2, 63));
 		break;
 	    case DBRI_ENABLE_MONO:	/* built-in speaker */
 	    	if (mc->un.ord == 1) {
@@ -1820,7 +1711,9 @@ dbri_set_port(void *hdl, mixer_ctrl_t *mc)
 	sc->sc_latt = latt;
 	sc->sc_ratt = ratt;
 
+	mutex_spin_enter(&sc->sc_intr_lock);
 	mmcodec_setgain(sc, 0);
+	mutex_spin_exit(&sc->sc_intr_lock);
 
 	return (0);
 }
@@ -1957,21 +1850,38 @@ dbri_query_devinfo(void *hdl, mixer_devinfo_t *di)
 	return (ENXIO);
 }
 
-static size_t
-dbri_round_buffersize(void *hdl, int dir, size_t bufsize)
-{
-#ifdef DBRI_BIG_BUFFER
-	return 0x20000;	/* use 128KB buffer */
-#else
-	return bufsize;
-#endif
-}
-
 static int
 dbri_get_props(void *hdl)
 {
 
-	return AUDIO_PROP_MMAP | AUDIO_PROP_FULLDUPLEX;
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE |
+	    AUDIO_PROP_FULLDUPLEX;
+}
+
+static int
+dbri_commit(void *hdl)
+{
+	struct dbri_softc *sc = hdl;
+	int ret = 0;
+
+	/*
+	 * we only need to whack the codec if things like sample format or
+	 * frequency changed, not for mixer stuff
+	 */
+	if (sc->sc_whack_codec == 0)
+		return 0;
+
+	mutex_spin_enter(&sc->sc_intr_lock);
+	ret = mmcodec_setcontrol(sc);
+	if (ret) {
+		DPRINTF("%s: control mode failed. Mutex %s PIL %x\n", __func__,
+		    mutex_owned(&sc->sc_intr_lock) ? "held" : "free",
+		    (getpsr() & PSR_PIL) >> 8);
+	} else
+		DPRINTF("%s: control mode ok\n", __func__);
+	mmcodec_init_data(sc);
+	mutex_spin_exit(&sc->sc_intr_lock);
+	return 0;
 }
 
 static int
@@ -1982,8 +1892,7 @@ dbri_trigger_output(void *hdl, void *start, void *end, int blksize,
 	struct dbri_softc *sc = hdl;
 	unsigned long count, num;
 
-	if (sc->sc_playing)
-		return 0;
+	KASSERT(sc->sc_playing == 0);
 
 	count = (unsigned long)(((char *)end - (char *)start));
 	num = count / blksize;
@@ -1993,13 +1902,6 @@ dbri_trigger_output(void *hdl, void *start, void *end, int blksize,
 	    (unsigned long)intrarg, blksize, count, num);
 
 	sc->sc_params = *param;
-
-	if (sc->sc_recording == 0) {
-		/* do not muck with the codec when it's already in use */
-		if (mmcodec_setcontrol(sc) != 0)
-			return -1;
-		mmcodec_init_data(sc);
-	}
 
 	/*
 	 * always use DMA descriptor 0 for output
@@ -2032,8 +1934,7 @@ dbri_trigger_input(void *hdl, void *start, void *end, int blksize,
 	struct dbri_softc *sc = hdl;
 	unsigned long count, num;
 
-	if (sc->sc_recording)
-		return 0;
+	KASSERT(sc->sc_recording == 0);
 
 	count = (unsigned long)(((char *)end - (char *)start));
 	num = count / blksize;
@@ -2043,17 +1944,6 @@ dbri_trigger_input(void *hdl, void *start, void *end, int blksize,
 	    (unsigned long)intrarg, blksize, count, num);
 
 	sc->sc_params = *param;
-
-	if (sc->sc_playing == 0) {
-
-		/*
-		 * we don't support different parameters for playing and
-		 * recording anyway so don't bother whacking the codec if
-		 * it's already set up
-		 */
-		mmcodec_setcontrol(sc);
-		mmcodec_init_data(sc);
-	}
 
 	sc->sc_recording = 1;
 	setup_ring_recv(sc, 6, 1, num, blksize, intr, intrarg);
@@ -2152,40 +2042,14 @@ dbri_free(void *v, void *p, size_t size)
 	bus_dmamap_destroy(sc->sc_dmat, dd->dmamap);
 }
 
-static paddr_t
-dbri_mappage(void *v, void *mem, off_t off, int prot)
-{
-	struct dbri_softc *sc = v;
-	int current;
-
-	if (off < 0)
-		return -1;
-
-	current = 0;
-	while ((current < sc->sc_desc_used) &&
-	    (sc->sc_desc[current].buf != mem))
-	    	current++;
-
-	if (current < sc->sc_desc_used) {
-		return bus_dmamem_mmap(sc->sc_dmat,
-		    &sc->sc_desc[current].dmaseg, 1, off, prot, BUS_DMA_WAITOK);
-	}
-
-	return -1;
-}
-
 static int
 dbri_open(void *cookie, int flags)
 {
 	struct dbri_softc *sc = cookie;
 
-	DPRINTF("%s: %d\n", __func__, sc->sc_refcount);
+	DPRINTF("%s\n", __func__);
 
-	if (sc->sc_refcount == 0)
-		dbri_bring_up(sc);
-
-	sc->sc_refcount++;
-
+	dbri_bring_up(sc);
 	return 0;
 }
 
@@ -2194,16 +2058,11 @@ dbri_close(void *cookie)
 {
 	struct dbri_softc *sc = cookie;
 
-	DPRINTF("%s: %d\n", __func__, sc->sc_refcount);
-
-	sc->sc_refcount--;
-	KASSERT(sc->sc_refcount >= 0);
-	if (sc->sc_refcount > 0)
-		return;
+	DPRINTF("%s\n", __func__);
+	KASSERT(sc->sc_playing == 0);
+	KASSERT(sc->sc_recording == 0);
 
 	dbri_set_power(sc, 0);
-	sc->sc_playing = 0;
-	sc->sc_recording = 0;
 }
 
 static bool
@@ -2211,7 +2070,9 @@ dbri_suspend(device_t self, const pmf_qual_t *qual)
 {
 	struct dbri_softc *sc = device_private(self);
 
+	mutex_spin_enter(&sc->sc_intr_lock);
 	dbri_set_power(sc, 0);
+	mutex_spin_exit(&sc->sc_intr_lock);
 	return true;
 }
 
@@ -2222,12 +2083,12 @@ dbri_resume(device_t self, const pmf_qual_t *qual)
 
 	if (sc->sc_powerstate != 0)
 		return true;
-	aprint_verbose("resume: %d\n", sc->sc_refcount);
+	aprint_verbose("resume\n");
 	if (sc->sc_playing) {
 		volatile uint32_t *cmd;
 
-		dbri_bring_up(sc);
 		mutex_spin_enter(&sc->sc_intr_lock);
+		dbri_bring_up(sc);
 		cmd = dbri_command_lock(sc);
 		*(cmd++) = DBRI_CMD(DBRI_COMMAND_SDP,
 		    0, sc->sc_pipe[4].sdp |

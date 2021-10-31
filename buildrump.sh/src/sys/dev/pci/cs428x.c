@@ -1,4 +1,4 @@
-/*	$NetBSD: cs428x.c,v 1.17 2012/10/27 17:18:31 chs Exp $	*/
+/*	$NetBSD: cs428x.c,v 1.20 2019/06/08 08:02:38 isaki Exp $	*/
 
 /*
  * Copyright (c) 2000 Tatoku Ogaito.  All rights reserved.
@@ -33,7 +33,7 @@
 /* Common functions for CS4280 and CS4281 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs428x.c,v 1.17 2012/10/27 17:18:31 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs428x.c,v 1.20 2019/06/08 08:02:38 isaki Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -43,10 +43,8 @@ __KERNEL_RCSID(0, "$NetBSD: cs428x.c,v 1.17 2012/10/27 17:18:31 chs Exp $");
 #include <sys/audioio.h>
 #include <sys/bus.h>
 
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 #include <dev/midi_if.h>
-#include <dev/mulaw.h>
-#include <dev/auconv.h>
 
 #include <dev/ic/ac97reg.h>
 #include <dev/ic/ac97var.h>
@@ -120,11 +118,7 @@ cs428x_malloc(void *addr, int direction, size_t size)
 	sc = addr;
 
 	p = kmem_alloc(sizeof(*p), KM_SLEEP);
-	if (p == NULL)
-		return 0;
-
 	error = cs428x_allocmem(sc, size, p);
-
 	if (error) {
 		kmem_free(p, sizeof(*p));
 		return 0;
@@ -169,40 +163,12 @@ cs428x_round_buffersize(void *addr, int direction,
 	return size;
 }
 
-paddr_t
-cs428x_mappage(void *addr, void *mem, off_t off, int prot)
-{
-	struct cs428x_softc *sc;
-	struct cs428x_dma *p;
-
-	sc = addr;
-
-	if (off < 0)
-		return -1;
-
-	for (p = sc->sc_dmas; p && BUFADDR(p) != mem; p = p->next)
-		continue;
-
-	if (p == NULL) {
-		DPRINTF(("cs428x_mappage: bad buffer address\n"));
-		return -1;
-	}
-
-	return (bus_dmamem_mmap(sc->sc_dmatag, p->segs, p->nsegs,
-	    off, prot, BUS_DMA_WAITOK));
-}
-
 int
 cs428x_get_props(void *addr)
 {
-	int retval;
 
-	retval = AUDIO_PROP_INDEPENDENT | AUDIO_PROP_FULLDUPLEX;
-#ifdef MMAP_READY
-	/* How can I mmap ? */
-	retval |= AUDIO_PROP_MMAP;
-#endif
-	return retval;
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE |
+	    AUDIO_PROP_INDEPENDENT | AUDIO_PROP_FULLDUPLEX;
 }
 
 /* AC97 */
@@ -299,8 +265,6 @@ cs428x_allocmem(struct cs428x_softc *sc, size_t size, struct cs428x_dma *p)
 	p->size = sc->dma_size;
 	/* allocate memory for upper audio driver */
 	p->dum  = kmem_alloc(size, KM_SLEEP);
-	if (p->dum == NULL)
-		return 1;
 
 	error = bus_dmamem_alloc(sc->sc_dmatag, p->size, align, 0,
 				 p->segs, sizeof(p->segs)/sizeof(p->segs[0]),

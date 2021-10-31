@@ -1,4 +1,4 @@
-/* $NetBSD: pckbc.c,v 1.59 2016/07/14 10:19:06 msaitoh Exp $ */
+/* $NetBSD: pckbc.c,v 1.62 2020/05/01 01:34:57 riastradh Exp $ */
 
 /*
  * Copyright (c) 2004 Ben Harris.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pckbc.c,v 1.59 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pckbc.c,v 1.62 2020/05/01 01:34:57 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -249,11 +249,7 @@ pckbc_attach_slot(struct pckbc_softc *sc, pckbc_slot_t slot)
 
 	if (t->t_slotdata[slot] == NULL) {
 		sdata = malloc(sizeof(struct pckbc_slotdata),
-		    M_DEVBUF, M_NOWAIT);
-		if (sdata == NULL) {
-			aprint_error_dev(sc->sc_dv, "no memory\n");
-			return (0);
-		}
+		    M_DEVBUF, M_WAITOK);
 		t->t_slotdata[slot] = sdata;
 		pckbc_init_slotdata(t->t_slotdata[slot]);
 		alloced++;
@@ -266,9 +262,12 @@ pckbc_attach_slot(struct pckbc_softc *sc, pckbc_slot_t slot)
 		t->t_slotdata[slot] = NULL;
 	}
 
-	if (child != NULL && t->t_slotdata[slot] != NULL)
+	if (child != NULL && t->t_slotdata[slot] != NULL) {
+		memset(&t->t_slotdata[slot]->rnd_source, 0,
+		    sizeof(t->t_slotdata[slot]->rnd_source));
 		rnd_attach_source(&t->t_slotdata[slot]->rnd_source,
 		    device_xname(child), RND_TYPE_TTY, RND_FLAG_DEFAULT);
+	}
 
 	return child != NULL;
 }
@@ -608,7 +607,8 @@ pckbcintr(void *vsc)
 		KBD_DELAY;
 		data = bus_space_read_1(t->t_iot, t->t_ioh_d, 0);
 
-		rnd_add_uint32(&q->rnd_source, (stat<<8)|data);
+		if (q != NULL)
+			rnd_add_uint32(&q->rnd_source, (stat<<8)|data);
 
 		pckbportintr(t->t_pt, slot, data);
 	}

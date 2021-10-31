@@ -1,4 +1,4 @@
-/*	$NetBSD: cache.h,v 1.13 2016/07/11 16:15:35 matt Exp $	*/
+/*	$NetBSD: cache.h,v 1.16 2020/07/27 10:59:10 skrll Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #ifndef _MIPS_CACHE_H_
-#define _MIPS_CACHE_H_
+#define	_MIPS_CACHE_H_
 
 /*
  * Cache operations.
@@ -225,15 +225,19 @@ struct mips_cache_info {
 	bool mci_icache_virtual_alias;
 };
 
-#if (MIPS1 + MIPS64_RMIXL + MIPS64R2_RMIXL + MIPS64_OCTEON) > 0 \
-     && !defined(MODULE)
+
+#if (MIPS1 + MIPS64_RMIXL + MIPS64R2_RMIXL + MIPS64_OCTEON) > 0 && \
+    (MIPS3 + MIPS4) == 0 \
+     && !defined(_MODULE)
 #define	MIPS_CACHE_ALIAS_MASK		0
 #define	MIPS_CACHE_VIRTUAL_ALIAS	false
 #else
 #define	MIPS_CACHE_ALIAS_MASK		mips_cache_info.mci_cache_alias_mask
 #define	MIPS_CACHE_VIRTUAL_ALIAS	mips_cache_info.mci_cache_virtual_alias
 #endif
-#if (MIPS1 + MIPS64_RMIXL + MIPS64_OCTEON) > 0 && !defined(_MODULE)
+#if (MIPS1 + MIPS64_RMIXL + MIPS64_OCTEON) > 0 && \
+    (MIPS3 + MIPS4) == 0 \
+    && !defined(_MODULE)
 #define	MIPS_ICACHE_ALIAS_MASK		0
 #define	MIPS_ICACHE_VIRTUAL_ALIAS	false
 #else

@@ -1,14 +1,19 @@
-/*	$NetBSD: param.h,v 1.19 2015/10/27 22:28:56 mrg Exp $	*/
+/*	$NetBSD: param.h,v 1.38 2020/06/29 09:56:51 jdolecek Exp $	*/
 
 #ifdef __x86_64__
 
-#ifndef XEN
+#ifndef XENPV
 /* Must be defined before cpu.h */
 #define	MAXCPUS		256
 #endif
 
 #ifdef _KERNEL
 #include <machine/cpu.h>
+#if defined(_KERNEL_OPT)
+#include "opt_kasan.h"
+#include "opt_kmsan.h"
+#include "opt_svs.h"
+#endif
 #endif
 
 #define	_MACHINE	amd64
@@ -17,7 +22,15 @@
 #define	MACHINE_ARCH	"x86_64"
 #define MID_MACHINE	MID_X86_64
 
-#define ALIGNED_POINTER(p,t)	1
+#define ALIGNED_POINTER(p,t)		1
+#define ALIGNED_POINTER_LOAD(q,p,t)	memcpy((q), (p), sizeof(t))
+
+/*
+ * Align stack as required by AMD64 System V ABI. This is because
+ * (1) we want to bypass libc/csu in LLDB, and
+ * (2) rtld in glibc >= 2.23 for Linux/x86_64 requires it.
+ */
+#define STACK_ALIGNBYTES	(16 - 1)
 
 #define ALIGNBYTES32		(sizeof(int) - 1)
 #define ALIGN32(p)		(((u_long)(p) + ALIGNBYTES32) &~ALIGNBYTES32)
@@ -27,39 +40,45 @@
 #define	PGOFSET		(NBPG-1)	/* byte offset into page */
 #define	NPTEPG		(NBPG/(sizeof (pt_entry_t)))
 
+#define	MAXIOMEM	0xffffffffffff
+
+/*
+ * Maximum physical memory supported by the implementation.
+ */
+#if defined(KMSAN)
+#define MAXPHYSMEM	0x008000000000ULL /* 512GB */
+#else
+#define MAXPHYSMEM	0x100000000000ULL /* 16TB */
+#endif
+
 /*
  * XXXfvdl change this (after bootstrap) to take # of bits from
  * config info into account.
  */
 #define	KERNBASE	0xffffffff80000000 /* start of kernel virtual space */
-#define	KERNTEXTOFF	0xffffffff80100000 /* start of kernel text */
+#define	KERNTEXTOFF	0xffffffff80200000 /* start of kernel text */
 #define	BTOPKERNBASE	((u_long)KERNBASE >> PGSHIFT)
 
 #define KERNTEXTOFF_HI	0xffffffff
-#define KERNTEXTOFF_LO	0x80100000
+#define KERNTEXTOFF_LO	0x80200000
 
 #define KERNBASE_HI	0xffffffff
 #define KERNBASE_LO	0x80000000
 
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define	DEV_BSIZE	(1 << DEV_BSHIFT)
-#define	BLKDEV_IOSIZE	2048
-#ifndef	MAXPHYS
-#define	MAXPHYS		(64 * 1024)	/* max raw I/O transfer size */
-#endif
-
 #define	SSIZE		1		/* initial stack size/NBPG */
 #define	SINCR		1		/* increment of stack/NBPG */
-#ifdef DIAGNOSTIC
-#define	UPAGES		4		/* pages of u-area (1 for redzone) */
+
+#if defined(KASAN) || defined(KMSAN)
+#define	UPAGES		8
+#elif defined(SVS)
+#define	UPAGES		6		/* 1 page used internally by SVS */
 #else
-#define	UPAGES		3		/* pages of u-area */
+#define	UPAGES		5		/* pages of u-area (1 for redzone) */
 #endif
 #define	USPACE		(UPAGES * NBPG)	/* total size of u-area */
-#define	INTRSTACKSIZE	4096
 
 #ifndef MSGBUFSIZE
-#define MSGBUFSIZE	(8*NBPG)	/* default message buffer size */
+#define MSGBUFSIZE	(16*NBPG)	/* default message buffer size */
 #endif
 
 /*
@@ -111,8 +130,6 @@
 
 #define btop(x)				x86_btop(x)
 #define ptob(x)				x86_ptob(x)
-
-#define mstohz(ms) ((ms + 0UL) * hz / 1000)
 
 #else	/*	__x86_64__	*/
 

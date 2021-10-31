@@ -1,4 +1,4 @@
-/*	$NetBSD: pte.h,v 1.19 2014/10/29 10:59:48 skrll Exp $	*/
+/*	$NetBSD: pte.h,v 1.23 2020/05/04 18:36:24 joerg Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 Wasabi Systems, Inc.
@@ -89,7 +89,11 @@
 
 #ifndef _LOCORE
 typedef uint32_t	pd_entry_t;	/* L1 table entry */
-typedef uint32_t	pt_entry_t;	/* L2 table entry */
+#ifndef	__BSD_PTENTRY_T__
+#define	__BSD_PTENTRY_T__
+typedef uint32_t pt_entry_t;
+#define PRIxPTE		PRIx32
+#endif
 #endif /* _LOCORE */
 
 #define	L1_SS_SIZE	0x01000000	/* 16M */
@@ -131,14 +135,16 @@ typedef uint32_t	pt_entry_t;	/* L2 table entry */
 
 #define	L1_TABLE_SIZE	0x4000		/* 16K */
 #define	L2_TABLE_SIZE	0x1000		/* 4K */
+
 /*
  * The new pmap deals with the 1KB coarse L2 tables by
  * allocating them from a pool. Until every port has been converted,
  * keep the old L2_TABLE_SIZE define lying around. Converted ports
  * should use L2_TABLE_SIZE_REAL until then.
  */
-#define	L1_TABLE_SIZE_REAL	0x4000	/* 16K */
 #define	L2_TABLE_SIZE_REAL	0x400	/* 1K */
+
+#define L1TT_SIZE		0x2000	/* 8K */
 
 /*
  * ARM L1 Descriptors

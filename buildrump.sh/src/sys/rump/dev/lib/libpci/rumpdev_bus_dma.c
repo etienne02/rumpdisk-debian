@@ -1,4 +1,4 @@
-/*	$NetBSD: rumpdev_bus_dma.c,v 1.5 2015/06/15 15:38:52 pooka Exp $	*/
+/*	$NetBSD: rumpdev_bus_dma.c,v 1.10 2020/11/02 18:58:06 christos Exp $	*/
 
 /*-
  * Copyright (c) 2013 Antti Kantee
@@ -67,6 +67,9 @@
  *	NetBSD: bus_dma.c,v 1.46 2012/02/01 09:54:03 matt Exp
  */
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: rumpdev_bus_dma.c,v 1.10 2020/11/02 18:58:06 christos Exp $");
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -76,8 +79,6 @@
 #include <sys/mbuf.h>
 #include <sys/bus.h>
 #include <sys/intr.h>
-
-#include <uvm/uvm.h>
 
 #include "pci_user.h"
 
@@ -191,7 +192,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 		sgsize = PAGE_SIZE - ((u_long)vaddr & PGOFSET);
 		if (buflen < sgsize)
 			sgsize = buflen;
-		sgsize = min(sgsize, map->dm_maxsegsz);
+		sgsize = MIN(sgsize, map->dm_maxsegsz);
 
 		/*
 		 * Make sure we don't cross any boundaries.
@@ -318,8 +319,8 @@ bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map,
 #ifdef POOL_VTOPHYS
 		/* XXX Could be better about coalescing. */
 		/* XXX Doesn't check boundaries. */
-		switch (m->m_flags & (M_EXT|M_CLUSTER)) {
-		case M_EXT|M_CLUSTER:
+		switch (m->m_flags & (M_EXT|M_EXT_CLUSTER)) {
+		case M_EXT|M_EXT_CLUSTER:
 			/* XXX KDASSERT */
 			KASSERT(m->m_ext.ext_paddr != M_PADDR_INVALID);
 			lastaddr = m->m_ext.ext_paddr +

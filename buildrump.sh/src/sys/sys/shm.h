@@ -1,4 +1,4 @@
-/*	$NetBSD: shm.h,v 1.51 2015/11/06 02:26:42 pgoyette Exp $	*/
+/*	$NetBSD: shm.h,v 1.55 2021/08/17 22:00:32 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -79,7 +79,7 @@
 #define _SHM_RMLINGER	040000	/* Attach even if segment removed */
 #endif
 
-/* Segment low boundry address multiple */
+/* Segment low boundary address multiple */
 #if defined(_KERNEL) || defined(_STANDALONE) || defined(_MODULE)
 #define	SHMLBA		PAGE_SIZE
 #else
@@ -172,11 +172,13 @@ extern int shm_nused;
 
 struct vmspace;
 
-void	shminit(struct sysctllog **);
+int	shminit(void);
 int	shmfini(void);
 void	shmfork(struct vmspace *, struct vmspace *);
 void	shmexit(struct vmspace *);
 int	shmctl1(struct lwp *, int, int, struct shmid_ds *);
+
+int	shm_find_segment_perm_by_index(int, struct ipc_perm *);
 
 extern void (*uvm_shmexit)(struct vmspace *);
 extern void (*uvm_shmfork)(struct vmspace *, struct vmspace *);

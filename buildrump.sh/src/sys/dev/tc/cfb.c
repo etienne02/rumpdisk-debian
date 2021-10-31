@@ -1,4 +1,4 @@
-/* $NetBSD: cfb.c,v 1.61 2012/01/11 21:12:36 macallan Exp $ */
+/* $NetBSD: cfb.c,v 1.65 2021/08/07 16:19:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cfb.c,v 1.61 2012/01/11 21:12:36 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cfb.c,v 1.65 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -258,12 +258,7 @@ cfbattach(device_t parent, device_t self, void *aux)
 	}
 	else {
 		ri = malloc(sizeof(struct rasops_info),
-			M_DEVBUF, M_NOWAIT|M_ZERO);
-		if (ri == NULL) {
-			printf(": can't alloc memory\n");
-			return;
-		}
-
+			M_DEVBUF, M_WAITOK | M_ZERO);
 		ri->ri_hw = (void *)ta->ta_addr;
 		cfb_common_init(ri);
 		sc->sc_ri = ri;
@@ -287,7 +282,7 @@ cfbattach(device_t parent, device_t self, void *aux)
 	waa.accessops = &cfb_accessops;
 	waa.accesscookie = sc;
 
-	config_found(self, &waa, wsemuldisplaydevprint);
+	config_found(self, &waa, wsemuldisplaydevprint, CFARGS_NONE);
 }
 
 static void
@@ -719,7 +714,7 @@ set_cursor(struct cfb_softc *sc, struct wsdisplay_cursor *p)
 	if (v & WSDISPLAY_CURSOR_DOCMAP) {
 		index = p->cmap.index;
 		count = p->cmap.count;
-		if (index >= 2 || (index + count) > 2)
+		if (index >= 2 || count > 2 - index)
 			return (EINVAL);
 		error = copyin(p->cmap.red, &r[index], count);
 		if (error)

@@ -1,4 +1,4 @@
-/*	$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv Exp $	*/
+/*	$NetBSD: uipc_syscalls_43.c,v 1.51 2019/01/27 02:08:39 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1990, 1993
@@ -32,7 +32,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.51 2019/01/27 02:08:39 pgoyette Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -52,6 +56,8 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv E
 #include <sys/protosw.h>
 
 #include <sys/mount.h>
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 
 #include <net/if.h>
@@ -61,7 +67,6 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv E
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <net/if_gre.h>
-#include <net/if_atm.h>
 #include <net/if_tap.h>
 #include <net80211/ieee80211_ioctl.h>
 #include <netinet6/in6_var.h>
@@ -70,6 +75,7 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv E
 #include <compat/sys/sockio.h>
 
 #include <compat/common/compat_util.h>
+#include <compat/common/compat_mod.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -78,6 +84,20 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_43.c,v 1.46 2014/11/09 17:48:07 maxv E
  * have been:
  * connect(2), bind(2), sendto(2)
  */
+
+static struct syscall_package uipc_syscalls_43_syscalls[] = {
+	{ SYS_compat_43_oaccept, 0, (sy_call_t *)compat_43_sys_accept },
+	{ SYS_compat_43_ogetpeername, 0,
+	    (sy_call_t *)compat_43_sys_getpeername },      
+	{ SYS_compat_43_ogetsockname, 0,
+	    (sy_call_t *)compat_43_sys_getsockname },
+	{ SYS_compat_43_orecv, 0, (sy_call_t *)compat_43_sys_recv },
+	{ SYS_compat_43_orecvfrom, 0, (sy_call_t *)compat_43_sys_recvfrom },
+	{ SYS_compat_43_orecvmsg, 0, (sy_call_t *)compat_43_sys_recvmsg },
+	{ SYS_compat_43_osend, 0, (sy_call_t *)compat_43_sys_send },
+	{ SYS_compat_43_osendmsg, 0, (sy_call_t *)compat_43_sys_sendmsg },
+	{ 0, 0, NULL }
+};
 
 static int compat_43_sa_put(void *);
 
@@ -343,7 +363,8 @@ compat_43_sys_sendmsg(struct lwp *l, const struct compat_43_sys_sendmsg_args *ua
 	msg.msg_iovlen = omsg.msg_iovlen;
 	msg.msg_iov = omsg.msg_iov;
 
-	error = sockargs(&nam, omsg.msg_name, omsg.msg_namelen, MT_SONAME);
+	error = sockargs(&nam, omsg.msg_name, omsg.msg_namelen,
+	    UIO_USERSPACE, MT_SONAME);
 	if (error != 0)
 		return (error);
 
@@ -361,7 +382,8 @@ compat_43_sys_sendmsg(struct lwp *l, const struct compat_43_sys_sendmsg_args *ua
 	if (error != 0)
 		goto bad;
 
-	return do_sys_sendmsg(l, SCARG(uap, s), &msg, SCARG(uap, flags), retval);
+	return do_sys_sendmsg(l, SCARG(uap, s), &msg, SCARG(uap, flags),
+	    retval);
 
     bad:
 	if (nam != NULL)
@@ -396,4 +418,18 @@ compat_43_sa_put(void *from)
 		return (error);
 
 	return (0);
+}
+
+int
+uipc_syscalls_43_init(void)
+{
+
+	return syscall_establish(NULL, uipc_syscalls_43_syscalls);
+}
+
+int
+uipc_syscalls_43_fini(void)
+{
+
+	return syscall_disestablish(NULL, uipc_syscalls_43_syscalls);
 }

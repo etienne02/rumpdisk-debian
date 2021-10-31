@@ -1,4 +1,4 @@
-/*	$NetBSD: dkio.h,v 1.22 2015/12/08 20:36:15 christos Exp $	*/
+/*	$NetBSD: dkio.h,v 1.26 2020/03/02 16:01:56 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1987, 1988, 1993
@@ -85,6 +85,17 @@
 #define	DKCACHE_RCHANGE	0x000100 /* read enable is changeable */
 #define	DKCACHE_WCHANGE	0x000200 /* write enable is changeable */
 #define	DKCACHE_SAVE	0x010000 /* cache parameters are savable/save them */
+#define	DKCACHE_FUA	0x020000 /* Force Unit Access supported */
+#define	DKCACHE_DPO	0x040000 /* Disable Page Out supported */
+
+/*
+ * Combine disk cache flags of two drives to get common cache capabilities.
+ * All common flags are retained. Besides this, if one of the disks
+ * has a write cache enabled or changeable, propagate those flags into result,
+ * even if it's not shared, to indicate that write cache is present.
+ */
+#define DKCACHE_COMBINE(a, b) \
+	(((a) & (b)) | (((a) | (b)) & (DKCACHE_WRITE|DKCACHE_WCHANGE)))
 
 		/* sync disk cache */
 #define	DIOCCACHESYNC	_IOW('d', 118, int)	/* sync cache (force?) */
@@ -118,5 +129,11 @@
 		/* query disk geometry */
 #define	DIOCGSECTORSIZE	_IOR('d', 133, u_int)	/* sector size in bytes */
 #define	DIOCGMEDIASIZE	_IOR('d', 132, off_t)	/* media size in bytes */
+
+		/* mass removal */
+#define	DIOCRMWEDGES	_IOR('d', 134, int)	/* remove all wedges */
+
+		/* sector alignment */
+#define	DIOCGSECTORALIGN _IOR('d', 135, struct disk_sectoralign)
 
 #endif /* _SYS_DKIO_H_ */

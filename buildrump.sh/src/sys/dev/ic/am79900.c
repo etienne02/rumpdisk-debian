@@ -1,4 +1,4 @@
-/*	$NetBSD: am79900.c,v 1.24 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: am79900.c,v 1.31 2020/10/20 18:17:58 roy Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -103,7 +103,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: am79900.c,v 1.24 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: am79900.c,v 1.31 2020/10/20 18:17:58 roy Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -120,9 +120,7 @@ __KERNEL_RCSID(0, "$NetBSD: am79900.c,v 1.24 2015/04/13 16:33:24 riastradh Exp $
 #include <net/if_dl.h>
 #include <net/if_ether.h>
 #include <net/if_media.h>
-
 #include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <dev/ic/lancereg.h>
 #include <dev/ic/lancevar.h>
@@ -152,6 +150,7 @@ am79900_config(struct am79900_softc *sc)
 	sc->lsc.sc_start = am79900_start;
 
 	lance_config(&sc->lsc);
+	if_deferred_start_init(&sc->lsc.sc_ethercom.ec_if, NULL);
 
 	mem = 0;
 	sc->lsc.sc_initaddr = mem;
@@ -279,12 +278,12 @@ am79900_rint(struct lance_softc *sc)
 			if (rmd.rmd1 & LE_R1_BUFF)
 				printf("%s: receive buffer error\n",
 				    device_xname(sc->sc_dev));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 		} else if ((rmd.rmd1 & (LE_R1_STP | LE_R1_ENP)) !=
 		    (LE_R1_STP | LE_R1_ENP)) {
 			printf("%s: dropping chained buffer\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 		} else {
 #ifdef LEDEBUG
 			if (sc->sc_debug)
@@ -339,8 +338,6 @@ am79900_tint(struct lance_softc *sc)
 		if (tmd.tmd1 & LE_T1_OWN)
 			break;
 
-		ifp->if_flags &= ~IFF_OACTIVE;
-
 		if (tmd.tmd1 & LE_T1_ERR) {
 			if (tmd.tmd2 & LE_T2_BUFF)
 				printf("%s: transmit buffer error\n",
@@ -361,22 +358,22 @@ am79900_tint(struct lance_softc *sc)
 					    device_xname(sc->sc_dev));
 			}
 			if (tmd.tmd2 & LE_T2_LCOL)
-				ifp->if_collisions++;
+				if_statinc(ifp, if_collisions);
 			if (tmd.tmd2 & LE_T2_RTRY) {
 #ifdef LEDEBUG
 				printf("%s: excessive collisions\n",
 				    device_xname(sc->sc_dev));
 #endif
-				ifp->if_collisions += 16;
+				if_statadd(ifp, if_collisions, 16);
 			}
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 		} else {
 			if (tmd.tmd1 & LE_T1_ONE)
-				ifp->if_collisions++;
+				if_statinc(ifp, if_collisions);
 			else if (tmd.tmd1 & LE_T1_MORE)
 				/* Real number is unknown. */
-				ifp->if_collisions += 2;
-			ifp->if_opackets++;
+				if_statadd(ifp, if_collisions, 2);
+			if_statinc(ifp, if_opackets);
 		}
 
 		if (++bix == sc->sc_ntbuf)
@@ -387,7 +384,7 @@ am79900_tint(struct lance_softc *sc)
 
 	sc->sc_first_td = bix;
 
-	am79900_start(ifp);
+	if_schedule_deferred_start(ifp);
 
 	if (sc->sc_no_td == 0)
 		ifp->if_timer = 0;
@@ -420,20 +417,20 @@ am79900_intr(void *arg)
 #ifdef LEDEBUG
 			printf("%s: babble\n", device_xname(sc->sc_dev));
 #endif
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 		}
 #if 0
 		if (isr & LE_C0_CERR) {
 			printf("%s: collision error\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_collisions++;
+			if_statinc(ifp, if_collisions);
 		}
 #endif
 		if (isr & LE_C0_MISS) {
 #ifdef LEDEBUG
 			printf("%s: missed packet\n", device_xname(sc->sc_dev));
 #endif
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 		}
 		if (isr & LE_C0_MERR) {
 			printf("%s: memory error\n", device_xname(sc->sc_dev));
@@ -444,13 +441,13 @@ am79900_intr(void *arg)
 
 	if ((isr & LE_C0_RXON) == 0) {
 		printf("%s: receiver disabled\n", device_xname(sc->sc_dev));
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		lance_reset(sc);
 		return (1);
 	}
 	if ((isr & LE_C0_TXON) == 0) {
 		printf("%s: transmitter disabled\n", device_xname(sc->sc_dev));
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 		lance_reset(sc);
 		return (1);
 	}
@@ -459,12 +456,17 @@ am79900_intr(void *arg)
 	 * Pretend we have carrier; if we don't this will be cleared
 	 * shortly.
 	 */
+	const int ocarrier = sc->sc_havecarrier;
 	sc->sc_havecarrier = 1;
 
 	if (isr & LE_C0_RINT)
 		am79900_rint(sc);
 	if (isr & LE_C0_TINT)
 		am79900_tint(sc);
+
+	if (sc->sc_havecarrier != ocarrier)
+		if_link_state_change(ifp,
+		    sc->sc_havecarrier ? LINK_STATE_UP : LINK_STATE_DOWN);
 
 	rnd_add_uint32(&sc->rnd_source, isr);
 
@@ -489,19 +491,20 @@ am79900_start(struct ifnet *ifp)
 	int rp;
 	int len;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) != IFF_RUNNING)
 		return;
 
 	bix = sc->sc_last_td;
 
-	for (;;) {
+	while (sc->sc_no_td < sc->sc_ntbuf) {
 		rp = LE_TMDADDR(sc, bix);
 		(*sc->sc_copyfromdesc)(sc, &tmd, rp, sizeof(tmd));
 
 		if (tmd.tmd1 & LE_T1_OWN) {
-			ifp->if_flags |= IFF_OACTIVE;
-			printf("missing buffer, no_td = %d, last_td = %d\n",
-			    sc->sc_no_td, sc->sc_last_td);
+			printf("%s: missing buffer, no_td = %d, last_td = %d\n",
+			    device_xname(sc->sc_dev), sc->sc_no_td,
+			    sc->sc_last_td);
+			break;
 		}
 
 		IFQ_DEQUEUE(&ifp->if_snd, m);
@@ -512,7 +515,7 @@ am79900_start(struct ifnet *ifp)
 		 * If BPF is listening on this interface, let it see the packet
 		 * before we commit it to the wire.
 		 */
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		/*
 		 * Copy the mbuf chain into the transmit buffer.
@@ -545,11 +548,7 @@ am79900_start(struct ifnet *ifp)
 		if (++bix == sc->sc_ntbuf)
 			bix = 0;
 
-		if (++sc->sc_no_td == sc->sc_ntbuf) {
-			ifp->if_flags |= IFF_OACTIVE;
-			break;
-		}
-
+		sc->sc_no_td++;
 	}
 
 	sc->sc_last_td = bix;

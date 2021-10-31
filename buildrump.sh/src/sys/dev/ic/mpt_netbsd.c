@@ -1,4 +1,4 @@
-/*	$NetBSD: mpt_netbsd.c,v 1.33 2016/05/02 19:18:29 christos Exp $	*/
+/*	$NetBSD: mpt_netbsd.c,v 1.39 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpt_netbsd.c,v 1.33 2016/05/02 19:18:29 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpt_netbsd.c,v 1.39 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "bio.h"
 
@@ -113,7 +113,6 @@ static int	mpt_bio_ioctl_inq(mpt_softc_t *, struct bioc_inq *);
 static int	mpt_bio_ioctl_vol(mpt_softc_t *, struct bioc_vol *);
 static int	mpt_bio_ioctl_disk(mpt_softc_t *, struct bioc_disk *);
 static int	mpt_bio_ioctl_disk_novol(mpt_softc_t *, struct bioc_disk *);
-static int	mpt_bio_ioctl_setstate(mpt_softc_t *, struct bioc_setstate *);
 #endif
 
 void
@@ -151,7 +150,7 @@ mpt_scsipi_attach(mpt_softc_t *mpt)
 	chan->chan_channel = 0;
 	chan->chan_flags = 0;
 	chan->chan_nluns = 8;
-	chan->chan_ntargets = mpt->mpt_max_devices;
+	chan->chan_ntargets = mpt->mpt_max_devices ? mpt->mpt_max_devices : 256;
 	chan->chan_id = mpt->mpt_ini_id;
 
 	/*
@@ -159,7 +158,7 @@ mpt_scsipi_attach(mpt_softc_t *mpt)
 	* errors
 	*/
 	mpt->sc_scsibus_dv = config_found(mpt->sc_dev, &mpt->sc_channel, 
-	scsiprint);
+	    scsiprint, CFARGS_NONE);
 
 #if NBIO > 0
 	if (mpt_is_raid(mpt)) {
@@ -1093,11 +1092,11 @@ mpt_run_xfer(mpt_softc_t *mpt, struct scsipi_xfer *xs)
 	if (mpt->verbose > 1)
 		mpt_print_scsi_io_request(mpt_req);
 
-		if (xs->timeout == 0) {
-			mpt_prt(mpt, "mpt_run_xfer: no timeout specified for request: 0x%x\n",
+	if (xs->timeout == 0) {
+		mpt_prt(mpt, "mpt_run_xfer: no timeout specified for request: 0x%x\n",
 			req->index);
-			xs->timeout = 500;
-		}
+		xs->timeout = 500;
+	}
 
 	s = splbio();
 	if (__predict_true((xs->xs_control & XS_CTL_POLL) == 0))
@@ -1121,18 +1120,18 @@ mpt_set_xfer_mode(mpt_softc_t *mpt, struct scsipi_xfer_mode *xm)
 {
 	fCONFIG_PAGE_SCSI_DEVICE_1 tmp;
 
-	/*
-	 * Always allow disconnect; we don't have a way to disable
-	 * it right now, in any case.
-	 */
-	mpt->mpt_disc_enable |= (1 << xm->xm_target);
-
 	if (xm->xm_mode & PERIPH_CAP_TQING)
 		mpt->mpt_tag_enable |= (1 << xm->xm_target);
 	else
 		mpt->mpt_tag_enable &= ~(1 << xm->xm_target);
 
 	if (mpt->is_scsi) {
+		/*
+		 * Always allow disconnect; we don't have a way to disable
+		 * it right now, in any case.
+		 */
+		mpt->mpt_disc_enable |= (1 << xm->xm_target);
+
 		/*
 		 * SCSI transport settings only make any sense for
 		 * SCSI
@@ -1781,9 +1780,6 @@ mpt_bio_ioctl(device_t dev, u_long cmd, void *addr)
 	case BIOCDISK:
 		error = mpt_bio_ioctl_disk(mpt, addr);
 		break;
-	case BIOCSETSTATE:
-		error = mpt_bio_ioctl_setstate(mpt, addr);
-		break;
 	default:
 		error = EINVAL;
 		break;
@@ -2068,12 +2064,6 @@ mpt_bio_ioctl_disk(mpt_softc_t *mpt, struct bioc_disk *bd)
 fail:
 	if (ioc2) free(ioc2, M_DEVBUF);
 	return EINVAL;
-}
-
-static int
-mpt_bio_ioctl_setstate(mpt_softc_t *mpt, struct bioc_setstate *bs)
-{
-	return ENOTTY;
 }
 #endif
 

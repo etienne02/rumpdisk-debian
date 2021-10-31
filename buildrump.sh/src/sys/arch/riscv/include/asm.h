@@ -1,4 +1,4 @@
-/*	$NetBSD: asm.h,v 1.2 2015/03/27 06:57:21 matt Exp $	*/
+/*	$NetBSD: asm.h,v 1.6 2021/05/01 07:05:07 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -34,6 +34,11 @@
 
 #define	_C_LABEL(x)	x
 
+#define	__CONCAT(x,y)	x ## y
+#define	__STRING(x)	#x
+
+#define	___CONCAT(x,y)	__CONCAT(x,y)
+
 /*
  * Define -pg profile entry code.
  * Must always be noreorder, must never use a macro instruction
@@ -49,7 +54,7 @@
 	REG_L	ra, CALLFRAME_RA(sp);				\
 	REG_L	a0, CALLFRAME_S0(sp);				\
 	addi	sp, sp, CALLFRAME_SIZ;				\
-	.set	pop;					
+	.set	pop;
 
 #ifdef GPROF
 #define	_PROF_PROLOGUE _KERN_MCOUNT
@@ -58,7 +63,7 @@
 #endif
 
 #ifdef __PIC__
-#define	PLT(x)	x##@
+#define	PLT(x)	x##@plt
 #else
 #define PLT(x)	x
 #endif
@@ -115,7 +120,9 @@
 	.asciiz str;			\
 	.align	3
 
-#define	__RCSID(name)	.pushsection ".ident"; .asciz name; .popsection
+#define __RCSID(x)	.pushsection ".ident","MS",@progbits,1;		\
+			.asciz x;					\
+			.popsection
 #define RCSID(name)	__RCSID(name)
 
 #if defined(_LP64)

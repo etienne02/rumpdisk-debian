@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_nfssvc.c,v 1.4 2015/12/01 09:12:23 pgoyette Exp $	*/
+/*	$NetBSD: netbsd32_nfssvc.c,v 1.7 2021/08/30 08:39:24 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2015 Matthew R. Green
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_nfssvc.c,v 1.4 2015/12/01 09:12:23 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_nfssvc.c,v 1.7 2021/08/30 08:39:24 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_nfs.h"
@@ -52,8 +52,6 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_nfssvc.c,v 1.4 2015/12/01 09:12:23 pgoyette
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 #include <nfs/nfs_var.h>
-
-extern struct emul emul_netbsd32;
 
 static int nfssvc32_addsock_in(struct nfsd_args *, const void *);
 static int nfssvc32_setexports_in(struct mountd_exports_list *, const void *);
@@ -136,7 +134,7 @@ nfssvc32_nsd_out(void *argp, const struct nfsd_srvargs *nsd)
 	args32.nsd_key[0] = nsd->nsd_key[0];
 	args32.nsd_key[1] = nsd->nsd_key[1];
 
-	return copyout(nsd, argp, sizeof *nsd);
+	return copyout(&args32, argp, sizeof args32);
 }
 
 static int
@@ -198,11 +196,11 @@ static const struct syscall_package compat_nfssvc_syscalls[] = {
 
 MODULE(MODULE_CLASS_EXEC, compat_netbsd32_nfssrv, "nfsserver,compat_netbsd32");
 
-static int      
+static int
 compat_netbsd32_nfssrv_modcmd(modcmd_t cmd, void *arg)
-{               
-	int error;      
-                
+{
+	int error;
+
 	switch (cmd) {
 	case MODULE_CMD_INIT:
 		error = syscall_establish(&emul_netbsd32,

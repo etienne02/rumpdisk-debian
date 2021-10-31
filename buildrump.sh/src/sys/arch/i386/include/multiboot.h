@@ -1,4 +1,4 @@
-/*	$NetBSD: multiboot.h,v 1.8 2009/02/22 18:05:42 ahoka Exp $	*/
+/*	$NetBSD: multiboot.h,v 1.11 2019/10/18 01:38:28 manu Exp $	*/
 
 /*-
  * Copyright (c) 2005, 2006 The NetBSD Foundation, Inc.
@@ -39,6 +39,12 @@
 #define MULTIBOOT_HEADER_WANT_MEMORY	0x00000002
 #define MULTIBOOT_HEADER_HAS_VBE	0x00000004
 #define MULTIBOOT_HEADER_HAS_ADDR	0x00010000
+
+#if defined(_LOCORE)
+#define MULTIBOOT2_HEADER_MAGIC		0xe85250d6
+#define MULTIBOOT2_BOOTLOADER_MAGIC	0x36d76289
+#define MULTIBOOT2_ARCHITECTURE_I386	0
+#endif
 
 #if !defined(_LOCORE)
 struct multiboot_header {
@@ -86,6 +92,7 @@ extern struct multiboot_header *Multiboot_Header;
 #define MULTIBOOT_INFO_HAS_LOADER_NAME	0x00000200
 #define MULTIBOOT_INFO_HAS_APM_TABLE	0x00000400
 #define MULTIBOOT_INFO_HAS_VBE		0x00000800
+#define MULTIBOOT_INFO_HAS_FRAMEBUFFER	0x00001000
 
 #if !defined(_LOCORE)
 struct multiboot_info {
@@ -134,9 +141,36 @@ struct multiboot_info {
 	/* Valid if mi_flags sets MULTIBOOT_INFO_HAS_VBE. */
 	void *		unused_mi_vbe_control_info;
 	void *		unused_mi_vbe_mode_info;
-	paddr_t		unused_mi_vbe_interface_seg;
-	paddr_t		unused_mi_vbe_interface_off;
-	uint32_t	unused_mi_vbe_interface_len;
+	uint16_t	unused_mi_vbe_mode;
+	uint16_t	unused_mi_vbe_interface_seg;
+	uint16_t	unused_mi_vbe_interface_off;
+	uint16_t	unused_mi_vbe_interface_len;
+
+	/* Valid if mi_flags sets MULTIBOOT_INFO_HAS_FRAMEBUFFER. */
+	uint64_t	framebuffer_addr;
+	uint32_t	framebuffer_pitch;
+	uint32_t	framebuffer_width;
+	uint32_t	framebuffer_height;
+	uint8_t		framebuffer_bpp;
+#define MULTIBOOT_FRAMEBUFFER_TYPE_INDEXED 	0
+#define MULTIBOOT_FRAMEBUFFER_TYPE_RGB     	1
+#define MULTIBOOT_FRAMEBUFFER_TYPE_EGA_TEXT     2
+	uint8_t framebuffer_type;
+	union {
+		struct {
+			uint32_t framebuffer_palette_addr;
+			uint16_t framebuffer_palette_num_colors;
+		};
+		struct {
+			uint8_t framebuffer_red_field_position;
+			uint8_t framebuffer_red_mask_size;
+			uint8_t framebuffer_green_field_position;
+			uint8_t framebuffer_green_mask_size;
+			uint8_t framebuffer_blue_field_position;
+			uint8_t framebuffer_blue_mask_size;
+		};
+	};
+
 };
 
 /* --------------------------------------------------------------------- */
@@ -191,13 +225,18 @@ struct multiboot_module {
 /* --------------------------------------------------------------------- */
 
 /*
- * Prototypes for public functions defined in multiboot.c.
+ * Prototypes for public functions defined in multiboot.c and multiboot2.c
  */
 #if !defined(_LOCORE) && defined(_KERNEL)
-void		multiboot_pre_reloc(struct multiboot_info *);
-void		multiboot_post_reloc(void);
-void		multiboot_print_info(void);
-bool		multiboot_ksyms_addsyms_elf(void);
+void		multiboot1_pre_reloc(struct multiboot_info *);
+void		multiboot1_post_reloc(void);
+void		multiboot1_print_info(void);
+bool		multiboot1_ksyms_addsyms_elf(void);
+
+void		multiboot2_pre_reloc(struct multiboot_info *);
+void		multiboot2_post_reloc(void);
+void		multiboot2_print_info(void);
+bool		multiboot2_ksyms_addsyms_elf(void);
 #endif /* !defined(_LOCORE) */
 
 /* --------------------------------------------------------------------- */

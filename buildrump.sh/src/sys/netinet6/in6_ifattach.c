@@ -1,4 +1,4 @@
-/*	$NetBSD: in6_ifattach.c,v 1.102 2016/07/20 07:37:51 ozaki-r Exp $	*/
+/*	$NetBSD: in6_ifattach.c,v 1.120 2021/05/17 04:07:43 yamaguchi Exp $	*/
 /*	$KAME: in6_ifattach.c,v 1.124 2001/07/18 08:32:51 jinmei Exp $	*/
 
 /*
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in6_ifattach.c,v 1.102 2016/07/20 07:37:51 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in6_ifattach.c,v 1.120 2021/05/17 04:07:43 yamaguchi Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -59,20 +59,11 @@ __KERNEL_RCSID(0, "$NetBSD: in6_ifattach.c,v 1.102 2016/07/20 07:37:51 ozaki-r E
 #include <netinet6/ip6_mroute.h>
 #include <netinet6/scope6_var.h>
 
-#include <net/net_osdep.h>
-
-unsigned long in6_maxmtu = 0;
-
 int ip6_auto_linklocal = 1;	/* enable by default */
-
-callout_t in6_tmpaddrtimer_ch;
-
 
 #if 0
 static int get_hostid_ifid(struct ifnet *, struct in6_addr *);
 #endif
-static int get_rand_ifid(struct in6_addr *);
-static int generate_tmp_ifid(u_int8_t *, const u_int8_t *, u_int8_t *);
 static int get_ifid(struct ifnet *, struct ifnet *, struct in6_addr *);
 static int in6_ifattach_linklocal(struct ifnet *, struct ifnet *);
 static int in6_ifattach_loopback(struct ifnet *);
@@ -87,8 +78,6 @@ static int in6_ifattach_loopback(struct ifnet *);
 
 #define IFID_LOCAL(in6)		(!EUI64_LOCAL(in6))
 #define IFID_UNIVERSAL(in6)	(!EUI64_UNIVERSAL(in6))
-
-#define GEN_TEMPID_RETRY_MAX 5
 
 #if 0
 /*
@@ -171,146 +160,6 @@ get_rand_ifid(struct in6_addr *in6)	/* upper 64bits are preserved */
 	return 0;
 }
 
-static int
-generate_tmp_ifid(u_int8_t *seed0, const u_int8_t *seed1, u_int8_t *ret)
-{
-	MD5_CTX ctxt;
-	u_int8_t seed[16], digest[16], nullbuf[8];
-	/*
-	 * interface ID for subnet anycast addresses.
-	 * XXX: we assume the unicast address range that requires IDs
-	 * in EUI-64 format.
-	 */
-	static const uint8_t anycast_id[8] = { 0xfd, 0xff, 0xff, 0xff,
-	    0xff, 0xff, 0xff, 0x80 };
-	static const uint8_t isatap_id[4] = { 0x00, 0x00, 0x5e, 0xfe };
-	int badid, retry = 0;
-
-	/* If there's no hisotry, start with a random seed. */
-	memset(nullbuf, 0, sizeof(nullbuf));
-	if (memcmp(nullbuf, seed0, sizeof(nullbuf)) == 0) {
-		cprng_fast(seed, sizeof(seed));
-	} else
-		memcpy(seed, seed0, 8);
-
-	/* copy the right-most 64-bits of the given address */
-	/* XXX assumption on the size of IFID */
-	memcpy(&seed[8], seed1, 8);
-
-  again:
-	/* for debugging purposes only */
-#if 0
-	{
-		int i;
-
-		printf("generate_tmp_ifid: new randomized ID from: ");
-		for (i = 0; i < 16; i++)
-			printf("%02x", seed[i]);
-		printf(" ");
-	}
-#endif
-
-	/* generate 16 bytes of pseudo-random value. */
-	memset(&ctxt, 0, sizeof(ctxt));
-	MD5Init(&ctxt);
-	MD5Update(&ctxt, seed, sizeof(seed));
-	MD5Final(digest, &ctxt);
-
-	/*
-	 * draft-ietf-ipngwg-temp-addresses-v2-00.txt 3.2.1. (3)
-	 * Take the left-most 64-bits of the MD5 digest and set bit 6 (the
-	 * left-most bit is numbered 0) to zero.
-	 */
-	memcpy(ret, digest, 8);
-	ret[0] &= ~EUI64_UBIT;
-
-	/*
-	 * Reject inappropriate identifiers according to
-	 * draft-ietf-ipngwg-temp-addresses-v2-00.txt 3.2.1. (4)
-	 * At this moment, we reject following cases:
-	 * - all 0 identifier
-	 * - identifiers that conflict with reserved subnet anycast addresses,
-	 *   which are defined in RFC 2526.
-	 * - identifiers that conflict with ISATAP addresses
-	 * - identifiers used in our own addresses
-	 */
-	badid = 0;
-	if (memcmp(nullbuf, ret, sizeof(nullbuf)) == 0)
-		badid = 1;
-	else if (memcmp(anycast_id, ret, 7) == 0 &&
-	    (anycast_id[7] & ret[7]) == anycast_id[7]) {
-		badid = 1;
-	} else if (memcmp(isatap_id, ret, sizeof(isatap_id)) == 0)
-		badid = 1;
-	else {
-		struct in6_ifaddr *ia;
-		int s = pserialize_read_enter();
-
-		IN6_ADDRLIST_READER_FOREACH(ia) {
-			if (!memcmp(&ia->ia_addr.sin6_addr.s6_addr[8], 
-			    ret, 8)) {
-				badid = 1;
-				break;
-			}
-		}
-		pserialize_read_exit(s);
-	}
-
-	/*
-	 * In the event that an unacceptable identifier has been generated,
-	 * restart the process, using the right-most 64 bits of the MD5 digest
-	 * obtained in place of the history value.
-	 */
-	if (badid) {
-		/* for debugging purposes only */
-#if 0
-		{
-			int i;
-
-			printf("unacceptable random ID: ");
-			for (i = 0; i < 16; i++)
-				printf("%02x", digest[i]);
-			printf("\n");
-		}
-#endif
-
-		if (++retry < GEN_TEMPID_RETRY_MAX) {
-			memcpy(seed, &digest[8], 8);
-			goto again;
-		} else {
-			/*
-			 * We're so unlucky.  Give up for now, and return
-			 * all 0 IDs to tell the caller not to make a
-			 * temporary address.
-			 */
-			nd6log(LOG_NOTICE, "never found a good ID\n");
-			memset(ret, 0, 8);
-		}
-	}
-
-	/*
-	 * draft-ietf-ipngwg-temp-addresses-v2-00.txt 3.2.1. (6)
-	 * Take the rightmost 64-bits of the MD5 digest and save them in
-	 * stable storage as the history value to be used in the next
-	 * iteration of the algorithm.
-	 */
-	memcpy(seed0, &digest[8], 8);
-
-	/* for debugging purposes only */
-#if 0
-	{
-		int i;
-
-		printf("to: ");
-		for (i = 0; i < 16; i++)
-			printf("%02x", digest[i]);
-		printf("\n");
-	}
-#endif
-
-	return 0;
-}
-
 /*
  * Get interface identifier for the specified interface.
  *
@@ -320,30 +169,34 @@ int
 in6_get_hw_ifid(struct ifnet *ifp, struct in6_addr *in6)
 {
 	struct ifaddr *ifa;
-	const struct sockaddr_dl *sdl = NULL, *tsdl;
-	const char *addr;
-	size_t addrlen;
+	const struct sockaddr_dl *sdl = NULL;
+	const char *addr = NULL; /* XXX gcc 4.8 -Werror=maybe-uninitialized */
+	size_t addrlen = 0; /* XXX gcc 4.8 -Werror=maybe-uninitialized */
 	static u_int8_t allzero[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 	static u_int8_t allone[8] =
 		{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	int s;
 
+	s = pserialize_read_enter();
 	IFADDR_READER_FOREACH(ifa, ifp) {
+		const struct sockaddr_dl *tsdl;
 		if (ifa->ifa_addr->sa_family != AF_LINK)
 			continue;
 		tsdl = satocsdl(ifa->ifa_addr);
 		if (tsdl == NULL || tsdl->sdl_alen == 0)
 			continue;
-		if (sdl == NULL || ifa == ifp->if_dl || ifa == ifp->if_hwdl)
+		if (sdl == NULL || ifa == ifp->if_dl || ifa == ifp->if_hwdl) {
 			sdl = tsdl;
+			addr = CLLADDR(sdl);
+			addrlen = sdl->sdl_alen;
+		}
 		if (ifa == ifp->if_hwdl)
 			break;
 	}
+	pserialize_read_exit(s);
 
 	if (sdl == NULL)
 		return -1;
-
-	addr = CLLADDR(sdl);
-	addrlen = sdl->sdl_alen;
 
 	switch (ifp->if_type) {
 	case IFT_IEEE1394:
@@ -360,7 +213,6 @@ in6_get_hw_ifid(struct ifnet *ifp, struct in6_addr *in6)
 	switch (ifp->if_type) {
 	/* IEEE802/EUI64 cases - what others? */
 	case IFT_ETHER:
-	case IFT_FDDI:
 	case IFT_ATM:
 	case IFT_IEEE1394:
 	case IFT_IEEE80211:
@@ -488,6 +340,7 @@ get_ifid(struct ifnet *ifp0, struct ifnet *altifp,
 			nd6log(LOG_DEBUG,
 			    "%s: borrow interface identifier from %s\n",
 			    if_name(ifp0), if_name(ifp));
+			pserialize_read_exit(s);
 			goto success;
 		}
 	}
@@ -529,10 +382,8 @@ success:
 static int
 in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 {
-	struct in6_ifaddr *ia __diagused;
 	struct in6_aliasreq ifra;
-	struct nd_prefixctl prc0;
-	int i, error;
+	int error;
 
 	/*
 	 * configure link-local address.
@@ -573,8 +424,7 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 	 * we know there's no other link-local address on the interface
 	 * and therefore we are adding one (instead of updating one).
 	 */
-	if ((error = in6_update_ifa(ifp, &ifra, NULL,
-	    IN6_IFAUPDATE_DADDELAY)) != 0) {
+	if ((error = in6_update_ifa(ifp, &ifra, IN6_IFAUPDATE_DADDELAY)) != 0) {
 		/*
 		 * XXX: When the interface does not support IPv6, this call
 		 * would fail in the SIOCINITIFADDR ioctl.  I believe the
@@ -587,46 +437,6 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct ifnet *altifp)
 			    "(errno=%d)\n",
 			    if_name(ifp), error);
 		return -1;
-	}
-
-	ia = in6ifa_ifpforlinklocal(ifp, 0); /* ia must not be NULL */
-	KASSERTMSG(ia, "ia == NULL in in6_ifattach_linklocal");
-
-	/*
-	 * Make the link-local prefix (fe80::/64%link) as on-link.
-	 * Since we'd like to manage prefixes separately from addresses,
-	 * we make an ND6 prefix structure for the link-local prefix,
-	 * and add it to the prefix list as a never-expire prefix.
-	 * XXX: this change might affect some existing code base...
-	 */
-	memset(&prc0, 0, sizeof(prc0));
-	prc0.ndprc_ifp = ifp;
-	/* this should be 64 at this moment. */
-	prc0.ndprc_plen = in6_mask2len(&ifra.ifra_prefixmask.sin6_addr, NULL);
-	prc0.ndprc_prefix = ifra.ifra_addr;
-	/* apply the mask for safety. (nd6_prelist_add will apply it again) */
-	for (i = 0; i < 4; i++) {
-		prc0.ndprc_prefix.sin6_addr.s6_addr32[i] &=
-		    in6mask64.s6_addr32[i];
-	}
-	/*
-	 * Initialize parameters.  The link-local prefix must always be
-	 * on-link, and its lifetimes never expire.
-	 */
-	prc0.ndprc_raf_onlink = 1;
-	prc0.ndprc_raf_auto = 1;	/* probably meaningless */
-	prc0.ndprc_vltime = ND6_INFINITE_LIFETIME;
-	prc0.ndprc_pltime = ND6_INFINITE_LIFETIME;
-	/*
-	 * Since there is no other link-local addresses, nd6_prefix_lookup()
-	 * probably returns NULL.  However, we cannot always expect the result.
-	 * For example, if we first remove the (only) existing link-local
-	 * address, and then reconfigure another one, the prefix is still
-	 * valid with referring to the old link-local address.
-	 */
-	if (nd6_prefix_lookup(&prc0) == NULL) {
-		if ((error = nd6_prelist_add(&prc0, NULL, NULL)) != 0)
-			return error;
 	}
 
 	return 0;
@@ -671,7 +481,7 @@ in6_ifattach_loopback(struct ifnet *ifp)
 	 * We are sure that this is a newly assigned address, so we can set
 	 * NULL to the 3rd arg.
 	 */
-	if ((error = in6_update_ifa(ifp, &ifra, NULL, 0)) != 0) {
+	if ((error = in6_update_ifa(ifp, &ifra, 0)) != 0) {
 		nd6log(LOG_ERR, "failed to configure "
 		    "the loopback address on %s (errno=%d)\n",
 		    if_name(ifp), error);
@@ -747,9 +557,13 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 	struct in6_ifaddr *ia;
 	struct in6_addr in6;
 
+	KASSERT(IFNET_LOCKED(ifp));
+
 	/* some of the interfaces are inherently not IPv6 capable */
 	switch (ifp->if_type) {
 	case IFT_BRIDGE:
+	case IFT_L2TP:
+	case IFT_IEEE8023ADLAG:
 #ifdef IFT_PFLOG
 	case IFT_PFLOG:
 #endif
@@ -771,9 +585,6 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 		    if_name(ifp));
 		return;
 	}
-
-	/* create a multicast kludge storage (if we have not had one) */
-	in6_createmkludge(ifp);
 
 	/*
 	 * quirks based on interface type
@@ -812,6 +623,7 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 	 */
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0) {
 		in6 = in6addr_loopback;
+		/* These are safe and atomic thanks to IFNET_LOCK */
 		if (in6ifa_ifpwithaddr(ifp, &in6) == NULL) {
 			if (in6_ifattach_loopback(ifp) != 0)
 				return;
@@ -822,13 +634,16 @@ in6_ifattach(struct ifnet *ifp, struct ifnet *altifp)
 	 * assign a link-local address, if there's none.
 	 */
 	if (!(ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) &&
-	    ND_IFINFO(ifp)->flags & ND6_IFF_AUTO_LINKLOCAL)
-	{
-		ia = in6ifa_ifpforlinklocal(ifp, 0);
+	    ND_IFINFO(ifp)->flags & ND6_IFF_AUTO_LINKLOCAL) {
+		int bound = curlwp_bind();
+		struct psref psref;
+		ia = in6ifa_ifpforlinklocal_psref(ifp, 0, &psref);
 		if (ia == NULL && in6_ifattach_linklocal(ifp, altifp) != 0) {
 			printf("%s: cannot assign link-local address\n",
 			    ifp->if_xname);
 		}
+		ia6_release(ia, &psref);
+		curlwp_bindx(bound);
 	}
 }
 
@@ -841,88 +656,14 @@ void
 in6_ifdetach(struct ifnet *ifp)
 {
 
+	/* nuke any of IPv6 addresses we have */
+	if_purgeaddrs(ifp, AF_INET6, in6_purgeaddr);
+
+	in6_purge_multi(ifp);
+
 	/* remove ip6_mrouter stuff */
 	ip6_mrouter_detach(ifp);
 
 	/* remove neighbor management table */
 	nd6_purge(ifp, NULL);
-
-	/* nuke any of IPv6 addresses we have */
-	if_purgeaddrs(ifp, AF_INET6, in6_purgeaddr);
-
-	/* cleanup multicast address kludge table, if there is any */
-	in6_purgemkludge(ifp);
-
-	/*
-	 * remove neighbor management table.  we call it twice just to make
-	 * sure we nuke everything.  maybe we need just one call.
-	 * XXX: since the first call did not release addresses, some prefixes
-	 * might remain.  We should call nd6_purge() again to release the
-	 * prefixes after removing all addresses above.
-	 * (Or can we just delay calling nd6_purge until at this point?)
-	 */
-	nd6_purge(ifp, NULL);
-}
-
-int
-in6_get_tmpifid(struct ifnet *ifp, u_int8_t *retbuf, 
-	const u_int8_t *baseid, int generate)
-{
-	u_int8_t nullbuf[8];
-	struct nd_ifinfo *ndi = ND_IFINFO(ifp);
-
-	memset(nullbuf, 0, sizeof(nullbuf));
-	if (memcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) == 0) {
-		/* we've never created a random ID.  Create a new one. */
-		generate = 1;
-	}
-
-	if (generate) {
-		memcpy(ndi->randomseed1, baseid, sizeof(ndi->randomseed1));
-
-		/* generate_tmp_ifid will update seedn and buf */
-		(void)generate_tmp_ifid(ndi->randomseed0, ndi->randomseed1,
-		    ndi->randomid);
-	}
-	memcpy(retbuf, ndi->randomid, 8);
-	if (generate && memcmp(retbuf, nullbuf, sizeof(nullbuf)) == 0) {
-		/* generate_tmp_ifid could not found a good ID. */
-		return -1;
-	}
-
-	return 0;
-}
-
-void
-in6_tmpaddrtimer(void *ignored_arg)
-{
-	struct nd_ifinfo *ndi;
-	u_int8_t nullbuf[8];
-	struct ifnet *ifp;
-	int s;
-
-	mutex_enter(softnet_lock);
-	KERNEL_LOCK(1, NULL);
-
-	callout_reset(&in6_tmpaddrtimer_ch,
-	    (ip6_temp_preferred_lifetime - ip6_desync_factor -
-	    ip6_temp_regen_advance) * hz, in6_tmpaddrtimer, NULL);
-
-	memset(nullbuf, 0, sizeof(nullbuf));
-	s = pserialize_read_enter();
-	IFNET_READER_FOREACH(ifp) {
-		ndi = ND_IFINFO(ifp);
-		if (memcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
-			/*
-			 * We've been generating a random ID on this interface.
-			 * Create a new one.
-			 */
-			(void)generate_tmp_ifid(ndi->randomseed0,
-			    ndi->randomseed1, ndi->randomid);
-		}
-	}
-	pserialize_read_exit(s);
-
-	KERNEL_UNLOCK_ONE(NULL);
-	mutex_exit(softnet_lock);
 }

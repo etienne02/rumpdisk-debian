@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.1 2015/12/23 08:14:06 pgoyette Exp $
+#	$NetBSD: Makefile,v 1.6 2019/02/17 04:05:57 rin Exp $
 
 .include "../Makefile.inc"
 
@@ -27,7 +27,7 @@ SRCS+=	rf_raid4.c              rf_raid5.c             rf_raid5_rotatedspare.c
 SRCS+=	rf_reconbuffer.c        rf_reconmap.c          rf_reconstruct.c
 SRCS+=	rf_reconutil.c          rf_revent.c            rf_shutdown.c
 SRCS+=	rf_sstf.c               rf_states.c            rf_stripelocks.c
-SRCS+=	rf_strutils.c           rf_utils.c             rf_compat50.c
+SRCS+=	rf_strutils.c           rf_utils.c
 
 CPPFLAGS+=	-DRAID_AUTOCONFIG=1
 
@@ -41,6 +41,11 @@ CPPFLAGS+=	-DRF_INCLUDE_INTERDECLUSTER=1
 CPPFLAGS+=	-DRF_INCLUDE_PARITY_DECLUSTERING=1
 CPPFLAGS+=	-DRF_INCLUDE_PARITY_DECLUSTERING_DS=1
 
-CPPFLAGS+=	-DCOMPAT_50
+.include "${.CURDIR}/../../compat/netbsd32/netbsd32.mk"
+.if ${COMPAT_USE_NETBSD32} != "no"
+CPPFLAGS.rf_netbsdkintf.c+=	-DCOMPAT_NETBSD32
+.endif
+
+WARNS=	3
 
 .include <bsd.kmodule.mk>

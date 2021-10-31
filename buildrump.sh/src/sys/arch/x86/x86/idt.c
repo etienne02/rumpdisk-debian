@@ -1,4 +1,4 @@
-/*	$NetBSD: idt.c,v 1.3 2009/04/19 14:11:37 ad Exp $	*/
+/*	$NetBSD: idt.c,v 1.14 2020/07/14 15:59:21 para Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2000, 2009 The NetBSD Foundation, Inc.
@@ -65,7 +65,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.3 2009/04/19 14:11:37 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.14 2020/07/14 15:59:21 para Exp $");
+
+#include "opt_pcpu_idt.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -73,21 +75,98 @@ __KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.3 2009/04/19 14:11:37 ad Exp $");
 #include <sys/cpu.h>
 #include <sys/atomic.h>
 
+#include <uvm/uvm.h>
+
 #include <machine/segments.h>
 
-#if !defined(XEN)
+/*
+ * XEN PV and native have a different idea of what idt entries should
+ * look like.
+ */
 
-struct gate_descriptor *idt;
-static char idt_allocmap[NIDT];
+/* Normalise across XEN PV and native */
+#if defined(XENPV)
+
+void
+set_idtgate(struct trap_info *xen_idd, void *function, int ist,
+	    int type, int dpl, int sel)
+{
+	/*
+	 * Find the page boundary in which the descriptor resides.
+	 * We make an assumption here, that the descriptor is part of
+	 * a table (array), which fits in a page and is page aligned.
+	 *
+	 * This assumption is from the usecases at early startup in
+	 * machine/machdep.c
+	 *
+	 * Thus this function may not work in the "general" case of a
+	 * randomly located idt entry template (for eg:).
+	 */
+
+	vaddr_t xen_idt_vaddr = ((vaddr_t) xen_idd) & ~PAGE_MASK;
+
+	//kpreempt_disable();
+#if defined(__x86_64__)
+	/* Make it writeable, so we can update the values. */
+	pmap_changeprot_local(xen_idt_vaddr, VM_PROT_READ | VM_PROT_WRITE);
+#endif /* __x86_64 */
+	xen_idd->cs = sel;
+	xen_idd->address = (unsigned long) function;
+	xen_idd->flags = dpl;
+
+	/*
+	 * Again we make the assumption that the descriptor is
+	 * implicitly part of an idt, which we infer as
+	 * xen_idt_vaddr. (See above).
+	 */
+	xen_idd->vector = xen_idd - (struct trap_info *)xen_idt_vaddr;
+
+	/* Back to read-only, as it should be. */
+#if defined(__x86_64__)
+	pmap_changeprot_local(xen_idt_vaddr, VM_PROT_READ);
+#endif /* __x86_64 */
+	//kpreempt_enable();
+}
+void
+unset_idtgate(struct trap_info *xen_idd)
+{
+#if defined(__x86_64__)
+	vaddr_t xen_idt_vaddr = ((vaddr_t) xen_idd) & ~PAGE_MASK;
+
+	/* Make it writeable, so we can update the values. */
+	pmap_changeprot_local(xen_idt_vaddr, VM_PROT_READ | VM_PROT_WRITE);
+#endif /* __x86_64 */
+
+	/* Zero it */
+	memset(xen_idd, 0, sizeof (*xen_idd));
+
+#if defined(__x86_64__)
+	/* Back to read-only, as it should be. */
+	pmap_changeprot_local(xen_idt_vaddr, VM_PROT_READ);
+#endif /* __x86_64 */
+}
+#else /* XENPV */
+void
+set_idtgate(struct gate_descriptor *idd, void *function, int ist, int type, int dpl, int sel)
+{
+	setgate(idd, function, ist, type, dpl,	sel);
+}
+void
+unset_idtgate(struct gate_descriptor *idd)
+{
+	unsetgate(idd);
+}
+#endif /* XENPV */
 
 /*
  * Allocate an IDT vector slot within the given range.
  * cpu_lock will be held unless single threaded during early boot.
  */
 int
-idt_vec_alloc(int low, int high)
+idt_vec_alloc(struct idt_vec *iv, int low, int high)
 {
 	int vec;
+	char *idt_allocmap = iv->iv_allocmap;
 
 	KASSERT(mutex_owned(&cpu_lock) || !mp_online);
 
@@ -103,43 +182,60 @@ idt_vec_alloc(int low, int high)
 }
 
 void
-idt_vec_reserve(int vec)
+idt_vec_reserve(struct idt_vec *iv, int vec)
 {
 	int result;
 
 	KASSERT(mutex_owned(&cpu_lock) || !mp_online);
 
-	result = idt_vec_alloc(vec, vec);
+	result = idt_vec_alloc(iv, vec, vec);
 	if (result != vec) {
 		panic("%s: failed to reserve vec %d", __func__, vec);
 	}
 }
 
 void
-idt_vec_set(int vec, void (*function)(void))
+idt_vec_set(struct idt_vec *iv, int vec, void (*function)(void))
 {
+	idt_descriptor_t *idt;
+	char *idt_allocmap __diagused = iv->iv_allocmap;
 
-	KASSERT(mutex_owned(&cpu_lock) || !mp_online);
 	KASSERT(idt_allocmap[vec] == 1);
-	setgate(&idt[vec], function, 0, SDT_SYS386IGT, SEL_KPL,
-	    GSEL(GCODE_SEL, SEL_KPL));
+	idt = iv->iv_idt;
+	set_idtgate(&idt[vec], function, 0, SDT_SYS386IGT, SEL_KPL,
+	       GSEL(GCODE_SEL, SEL_KPL));
 }
 
 /*
  * Free IDT vector.  No locking required as release is atomic.
  */
 void
-idt_vec_free(int vec)
+idt_vec_free(struct idt_vec *iv, int vec)
 {
+	idt_descriptor_t *idt;
+	char *idt_allocmap = iv->iv_allocmap;
 
-	unsetgate(&idt[vec]);
+	idt = iv->iv_idt;
+	unset_idtgate(&idt[vec]);
 	idt_allocmap[vec] = 0;
 }
 
-void
-idt_init(void)
+bool
+idt_vec_is_pcpu(void)
 {
 
+#ifdef PCPU_IDT
+	return true;
+#else
+	return false;
+#endif
 }
 
-#endif /* !defined(XEN) */
+struct idt_vec *
+idt_vec_ref(struct idt_vec *iv)
+{
+	if (idt_vec_is_pcpu())
+		return iv;
+
+	return &(cpu_info_primary.ci_idtvec);
+}

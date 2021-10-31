@@ -1,4 +1,4 @@
-/*	$NetBSD: ld.c,v 1.94 2016/02/27 08:54:49 mlelstv Exp $	*/
+/*	$NetBSD: ld.c,v 1.112 2021/05/30 11:24:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ld.c,v 1.94 2016/02/27 08:54:49 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ld.c,v 1.112 2021/05/30 11:24:02 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,13 +54,16 @@ __KERNEL_RCSID(0, "$NetBSD: ld.c,v 1.94 2016/02/27 08:54:49 mlelstv Exp $");
 #include <sys/vnode.h>
 #include <sys/syslog.h>
 #include <sys/mutex.h>
+#include <sys/module.h>
+#include <sys/reboot.h>
 
 #include <dev/ldvar.h>
 
-#include <prop/proplib.h>
+#include "ioconf.h"
 
 static void	ldminphys(struct buf *bp);
 static bool	ld_suspend(device_t, const pmf_qual_t *);
+static bool	ld_resume(device_t, const pmf_qual_t *);
 static bool	ld_shutdown(device_t, int);
 static int	ld_diskstart(device_t, struct buf *bp);
 static void	ld_iosize(device_t, int *);
@@ -70,8 +73,7 @@ static void	ld_set_geometry(struct ld_softc *);
 static void	ld_config_interrupts (device_t);
 static int	ld_lastclose(device_t);
 static int	ld_discard(device_t, off_t, off_t);
-
-extern struct	cfdriver ld_cd;
+static int	ld_flush(device_t, bool);
 
 static dev_type_open(ldopen);
 static dev_type_close(ldclose);
@@ -109,7 +111,7 @@ const struct cdevsw ld_cdevsw = {
 	.d_flag = D_DISK | D_MPSAFE
 };
 
-static struct	dkdriver lddkdriver = {
+static const struct	dkdriver lddkdriver = {
 	.d_open = ldopen,
 	.d_close = ldclose,
 	.d_strategy = ldstrategy,
@@ -122,7 +124,7 @@ static struct	dkdriver lddkdriver = {
 };
 
 void
-ldattach(struct ld_softc *sc)
+ldattach(struct ld_softc *sc, const char *default_strategy)
 {
 	device_t self = sc->sc_dv;
 	struct dk_softc *dksc = &sc->sc_dksc;
@@ -131,6 +133,12 @@ ldattach(struct ld_softc *sc)
 	cv_init(&sc->sc_drain, "lddrain");
 
 	if ((sc->sc_flags & LDF_ENABLED) == 0) {
+		return;
+	}
+
+	/* don't attach a disk that we cannot handle */
+	if (sc->sc_secsize < DEV_BSIZE) {
+		sc->sc_flags &= ~LDF_ENABLED;
 		return;
 	}
 
@@ -148,15 +156,19 @@ ldattach(struct ld_softc *sc)
 
 	sc->sc_disksize512 = sc->sc_secperunit * sc->sc_secsize / DEV_BSIZE;
 
+	if (sc->sc_flags & LDF_NO_RND)
+		dksc->sc_flags |= DKF_NO_RND;
+
 	/* Attach dk and disk subsystems */
 	dk_attach(dksc);
 	disk_attach(&dksc->sc_dkdev);
 	ld_set_geometry(sc);
 
-	bufq_alloc(&dksc->sc_bufq, BUFQ_DISK_DEFAULT_STRAT, BUFQ_SORT_RAWBLOCK);
+	bufq_alloc(&dksc->sc_bufq, default_strategy, BUFQ_SORT_RAWBLOCK);
 
 	/* Register with PMF */
-	if (!pmf_device_register1(dksc->sc_dev, ld_suspend, NULL, ld_shutdown))
+	if (!pmf_device_register1(dksc->sc_dev, ld_suspend, ld_resume,
+		ld_shutdown))
 		aprint_error_dev(dksc->sc_dev,
 		    "couldn't establish power handler\n");
 
@@ -179,26 +191,25 @@ int
 ldbegindetach(struct ld_softc *sc, int flags)
 {
 	struct dk_softc *dksc = &sc->sc_dksc;
-	int rv = 0;
+	int error;
 
+	/* If we never attached properly, no problem with detaching.  */
 	if ((sc->sc_flags & LDF_ENABLED) == 0)
-		return (0);
+		return 0;
 
-	rv = disk_begindetach(&dksc->sc_dkdev, ld_lastclose, dksc->sc_dev, flags);
+	/*
+	 * If the disk is still open, back out before we commit to
+	 * detaching.
+	 */
+	error = disk_begindetach(&dksc->sc_dkdev, ld_lastclose, dksc->sc_dev,
+	    flags);
+	if (error)
+		return error;
 
-	if (rv != 0)
-		return rv;
+	/* We are now committed to detaching.  Prevent new xfers.  */
+	ldadjqparam(sc, 0);
 
-	mutex_enter(&sc->sc_mutex);
-	sc->sc_maxqueuecnt = 0;
-
-	while (sc->sc_queuecnt > 0) {
-		sc->sc_flags |= LDF_DRAIN;
-		cv_wait(&sc->sc_drain, &sc->sc_mutex);
-	}
-	mutex_exit(&sc->sc_mutex);
-
-	return (rv);
+	return 0;
 }
 
 void
@@ -210,12 +221,17 @@ ldenddetach(struct ld_softc *sc)
 	if ((sc->sc_flags & LDF_ENABLED) == 0)
 		return;
 
-	mutex_enter(&sc->sc_mutex);
-
 	/* Wait for commands queued with the hardware to complete. */
-	if (sc->sc_queuecnt != 0) {
-		if (cv_timedwait(&sc->sc_drain, &sc->sc_mutex, 30 * hz))
+	mutex_enter(&sc->sc_mutex);
+	while (sc->sc_queuecnt > 0) {
+		if (cv_timedwait(&sc->sc_drain, &sc->sc_mutex, 30 * hz)) {
+			/*
+			 * XXX This seems like a recipe for crashing on
+			 * use after free...
+			 */
 			printf("%s: not drained\n", dksc->sc_xname);
+			break;
+		}
 	}
 	mutex_exit(&sc->sc_mutex);
 
@@ -247,15 +263,12 @@ ldenddetach(struct ld_softc *sc)
 	pmf_device_deregister(dksc->sc_dev);
 
 	/*
-	 * XXX We can't really flush the cache here, beceause the
+	 * XXX We can't really flush the cache here, because the
 	 * XXX device may already be non-existent from the controller's
 	 * XXX perspective.
 	 */
 #if 0
-	/* Flush the device's cache. */
-	if (sc->sc_flush != NULL)
-		if ((*sc->sc_flush)(sc, 0) != 0)
-			device_printf(dksc->sc_dev, "unable to flush cache\n");
+	ld_flush(dksc->sc_dev, false);
 #endif
 	cv_destroy(&sc->sc_drain);
 	mutex_destroy(&sc->sc_mutex);
@@ -265,20 +278,63 @@ ldenddetach(struct ld_softc *sc)
 static bool
 ld_suspend(device_t dev, const pmf_qual_t *qual)
 {
-	return ld_shutdown(dev, 0);
+	struct ld_softc *sc = device_private(dev);
+	int queuecnt;
+	bool ok = false;
+
+	/* Block new requests and wait for outstanding requests to drain.  */
+	mutex_enter(&sc->sc_mutex);
+	KASSERT((sc->sc_flags & LDF_SUSPEND) == 0);
+	sc->sc_flags |= LDF_SUSPEND;
+	while ((queuecnt = sc->sc_queuecnt) > 0) {
+		if (cv_timedwait(&sc->sc_drain, &sc->sc_mutex, 30 * hz))
+			break;
+	}
+	mutex_exit(&sc->sc_mutex);
+
+	/* Block suspend if we couldn't drain everything in 30sec.  */
+	if (queuecnt > 0) {
+		device_printf(dev, "timeout draining buffers\n");
+		goto out;
+	}
+
+	/* Flush cache before we lose power.  If we can't, block suspend.  */
+	if (ld_flush(dev, /*poll*/false) != 0) {
+		device_printf(dev, "failed to flush cache\n");
+		goto out;
+	}
+
+	/* Success!  */
+	ok = true;
+
+out:	if (!ok)
+		(void)ld_resume(dev, qual);
+	return ok;
+}
+
+static bool
+ld_resume(device_t dev, const pmf_qual_t *qual)
+{
+	struct ld_softc *sc = device_private(dev);
+
+	/* Allow new requests to come in.  */
+	mutex_enter(&sc->sc_mutex);
+	KASSERT(sc->sc_flags & LDF_SUSPEND);
+	sc->sc_flags &= ~LDF_SUSPEND;
+	mutex_exit(&sc->sc_mutex);
+
+	/* Restart any pending queued requests.  */
+	dk_start(&sc->sc_dksc, NULL);
+
+	return true;
 }
 
 /* ARGSUSED */
 static bool
 ld_shutdown(device_t dev, int flags)
 {
-	struct ld_softc *sc = device_private(dev);
-	struct dk_softc *dksc = &sc->sc_dksc;
-
-	if (sc->sc_flush != NULL && (*sc->sc_flush)(sc, LDFL_POLL) != 0) {
-		device_printf(dksc->sc_dev, "unable to flush cache\n");
+	if ((flags & RB_NOSYNC) == 0 && ld_flush(dev, true) != 0)
 		return false;
-	}
 
 	return true;
 }
@@ -294,6 +350,10 @@ ldopen(dev_t dev, int flags, int fmt, struct lwp *l)
 	unit = DISKUNIT(dev);
 	if ((sc = device_lookup_private(&ld_cd, unit)) == NULL)
 		return (ENXIO);
+
+	if ((sc->sc_flags & LDF_ENABLED) == 0)
+		return (ENODEV);
+
 	dksc = &sc->sc_dksc;
 
 	return dk_open(dksc, dev, flags, fmt, l);
@@ -302,10 +362,7 @@ ldopen(dev_t dev, int flags, int fmt, struct lwp *l)
 static int
 ld_lastclose(device_t self)
 {
-	struct ld_softc *sc = device_private(self);
-
-	if (sc->sc_flush != NULL && (*sc->sc_flush)(sc, 0) != 0)
-		device_printf(self, "unable to flush cache\n");
+	ld_flush(self, false);
 
 	return 0;
 }
@@ -353,12 +410,12 @@ ldioctl(dev_t dev, u_long cmd, void *addr, int32_t flag, struct lwp *l)
 	sc = device_lookup_private(&ld_cd, unit);
 	dksc = &sc->sc_dksc;
 
-	error = dk_ioctl(dksc, dev, cmd, addr, flag, l);
-	if (error != EPASSTHROUGH)
-		return (error);
-
 	error = 0;
 
+	/*
+	 * Some common checks so that individual attachments wouldn't need
+	 * to duplicate them.
+	 */
 	switch (cmd) {
 	case DIOCCACHESYNC:
 		/*
@@ -367,17 +424,48 @@ ldioctl(dev_t dev, u_long cmd, void *addr, int32_t flag, struct lwp *l)
 		 */
 		if ((flag & FWRITE) == 0)
 			error = EBADF;
-		else if (sc->sc_flush)
-			error = (*sc->sc_flush)(sc, 0);
 		else
-			error = 0;	/* XXX Error out instead? */
-		break;
-	default:
-		error = ENOTTY;
+			error = 0;
 		break;
 	}
 
-	return (error);
+	if (error != 0)
+		return (error);
+
+	if (sc->sc_ioctl) {
+		if ((sc->sc_flags & LDF_MPSAFE) == 0)
+			KERNEL_LOCK(1, curlwp);
+		error = (*sc->sc_ioctl)(sc, cmd, addr, flag, 0);
+		if ((sc->sc_flags & LDF_MPSAFE) == 0)
+			KERNEL_UNLOCK_ONE(curlwp);
+		if (error != EPASSTHROUGH)
+			return (error);
+	}
+
+	/* something not handled by the attachment */
+	return dk_ioctl(dksc, dev, cmd, addr, flag, l);
+}
+
+/*
+ * Flush the device's cache.
+ */
+static int
+ld_flush(device_t self, bool poll)
+{
+	int error = 0;
+	struct ld_softc *sc = device_private(self);
+
+	if (sc->sc_ioctl) {
+		if ((sc->sc_flags & LDF_MPSAFE) == 0)
+			KERNEL_LOCK(1, curlwp);
+		error = (*sc->sc_ioctl)(sc, DIOCCACHESYNC, NULL, 0, poll);
+		if ((sc->sc_flags & LDF_MPSAFE) == 0)
+			KERNEL_UNLOCK_ONE(curlwp);
+		if (error != 0)
+			device_printf(self, "unable to flush cache\n");
+	}
+
+	return error;
 }
 
 static void
@@ -400,20 +488,33 @@ ld_diskstart(device_t dev, struct buf *bp)
 	struct ld_softc *sc = device_private(dev);
 	int error;
 
-	if (sc->sc_queuecnt >= sc->sc_maxqueuecnt)
+	if (sc->sc_queuecnt >= sc->sc_maxqueuecnt ||
+	    sc->sc_flags & LDF_SUSPEND) {
+		if (sc->sc_flags & LDF_SUSPEND)
+			aprint_debug_dev(dev, "i/o blocked while suspended\n");
 		return EAGAIN;
+	}
+
+	if ((sc->sc_flags & LDF_MPSAFE) == 0)
+		KERNEL_LOCK(1, curlwp);
 
 	mutex_enter(&sc->sc_mutex);
 
-	if (sc->sc_queuecnt >= sc->sc_maxqueuecnt)
+	if (sc->sc_queuecnt >= sc->sc_maxqueuecnt ||
+	    sc->sc_flags & LDF_SUSPEND) {
+		if (sc->sc_flags & LDF_SUSPEND)
+			aprint_debug_dev(dev, "i/o blocked while suspended\n");
 		error = EAGAIN;
-	else {
+	} else {
 		error = (*sc->sc_start)(sc, bp);
 		if (error == 0)
 			sc->sc_queuecnt++;
 	}
 
 	mutex_exit(&sc->sc_mutex);
+
+	if ((sc->sc_flags & LDF_MPSAFE) == 0)
+		KERNEL_UNLOCK_ONE(curlwp);
 
 	return error;
 }
@@ -427,10 +528,7 @@ lddone(struct ld_softc *sc, struct buf *bp)
 
 	mutex_enter(&sc->sc_mutex);
 	if (--sc->sc_queuecnt <= sc->sc_maxqueuecnt) {
-		if ((sc->sc_flags & LDF_DRAIN) != 0) {
-			sc->sc_flags &= ~LDF_DRAIN;
-			cv_broadcast(&sc->sc_drain);
-		}
+		cv_broadcast(&sc->sc_drain);
 		mutex_exit(&sc->sc_mutex);
 		dk_start(dksc, NULL);
 	} else
@@ -446,11 +544,11 @@ ldsize(dev_t dev)
 
 	unit = DISKUNIT(dev);
 	if ((sc = device_lookup_private(&ld_cd, unit)) == NULL)
-		return (ENODEV);
+		return (-1);
 	dksc = &sc->sc_dksc;
 
 	if ((sc->sc_flags & LDF_ENABLED) == 0)
-		return (ENODEV);
+		return (-1);
 
 	return dk_size(dksc, dev);
 }
@@ -473,7 +571,7 @@ lddump(dev_t dev, daddr_t blkno, void *va, size_t size)
 	if ((sc->sc_flags & LDF_ENABLED) == 0)
 		return (ENODEV);
 
-	return dk_dump(dksc, dev, blkno, va, size);
+	return dk_dump(dksc, dev, blkno, va, size, 0);
 }
 
 static int
@@ -557,7 +655,7 @@ ld_set_geometry(struct ld_softc *sc)
 	dg->dg_ntracks = sc->sc_nheads;
 	dg->dg_ncylinders = sc->sc_ncylinders;
 
-	disk_set_info(dksc->sc_dev, &dksc->sc_dkdev, NULL);
+	disk_set_info(dksc->sc_dev, &dksc->sc_dkdev, sc->sc_typename);
 }
 
 static void
@@ -573,11 +671,45 @@ static int
 ld_discard(device_t dev, off_t pos, off_t len)
 {
 	struct ld_softc *sc = device_private(dev);
+	struct buf dbuf, *bp = &dbuf;
+	int error = 0;
+
+	KASSERT(len <= INT_MAX);
 
 	if (sc->sc_discard == NULL)
 		return (ENODEV);
 
-	return (*sc->sc_discard)(sc, pos, len);
+	if ((sc->sc_flags & LDF_MPSAFE) == 0)
+		KERNEL_LOCK(1, curlwp);
+
+	buf_init(bp);
+	bp->b_vp = NULL;
+	bp->b_data = NULL;
+	bp->b_bufsize = 0;
+	bp->b_rawblkno = pos / sc->sc_secsize;
+	bp->b_bcount = len;
+	bp->b_flags = B_WRITE;
+	bp->b_cflags = BC_BUSY;
+
+	error = (*sc->sc_discard)(sc, bp);
+	if (error == 0)
+		error = biowait(bp);
+
+	buf_destroy(bp);
+
+	if ((sc->sc_flags & LDF_MPSAFE) == 0)
+		KERNEL_UNLOCK_ONE(curlwp);
+
+	return error;
+}
+
+void
+lddiscardend(struct ld_softc *sc, struct buf *bp)
+{
+
+	if (bp->b_error)
+		bp->b_resid = bp->b_bcount;
+	biodone(bp);
 }
 
 static int
@@ -592,4 +724,43 @@ lddiscard(dev_t dev, off_t pos, off_t len)
 	dksc = &sc->sc_dksc;
 
 	return dk_discard(dksc, dev, pos, len);
+}
+
+MODULE(MODULE_CLASS_DRIVER, ld, "dk_subr");
+
+#ifdef _MODULE
+CFDRIVER_DECL(ld, DV_DISK, NULL);
+#endif
+
+static int
+ld_modcmd(modcmd_t cmd, void *opaque)
+{
+#ifdef _MODULE
+	devmajor_t bmajor, cmajor;
+#endif
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		bmajor = cmajor = -1;
+		error = devsw_attach(ld_cd.cd_name, &ld_bdevsw, &bmajor,
+		    &ld_cdevsw, &cmajor);
+		if (error)
+			break;
+		error = config_cfdriver_attach(&ld_cd);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_cfdriver_detach(&ld_cd);
+		if (error)
+			break;
+		devsw_detach(&ld_bdevsw, &ld_cdevsw);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+
+	return error;
 }

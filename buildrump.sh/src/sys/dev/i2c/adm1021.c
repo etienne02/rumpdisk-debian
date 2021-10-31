@@ -1,4 +1,4 @@
-/*	$NetBSD: adm1021.c,v 1.12 2016/01/04 19:24:15 christos Exp $ */
+/*	$NetBSD: adm1021.c,v 1.29 2021/06/21 03:12:54 christos Exp $ */
 /*	$OpenBSD: adm1021.c,v 1.27 2007/06/24 05:34:35 dlg Exp $	*/
 
 /*
@@ -20,15 +20,15 @@
 /*
  * Driver for ADM1021 and compatible temperature sensors, including ADM1021,
  * ADM1021A, ADM1023, ADM1032, GL523SM, G781, LM84, MAX1617, MAX1617A,
- * NE1617A, and Xeon embedded temperature sensors.
+ * NE1617A, MAX6642 and Xeon embedded temperature sensors.
  *
  * Some sensors differ from the ADM1021/MAX1617/NE1617A:
- *                         ADM1021A ADM1023 ADM1032 G781 LM84 MAX1617A
- *   company/revision reg  X        X       X       X         X
- *   no negative temps     X        X       X       X
- *   11-bit remote temp             X       X       X
- *   no low limits                                       X
- *   therm (high) limits                    X       X
+ *                         ADM1021A ADM1023 ADM1032 G781 LM84 MAX1617A MAX6642
+ *   company/revision reg  X        X       X       X         X        X
+ *   no negative temps     X        X       X       X 
+ *   11-bit remote temp             X       X       X                  X
+ *   no low limits                                       X             X
+ *   therm (high) limits                    X       X                  X
  *
  * Registers 0x00 to 0x0f have separate read/write addresses, but
  * registers 0x10 and above have the same read/write address.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adm1021.c,v 1.12 2016/01/04 19:24:15 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adm1021.c,v 1.29 2021/06/21 03:12:54 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -110,6 +110,7 @@ __KERNEL_RCSID(0, "$NetBSD: adm1021.c,v 1.12 2016/01/04 19:24:15 christos Exp $"
 struct admtemp_softc {
 	i2c_tag_t	sc_tag;
 	i2c_addr_t	sc_addr;
+	prop_dictionary_t sc_prop;
 
 	int		sc_flags;
 	int		sc_noexternal, sc_noneg, sc_nolow;
@@ -142,39 +143,62 @@ void	admtemp_setlim_1032(struct sysmon_envsys *, envsys_data_t *,
 CFATTACH_DECL_NEW(admtemp, sizeof(struct admtemp_softc),
 	admtemp_match, admtemp_attach, NULL, NULL);
 
-/* XXX: add flags for compats to admtemp_setflags() */
-static const char * admtemp_compats[] = {
-	"i2c-max1617",
-	NULL
+struct admtemp_params {
+	const char *name;
+	int	noneg;
+	int	nolow;
+	int	ext11;
+	int	therm;
+};
+
+static const struct admtemp_params admtemp_params_max1617 = {
+	.name = "MAX1617A",
+	.noneg = 0,
+	.nolow = 0,
+	.ext11 = 0,
+	.therm = 0,
+};
+
+static const struct admtemp_params admtemp_params_max6642 = {
+	.name = "MAX6642",
+	.noneg = 0,
+	.nolow = 1,
+	.ext11 = 0,
+	.therm = 0,
+};
+
+static const struct admtemp_params admtemp_params_max6690 = {
+	.name = "MAX6690",
+	.noneg = 0,
+	.nolow = 0,
+	.ext11 = 1,
+	.therm = 0,
+};
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "i2c-max1617",	.data = &admtemp_params_max1617 },
+	{ .compat = "max6642",		.data = &admtemp_params_max6642 },
+	{ .compat = "max6690",		.data = &admtemp_params_max6690 },
+	DEVICE_COMPAT_EOL
 };
 
 int
 admtemp_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
+	int match_result;
 
-	if (ia->ia_name == NULL) {
-		/*
-		 * Indirect config - not much we can do!
-		 * Check typical addresses.
-		 */
-		if (((ia->ia_addr >= 0x18) && (ia->ia_addr <= 0x1a)) ||
-		    ((ia->ia_addr >= 0x29) && (ia->ia_addr <= 0x2b)) ||
-		    ((ia->ia_addr >= 0x4c) && (ia->ia_addr <= 0x4e)))
-			return (1);
-	} else {
-		/*
-		 * Direct config - match via the list of compatible
-		 * hardware or simply match the device name.
-		 */
-		if (ia->ia_ncompat > 0) {
-			if (iic_compat_match(ia, admtemp_compats))
-				return 1;
-		} else {
-			if (strcmp(ia->ia_name, "admtemp") == 0)
-				return 1;
-		}
-	}
+	if (iic_use_direct_match(ia, match, compat_data, &match_result))
+		return match_result;
+	
+	/*
+	 * Indirect config - not much we can do!
+	 * Check typical addresses.
+	 */
+	if (((ia->ia_addr >= 0x18) && (ia->ia_addr <= 0x1a)) ||
+	    ((ia->ia_addr >= 0x29) && (ia->ia_addr <= 0x2b)) ||
+	    ((ia->ia_addr >= 0x48) && (ia->ia_addr <= 0x4e)))
+		return I2C_MATCH_ADDRESS_ONLY;
 
 	return 0;
 }
@@ -210,7 +234,6 @@ admtemp_setflags(struct admtemp_softc *sc, struct i2c_attach_args *ia,
     uint8_t* comp, uint8_t *rev, char* name)
 {
 	uint8_t cmd, data, tmp;
-	int i;
 
 	*comp = 0;
 	*rev = 0;
@@ -227,12 +250,17 @@ admtemp_setflags(struct admtemp_softc *sc, struct i2c_attach_args *ia,
 	sc->sc_therm = 0;
 
 	/* Direct config */
-	for (i = 0; i < ia->ia_ncompat; i++) {
-		if (strcmp("i2c-max1617", ia->ia_compat[i]) == 0) {
-			sc->sc_noneg = 0;
-			strlcpy(name, "MAX1617A", ADMTEMP_NAMELEN);
-			return;
-		}
+	const struct device_compatible_entry *dce =
+	    iic_compatible_lookup(ia, compat_data);
+	if (dce != NULL) {
+		const struct admtemp_params *params = dce->data;
+
+		sc->sc_noneg = params->noneg;
+		sc->sc_nolow = params->nolow;
+		sc->sc_ext11 = params->ext11;
+		sc->sc_therm = params->therm;
+		strlcpy(name, params->name, ADMTEMP_NAMELEN);
+		return;
 	}
 
 	/* Indirect config */
@@ -249,7 +277,22 @@ admtemp_setflags(struct admtemp_softc *sc, struct i2c_attach_args *ia,
 
 	if (*comp == ADM1021_COMPANY_MAXIM) {
 		sc->sc_noneg = 0;
-		strlcpy(name, "MAX1617A", ADMTEMP_NAMELEN);
+		/*
+		 * MAX6642 doesn't have a revision register
+		 * XXX this works only on macppc with iic at pmu because the
+		 * pmu doesn't return an error for nonexistant registers, it
+		 * just repeats previous data
+		 */
+		if (*comp == *rev) {		
+			sc->sc_therm = 0;	/* */
+			sc->sc_nolow = 1;
+			strlcpy(name, "MAX6642", ADMTEMP_NAMELEN);
+		} else if (*rev == 0) {
+			strlcpy(name, "MAX6690", ADMTEMP_NAMELEN);
+			sc->sc_ext11 = 1;
+		} else {
+			strlcpy(name, "MAX1617A", ADMTEMP_NAMELEN);
+		}
 	}
 
 	if (*comp == ADM1021_COMPANY_GMT) {
@@ -293,11 +336,19 @@ admtemp_attach(device_t parent, device_t self, void *aux)
 	struct i2c_attach_args *ia = aux;
 	uint8_t cmd, data, stat, comp, rev;
 	char name[ADMTEMP_NAMELEN];
+	char ename[64] = "external", iname[64] = "internal";
+	const char *desc;
 
 	sc->sc_tag = ia->ia_tag;
 	sc->sc_addr = ia->ia_addr;
+	sc->sc_prop = ia->ia_prop;
+	prop_object_retain(sc->sc_prop);
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0)) {
+		aprint_error_dev(self, "cannot acquire iic bus\n");
+		return;
+	}
+
 	cmd = ADM1021_CONFIG_READ;
 	if (admtemp_exec(sc, I2C_OP_READ_WITH_STOP, &cmd, &data) != 0) {
 		iic_release_bus(sc->sc_tag, 0);
@@ -353,16 +404,29 @@ admtemp_attach(device_t parent, device_t self, void *aux)
 	sc->sc_sensor[ADMTEMP_INT].units = ENVSYS_STEMP;
 	sc->sc_sensor[ADMTEMP_EXT].state = ENVSYS_SINVALID;
 	sc->sc_sensor[ADMTEMP_EXT].units = ENVSYS_STEMP;
-	sc->sc_sensor[ADMTEMP_INT].flags = ENVSYS_FMONLIMITS;
-	sc->sc_sensor[ADMTEMP_EXT].flags = ENVSYS_FMONLIMITS;
-	strlcpy(sc->sc_sensor[ADMTEMP_INT].desc, "internal",
+	sc->sc_sensor[ADMTEMP_INT].flags =
+	    ENVSYS_FMONLIMITS | ENVSYS_FHAS_ENTROPY;
+	sc->sc_sensor[ADMTEMP_EXT].flags =
+	    ENVSYS_FMONLIMITS | ENVSYS_FHAS_ENTROPY;
+
+	if (prop_dictionary_get_string(sc->sc_prop, "s00", &desc)) {
+		strncpy(iname, desc, 64);
+	}
+
+	if (prop_dictionary_get_string(sc->sc_prop, "s01", &desc)) {
+		strncpy(ename, desc, 64);
+	}
+
+	strlcpy(sc->sc_sensor[ADMTEMP_INT].desc, iname,
 	    sizeof(sc->sc_sensor[ADMTEMP_INT].desc));
-	strlcpy(sc->sc_sensor[ADMTEMP_EXT].desc, "external",
+	strlcpy(sc->sc_sensor[ADMTEMP_EXT].desc, ename,
 	    sizeof(sc->sc_sensor[ADMTEMP_EXT].desc));
+
 	sc->sc_sme = sysmon_envsys_create();
 	if (sysmon_envsys_sensor_attach(
 	    sc->sc_sme, &sc->sc_sensor[ADMTEMP_INT])) {
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		aprint_error_dev(self,
 		    "unable to attach internal at sysmon\n");
 		return;
@@ -371,6 +435,7 @@ admtemp_attach(device_t parent, device_t self, void *aux)
 	    sysmon_envsys_sensor_attach(
 	    sc->sc_sme, &sc->sc_sensor[ADMTEMP_EXT])) {
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		aprint_error_dev(self,
 		    "unable to attach external at sysmon\n");
 		return;
@@ -392,6 +457,7 @@ admtemp_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self,
 		    "unable to register with sysmon\n");
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		return;
 	}
 }
@@ -404,7 +470,8 @@ admtemp_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 	uint8_t cmd, xdata;
 	int8_t sdata;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0) != 0)
+		return;
 
 	if (edata->sensor == ADMTEMP_INT)
 		cmd = ADM1021_INT_TEMP;
@@ -439,7 +506,8 @@ admtemp_getlim_1021(struct sysmon_envsys *sme, envsys_data_t *edata,
 
 	*props &= ~(PROP_CRITMAX | PROP_CRITMIN);
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (edata->sensor == ADMTEMP_INT)
 		cmd = ADM1021_INT_HIGH_READ;
@@ -488,7 +556,8 @@ admtemp_getlim_1023(struct sysmon_envsys *sme, envsys_data_t *edata,
 
 	*props &= ~(PROP_CRITMAX | PROP_CRITMIN);
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (edata->sensor == ADMTEMP_INT)
 		cmd = ADM1021_INT_HIGH_READ;
@@ -552,7 +621,8 @@ admtemp_getlim_1032(struct sysmon_envsys *sme, envsys_data_t *edata,
 
 	*props &= ~(PROP_WARNMAX | PROP_CRITMAX | PROP_WARNMIN);
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (edata->sensor == ADMTEMP_INT)
 		cmd = ADM1032_INT_THERM;
@@ -627,7 +697,8 @@ admtemp_setlim_1021(struct sysmon_envsys *sme, envsys_data_t *edata,
 	int tmp;
 	int8_t sdata;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (*props & PROP_CRITMAX) {
 		if (edata->sensor == ADMTEMP_INT)
@@ -713,7 +784,8 @@ admtemp_setlim_1023(struct sysmon_envsys *sme, envsys_data_t *edata,
 	else
 		ext11 = 1;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (*props & PROP_CRITMAX) {
 		if (edata->sensor == ADMTEMP_INT)
@@ -770,7 +842,8 @@ admtemp_setlim_1032(struct sysmon_envsys *sme, envsys_data_t *edata,
 	else
 		ext11 = 1;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	if (*props & PROP_CRITMAX) {
 		if (edata->sensor == ADMTEMP_INT)

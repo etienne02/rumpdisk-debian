@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ep_pci.c,v 1.53 2014/03/29 19:28:24 christos Exp $	*/
+/*	$NetBSD: if_ep_pci.c,v 1.55 2018/12/09 11:14:02 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ep_pci.c,v 1.53 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ep_pci.c,v 1.55 2018/12/09 11:14:02 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -103,7 +103,7 @@ static void	ep_pci_attach(device_t , device_t , void *);
 CFATTACH_DECL_NEW(ep_pci, sizeof(struct ep_softc),
     ep_pci_match, ep_pci_attach, NULL, NULL);
 
-static struct ep_pci_product {
+static const struct ep_pci_product {
 	u_int32_t	epp_prodid;	/* PCI product ID */
 	u_short		epp_chipset;	/* 3Com chipset used */
 	int		epp_flags;	/* initial softc flags */
@@ -149,7 +149,7 @@ static struct ep_pci_product {
 static const struct ep_pci_product *
 ep_pci_lookup(const struct pci_attach_args *pa)
 {
-	struct ep_pci_product *epp;
+	const struct ep_pci_product *epp;
 
 	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_3COM)
 		return (NULL);
@@ -218,7 +218,8 @@ ep_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_NET, epintr, sc);
+	sc->sc_ih = pci_intr_establish_xname(pc, ih, IPL_NET, epintr, sc,
+	    device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(sc->sc_dev, "couldn't establish interrupt");
 		if (intrstr != NULL)

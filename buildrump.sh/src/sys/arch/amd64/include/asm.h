@@ -1,4 +1,4 @@
-/*	$NetBSD: asm.h,v 1.19 2014/05/22 14:59:01 uebayasi Exp $	*/
+/*	$NetBSD: asm.h,v 1.22 2021/04/17 20:12:55 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -81,12 +81,12 @@
 	ALIGN_TEXT; .globl X ## name; .type X ## name,@function; X ## name:
 #define	IDTVEC_END(name) \
 	.size X ## name, . - X ## name
-#else 
+#else
 #define	IDTVEC(name) \
 	ALIGN_TEXT; .globl X/**/name; .type X/**/name,@function; X/**/name:
 #define	IDTVEC_END(name) \
 	.size X/**/name, . - X/**/name
-#endif /* __STDC__ */ 
+#endif /* __STDC__ */
 #endif /* _KERNEL */
 
 #ifdef __STDC__
@@ -112,7 +112,9 @@
 
 #define	ASMSTR		.asciz
 
-#define RCSID(x)	.pushsection ".ident"; .asciz x; .popsection
+#define RCSID(x)	.pushsection ".ident","MS",@progbits,1;		\
+			.asciz x;					\
+			.popsection
 
 #define	WEAK_ALIAS(alias,sym)						\
 	.weak alias;							\

@@ -1,4 +1,4 @@
-/*	$NetBSD: ct.c,v 1.28 2016/07/11 11:31:50 msaitoh Exp $ */
+/*	$NetBSD: ct.c,v 1.31 2019/11/12 13:17:44 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 1996-2003 The NetBSD Foundation, Inc.
@@ -82,7 +82,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ct.c,v 1.28 2016/07/11 11:31:50 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ct.c,v 1.31 2019/11/12 13:17:44 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -99,6 +99,8 @@ __KERNEL_RCSID(0, "$NetBSD: ct.c,v 1.28 2016/07/11 11:31:50 msaitoh Exp $");
 
 #include <dev/gpib/gpibvar.h>
 #include <dev/gpib/cs80busvar.h>
+
+#include "ioconf.h"
 
 /* number of eof marks to remember */
 #define EOFS	128
@@ -206,8 +208,6 @@ const struct cdevsw ct_cdevsw = {
 	.d_flag = D_TAPE
 };
 
-extern struct cfdriver ct_cd;
-
 struct	ctinfo {
 	short	hwid;
 	short	punit;
@@ -260,6 +260,7 @@ ctattach(device_t parent, device_t self, void *aux)
 	char name[7];
 	int type, i, n, canstream = 0;
 
+	sc->sc_dev = self;
 	sc->sc_ic = ca->ca_ic;
 	sc->sc_slave = ca->ca_slave;
 	sc->sc_punit = ca->ca_punit;
@@ -308,7 +309,7 @@ ctattach(device_t parent, device_t self, void *aux)
 	case CT7946ID:
 		if (memcmp(name, "079450", 6) == 0)
 			return;			/* not really a 7946 */
-		/* fall into... */
+		/* FALLTHROUGH */
 	case CT9144ID:
 	case CT9145ID:
 	case CT35401ID:

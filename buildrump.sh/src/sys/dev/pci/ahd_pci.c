@@ -1,4 +1,4 @@
-/*	$NetBSD: ahd_pci.c,v 1.35 2014/03/29 19:28:24 christos Exp $	*/
+/*	$NetBSD: ahd_pci.c,v 1.39 2019/11/10 21:16:36 chs Exp $	*/
 
 /*
  * Product specific probe and attach routines for:
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahd_pci.c,v 1.35 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahd_pci.c,v 1.39 2019/11/10 21:16:36 chs Exp $");
 
 #define AHD_PCI_IOADDR	PCI_MAPREG_START	/* I/O Address */
 #define AHD_PCI_MEMADDR	(PCI_MAPREG_START + 4)	/* Mem I/O Address */
@@ -129,7 +129,7 @@ static ahd_device_setup_t ahd_aic7901A_setup;
 static ahd_device_setup_t ahd_aic7902_setup;
 static ahd_device_setup_t ahd_aic790X_setup;
 
-static struct ahd_pci_identity ahd_pci_ident_table [] =
+static const struct ahd_pci_identity ahd_pci_ident_table[] =
 {
 	/* aic7901 based controllers */
 	{
@@ -337,14 +337,7 @@ ahd_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 
 	/* Keep information about the PCI bus */
-	bd = malloc(sizeof (struct ahd_pci_busdata), M_DEVBUF, M_NOWAIT);
-	if (bd == NULL) {
-		aprint_error("%s: unable to allocate bus-specific data\n",
-		    ahd_name(ahd));
-		return;
-	}
-	memset(bd, 0, sizeof(struct ahd_pci_busdata));
-
+	bd = malloc(sizeof (struct ahd_pci_busdata), M_DEVBUF, M_WAITOK|M_ZERO);
 	bd->pc = pa->pa_pc;
 	bd->tag = pa->pa_tag;
 	bd->func = pa->pa_function;
@@ -355,12 +348,7 @@ ahd_pci_attach(device_t parent, device_t self, void *aux)
 	ahd->description = entry->name;
 
 	ahd->seep_config = malloc(sizeof(*ahd->seep_config),
-				  M_DEVBUF, M_NOWAIT);
-	if (ahd->seep_config == NULL) {
-		aprint_error("%s: cannot malloc seep_config!\n", ahd_name(ahd));
-		return;
-	}
-	memset(ahd->seep_config, 0, sizeof(*ahd->seep_config));
+				  M_DEVBUF, M_WAITOK|M_ZERO);
 
 	LIST_INIT(&ahd->pending_scbs);
 	ahd_timer_init(&ahd->reset_timer);
@@ -539,7 +527,8 @@ ahd_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	ahd->ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO, ahd_intr, ahd);
+	ahd->ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO, ahd_intr,
+	    ahd, device_xname(self));
 	if (ahd->ih == NULL) {
 		aprint_error("%s: couldn't establish interrupt",
 		       ahd_name(ahd));

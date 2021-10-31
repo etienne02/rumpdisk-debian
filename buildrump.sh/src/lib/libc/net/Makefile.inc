@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.86 2015/04/15 19:13:46 mrg Exp $
+#	$NetBSD: Makefile.inc,v 1.92 2021/04/12 06:08:30 mrg Exp $
 #	@(#)Makefile.inc	8.2 (Berkeley) 9/5/93
 
 # net sources
@@ -13,7 +13,7 @@ SRCS+=	base64.c ethers.c gethnamaddr.c getifaddrs.c \
 	iso_addr.c linkaddr.c \
 	nsdispatch.c nslexer.l nsparser.y nsap_addr.c \
 	rcmd.c recv.c send.c sethostent.c \
-	sockatmark.c
+	sctp_sys_calls.c sockatmark.c
 
 .if (${MKHESIOD} != "no")
 SRCS+=	hesiod.c
@@ -21,8 +21,9 @@ SRCS+=	hesiod.c
 
 SRCS+=	getaddrinfo.c getnameinfo.c
 .if (${USE_INET6} != "no")
-SRCS+=	ip6opt.c rthdr.c vars6.c inet6_scopeid.c
+SRCS+=	ip6opt.c rthdr.c inet6_scopeid.c
 .endif
+SRCS+=	vars6.c
 SRCS+=	if_indextoname.c if_nameindex.c if_nametoindex.c
 
 LPREFIX=_nsyy
@@ -144,3 +145,11 @@ MLINKS+=getaddrinfo.3 freeaddrinfo.3 \
 	inet6_rth_space.3 inet6_rth_getaddr.3 \
 	rcmd.3 rcmd_af.3 rcmd.3 iruserok_sa.3 rcmd.3 rresvport_af.3 \
 	rcmd.3 orcmd_af.3
+
+# SCTP
+MAN+=	sctp_bindx.3 sctp_connectx.3 sctp_freepaddrs.3 sctp_getaddrlen.3 \
+	sctp_getassocid.3 sctp_getpaddrs.3 sctp_opt_info.3 sctp_peeloff.3 \
+	sctp_recvmsg.3 sctp_send.3 sctp_sendmsg.3
+
+COPTS.getaddrinfo.c+=		${GCC_NO_STRINGOP_OVERFLOW}
+COPTS.sctp_sys_calls.c+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}

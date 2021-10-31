@@ -1,4 +1,4 @@
-/*	$NetBSD: ulfs_quota2.c,v 1.28 2016/07/07 06:55:44 msaitoh Exp $	*/
+/*	$NetBSD: ulfs_quota2.c,v 1.33 2020/12/05 17:40:00 thorpej Exp $	*/
 /*  from NetBSD: ufs_quota2.c,v 1.40 2015/03/28 19:24:05 maxv Exp Exp  */
 /*  from NetBSD: ffs_quota2.c,v 1.5 2015/02/22 14:12:48 maxv Exp  */
 
@@ -29,7 +29,7 @@
   */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ulfs_quota2.c,v 1.28 2016/07/07 06:55:44 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ulfs_quota2.c,v 1.33 2020/12/05 17:40:00 thorpej Exp $");
 
 #include <sys/buf.h>
 #include <sys/param.h>
@@ -40,11 +40,9 @@ __KERNEL_RCSID(0, "$NetBSD: ulfs_quota2.c,v 1.28 2016/07/07 06:55:44 msaitoh Exp
 #include <sys/proc.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
-#include <sys/fstrans.h>
 #include <sys/kauth.h>
 #include <sys/quota.h>
 #include <sys/quotactl.h>
-#include <sys/timevar.h>
 
 #include <ufs/lfs/lfs.h>
 #include <ufs/lfs/lfs_accessors.h>
@@ -205,7 +203,7 @@ quota2_walk_list(struct ulfsmount *ump, struct buf *hbp, int type,
 	struct quota2_entry *q2e;
 	daddr_t lblkno, blkoff, olblkno = 0;
 
-	KASSERT(mutex_owner(&lfs_dqlock));
+	KASSERT(mutex_owned(&lfs_dqlock));
 
 	while (off != 0) {
 		lblkno = (off >> ump->um_mountp->mnt_fs_bshift);
@@ -323,7 +321,7 @@ quota2_q2ealloc(struct ulfsmount *ump, int type, uid_t uid, struct dquot *dq)
 		KASSERT((ip->i_size % ump->umq2_bsize) == 0);
 		ip->i_size += ump->umq2_bsize;
 		DIP_ASSIGN(ip, size, ip->i_size);
-		ip->i_flag |= IN_CHANGE | IN_UPDATE;
+		ip->i_state |= IN_CHANGE | IN_UPDATE;
 		uvm_vnp_setsize(vp, ip->i_size);
 		lfsquota2_addfreeq2e(q2h, bp->b_data, size, ump->umq2_bsize,
 		    needswap);
@@ -1599,7 +1597,8 @@ lfs_quota2_mount(struct mount *mp)
 
         if (fs->lfs_quota_flags & FS_Q2_DO_TYPE(ULFS_USRQUOTA) &&
 	    ump->um_quotas[ULFS_USRQUOTA] == NULLVP) {
-		error = VFS_VGET(mp, fs->lfs_quotaino[ULFS_USRQUOTA], &vp);
+		error = VFS_VGET(mp, fs->lfs_quotaino[ULFS_USRQUOTA],
+		    LK_EXCLUSIVE, &vp);
 		if (error) {
 			printf("%s: can't vget() user quota inode: %d\n",
 			    mp->mnt_stat.f_mntonname, error);
@@ -1614,7 +1613,8 @@ lfs_quota2_mount(struct mount *mp)
 	}
         if (fs->lfs_quota_flags & FS_Q2_DO_TYPE(ULFS_GRPQUOTA) &&
 	    ump->um_quotas[ULFS_GRPQUOTA] == NULLVP) {
-		error = VFS_VGET(mp, fs->lfs_quotaino[ULFS_GRPQUOTA], &vp);
+		error = VFS_VGET(mp, fs->lfs_quotaino[ULFS_GRPQUOTA],
+		    LK_EXCLUSIVE, &vp);
 		if (error) {
 			vn_close(ump->um_quotas[ULFS_USRQUOTA],
 			    FREAD|FWRITE, l->l_cred);

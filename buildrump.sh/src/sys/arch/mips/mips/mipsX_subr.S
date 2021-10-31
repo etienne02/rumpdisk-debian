@@ -1,4 +1,4 @@
-/*	$NetBSD: mipsX_subr.S,v 1.74 2016/07/21 12:17:07 skrll Exp $	*/
+/*	$NetBSD: mipsX_subr.S,v 1.113 2021/02/16 06:06:58 simonb Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -115,6 +115,10 @@
  *
  *	@(#)locore.s	8.5 (Berkeley) 1/4/94
  */
+
+#include <mips/asm.h>
+RCSID("$NetBSD: mipsX_subr.S,v 1.113 2021/02/16 06:06:58 simonb Exp $")
+
 #include "opt_cputype.h"
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -125,7 +129,6 @@
 #include <sys/cdefs.h>
 #include <sys/endian.h>
 
-#include <mips/asm.h>
 #include <mips/cpuregs.h>
 #if defined(MIPS3)
 #include <mips/cache_r4k.h>
@@ -134,14 +137,14 @@
 
 #include "assym.h"
 
-#if defined(MIPS1) || defined(MIPS2)
-#error use locore_mips1.S
+#if defined(MIPS64_OCTEON)
+#include "cpunode.h"			/* for NWDOG */
+#else
+#define NWDOG 0
 #endif
 
-#if defined(MIPS3)
-#define	MFC0_HAZARD	nop
-#else
-#define	MFC0_HAZARD	/* nothing */
+#if defined(MIPS1) || defined(MIPS2)
+#error use locore_mips1.S
 #endif
 
 #if defined(__mips_o32)
@@ -154,6 +157,13 @@
 	li reg, MIPS_SR_KX; mtc0 reg, MIPS_COP_0_STATUS
 #define	SET_EXCEPTION_LEVEL(reg) \
 	li reg, MIPS_SR_EXL | MIPS_SR_KX; mtc0 reg, MIPS_COP_0_STATUS
+#endif
+
+#ifdef MIPS3_LOONGSON2
+#define KERN_ENTRY_ERRATA \
+	li k0, MIPS_DIAG_BTB_CLEAR|MIPS_DIAG_RAS_DISABLE; mtc0 k0, MIPS_COP_0_DIAG
+#else
+#define KERN_ENTRY_ERRATA /* nothing */
 #endif
 
 #if MIPS1
@@ -360,7 +370,7 @@
  *
  * Loongson2 processors don't have separate tlbmiss and xtlbmiss handlers;
  * so we have to check for useg addresses in tlb_miss. The good news is that
- * we can use 64 intructions form tlbmiss instead of 32.
+ * we can use 64 intructions from tlbmiss instead of 32.
  *
  *----------------------------------------------------------------------------
  */
@@ -373,24 +383,21 @@ VECTOR(MIPSX(tlb_miss), unknown)
 	nop					#01: nop
 	PTR_SRL k1, k0, 31			#02: clear useg bits
 	beqz	k1, 2f				#03: k1==0 -> useg address
-	 PTR_SRL k1,k0,XSEGSHIFT+XSEGLENGTH+2	#04: clear valid bits
+	 PTR_SLL k1, k0, 2			#0x: clear top bits
+	PTR_SRL k1, XSEGSHIFT+XSEGLENGTH+2	#04: clear valid bits
 	bnez	k1, MIPSX(nopagetable)		#05: not legal address
-	 PTR_SRL k0, XSEGSHIFT - PTR_SCALESHIFT #06: k0=seg offset (almost)
+	 PTR_SRA k0, XSEGSHIFT - PTR_SCALESHIFT #06: k0=seg offset (almost)
 	bgez	k0, 1f				#07: k0<0 -> kernel fault
 	 lui	k1, %hi(CPUVAR(PMAP_SEGTAB))	#08: k1=hi of segtab
 	PTR_ADDI k1,  1 << PTR_SCALESHIFT	#09: kernel segtab entry
 1:
-	andi	k0, NBPG-(1<<PTR_SCALESHIFT)	#0a: k0=seg offset (mask 0x3)
+	andi	k0, (NSEGPG-1)<<PTR_SCALESHIFT	#0a: k0=seg offset (mask 0x3)
 	PTR_L	k1, %lo(CPUVAR(PMAP_SEGTAB))(k1)#0b: k1=segment tab
 	PTR_ADDU k1, k0				#0c: k1=seg entry address
 	dmfc0	k0, MIPS_COP_0_BAD_VADDR	#0d: k0=bad address (again)
 	PTR_L	k1, 0(k1)			#0e: k1=seg entry
 	b	MIPSX(tlb_miss_common)		#0f
-#ifdef MIPSNNR2
-	 _EXT	k0, k0, SEGSHIFT, SEGLENGTH	#0f: k0=seg index
-#else
-	 PTR_SRL k0, SEGSHIFT - PTR_SCALESHIFT	#0f: k0=seg offset (almost)
-#endif
+	 PTR_SRL k0, SEGSHIFT - PTR_SCALESHIFT	#10: k0=seg offset (almost)
 #endif /* LP64 */
 2: /* handle useg addresses */
 	lui	k1, %hi(CPUVAR(PMAP_SEG0TAB))	#11: k1=hi of seg0tab
@@ -647,17 +654,16 @@ _VECTOR_END(MIPSX(exception))
  */
 VECTOR(MIPSX(intr), unknown)
 	.set	noat
-	mfc0	k1, MIPS_COP_0_STATUS		#00: get the status register
+	mfc0	k0, MIPS_COP_0_STATUS		#00: get the status register
 	MFC0_HAZARD				#01: stall
-	and	k1, k1, MIPS3_SR_KSU_USER	#02: test for user mode
-	PTR_LA	k0, MIPSX(user_intr)		#03: assume user mode
-	bnez	k1, 1f				#04: yep, do it
-	 nop					#05:  branch deay
-	PTR_LA	k0, MIPSX(kern_intr)		#06: nope, kernel intr
+	and	k0, k0, MIPS3_SR_KSU_USER	#02: test for user mode
+	bnez	k0, 1f				#03: yep, do it
+	 nop					#04:  branch deay
+	j	MIPSX(kern_intr)		#05: nope, kernel intr
 1:
-	lui	k1, %hi(CPUVAR(CURLWP))		#07: k1=hi of curlwp
-	jr	k0				#08: jump to the function
-	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)	#09: k1=lo of curlwp
+	lui	k1, %hi(CPUVAR(CURLWP))		#06: k1=hi of curlwp
+	j	MIPSX(user_intr)		#07: user intr
+	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)	#08: k1=lo of curlwp
 	.set	at
 _VECTOR_END(MIPSX(intr))
 
@@ -706,7 +712,7 @@ MIPSX(slowfault):
 NESTED_NOPROFILE(MIPSX(kern_gen_exception), KERNFRAME_SIZ, ra)
 	.set	noat
 	.mask	0x80000000, -4
-#if defined(PARANOIA) || 1
+#if defined(PARANOIA)
 	PTR_L	k0, L_PCB(MIPS_CURLWP)
 	slt	k0, k0, sp		# k0 = L_PCB(MIPS_CURLWP) < sp
 1:	beqz	k0, 1b			# loop forever if false
@@ -909,7 +915,7 @@ MIPSX(kern_return):
 	.set	at
 END(MIPSX(kern_gen_exception))
 
-#ifdef DDB
+#if NWDOG > 0 || defined(DDB)
 /*
  * mipsN_kern_nonmaskable_intr
  *
@@ -1047,7 +1053,7 @@ NESTED_NOPROFILE(MIPSX(kern_nonmaskable_intr), KERNFRAME_SIZ, ra)
 	 nop
 	.set	at
 END(MIPSX(kern_nonmaskable_intr))
-#endif /* DDB */
+#endif /* NWDOG > 0 || DDB */
 
 /*
  * mipsN_kern_intr
@@ -1298,10 +1304,7 @@ NESTED_NOPROFILE(MIPSX(user_reserved_insn), CALLFRAME_SIZ, ra)
 	/*
 	 * Save a minimum of registers to see if this is rdhwr $3,$29
 	 */
-#ifdef MIPS3_LOONGSON2
-	li	k0, MIPS_DIAG_BTB_CLEAR
-	mtc0	k0, MIPS_COP_0_DIAG
-#endif
+	KERN_ENTRY_ERRATA
 	/* K1 already has CURLWP */
 	PTR_L	k0, L_PCB(k1)			# XXXuvm_lwp_getuarea
 	PTR_ADDU k0, USPACE - TF_SIZ - CALLFRAME_SIZ
@@ -1327,8 +1330,8 @@ NESTED_NOPROFILE(MIPSX(user_reserved_insn), CALLFRAME_SIZ, ra)
 	/*
 	 * Was this rdhwr $3,$29?
 	 */
-	lui	v0, %hi(0x7c03e83b)
-	addiu	v0, %lo(0x7c03e83b)
+	lui	v0, %hi(0x7c03e83b)	# 0x7c03e83b => rdhwr $3,$29
+	addiu	v0, %lo(0x7c03e83b)	#        or ... rdhwr v1,ulr
 	bne	AT, v0, MIPSX(user_gen_exception_common)
 	 nop
 
@@ -1363,10 +1366,7 @@ NESTED_NOPROFILE(MIPSX(user_gen_exception), CALLFRAME_SIZ, ra)
 	/*
 	 * Save all the registers except the kernel temporaries onto the stack.
 	 */
-#ifdef MIPS3_LOONGSON2
-	li	k0, MIPS_DIAG_BTB_CLEAR
-	mtc0	k0, MIPS_COP_0_DIAG
-#endif
+	KERN_ENTRY_ERRATA
 	/* K1 already has CURLWP */
 	PTR_L	k0, L_PCB(k1)			# XXXuvm_lwp_getuarea
 	PTR_ADDU k0, USPACE - TF_SIZ - CALLFRAME_SIZ
@@ -1478,10 +1478,7 @@ NESTED_NOPROFILE(MIPSX(user_intr), CALLFRAME_SIZ, ra)
  * Save the relevant user registers onto the kernel stack.
  * We don't need to save s0 - s8 because the compiler does it for us.
  */
-#ifdef MIPS3_LOONGSON2
-	li	k0, MIPS_DIAG_BTB_CLEAR
-	mtc0	k0, MIPS_COP_0_DIAG
-#endif
+	KERN_ENTRY_ERRATA
 	/* k1 contains curlwp */
 	PTR_L	k0, L_PCB(k1)			# XXXuvm_lwp_getuarea
 	PTR_ADDU k0, USPACE - TF_SIZ - CALLFRAME_SIZ
@@ -1539,10 +1536,16 @@ NESTED_NOPROFILE(MIPSX(user_intr), CALLFRAME_SIZ, ra)
 	 */
 	mfc0	v1, MIPS_COP_0_STATUS
 #ifdef NOFPU
+	/*
+	 * enter kernel mode
+	 */
 	MFC0_HAZARD
-	and	v0, v1, MIPS_SR_KSU_MASK|MIPS_SR_EXL
-	xor	v0, v1				# clear the bits
+	and	v0, v1, MIPS_SR_EXL|MIPS_SR_KSU_MASK # bits to clear
+	xor	v0, v1				# clear them.
 #else
+	/*
+	 * Turn off FPU and enter kernel mode
+	 */
 	lui	v0, %hi(~(MIPS_SR_COP_1_BIT|MIPS_SR_EXL|MIPS_SR_KSU_MASK))
 	addiu	v0, %lo(~(MIPS_SR_COP_1_BIT|MIPS_SR_EXL|MIPS_SR_KSU_MASK))
 	and	v0, v1
@@ -1664,11 +1667,8 @@ NESTED_NOPROFILE(MIPSX(systemcall), CALLFRAME_SIZ, ra)
 	/*
 	 * Save all the registers but kernel temporaries onto the stack.
 	 */
-#ifdef MIPS3_LOONGSON2
-	li	k0, MIPS_DIAG_BTB_CLEAR
-	mtc0	k0, MIPS_COP_0_DIAG
-#endif
-	/* k1 already contains cpulwp */
+	KERN_ENTRY_ERRATA
+	/* k1 already contains curlwp */
 	PTR_L	k0, L_PCB(k1)			# XXXuvm_lwp_getuarea
 	PTR_ADDU k0, USPACE - TF_SIZ - CALLFRAME_SIZ
 	#REG_S	AT, CALLFRAME_SIZ+TF_REG_AST(k0)
@@ -1728,18 +1728,21 @@ NESTED_NOPROFILE(MIPSX(systemcall), CALLFRAME_SIZ, ra)
 #endif
 	PTR_L	s0, L_PROC(MIPS_CURLWP)		# curlwp->l_proc
 	PTR_L	t9, P_MD_SYSCALL(s0)		# t9 = syscall
+#ifdef NOFPU
+	/*
+	 * enter kernel mode
+	 */
+	and	t0, a1, MIPS_SR_EXL|MIPS_SR_KSU_MASK # bits to clear
+	xor	t0, a1				# clear them.
+#else
 	/*
 	 * Turn off FPU and enter kernel mode
 	 */
-#ifdef NOFPU
-	and	t0, a1, MIPS_SR_EXL|MIPS_SR_KSU_MASK
-	xor	t0, a1				# turns off the FPU & ints on
-#else
 	lui	t0, %hi(~(MIPS_SR_COP_1_BIT|MIPS_SR_EXL|MIPS_SR_KSU_MASK))
 	addiu	t0, %lo(~(MIPS_SR_COP_1_BIT|MIPS_SR_EXL|MIPS_SR_KSU_MASK))
 	and	t0, a1
 #endif
-	mtc0	t0, MIPS_COP_0_STATUS		# re-enable interrupts
+	mtc0	t0, MIPS_COP_0_STATUS
 	COP0_SYNC
 /*
  * Call the system call handler.
@@ -1832,7 +1835,7 @@ END(MIPSX(cache_exception))
  *	virtual address.
  *
  *	If we are page sizes which use both TLB LO entries, either both
- *	are valid or neither are.  So this expection should never happen.
+ *	are valid or neither are.  So this exception should never happen.
  *
  * Results:
  *	None.
@@ -1966,7 +1969,7 @@ MIPSX(kern_tlbi_odd):
 	_SLL	k0, k0, WIRED_SHIFT		# get rid of wired bit
 	_SRL	k0, k0, WIRED_SHIFT
 #endif
-	_MTC0	k0, MIPS_COP_0_TLB_LO1		# save PTE entry
+	_MTC0	k0, MIPS_COP_0_TLB_LO1		# load PTE entry
 	COP0_SYNC
 	and	k0, k0, MIPS3_PG_V		# check for valid entry
 #ifdef MIPS3
@@ -1987,7 +1990,7 @@ MIPSX(kern_tlbi_odd):
 	sltiu	k1, k1, MIPS3_TLB_WIRED_UPAGES	# Luckily this is MIPS3_PG_G
 	or	k1, k1, k0
 #endif
-	_MTC0	k0, MIPS_COP_0_TLB_LO0		# save PTE entry
+	_MTC0	k0, MIPS_COP_0_TLB_LO0		# load PTE entry
 	COP0_SYNC
 #ifdef MIPS3
 	nop					# required for QED5230
@@ -2050,7 +2053,7 @@ END(MIPSX(tlb_get_asid))
  *	None.
  *
  * Side effects:
- *	PID set in the entry hi register.
+ *	ASID set in the entry hi register.
  *
  *--------------------------------------------------------------------------
  */
@@ -2088,14 +2091,14 @@ END(MIPSX(tlb_set_asid))
  */
 LEAF(MIPSX(tlb_update_addr))
 #ifdef MIPSNNR2
-	di	ta0			# Disable interrupts
+	di	ta0				# Disable interrupts
 #else
-	mfc0	ta0, MIPS_COP_0_STATUS	# Save the status register.
-	mtc0	zero, MIPS_COP_0_STATUS	# Disable interrupts
+	mfc0	ta0, MIPS_COP_0_STATUS		# Save the status register.
+	mtc0	zero, MIPS_COP_0_STATUS		# Disable interrupts
 #endif
 	COP0_SYNC
 #if (PGSHIFT & 1) == 0
-	and	t1, a0, MIPS3_PG_ODDPG	# t1 = Even/Odd flag
+	and	t1, a0, MIPS3_PG_ODDPG		# t1 = Even/Odd flag
 #endif
 	and	a1, a1, MIPS3_PG_ASID
 #ifdef MIPSNNR2
@@ -2105,7 +2108,7 @@ LEAF(MIPSX(tlb_update_addr))
 	and	a0, a0, v0
 	or	a0, a0, a1			# Merge ASID
 #endif
-	_MFC0	ta1, MIPS_COP_0_TLB_HI		# Save current PID
+	_MFC0	ta1, MIPS_COP_0_TLB_HI		# Save current ASID
 	_MTC0	a0, MIPS_COP_0_TLB_HI		# Init high reg
 	COP0_SYNC
 #if (PGSHIFT & 1) == 0
@@ -2162,12 +2165,12 @@ LEAF(MIPSX(tlb_update_addr))
 	 li	v0, 0				# assume failure
 	bnez	t1, 4f				# Decide even odd
 	 nop
-	move	t3, a2				# swap a1 & t0
-	move	a2, t0				#
-	move	t0, a3				#
+	move	t3, a1				# swap a1 and t0
+	move	a1, t0				#
+	move	t0, t3				#
 4:
 	_MTC0	t0, MIPS_COP_0_TLB_LO0		# init low reg0.
-	_MTC0	a2, MIPS_COP_0_TLB_LO1		# init low reg1.
+	_MTC0	a1, MIPS_COP_0_TLB_LO1		# init low reg1.
 #endif /* PGSHIFT & 1 */
 5:
 	COP0_SYNC
@@ -2189,7 +2192,7 @@ LEAF(MIPSX(tlb_update_addr))
 	nop
 #endif
 7:
-	_MTC0	ta1, MIPS_COP_0_TLB_HI		# restore PID
+	_MTC0	ta1, MIPS_COP_0_TLB_HI		# restore ASID
 	COP0_SYNC
 #ifdef MIPS3
 	nop					# required for QED5230
@@ -2226,7 +2229,7 @@ LEAF(MIPSX(tlb_read_entry))
 #ifdef MIPS3
 	nop
 #endif
-	_MFC0	t0, MIPS_COP_0_TLB_HI		# Get current PID
+	_MFC0	t0, MIPS_COP_0_TLB_HI		# Get current ASID
 
 	mtc0	a0, MIPS_COP_0_TLB_INDEX	# Set the index register
 	COP0_SYNC
@@ -2245,7 +2248,7 @@ LEAF(MIPSX(tlb_read_entry))
 	_MFC0	t3, MIPS_COP_0_TLB_HI		# fetch the hi entry
 	_MFC0	ta0, MIPS_COP_0_TLB_LO0		# See what we got
 	_MFC0	ta1, MIPS_COP_0_TLB_LO1		# See what we got
-	_MTC0	t0, MIPS_COP_0_TLB_HI		# restore PID
+	_MTC0	t0, MIPS_COP_0_TLB_HI		# restore ASID
 	mtc0	ta2, MIPS_COP_0_TLB_PG_MASK	# restore pgMask
 	COP0_SYNC
 	mtc0	v1, MIPS_COP_0_STATUS		# Restore the status register
@@ -2289,6 +2292,7 @@ LEAF_NOPROFILE(MIPSX(tlb_invalidate_addr))
 	tlbp					# probe the entry in question
 	COP0_SYNC
 	mfc0	v0, MIPS_COP_0_TLB_INDEX	# see what we got
+	MFC0_HAZARD
 	bltz	v0, 2f				# index < 0 then skip
 	 li	t2, MIPS_KSEG0_START		# invalid address
 	PTR_SLL	v0, PGSHIFT | 1			# PAGE_SHIFT | 1
@@ -2305,20 +2309,23 @@ LEAF_NOPROFILE(MIPSX(tlb_invalidate_addr))
 #endif
 	and	a2, t0				# a2=valid entryLo0 afterwards
 	and	a3, t1				# a3=valid entryLo1 afterwards
-	or	v0, a2, a3			# will one be value?
-#ifdef MIPSNN
+	or	v0, a2, a3			# will one be valid?
+#ifdef MIPSNNX
+#error Global bit is lost here when V==0 and it needs to be preserved
 	movz	t0, zero, a2			# zero lo0 if V would not be set
 	movz	t1, zero, a3			# zero lo1 if V would not be set
 	movn	t2, a0, v0			# yes, keep VA the same
 #else
-	beqz	v0, 1f				# no valid entry
-	 _SLL	a2, a2, PG_V_LSHIFT		# move V to MSB
+	_SLL	a2, a2, PG_V_LSHIFT		# move V to MSB
 	_SRA	a2, a2, PG_V_RSHIFT		# fill with MSB
+	or	a2, MIPS3_PG_G			# mask needs to preserve G
 	and	t0, t0, a2			# zero lo0 if V would not be set
 	_SLL	a3, a3, PG_V_LSHIFT		# move V to MSB
 	_SRA	a3, a3, PG_V_RSHIFT		# fill with MSB
-	and	t1, t1, a3			# zero lo1 if V would not be set
-	move	t2, a0				# we need entryHi to be value
+	or	a3, MIPS3_PG_G			# mask needs to preserve G
+	beqz	v0, 1f				# no valid entry
+	 and	t1, t1, a3			# zero lo1 if V would not be set
+	move	t2, a0				# we need entryHi to be valid
 1:
 #endif /* MIPSNN */
 #endif /* (PGSHIFT & 1) == 0 */
@@ -2363,9 +2370,7 @@ LEAF_NOPROFILE(MIPSX(tlb_invalidate_asids))
 	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
 	COP0_SYNC
 
-	add	a2, 1				# bias for sltu
-
-	_MFC0	t0, MIPS_COP_0_TLB_HI		# Save the current PID.
+	_MFC0	t0, MIPS_COP_0_TLB_HI		# Save the current ASID.
 	mfc0	t1, MIPS_COP_0_TLB_WIRED
 	li	v0, MIPS_KSEG0_START		# invalid address
 	INT_L	t2, _C_LABEL(mips_options) + MO_NUM_TLB_ENTRIES
@@ -2378,19 +2383,19 @@ LEAF_NOPROFILE(MIPSX(tlb_invalidate_asids))
 	sll	ta0, t1, PGSHIFT | 1		# PAGE_SHIFT | 1
 	tlbr					# obtain an entry
 	COP0_SYNC
-	_MFC0	a0, MIPS_COP_0_TLB_LO1
+	_MFC0	ta1, MIPS_COP_0_TLB_LO1
 	MFC0_HAZARD
-	and	a0, MIPS3_PG_G			# check to see it has G bit
-	bnez	a0, 2f				# yep, skip this one.
+	and	ta1, MIPS3_PG_G			# check to see it has G bit
+	bnez	ta1, 2f				# yep, skip this one.
 	 nop
-	_MFC0	a0, MIPS_COP_0_TLB_HI		# get VA and ASID
+	_MFC0	ta1, MIPS_COP_0_TLB_HI		# get VA and ASID
 	MFC0_HAZARD
-	and	a0, MIPS3_PG_ASID		# focus on ASID
-	sltu	a3, a0, a1			# asid < base?
+	and	ta1, MIPS3_PG_ASID		# focus on ASID
+	sltu	a3, ta1, a0			# asid < base?
 	bnez	a3, 2f				# yes, skip this entry.
 	 nop
-	sltu	a3, a0, a2			# asid < limit
-	beqz	a3, 2f				# nope, skip this entry.
+	sltu	a3, a1, ta1			# limit < asid
+	bnez	a3, 2f				# yes, skip this entry.
 	 nop
 	PTR_ADDU ta0, v0
 
@@ -2406,7 +2411,7 @@ LEAF_NOPROFILE(MIPSX(tlb_invalidate_asids))
 	bne	t1, t2, 1b
 	 nop
 
-	_MTC0	t0, MIPS_COP_0_TLB_HI		# restore PID.
+	_MTC0	t0, MIPS_COP_0_TLB_HI		# restore ASID.
 	mtc0	t3, MIPS_COP_0_TLB_PG_MASK	# restore pgMask
 	COP0_SYNC
 
@@ -2538,9 +2543,10 @@ END(MIPSX(tlb_invalidate_all))
  * ASIDs present.
  */
 LEAF_NOPROFILE(MIPSX(tlb_record_asids))
-	_MFC0	a3, MIPS_COP_0_TLB_HI		# Save the current PID.
+	_MFC0	a3, MIPS_COP_0_TLB_HI		# Save the current ASID.
 	mfc0	ta0, MIPS_COP_0_TLB_WIRED
 	INT_L	ta1, _C_LABEL(mips_options) + MO_NUM_TLB_ENTRIES
+	mfc0	t3, MIPS_COP_0_TLB_PG_MASK	# save current pgMask
 	move	ta2, zero
 	li	ta3, 1
 	move	v0, zero			# start at zero ASIDs
@@ -2574,7 +2580,7 @@ LEAF_NOPROFILE(MIPSX(tlb_record_asids))
 	_MFC0	t0, MIPS_COP_0_TLB_HI		# get VA and ASID
 	MFC0_HAZARD
 	and	t0, t0, MIPS3_PG_ASID		# focus on ASID
-	bge	t0, a1, 4f			# >= ASID max? skip
+	bgt	t0, a1, 4f			# > ASID max? skip
 	 nop
 
 	srl	a2, t0, 3 + LONG_SCALESHIFT	# drop low 5 or 6 bits
@@ -2607,6 +2613,7 @@ LEAF_NOPROFILE(MIPSX(tlb_record_asids))
 
 	LONG_S	t2, 0(ta2)			# save the updated value.
 5:
+	mtc0	t3, MIPS_COP_0_TLB_PG_MASK	# restore pgMask
 	_MTC0	a3, MIPS_COP_0_TLB_HI		# restore ASID
 	COP0_SYNC
 
@@ -2620,8 +2627,10 @@ END(MIPSX(tlb_record_asids))
  * Arrange for a function to be invoked neatly, after a cpu_switch().
  * Call the service function with one argument, specified by the s0
  * and s1 respectively.  There is no need register save operation.
+ * XXX - Not profiled because we pass an arg in with v0 which isn't
+ *       preserved by _mcount()
  */
-LEAF(MIPSX(lwp_trampoline))
+LEAF_NOPROFILE(MIPSX(lwp_trampoline))
 	PTR_ADDU sp, -CALLFRAME_SIZ
 
 	# Call lwp_startup(), with args from cpu_switchto()/cpu_lwp_fork()
@@ -2652,10 +2661,6 @@ MIPSX(user_return):
 	REG_L	s6, CALLFRAME_SIZ+TF_REG_S6(sp)		# $22
 	REG_L	s7, CALLFRAME_SIZ+TF_REG_S7(sp)		# $23
 	REG_L	s8, CALLFRAME_SIZ+TF_REG_S8(sp)		# $30
-#ifdef MIPS3_LOONGSON2
-	li	t0, (MIPS_DIAG_BTB_CLEAR|MIPS_DIAG_ITLB_CLEAR)
-	mtc0	t0, MIPS_COP_0_DIAG
-#endif
 MIPSX(user_intr_return):
 #ifdef PARANOIA
 	PTR_L	t0, L_CPU(MIPS_CURLWP)
@@ -2694,7 +2699,7 @@ MIPSX(user_intr_return):
 	REG_L	t9, CALLFRAME_SIZ+TF_REG_T9(k1)		# $25
 	REG_L	k0, CALLFRAME_SIZ+TF_REG_SR(k1)		# status register
 	DYNAMIC_STATUS_MASK(k0, sp)		# machine dependent masking
-	REG_L	gp, CALLFRAME_SIZ+TF_REG_GP(k1)		# $29
+	REG_L	gp, CALLFRAME_SIZ+TF_REG_GP(k1)		# $28
 	REG_L	sp, CALLFRAME_SIZ+TF_REG_SP(k1)		# $29
 	REG_L	ra, CALLFRAME_SIZ+TF_REG_RA(k1)		# $31
 	mtc0	k0, MIPS_COP_0_STATUS
@@ -2709,22 +2714,37 @@ END(MIPSX(lwp_trampoline))
  * Wiredown the USPACE of newproc in TLB entry#0.  Check whether target
  * USPACE is already in another place of TLB before that, and make
  * sure TBIS(it) in the case.
+ *
+ * Disable the optimisation for PGSHIFT == 14 (aka ENABLE_MIPS_16KB_PAGE)
+ * as the code needs fixing for this case
+ *
+ * A TLB entry isn't used for the following cases:
+ *  - 16kB USPACE
+ *  - LP64 - USPACE is always accessed directly via XKPHYS
  */
+
 LEAF_NOPROFILE(MIPSX(cpu_switch_resume))
-#if !defined(ENABLE_MIPS_16KB_PAGE) && !defined(ENABLE_MIPS_8KB_PAGE)
+#if !defined(_LP64)
+#if (PAGE_SIZE < 16384)
+#if (USPACE > PAGE_SIZE) || !defined(_LP64)
 	INT_L	a1, L_MD_UPTE_0(a0)		# a1 = upte[0]
 #if (PGSHIFT & 1)
+#if (USPACE > PAGE_SIZE)
+#error Unsupported
+#else
+	/* even/odd are contiguaous */
 	INT_ADD a2, a1, MIPS3_PG_NEXT		# a2 = upper half
+#endif
 #else
 	INT_L	a2, L_MD_UPTE_1(a0)		# a2 = upte[1]
-#endif
+#endif /* (PGSHIFT & 1) */
 	PTR_L	v0, L_PCB(a0)			# va = l->l_addr
 #if VM_MIN_KERNEL_ADDRESS == MIPS_KSEG2_START
 	li	t0, VM_MIN_KERNEL_ADDRESS	# compute index
 	blt	v0, t0, MIPSX(resume)
 	 nop
 #else
-	li	t0, MIPS_KSEG0_START		# above XKSEG?
+	li	t0, MIPS_KSEG0_START		# below KSEG0?
 	blt	t0, v0, MIPSX(resume)
 	 nop
 	li	t0, VM_MIN_KERNEL_ADDRESS>>32	# below XKSEG?
@@ -2746,14 +2766,12 @@ MIPSX(entry0):
 #endif /* (PGSHIFT & 1) == 0 */
 	_MFC0	ta1, MIPS_COP_0_TLB_HI		# save TLB_HI
 	_MTC0	v0, MIPS_COP_0_TLB_HI		# VPN = va
-#if (PGSHIFT & 1) == 0
+
 	COP0_SYNC
 	tlbp					# probe VPN
 	COP0_SYNC
 	mfc0	t0, MIPS_COP_0_TLB_INDEX
-#ifdef MIPS3
-	nop
-#endif
+	MFC0_HAZARD
 	bltz	t0, MIPSX(entry0set)
 	 sll	t0, t0, PGSHIFT | 1		# PAGE_SHIFT | 1
 	PTR_LA	t0, MIPS_KSEG0_START(t0)
@@ -2766,7 +2784,7 @@ MIPSX(entry0):
 	_MTC0	v0, MIPS_COP_0_TLB_HI		# set VPN again
 	COP0_SYNC
 MIPSX(entry0set):
-#endif /* (PGSHIFT & 1) == 0 */
+
 #ifdef MULTIPROCESSOR
 	PTR_L	t0, L_CPU(a0)			# get cpu_info
 	INT_L	t1, CPU_INFO_KSP_TLB_SLOT(t0)	# get TLB# for KSP
@@ -2783,7 +2801,9 @@ MIPSX(entry0set):
 	_MTC0	ta1, MIPS_COP_0_TLB_HI		# restore TLB_HI
 	COP0_SYNC
 MIPSX(resume):
-#endif /* !ENABLE_MIPS_16KB_PAGE */
+#endif /* (USPACE > PAGE_SIZE) || !defined(_LP64) */
+#endif /* PAGE_SIZE < 16384 */
+#endif /* ! LP64 */
 #ifdef MIPSNNR2
 	PTR_L	v0, L_PRIVATE(a0)		# get lwp private
 	_MTC0	v0, MIPS_COP_0_USERLOCAL	# make available for rdhwr
@@ -2816,7 +2836,7 @@ LEAF(MIPSX(tlb_write_entry))
 	REG_L	a2, TLBMASK_LO0(a1)		# fetch tlb->tlb_lo0
 	REG_L	a3, TLBMASK_LO1(a1)		# fetch tlb->tlb_lo1
 	mfc0	ta2, MIPS_COP_0_TLB_PG_MASK	# Save current page mask.
-	_MFC0	ta1, MIPS_COP_0_TLB_HI		# Save the current PID.
+	_MFC0	ta1, MIPS_COP_0_TLB_HI		# Save the current ASID.
 
 	_MTC0	a2, MIPS_COP_0_TLB_LO0		# Set up entry low0.
 	_MTC0	a3, MIPS_COP_0_TLB_LO1		# Set up entry low1.
@@ -2842,7 +2862,7 @@ LEAF(MIPSX(tlb_write_entry))
 	nop
 #endif
 
-	_MTC0	ta1, MIPS_COP_0_TLB_HI		# Restore the PID.
+	_MTC0	ta1, MIPS_COP_0_TLB_HI		# Restore the ASID.
 	mtc0	ta2, MIPS_COP_0_TLB_PG_MASK	# Restore page mask.
 	COP0_SYNC
 

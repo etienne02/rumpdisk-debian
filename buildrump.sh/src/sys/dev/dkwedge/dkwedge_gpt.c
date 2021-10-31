@@ -1,4 +1,4 @@
-/*	$NetBSD: dkwedge_gpt.c,v 1.17 2016/04/28 00:35:24 christos Exp $	*/
+/*	$NetBSD: dkwedge_gpt.c,v 1.26 2020/04/11 16:00:34 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2004 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dkwedge_gpt.c,v 1.17 2016/04/28 00:35:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dkwedge_gpt.c,v 1.26 2020/04/11 16:00:34 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -42,7 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD: dkwedge_gpt.c,v 1.17 2016/04/28 00:35:24 christos Ex
 #include <sys/errno.h>
 #include <sys/disk.h>
 #include <sys/vnode.h>
-#include <sys/malloc.h>
+#include <sys/buf.h>
 
 #include <sys/disklabel_gpt.h>
 #include <sys/uuid.h>
@@ -73,6 +73,12 @@ static const struct {
 	{ GPT_ENT_TYPE_NETBSD_CCD,		DKW_PTYPE_CCD },
 	{ GPT_ENT_TYPE_NETBSD_CGD,		DKW_PTYPE_CGD },
 	{ GPT_ENT_TYPE_APPLE_HFS,		DKW_PTYPE_APPLEHFS },
+	{ GPT_ENT_TYPE_VMWARE_VMKCORE,		DKW_PTYPE_VMKCORE },
+	{ GPT_ENT_TYPE_VMWARE_VMFS,		DKW_PTYPE_VMFS },
+	{ GPT_ENT_TYPE_VMWARE_RESERVED,		DKW_PTYPE_VMWRESV },
+	{ GPT_ENT_TYPE_MS_BASIC_DATA,		DKW_PTYPE_NTFS },
+	{ GPT_ENT_TYPE_LINUX_DATA,		DKW_PTYPE_EXT2FS },
+	{ GPT_ENT_TYPE_FREEBSD_ZFS,		DKW_PTYPE_ZFS },
 };
 
 static const char *
@@ -109,7 +115,7 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 	static const struct uuid ent_type_unused = GPT_ENT_TYPE_UNUSED;
 	static const char gpt_hdr_sig[] = GPT_HDR_SIG;
 	struct dkwedge_info dkw;
-	void *buf;
+	struct buf *bp;
 	uint32_t secsize;
 	struct gpt_hdr *hdr;
 	struct gpt_ent *ent;
@@ -118,11 +124,11 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 	uint32_t gpe_crc;
 	int error;
 	u_int i;
-	size_t r, n;
+	size_t r, n, sz;
 	uint8_t *c;
 
 	secsize = DEV_BSIZE << pdk->dk_blkshift;
-	buf = malloc(secsize, M_DEVBUF, M_WAITOK);
+	bp = geteblk(secsize);
 
 	/*
 	 * Note: We don't bother with a Legacy or Protective MBR
@@ -131,10 +137,11 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 	 */
 
 	/* Read in the GPT Header. */
-	error = dkwedge_read(pdk, vp, GPT_HDR_BLKNO << pdk->dk_blkshift, buf, secsize);
+	error = dkwedge_read(pdk, vp, GPT_HDR_BLKNO << pdk->dk_blkshift,
+	    bp->b_data, secsize);
 	if (error)
 		goto out;
-	hdr = buf;
+	hdr = bp->b_data;
 
 	/* Validate it. */
 	if (memcmp(gpt_hdr_sig, hdr->hdr_sig, sizeof(hdr->hdr_sig)) != 0) {
@@ -170,7 +177,7 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 
 	entries = le32toh(hdr->hdr_entries);
 	entsz = roundup(le32toh(hdr->hdr_entsz), 8);
-	if (entsz > roundup(sizeof(struct gpt_ent), 8)) {
+	if (entsz != sizeof(struct gpt_ent)) {
 		aprint_error("%s: bogus GPT entry size: %u\n",
 		    pdk->dk_name, le32toh(hdr->hdr_entsz));
 		error = EINVAL;
@@ -195,10 +202,12 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 		goto out;
 	}
 
-	free(buf, M_DEVBUF);
-	buf = malloc(roundup(entries * entsz, secsize), M_DEVBUF, M_WAITOK);
-	error = dkwedge_read(pdk, vp, lba_table << pdk->dk_blkshift, buf,
-			     roundup(entries * entsz, secsize));
+	brelse(bp, 0);
+
+	sz = roundup(entries * entsz, secsize);
+	bp = geteblk(sz);
+	error = dkwedge_read(pdk, vp, lba_table << pdk->dk_blkshift,
+	    bp->b_data, sz);
 	if (error) {
 		/* XXX Should check alternate location. */
 		aprint_error("%s: unable to read GPT partition array, "
@@ -206,7 +215,7 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 		goto out;
 	}
 
-	if (crc32(0, buf, entries * entsz) != gpe_crc) {
+	if (crc32(0, bp->b_data, entries * entsz) != gpe_crc) {
 		/* XXX Should check alternate location. */
 		aprint_error("%s: bad GPT partition array CRC\n",
 		    pdk->dk_name);
@@ -223,7 +232,7 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 		int j;
 		char ptype_guid_str[UUID_STR_LEN], ent_guid_str[UUID_STR_LEN];
 
-		ent = (struct gpt_ent *)((char *)buf + (i * entsz));
+		ent = (struct gpt_ent *)((char *)bp->b_data + (i * entsz));
 
 		uuid_dec_le(ent->ent_type, &ptype_guid);
 		if (memcmp(&ptype_guid, &ent_type_unused,
@@ -237,22 +246,25 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 		uuid_snprintf(ent_guid_str, sizeof(ent_guid_str),
 		    &ent_guid);
 
+		memset(&dkw, 0, sizeof(dkw));
+
 		/* figure out the type */
 		ptype = gpt_ptype_guid_to_str(&ptype_guid);
-		strcpy(dkw.dkw_ptype, ptype);
+		strlcpy(dkw.dkw_ptype, ptype, sizeof(dkw.dkw_ptype));
 
-		strcpy(dkw.dkw_parent, pdk->dk_name);
+		strlcpy(dkw.dkw_parent, pdk->dk_name, sizeof(dkw.dkw_parent));
 		dkw.dkw_offset = le64toh(ent->ent_lba_start);
 		dkw.dkw_size = le64toh(ent->ent_lba_end) - dkw.dkw_offset + 1;
 
 		/* XXX Make sure it falls within the disk's data area. */
 
 		if (ent->ent_name[0] == 0x0000)
-			strcpy(dkw.dkw_wname, ent_guid_str);
+			strlcpy(dkw.dkw_wname, ent_guid_str, sizeof(dkw.dkw_wname));
 		else {
 			c = dkw.dkw_wname;
 			r = sizeof(dkw.dkw_wname) - 1;
-			for (j = 0; ent->ent_name[j] != 0x0000; j++) {
+			for (j = 0; j < __arraycount(ent->ent_name)
+			    && ent->ent_name[j] != 0x0000; j++) {
 				n = wput_utf8(c, r, le16toh(ent->ent_name[j]));
 				if (n == 0)
 					break;
@@ -268,8 +280,8 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 		if ((error = dkwedge_add(&dkw)) == EEXIST &&
 		    strcmp(dkw.dkw_wname, ent_guid_str) != 0) {
 			char orig[sizeof(dkw.dkw_wname)];
-			strcpy(orig, dkw.dkw_wname);
-			strcpy(dkw.dkw_wname, ent_guid_str);
+			strlcpy(orig, dkw.dkw_wname, sizeof(orig));
+			strlcpy(dkw.dkw_wname, ent_guid_str, sizeof(dkw.dkw_wname));
 			error = dkwedge_add(&dkw);
 			if (!error)
 				aprint_error("%s: wedge named '%s' already "
@@ -288,7 +300,7 @@ dkwedge_discover_gpt(struct disk *pdk, struct vnode *vp)
 	error = 0;
 
  out:
-	free(buf, M_DEVBUF);
+	brelse(bp, 0);
 	return (error);
 }
 

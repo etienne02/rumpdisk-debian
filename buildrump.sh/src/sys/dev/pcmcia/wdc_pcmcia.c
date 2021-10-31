@@ -1,4 +1,4 @@
-/*	$NetBSD: wdc_pcmcia.c,v 1.124 2013/10/12 16:49:01 christos Exp $ */
+/*	$NetBSD: wdc_pcmcia.c,v 1.127 2018/09/03 16:29:33 riastradh Exp $ */
 
 /*-
  * Copyright (c) 1998, 2003, 2004 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wdc_pcmcia.c,v 1.124 2013/10/12 16:49:01 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wdc_pcmcia.c,v 1.127 2018/09/03 16:29:33 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -65,7 +65,6 @@ struct wdc_pcmcia_softc {
 	struct wdc_softc sc_wdcdev;
 	struct ata_channel *wdc_chanlist[1];
 	struct ata_channel ata_channel;
-	struct ata_queue wdc_chqueue;
 	struct wdc_regs wdc_regs;
 
 	struct pcmcia_function *sc_pf;
@@ -296,11 +295,11 @@ wdc_pcmcia_attach(device_t parent, device_t self, void *aux)
 	sc->sc_wdcdev.sc_atac.atac_nchannels = 1;
 	sc->ata_channel.ch_channel = 0;
 	sc->ata_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-	sc->ata_channel.ch_queue = &sc->wdc_chqueue;
+
 	wdcp = pcmcia_product_lookup(pa, wdc_pcmcia_products,
 	    wdc_pcmcia_nproducts, sizeof(wdc_pcmcia_products[0]), NULL);
 	sc->sc_wdcdev.wdc_maxdrives = wdcp ? wdcp->wdc_ndrive : 2;
-	wdc_init_shadow_regs(&sc->ata_channel);
+	wdc_init_shadow_regs(wdr);
 
 	error = wdc_pcmcia_enable(self, 1);
 	if (error)
@@ -403,7 +402,7 @@ wdc_pcmcia_datain_memory(struct ata_channel *chp, int flags, void *buf,
 	while (len > 0) {
 		size_t n;
 
-		n = min(len, 1024);
+		n = uimin(len, 1024);
 		if ((flags & ATA_DRIVE_CAP32) && (n & 3) == 0)
 			bus_space_read_region_stream_4(wdr->data32iot,
 			    wdr->data32ioh, 0, buf, n >> 2);
@@ -424,7 +423,7 @@ wdc_pcmcia_dataout_memory(struct ata_channel *chp, int flags, void *buf,
 	while (len > 0) {
 		size_t n;
 
-		n = min(len, 1024);
+		n = uimin(len, 1024);
 		if ((flags & ATA_DRIVE_CAP32) && (n & 3) == 0)
 			bus_space_write_region_stream_4(wdr->data32iot,
 			    wdr->data32ioh, 0, buf, n >> 2);

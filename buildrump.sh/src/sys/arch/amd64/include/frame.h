@@ -1,4 +1,4 @@
-/*	$NetBSD: frame.h,v 1.17 2014/02/20 18:20:39 dsl Exp $	*/
+/*	$NetBSD: frame.h,v 1.22 2019/02/14 08:18:25 cherry Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -97,6 +97,14 @@ struct intrframe {
 	struct trapframe if_tf;
 };
 
+#ifdef XEN
+/*
+ * Need arch independany way to access IP and CS from intrframe
+ */
+#define	_INTRFRAME_CS	if_tf.tf_cs
+#define	_INTRFRAME_IP	if_tf.tf_rip
+#endif
+
 /*
  * Stack frame inside cpu_switchto()
  */
@@ -121,6 +129,7 @@ struct sigframe_siginfo {
 #ifdef _KERNEL
 struct lwp;
 void buildcontext(struct lwp *, void *, void *);
+#define lwp_trapframe(l)	((l)->l_md.md_regs)
 #endif
 
 #else	/*	__x86_64__	*/

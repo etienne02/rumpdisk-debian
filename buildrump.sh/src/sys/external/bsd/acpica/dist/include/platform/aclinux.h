@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -58,11 +58,13 @@
 
 #define ACPI_USE_SYSTEM_CLIBRARY
 #define ACPI_USE_DO_WHILE_0
+#define ACPI_IGNORE_PACKAGE_RESOLUTION_ERRORS
 
 
 #ifdef __KERNEL__
 
 #define ACPI_USE_SYSTEM_INTTYPES
+#define ACPI_USE_GPE_POLLING
 
 /* Kernel specific ACPICA configuration */
 
@@ -72,6 +74,10 @@
 
 #ifdef CONFIG_ACPI_DEBUGGER
 #define ACPI_DEBUGGER
+#endif
+
+#ifdef CONFIG_ACPI_DEBUG
+#define ACPI_MUTEX_DEBUG
 #endif
 
 #include <linux/string.h>
@@ -88,6 +94,13 @@
 #ifdef CONFIG_ACPI
 #include <asm/acenv.h>
 #endif
+
+#define ACPI_INIT_FUNCTION __init
+
+/* Use a specific bugging default separate from ACPICA */
+
+#undef ACPI_DEBUG_DEFAULT
+#define ACPI_DEBUG_DEFAULT          (ACPI_LV_INFO | ACPI_LV_REPAIR)
 
 #ifndef CONFIG_ACPI
 
@@ -123,6 +136,7 @@
 /* Host-dependent types and defines for in-kernel ACPICA */
 
 #define ACPI_MACHINE_WIDTH          BITS_PER_LONG
+#define ACPI_USE_NATIVE_MATH64
 #define ACPI_EXPORT_SYMBOL(symbol)  EXPORT_SYMBOL(symbol);
 #define strtoul                     simple_strtoul
 
@@ -151,6 +165,8 @@
  */
 #define ACPI_USE_ALTERNATE_PROTOTYPE_AcpiOsReadable
 #define ACPI_USE_ALTERNATE_PROTOTYPE_AcpiOsWritable
+#define ACPI_USE_ALTERNATE_PROTOTYPE_AcpiOsInitializeDebugger
+#define ACPI_USE_ALTERNATE_PROTOTYPE_AcpiOsTerminateDebugger
 
 /*
  * OSL interfaces used by utilities
@@ -171,18 +187,26 @@
 #define ACPI_MSG_BIOS_ERROR     KERN_ERR "ACPI BIOS Error (bug): "
 #define ACPI_MSG_BIOS_WARNING   KERN_WARNING "ACPI BIOS Warning (bug): "
 
+/*
+ * Linux wants to use designated initializers for function pointer structs.
+ */
+#define ACPI_STRUCT_INIT(field, value)  .field = value
+
 #else /* !__KERNEL__ */
 
-#include <stdarg.h>
-#include <string.h>
-#include <stdlib.h>
-#include <ctype.h>
+#define ACPI_USE_STANDARD_HEADERS
+
+#ifdef ACPI_USE_STANDARD_HEADERS
 #include <unistd.h>
+#endif
 
 /* Define/disable kernel-specific declarators */
 
 #ifndef __init
 #define __init
+#endif
+#ifndef __iomem
+#define __iomem
 #endif
 
 /* Host-dependent types and defines for user-space ACPICA */
@@ -190,8 +214,10 @@
 #define ACPI_FLUSH_CPU_CACHE()
 #define ACPI_CAST_PTHREAD_T(Pthread) ((ACPI_THREAD_ID) (Pthread))
 
-#if defined(__ia64__)    || defined(__x86_64__) ||\
-    defined(__aarch64__) || defined(__PPC64__)
+#if defined(__ia64__)    || (defined(__x86_64__) && !defined(__ILP32__)) ||\
+    defined(__aarch64__) || defined(__PPC64__) ||\
+    defined(__s390x__) ||\
+    (defined(__riscv) && (defined(__LP64__) || defined(_LP64)))
 #define ACPI_MACHINE_WIDTH          64
 #define COMPILER_DEPENDENT_INT64    long
 #define COMPILER_DEPENDENT_UINT64   unsigned long
@@ -200,6 +226,7 @@
 #define COMPILER_DEPENDENT_INT64    long long
 #define COMPILER_DEPENDENT_UINT64   unsigned long long
 #define ACPI_USE_NATIVE_DIVIDE
+#define ACPI_USE_NATIVE_MATH64
 #endif
 
 #ifndef __cdecl
@@ -207,9 +234,5 @@
 #endif
 
 #endif /* __KERNEL__ */
-
-/* Linux uses GCC */
-
-#include "acgcc.h"
 
 #endif /* __ACLINUX_H__ */

@@ -1,4 +1,4 @@
-#	$NetBSD: files.tc,v 1.33 2008/02/27 23:49:11 matt Exp $
+#	$NetBSD: files.tc,v 1.36 2020/01/20 18:38:17 thorpej Exp $
 #
 # Config file and device description for machine-independent
 # TURBOchannel code.  Included by ports that need it.
@@ -25,14 +25,9 @@ attach le at tc with le_tc:		le24, le_dec_subr
 file	dev/tc/if_le_tc.c		le_tc
 
 # baseboard audio
-device  bba: audiobus,am7930,auconv
+device  bba: audiobus, am7930
 attach  bba at ioasic
 file    dev/tc/bba.c                    bba
-
-# DEFTA FDDI controller
-device	fta: pdq, fddi, ifnet, arp
-attach	fta at tc
-file	dev/tc/if_fta.c			fta
 
 # TCDS dual channel SCSI
 device	tcds { chip = -1 }
@@ -100,3 +95,11 @@ file   dev/tc/pxg.c                    pxg needs-flag
 device	sfbp: wsemuldisplaydev, rasops32, rasops8
 attach	sfbp at tc
 file	dev/tc/sfbplus.c		sfbp needs-flag
+
+# TC-USB
+device	tcu { } : gpiobus
+attach	tcu at tc
+file	dev/tc/tcu.c			tcu
+
+attach	slhci at tcu with slhci_tcu
+file	dev/tc/slhci_tcu.c		slhci_tcu needs-flag

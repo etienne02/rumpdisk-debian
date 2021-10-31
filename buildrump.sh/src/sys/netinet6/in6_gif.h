@@ -1,4 +1,4 @@
-/*	$NetBSD: in6_gif.h,v 1.15 2016/07/04 04:22:47 knakahara Exp $	*/
+/*	$NetBSD: in6_gif.h,v 1.18 2019/10/30 03:45:59 knakahara Exp $	*/
 /*	$KAME: in6_gif.h,v 1.7 2001/07/26 06:53:16 jinmei Exp $	*/
 
 /*
@@ -35,17 +35,20 @@
 
 #define GIF_HLIM	30
 extern int	ip6_gif_hlim;		/* Hop limit for gif encap packet */
+extern int	ip6_gif_pmtu;		/* Default Path MTU setting for gif tunnels */
 
-struct gif_softc;
+#define GIF_PMTU_SYSDEFAULT	-1	/* Use system default value (ip6_gif_pmtu) */
+#define GIF_PMTU_MINMTU		0	/* Fragmented by IPV6_MINMTU */
+#define GIF_PMTU_OUTERMTU	1	/* Fragmented by Path MTU of outer path */
+
+struct gif_variant;
 struct sockaddr;
-int in6_gif_input(struct mbuf **, int *, int);
-int in6_gif_output(struct ifnet *, int, struct mbuf *);
+int in6_gif_input(struct mbuf **, int *, int, void *);
 #ifdef GIF_ENCAPCHECK
-int gif_encapcheck6(struct mbuf *, int, int, void *);
+int gif_encapcheck6(struct mbuf *, int, int, struct gif_variant *);
 #endif
-int in6_gif_attach(struct gif_softc *);
-int in6_gif_detach(struct gif_softc *);
-int in6_gif_pause(struct gif_softc *);
+int in6_gif_attach(struct gif_variant *);
+int in6_gif_detach(struct gif_variant *);
 void *in6_gif_ctlinput(int, const struct sockaddr *, void *, void *);
 
 #endif /* !_NETINET6_IN6_GIF_H_ */

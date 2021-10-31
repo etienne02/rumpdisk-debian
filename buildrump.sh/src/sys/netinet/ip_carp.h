@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_carp.h,v 1.8 2016/04/28 00:16:56 ozaki-r Exp $	*/
+/*	$NetBSD: ip_carp.h,v 1.14 2021/02/03 18:13:13 roy Exp $	*/
 /*	$OpenBSD: ip_carp.h,v 1.18 2005/04/20 23:00:41 mpf Exp $	*/
 
 /*
@@ -74,7 +74,11 @@ struct carp_header {
 	u_int16_t	carp_cksum;
 	u_int32_t	carp_counter[2];
 	unsigned char	carp_md[20];	/* SHA1 HMAC */
-} __packed;
+};
+
+#ifdef __CTASSERT
+__CTASSERT(sizeof(struct carp_header) == 36);
+#endif
 
 #define	CARP_DFLTTL		255
 
@@ -143,18 +147,10 @@ struct carpreq {
 #define CARPCTL_STATS		5	/* carp statistics */
 #define	CARPCTL_MAXID		6
 
-#define	CARPCTL_NAMES { \
-	{ 0, 0 }, \
-	{ "allow", CTLTYPE_INT }, \
-	{ "preempt", CTLTYPE_INT }, \
-	{ "log", CTLTYPE_INT }, \
-	{ "arpbalance", CTLTYPE_INT }, \
-}
-
 #ifdef _KERNEL
 void		 carp_init(void);
 void		 carp_ifdetach(struct ifnet *);
-void		 carp_proto_input(struct mbuf *, ...);
+void		 carp_proto_input(struct mbuf *, int, int);
 void		 carp_carpdev_state(void *);
 int		 carp6_proto_input(struct mbuf **, int *, int);
 int		 carp_iamatch(struct in_ifaddr *, u_char *,

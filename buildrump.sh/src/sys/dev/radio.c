@@ -1,4 +1,4 @@
-/* $NetBSD: radio.c,v 1.27 2014/07/25 08:10:35 dholland Exp $ */
+/* $NetBSD: radio.c,v 1.31 2021/08/07 16:19:08 thorpej Exp $ */
 /* $OpenBSD: radio.c,v 1.2 2001/12/05 10:27:06 mickey Exp $ */
 /* $RuOBSD: radio.c,v 1.7 2001/12/04 06:03:05 tm Exp $ */
 
@@ -30,7 +30,7 @@
 /* This is the /dev/radio driver from OpenBSD */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radio.c,v 1.27 2014/07/25 08:10:35 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radio.c,v 1.31 2021/08/07 16:19:08 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -43,6 +43,8 @@ __KERNEL_RCSID(0, "$NetBSD: radio.c,v 1.27 2014/07/25 08:10:35 dholland Exp $");
 #include <sys/conf.h>
 
 #include <dev/radio_if.h>
+
+#include "ioconf.h"
 
 struct radio_softc {
 	void		*hw_hdl;	/* hardware driver handle */
@@ -76,8 +78,6 @@ const struct cdevsw radio_cdevsw = {
 	.d_discard = nodiscard,
 	.d_flag = D_OTHER,
 };
-
-extern struct cfdriver radio_cd;
 
 static int
 radioprobe(device_t parent, cfdata_t match, void *aux)
@@ -148,7 +148,7 @@ radioioctl(dev_t dev, u_long cmd, void *data, int flags,
 		if (sc->hw_if->get_info)
 			error = (sc->hw_if->get_info)(sc->hw_hdl,
 					(struct radio_info *)data);
-			break;
+		break;
 	case RIOCSINFO:
 		if (sc->hw_if->set_info)
 			error = (sc->hw_if->set_info)(sc->hw_hdl,
@@ -177,7 +177,7 @@ radio_attach_mi(const struct radio_hw_if *rhwp, void *hdlp, device_t dev)
 
 	arg.hwif = rhwp;
 	arg.hdl = hdlp;
-	return (config_found(dev, &arg, radioprint));
+	return (config_found(dev, &arg, radioprint, CFARGS_NONE));
 }
 
 static int

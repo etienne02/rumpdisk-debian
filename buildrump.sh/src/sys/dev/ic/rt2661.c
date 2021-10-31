@@ -1,4 +1,4 @@
-/*	$NetBSD: rt2661.c,v 1.33 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: rt2661.c,v 1.44 2021/06/16 00:21:18 riastradh Exp $	*/
 /*	$OpenBSD: rt2661.c,v 1.17 2006/05/01 08:41:11 damien Exp $	*/
 /*	$FreeBSD: rt2560.c,v 1.5 2006/06/02 19:59:31 csjp Exp $	*/
 
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rt2661.c,v 1.33 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rt2661.c,v 1.44 2021/06/16 00:21:18 riastradh Exp $");
 
 
 #include <sys/param.h>
@@ -165,18 +165,7 @@ static int	rt2661_radar_stop(struct rt2661_softc *);
 static int	rt2661_prepare_beacon(struct rt2661_softc *);
 static void	rt2661_enable_tsf_sync(struct rt2661_softc *);
 static int	rt2661_get_rssi(struct rt2661_softc *, uint8_t);
-
-/*
- * Supported rates for 802.11a/b/g modes (in 500Kbps unit).
- */
-static const struct ieee80211_rateset rt2661_rateset_11a =
-	{ 8, { 12, 18, 24, 36, 48, 72, 96, 108 } };
-
-static const struct ieee80211_rateset rt2661_rateset_11b =
-	{ 4, { 2, 4, 11, 22 } };
-
-static const struct ieee80211_rateset rt2661_rateset_11g =
-	{ 12, { 2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108 } };
+static void	rt2661_softintr(void *);
 
 static const struct {
 	uint32_t	reg;
@@ -235,6 +224,12 @@ rt2661_attach(void *xsc, int id)
 
 	aprint_normal_dev(sc->sc_dev, "MAC/BBP RT%X, RF %s\n", val,
 	    rt2661_get_rf(sc->rf_rev));
+
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, rt2661_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(sc->sc_dev, "could not establish softint\n");
+		goto fail0;
+	}
 
 	/*
 	 * Allocate Tx and Rx rings.
@@ -302,7 +297,7 @@ rt2661_attach(void *xsc, int id)
 
 	if (sc->rf_rev == RT2661_RF_5225 || sc->rf_rev == RT2661_RF_5325) {
 		/* set supported .11a rates */
-		ic->ic_sup_rates[IEEE80211_MODE_11A] = rt2661_rateset_11a;
+		ic->ic_sup_rates[IEEE80211_MODE_11A] = ieee80211_std_rateset_11a;
 
 		/* set supported .11a channels */
 		for (i = 36; i <= 64; i += 4) {
@@ -323,8 +318,8 @@ rt2661_attach(void *xsc, int id)
 	}
 
 	/* set supported .11b and .11g rates */
-	ic->ic_sup_rates[IEEE80211_MODE_11B] = rt2661_rateset_11b;
-	ic->ic_sup_rates[IEEE80211_MODE_11G] = rt2661_rateset_11g;
+	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
+	ic->ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
 
 	/* set supported .11b and .11g channels (1 through 14) */
 	for (i = 1; i <= 14; i++) {
@@ -335,8 +330,12 @@ rt2661_attach(void *xsc, int id)
 		    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ;
 	}
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
+
 	ic->ic_node_alloc = rt2661_node_alloc;
 	ic->ic_newassoc = rt2661_newassoc;
 	ic->ic_updateslot = rt2661_updateslot;
@@ -374,7 +373,9 @@ fail5:	rt2661_free_tx_ring(sc, &sc->txq[3]);
 fail4:	rt2661_free_tx_ring(sc, &sc->txq[2]);
 fail3:	rt2661_free_tx_ring(sc, &sc->txq[1]);
 fail2:	rt2661_free_tx_ring(sc, &sc->txq[0]);
-fail1:	return ENXIO;
+fail1:	softint_disestablish(sc->sc_soft_ih);
+	sc->sc_soft_ih = NULL;
+fail0:	return ENXIO;
 }
 
 int
@@ -397,6 +398,11 @@ rt2661_detach(void *xsc)
 	rt2661_free_tx_ring(sc, &sc->txq[3]);
 	rt2661_free_tx_ring(sc, &sc->mgtq);
 	rt2661_free_rx_ring(sc, &sc->rxq);
+
+	if (sc->sc_soft_ih != NULL) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
+	}
 
 	return 0;
 }
@@ -444,14 +450,8 @@ rt2661_alloc_tx_ring(struct rt2661_softc *sc, struct rt2661_tx_ring *ring,
 	ring->physaddr = ring->map->dm_segs->ds_addr;
 
 	ring->data = malloc(count * sizeof (struct rt2661_tx_data), M_DEVBUF,
-	    M_NOWAIT);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
+	    M_WAITOK | M_ZERO);
 
-	memset(ring->data, 0, count * sizeof (struct rt2661_tx_data));
 	for (i = 0; i < count; i++) {
 		error = bus_dmamap_create(sc->sc_dmat, MCLBYTES,
 		    RT2661_MAX_SCATTER, MCLBYTES, 0, BUS_DMA_NOWAIT,
@@ -584,17 +584,11 @@ rt2661_alloc_rx_ring(struct rt2661_softc *sc, struct rt2661_rx_ring *ring,
 	ring->physaddr = ring->map->dm_segs->ds_addr;
 
 	ring->data = malloc(count * sizeof (struct rt2661_rx_data), M_DEVBUF,
-	    M_NOWAIT);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
+	    M_WAITOK | M_ZERO);
 
 	/*
 	 * Pre-allocate Rx buffers and populate Rx ring.
 	 */
-	memset(ring->data, 0, count * sizeof (struct rt2661_rx_data));
 	for (i = 0; i < count; i++) {
 		desc = &sc->rxq.desc[i];
 		data = &sc->rxq.data[i];
@@ -916,7 +910,9 @@ rt2661_tx_intr(struct rt2661_softc *sc)
 	struct rt2661_tx_data *data;
 	struct rt2661_node *rn;
 	uint32_t val;
-	int qid, retrycnt;
+	int qid, retrycnt, s;
+
+	s = splnet();
 
 	for (;;) {
 		val = RAL_READ(sc, RT2661_STA_CSR4);
@@ -944,7 +940,7 @@ rt2661_tx_intr(struct rt2661_softc *sc)
 			rn->amn.amn_txcnt++;
 			if (retrycnt > 0)
 				rn->amn.amn_retrycnt++;
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 			break;
 
 		case RT2661_TX_RETRY_FAIL:
@@ -952,13 +948,13 @@ rt2661_tx_intr(struct rt2661_softc *sc)
 			    "retries)\n"));
 			rn->amn.amn_txcnt++;
 			rn->amn.amn_retrycnt++;
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 
 		default:
 			/* other failure */
 			aprint_error_dev(sc->sc_dev, "sending data frame failed 0x%08x\n", val);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 		}
 
 		ieee80211_free_node(data->ni);
@@ -973,7 +969,9 @@ rt2661_tx_intr(struct rt2661_softc *sc)
 
 	sc->sc_tx_timer = 0;
 	ifp->if_flags &= ~IFF_OACTIVE;
-	rt2661_start(ifp);
+	rt2661_start(ifp); /* in softint */
+
+	splx(s);
 }
 
 static void
@@ -1025,7 +1023,7 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
 	struct mbuf *mnew, *m;
-	int error, rssi;
+	int error, rssi, s;
 
 	for (;;) {
 		desc = &sc->rxq.desc[sc->rxq.cur];
@@ -1046,12 +1044,12 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 			 */
 			DPRINTFN(5, ("PHY or CRC error flags 0x%08x\n",
 			    le32toh(desc->flags)));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
 		if ((le32toh(desc->flags) & RT2661_RX_CIPHER_MASK) != 0) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
@@ -1064,14 +1062,14 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 		 */
 		MGETHDR(mnew, M_DONTWAIT, MT_DATA);
 		if (mnew == NULL) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
 		MCLGET(mnew, M_DONTWAIT);
 		if (!(mnew->m_flags & M_EXT)) {
 			m_freem(mnew);
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
@@ -1095,7 +1093,7 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 			}
 			/* physical address may have changed */
 			desc->physaddr = htole32(data->map->dm_segs->ds_addr);
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
@@ -1111,6 +1109,8 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len =
 		    (le32toh(desc->flags) >> 16) & 0xfff;
+
+		s = splnet();
 
 		if (sc->sc_drvbpf != NULL) {
 			struct rt2661_rx_radiotap_header *tap = &sc->sc_rxtap;
@@ -1128,7 +1128,8 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 			tap->wr_chan_flags = htole16(sc->sc_curchan->ic_flags);
 			tap->wr_antsignal = desc->rssi;
 
-			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m,
+			    BPF_D_IN);
 		}
 
 		wh = mtod(m, struct ieee80211_frame *);
@@ -1149,6 +1150,8 @@ rt2661_rx_intr(struct rt2661_softc *sc)
 		/* node is no longer needed */
 		ieee80211_free_node(ni);
 
+		splx(s);
+
 skip:		desc->flags |= htole32(RT2661_RX_BUSY);
 
 		bus_dmamap_sync(sc->sc_dmat, sc->rxq.map,
@@ -1164,8 +1167,10 @@ skip:		desc->flags |= htole32(RT2661_RX_BUSY);
 	 * In HostAP mode, ieee80211_input() will enqueue packets in if_snd
 	 * without calling if_start().
 	 */
+	s = splnet();
 	if (!IFQ_IS_EMPTY(&ifp->if_snd) && !(ifp->if_flags & IFF_OACTIVE))
 		rt2661_start(ifp);
+	splx(s);
 }
 
 /*
@@ -1220,7 +1225,6 @@ rt2661_intr(void *arg)
 	struct rt2661_softc *sc = arg;
 	struct ifnet *ifp = &sc->sc_if;
 	uint32_t r1, r2;
-	int rv = 0;
 
 	/* don't re-enable interrupts if we're shutting down */
 	if (!(ifp->if_flags & IFF_RUNNING)) {
@@ -1229,6 +1233,26 @@ rt2661_intr(void *arg)
 		RAL_WRITE(sc, RT2661_MCU_INT_MASK_CSR, 0xffffffff);
 		return 0;
 	}
+
+	r1 = RAL_READ(sc, RT2661_INT_SOURCE_CSR);
+	r2 = RAL_READ(sc, RT2661_MCU_INT_SOURCE_CSR);
+
+	if ((r1 & RT2661_INT_CSR_ALL) == 0 && (r2 & RT2661_MCU_INT_ALL) == 0)
+		return 0;
+
+	/* disable interrupts */
+	RAL_WRITE(sc, RT2661_INT_MASK_CSR, 0xffffff7f);
+	RAL_WRITE(sc, RT2661_MCU_INT_MASK_CSR, 0xffffffff);
+
+	softint_schedule(sc->sc_soft_ih);
+	return 1;
+}
+
+static void
+rt2661_softintr(void *arg)
+{
+	struct rt2661_softc *sc = arg;
+	uint32_t r1, r2;
 
 	for (;;) {
 		r1 = RAL_READ(sc, RT2661_INT_SOURCE_CSR);
@@ -1240,8 +1264,6 @@ rt2661_intr(void *arg)
 
 		RAL_WRITE(sc, RT2661_INT_SOURCE_CSR, r1);
 		RAL_WRITE(sc, RT2661_MCU_INT_SOURCE_CSR, r2);
-
-		rv = 1;
 
 		if (r1 & RT2661_MGT_DONE)
 			rt2661_tx_dma_intr(sc, &sc->mgtq);
@@ -1274,7 +1296,9 @@ rt2661_intr(void *arg)
 			rt2661_mcu_wakeup(sc);
 	}
 
-	return rv;
+	/* enable interrupts */
+	RAL_WRITE(sc, RT2661_INT_MASK_CSR, 0x0000ff10);
+	RAL_WRITE(sc, RT2661_MCU_INT_MASK_CSR, 0);
 }
 
 /* quickly determine if a given rate is CCK or OFDM */
@@ -1508,7 +1532,7 @@ rt2661_tx_mgt(struct rt2661_softc *sc, struct mbuf *m0,
 		tap->wt_chan_freq = htole16(sc->sc_curchan->ic_freq);
 		tap->wt_chan_flags = htole16(sc->sc_curchan->ic_flags);
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0, BPF_D_OUT);
 	}
 
 	data->m = m0;
@@ -1711,7 +1735,7 @@ rt2661_tx_data(struct rt2661_softc *sc, struct mbuf *m0,
 			return ENOMEM;
 		}
 
-		M_COPY_PKTHDR(mnew, m0);
+		m_copy_pkthdr(mnew, m0);
 		if (m0->m_pkthdr.len > MHLEN) {
 			MCLGET(mnew, M_DONTWAIT);
 			if (!(mnew->m_flags & M_EXT)) {
@@ -1746,7 +1770,7 @@ rt2661_tx_data(struct rt2661_softc *sc, struct mbuf *m0,
 		tap->wt_chan_freq = htole16(sc->sc_curchan->ic_freq);
 		tap->wt_chan_flags = htole16(sc->sc_curchan->ic_flags);
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0, BPF_D_OUT);
 	}
 
 	data->m = m0;
@@ -1808,7 +1832,7 @@ rt2661_start(struct ifnet *ifp)
 
 			ni = M_GETCTX(m0, struct ieee80211_node *);
 			M_CLEARCTX(m0);
-			bpf_mtap3(ic->ic_rawbpf, m0);
+			bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 			if (rt2661_tx_mgt(sc, m0, ni) != 0)
 				break;
 
@@ -1833,22 +1857,22 @@ rt2661_start(struct ifnet *ifp)
 			ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 			if (ni == NULL) {
 				m_freem(m0);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				continue;
 			}
 
-			bpf_mtap3(ifp->if_bpf, m0);
+			bpf_mtap(ifp, m0, BPF_D_OUT);
 			m0 = ieee80211_encap(ic, m0, ni);
 			if (m0 == NULL) {
 				ieee80211_free_node(ni);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				continue;
 			}
-			bpf_mtap3(ic->ic_rawbpf, m0);
+			bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 			if (rt2661_tx_data(sc, m0, ni, 0) != 0) {
 				if (ni != NULL)
 					ieee80211_free_node(ni);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 		}
@@ -1869,7 +1893,7 @@ rt2661_watchdog(struct ifnet *ifp)
 		if (--sc->sc_tx_timer == 0) {
 			aprint_error_dev(sc->sc_dev, "device timeout\n");
 			rt2661_init(ifp);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			return;
 		}
 		ifp->if_timer = 1;
@@ -2127,7 +2151,7 @@ rt2661_set_basicrates(struct rt2661_softc *sc,
 		 * Find h/w rate index.  We know it exists because the rate
 		 * set has already been negotiated.
 		 */
-		for (j = 0; rt2661_rateset_11g.rs_rates[j] != RV(rate); j++);
+		for (j = 0; ieee80211_std_rateset_11g.rs_rates[j] != RV(rate); j++);
 
 		mask |= 1 << j;
 	}
@@ -2832,9 +2856,9 @@ rt2661_rx_tune(struct rt2661_softc *sc)
 		if (bbp17 > hi)
 			bbp17 = hi;
 		else if (cca > 512)
-			bbp17 = min(bbp17 + 1, hi);
+			bbp17 = uimin(bbp17 + 1, hi);
 		else if (cca < 100)
-			bbp17 = max(bbp17 - 1, lo);
+			bbp17 = uimax(bbp17 - 1, lo);
 
 	} else if (dbm < -66) {
 		bbp17 = lo + 0x08;
@@ -2952,7 +2976,7 @@ rt2661_prepare_beacon(struct rt2661_softc *sc)
 		    RT2661_HW_BEACON_BASE0 + 24 +
 		    sizeof (struct ieee80211_frame) +
 		    8 + 2 + 2 + 2 + ni->ni_esslen +
-		    2 + min(ni->ni_rates.rs_nrates, IEEE80211_RATE_SIZE) +
+		    2 + uimin(ni->ni_rates.rs_nrates, IEEE80211_RATE_SIZE) +
 		    2 + 1 +
 		    ((ic->ic_opmode == IEEE80211_M_IBSS) ? 4 : 6) +
 		    2;

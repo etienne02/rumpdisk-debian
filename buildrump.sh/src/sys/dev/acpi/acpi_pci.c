@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_pci.c,v 1.19 2015/04/13 18:32:50 christos Exp $ */
+/* $NetBSD: acpi_pci.c,v 1.31 2021/05/12 23:22:33 thorpej Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 The NetBSD Foundation, Inc.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_pci.c,v 1.19 2015/04/13 18:32:50 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_pci.c,v 1.31 2021/05/12 23:22:33 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -53,9 +53,16 @@ ACPI_MODULE_NAME	  ("acpi_pci")
 #define ACPI_HILODWORD(x) ACPI_HIWORD(ACPI_LODWORD((x)))
 #define ACPI_LOLODWORD(x) ACPI_LOWORD(ACPI_LODWORD((x)))
 
-static ACPI_STATUS	  acpi_pcidev_pciroot_bus(ACPI_HANDLE, uint16_t *);
 static ACPI_STATUS	  acpi_pcidev_pciroot_bus_callback(ACPI_RESOURCE *,
 							   void *);
+
+/*
+ * UUID for _DSM control method, from PCI Firmware Specification.
+ */
+static UINT8 acpi_pci_dsm_uuid[ACPI_UUID_LENGTH] = {
+	0xd0, 0x37, 0xc9, 0xe5, 0x53, 0x35, 0x7a, 0x4d,
+	0x91, 0x17, 0xea, 0x4d, 0x19, 0xc3, 0x43, 0x4d
+};
 
 /*
  * Regarding PCI Segment Groups (ACPI 4.0, p. 277):
@@ -98,7 +105,7 @@ static ACPI_STATUS	  acpi_pcidev_pciroot_bus_callback(ACPI_RESOURCE *,
  *	If successful, return AE_OK and fill *busp.  Otherwise, return an
  *	exception code and leave *busp unchanged.
  */
-static ACPI_STATUS
+ACPI_STATUS
 acpi_pcidev_pciroot_bus(ACPI_HANDLE handle, uint16_t *busp)
 {
 	ACPI_STATUS rv;
@@ -184,16 +191,13 @@ acpi_pcidev_scan(struct acpi_devnode *ad)
 	 */
 	if (ad->ad_devinfo->Type != ACPI_TYPE_DEVICE)
 		goto rec;
-	if ((ad->ad_devinfo->Valid & ACPI_VALID_STA) != 0 &&
-	    (ad->ad_devinfo->CurrentStatus & ACPI_STA_OK) != ACPI_STA_OK)
+
+	if (!acpi_device_present(ad->ad_handle))
 		goto rec;
 
 	if (ad->ad_devinfo->Flags & ACPI_PCI_ROOT_BRIDGE) {
 
 		ap = kmem_zalloc(sizeof(*ap), KM_SLEEP);
-
-		if (ap == NULL)
-			return AE_NO_MEMORY;
 
 		/*
 		 * If no _SEG exist, all PCI bus segments are assumed
@@ -224,6 +228,8 @@ acpi_pcidev_scan(struct acpi_devnode *ad)
 		}
 
 		ap->ap_flags |= ACPI_PCI_INFO_BRIDGE;
+
+		ap->ap_pc = acpi_get_pci_chipset_tag(acpi_softc, ap->ap_segment, ap->ap_downbus);
 
 		/*
 		 * This ACPI node denotes a PCI root bridge, but it may also
@@ -261,9 +267,7 @@ acpi_pcidev_scan(struct acpi_devnode *ad)
 		 */
 		ap = kmem_zalloc(sizeof(*ap), KM_SLEEP);
 
-		if (ap == NULL)
-			return AE_NO_MEMORY;
-
+		ap->ap_pc = ad->ad_parent->ad_pciinfo->ap_pc;
 		ap->ap_segment = ad->ad_parent->ad_pciinfo->ap_segment;
 		ap->ap_bus = ad->ad_parent->ad_pciinfo->ap_downbus;
 
@@ -290,8 +294,10 @@ acpi_pcidev_scan(struct acpi_devnode *ad)
 			 * Check whether this device is a PCI-to-PCI
 			 * bridge and get its secondary bus number.
 			 */
-			rv = acpi_pcidev_ppb_downbus(ap->ap_segment, ap->ap_bus,
-			    ap->ap_device, ap->ap_function, &ap->ap_downbus);
+			rv = acpi_pcidev_ppb_downbus(
+			    ad->ad_parent->ad_pciinfo->ap_pc,
+			    ap->ap_segment, ap->ap_bus, ap->ap_device,
+			    ap->ap_function, &ap->ap_downbus);
 
 			if (ACPI_SUCCESS(rv))
 				ap->ap_flags |= ACPI_PCI_INFO_BRIDGE;
@@ -323,18 +329,14 @@ rec:
  * XXX	Need to deal with PCI segment groups (see also acpica/OsdHardware.c).
  */
 ACPI_STATUS
-acpi_pcidev_ppb_downbus(uint16_t segment, uint16_t bus, uint16_t device,
-    uint16_t function, uint16_t *downbus)
+acpi_pcidev_ppb_downbus(pci_chipset_tag_t pc, uint16_t segment, uint16_t bus,
+    uint16_t device, uint16_t function, uint16_t *downbus)
 {
-	struct acpi_softc *sc = acpi_softc;
-	pci_chipset_tag_t pc;
 	pcitag_t tag;
 	pcireg_t val;
 
 	if (bus > 255 || device > 31 || function > 7)
 		return AE_BAD_PARAMETER;
-
-	pc = sc->sc_pc;
 
 	tag = pci_make_tag(pc, bus, device, function);
 
@@ -352,8 +354,8 @@ acpi_pcidev_ppb_downbus(uint16_t segment, uint16_t bus, uint16_t device,
 		return AE_TYPE;
 
 	/* This is a PCI-to-PCI bridge.  Get its secondary bus#. */
-	val = pci_conf_read(pc, tag, PPB_REG_BUSINFO);
-	*downbus = PPB_BUSINFO_SECONDARY(val);
+	val = pci_conf_read(pc, tag, PCI_BRIDGE_BUS_REG);
+	*downbus = PCI_BRIDGE_BUS_NUM_SECONDARY(val);
 
 	return AE_OK;
 }
@@ -389,6 +391,51 @@ acpi_pcidev_find(uint16_t segment, uint16_t bus,
 	return NULL;
 }
 
+/*
+ * acpi_pcidev_get_tag:
+ *
+ *	Returns a PCI chipset tag for a PCI device in the ACPI name space.
+ */
+pci_chipset_tag_t
+acpi_pcidev_get_tag(uint16_t segment, uint16_t bus,
+    uint16_t device, uint16_t function)
+{
+	struct acpi_devnode *ad;
+
+	ad = acpi_pcidev_find(segment, bus, device, function);
+	if (ad == NULL || ad->ad_pciinfo == NULL)
+		return NULL;
+
+	return ad->ad_pciinfo->ap_pc;
+}
+
+/*
+ * acpi_pciroot_find:
+ *
+ *	Finds a PCI root bridge in the ACPI name space.
+ *
+ *	Returns an ACPI device node on success and NULL on failure.
+ */
+struct acpi_devnode *
+acpi_pciroot_find(uint16_t segment, uint16_t bus)
+{
+	struct acpi_softc *sc = acpi_softc;
+	struct acpi_devnode *ad;
+
+	if (sc == NULL)
+		return NULL;
+
+	SIMPLEQ_FOREACH(ad, &sc->ad_head, ad_list) {
+
+		if (ad->ad_pciinfo != NULL &&
+		    (ad->ad_pciinfo->ap_flags & ACPI_PCI_INFO_BRIDGE) &&
+		    ad->ad_pciinfo->ap_segment == segment &&
+		    ad->ad_pciinfo->ap_bus == bus)
+			return ad;
+	}
+
+	return NULL;
+}
 
 /*
  * acpi_pcidev_find_dev:
@@ -438,3 +485,96 @@ acpi_pcidev_find_dev(struct acpi_devnode *ad)
 
 	return dv;
 }
+
+/*
+ * acpi_pci_ignore_boot_config:
+ *
+ *	Returns 1 if the operating system may ignore the boot configuration
+ *	of PCI resources.
+ */
+ACPI_INTEGER
+acpi_pci_ignore_boot_config(ACPI_HANDLE handle)
+{
+	ACPI_OBJECT *pobj = NULL;
+	ACPI_INTEGER ret;
+
+	/*
+	 * This one is a little confusing, but the result of
+	 * evaluating _DSM #5 is:
+	 *
+	 * 0: The operating system may not ignore the boot configuration
+	 *    of PCI resources.
+	 *
+	 * 1: The operating system may ignore the boot configuration of
+	 *    PCI resources, and reconfigure or rebalance these resources
+	 *    in the hierarchy as required.
+	 */
+
+	if (ACPI_FAILURE(acpi_dsm(handle, acpi_pci_dsm_uuid,
+				  1, 5, NULL, &pobj))) {
+		/*
+		 * In the absence of _DSM #5, we may assume that the
+		 * boot config can be ignored.
+		 */
+		return 1;
+	}
+
+	/*
+	 * ...and we default to "may ignore" in the event that the
+	 * method returns nonsense.
+	 */
+	ret = 1;
+
+	if (pobj != NULL) {
+		switch (pobj->Type) {
+		case ACPI_TYPE_INTEGER:
+			ret = pobj->Integer.Value;
+			break;
+
+		case ACPI_TYPE_PACKAGE:
+			if (pobj->Package.Count == 1 &&
+			    pobj->Package.Elements[0].Type == ACPI_TYPE_INTEGER)
+				ret = pobj->Package.Elements[0].Integer.Value;
+			break;
+		}
+		ACPI_FREE(pobj);
+	}
+
+	return ret;
+}
+
+/*
+ * acpi_pci_bus_get_child_devhandle:
+ *
+ *	Implements the "pci-bus-get-child-devhandle" device call for
+ *	ACPI device handles
+ */
+static int
+acpi_pci_bus_get_child_devhandle(device_t dev, devhandle_t call_handle, void *v)
+{
+	struct pci_bus_get_child_devhandle_args *args = v;
+	struct acpi_devnode *ad;
+	ACPI_HANDLE hdl;
+	int b, d, f;
+	u_int segment;
+
+#ifdef __HAVE_PCI_GET_SEGMENT
+	segment = pci_get_segment(args->pc);
+#else
+	segment = 0;
+#endif /* __HAVE_PCI_GET_SEGMENT */
+
+	pci_decompose_tag(args->pc, args->tag, &b, &d, &f);
+
+	ad = acpi_pcidev_find(segment, b, d, f);
+
+	if (ad != NULL && (hdl = ad->ad_handle) != NULL) {
+		/* Found it! */
+		args->devhandle = devhandle_from_acpi(hdl);
+		return 0;
+	}
+
+	return ENODEV;
+}
+ACPI_DEVICE_CALL_REGISTER("pci-bus-get-child-devhandle",
+			  acpi_pci_bus_get_child_devhandle)

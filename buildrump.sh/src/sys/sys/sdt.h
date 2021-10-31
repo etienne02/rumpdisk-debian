@@ -1,3 +1,5 @@
+/*	$NetBSD: sdt.h,v 1.14 2020/04/19 03:12:35 riastradh Exp $	*/
+
 /*-
  * Copyright 2006-2008 John Birrell <jb@FreeBSD.org>
  *
@@ -35,49 +37,55 @@
 
 #define	_DTRACE_VERSION	1
 
-#define	DTRACE_PROBE(prov, name) {				\
+#define	DTRACE_PROBE(prov, name) do {				\
 	extern void __dtrace_##prov##___##name(void);		\
 	__dtrace_##prov##___##name();				\
-}
+} while (0)
 
-#define	DTRACE_PROBE1(prov, name, arg1) {			\
+#define	DTRACE_PROBE1(prov, name, arg1) do {			\
 	extern void __dtrace_##prov##___##name(unsigned long);	\
 	__dtrace_##prov##___##name((unsigned long)arg1);	\
-}
+} while (0)
 
-#define	DTRACE_PROBE2(prov, name, arg1, arg2) {			\
+#define	DTRACE_PROBE2(prov, name, arg1, arg2) do {		\
 	extern void __dtrace_##prov##___##name(unsigned long,	\
 	    unsigned long);					\
 	__dtrace_##prov##___##name((unsigned long)arg1,		\
 	    (unsigned long)arg2);				\
-}
+} while (0)
 
-#define	DTRACE_PROBE3(prov, name, arg1, arg2, arg3) {		\
+#define	DTRACE_PROBE3(prov, name, arg1, arg2, arg3) do {	\
 	extern void __dtrace_##prov##___##name(unsigned long,	\
 	    unsigned long, unsigned long);			\
 	__dtrace_##prov##___##name((unsigned long)arg1,		\
 	    (unsigned long)arg2, (unsigned long)arg3);		\
-}
+} while (0)
 
-#define	DTRACE_PROBE4(prov, name, arg1, arg2, arg3, arg4) {	\
+#define	DTRACE_PROBE4(prov, name, arg1, arg2, arg3, arg4) do {	\
 	extern void __dtrace_##prov##___##name(unsigned long,	\
 	    unsigned long, unsigned long, unsigned long);	\
 	__dtrace_##prov##___##name((unsigned long)arg1,		\
 	    (unsigned long)arg2, (unsigned long)arg3,		\
 	    (unsigned long)arg4);				\
-}
+} while (0)
 
-#define	DTRACE_PROBE5(prov, name, arg1, arg2, arg3, arg4, arg5) {	\
+#define	DTRACE_PROBE5(prov, name, arg1, arg2, arg3, arg4, arg5) do {	\
 	extern void __dtrace_##prov##___##name(unsigned long,		\
 	    unsigned long, unsigned long, unsigned long, unsigned long);\
 	__dtrace_##prov##___##name((unsigned long)arg1,			\
 	    (unsigned long)arg2, (unsigned long)arg3,			\
 	    (unsigned long)arg4, (unsigned long)arg5);			\
-}
+} while (0)
 
 #else /* _KERNEL */
 
+#include <sys/types.h>
 #include <sys/cdefs.h>
+#include <sys/queue.h>
+
+#ifdef _KERNEL_OPT
+#include "opt_dtrace.h"
+#endif
 
 #ifndef KDTRACE_HOOKS
 
@@ -85,7 +93,8 @@
 #define SDT_PROVIDER_DECLARE(prov)
 #define SDT_PROBE_DEFINE(prov, mod, func, name)
 #define SDT_PROBE_DECLARE(prov, mod, func, name)
-#define SDT_PROBE(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)
+#define SDT_PROBE(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)	      \
+	__nothing
 #define SDT_PROBE_ARGTYPE(prov, mod, func, name, num, type, xtype)
 
 #define	SDT_PROBE_DEFINE0(prov, mod, func, name)
@@ -99,15 +108,19 @@
 #define	SDT_PROBE_DEFINE7(prov, mod, func, name, arg0, arg1, arg2,      \
     arg3, arg4, arg5, arg6)
 
-#define	SDT_PROBE0(prov, mod, func, name)
-#define	SDT_PROBE1(prov, mod, func, name, arg0)
-#define	SDT_PROBE2(prov, mod, func, name, arg0, arg1)
-#define	SDT_PROBE3(prov, mod, func, name, arg0, arg1, arg2)
-#define	SDT_PROBE4(prov, mod, func, name, arg0, arg1, arg2, arg3)
-#define	SDT_PROBE5(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)
-#define	SDT_PROBE6(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4, arg5)
-#define	SDT_PROBE7(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4, arg5,  \
-    arg6)
+#define	SDT_PROBE0(prov, mod, func, name)			__nothing
+#define	SDT_PROBE1(prov, mod, func, name, arg0)			__nothing
+#define	SDT_PROBE2(prov, mod, func, name, arg0, arg1)		__nothing
+#define	SDT_PROBE3(prov, mod, func, name, arg0, arg1, arg2)	__nothing
+#define	SDT_PROBE4(prov, mod, func, name, arg0, arg1, arg2, arg3)	      \
+	__nothing
+#define	SDT_PROBE5(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)	      \
+	__nothing
+#define	SDT_PROBE6(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4, arg5) \
+	__nothing
+#define	SDT_PROBE7(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4, arg5, \
+    arg6)								      \
+	__nothing
 
 #define	SDT_PROBE_DEFINE0_XLATE(prov, mod, func, name)
 #define	SDT_PROBE_DEFINE1_XLATE(prov, mod, func, name, arg0, xarg0)
@@ -125,13 +138,16 @@
     arg1, xarg1, arg2, xarg2, arg3, xarg3, arg4, xarg4, arg5, xarg5, arg6,     \
     xarg6)
 
-#define	DTRACE_PROBE(name)
-#define	DTRACE_PROBE1(name, type0, arg0)
-#define	DTRACE_PROBE2(name, type0, arg0, type1, arg1)
-#define	DTRACE_PROBE3(name, type0, arg0, type1, arg1, type2, arg2)
-#define	DTRACE_PROBE4(name, type0, arg0, type1, arg1, type2, arg2, type3, arg3)
+#define	DTRACE_PROBE(name)					__nothing
+#define	DTRACE_PROBE1(name, type0, arg0)			__nothing
+#define	DTRACE_PROBE2(name, type0, arg0, type1, arg1)		__nothing
+#define	DTRACE_PROBE3(name, type0, arg0, type1, arg1, type2, arg2)	      \
+	__nothing
+#define	DTRACE_PROBE4(name, type0, arg0, type1, arg1, type2, arg2, type3, arg3)\
+	__nothing
 #define	DTRACE_PROBE5(name, type0, arg0, type1, arg1, type2, arg2, type3, arg3,\
-    type4, arg4)
+    type4, arg4)							      \
+	__nothing
 
 #else
 
@@ -158,8 +174,8 @@
 #define SDT_PROBE(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)	do {	\
 	if (sdt_##prov##_##mod##_##func##_##name->id)				\
 		(*sdt_probe_func)(sdt_##prov##_##mod##_##func##_##name->id,	\
-		    (uintptr_t) arg0, (uintptr_t) arg1, (uintptr_t) arg2,	\
-		    (uintptr_t) arg3, (uintptr_t) arg4);			\
+		    (uintptr_t) (arg0), (uintptr_t) (arg1), (uintptr_t) (arg2),	\
+		    (uintptr_t) (arg3), (uintptr_t) (arg4));			\
 } while (0)
 
 #define SDT_PROBE_ARGTYPE(prov, mod, func, name, num, type, xtype)		\
@@ -294,11 +310,13 @@
 	SDT_PROBE(prov, mod, func, name, arg0, arg1, arg2, arg3, 0)
 #define	SDT_PROBE5(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4) \
 	SDT_PROBE(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4)
+/* XXX: void * function casts */
 #define	SDT_PROBE6(prov, mod, func, name, arg0, arg1, arg2, arg3, arg4, arg5)  \
 	do {								       \
 		if (sdt_##prov##_##mod##_##func##_##name->id)		       \
-			(*(void (*)(uint32_t, uintptr_t, uintptr_t, uintptr_t, \
-			    uintptr_t, uintptr_t, uintptr_t))sdt_probe_func)(  \
+			__FPTRCAST(void (*)(uint32_t, uintptr_t, uintptr_t,    \
+			    uintptr_t, uintptr_t, uintptr_t, uintptr_t),       \
+			    sdt_probe_func)(  				       \
 			    sdt_##prov##_##mod##_##func##_##name->id,	       \
 			    (uintptr_t)arg0, (uintptr_t)arg1, (uintptr_t)arg2, \
 			    (uintptr_t)arg3, (uintptr_t)arg4, (uintptr_t)arg5);\
@@ -307,9 +325,9 @@
     arg6)								       \
 	do {								       \
 		if (sdt_##prov##_##mod##_##func##_##name->id)		       \
-			(*(void (*)(uint32_t, uintptr_t, uintptr_t, uintptr_t, \
-			    uintptr_t, uintptr_t, uintptr_t, uintptr_t))       \
-			    sdt_probe_func)(				       \
+			__FPTRCAST(void (*)(uint32_t, uintptr_t, uintptr_t,    \
+			    uintptr_t, uintptr_t, uintptr_t, uintptr_t,	       \
+			    uintptr_t), sdt_probe_func)(		       \
 			    sdt_##prov##_##mod##_##func##_##name->id,	       \
 			    (uintptr_t)arg0, (uintptr_t)arg1, (uintptr_t)arg2, \
 			    (uintptr_t)arg3, (uintptr_t)arg4, (uintptr_t)arg5, \

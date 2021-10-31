@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic_init_testset.c,v 1.15 2014/02/27 09:39:00 matt Exp $	*/
+/*	$NetBSD: atomic_init_testset.c,v 1.17 2020/05/15 15:20:40 martin Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: atomic_init_testset.c,v 1.15 2014/02/27 09:39:00 matt Exp $");
+__RCSID("$NetBSD: atomic_init_testset.c,v 1.17 2020/05/15 15:20:40 martin Exp $");
 
 #include "atomic_op_namespace.h"
 
@@ -296,30 +296,28 @@ __libc_atomic_init(void)
 		return;
 	if (ncpu > 1)
 		return;
+
 	if (rasctl(RAS_ADDR(_atomic_cas), RAS_SIZE(_atomic_cas),
 	    RAS_INSTALL) == 0) {
 		_atomic_cas_fn = _atomic_cas_up;
-		return;
 	}
+
 
 #ifdef	__HAVE_ATOMIC_CAS_64_UP
 	if (rasctl(RAS_ADDR(_atomic_cas_64), RAS_SIZE(_atomic_cas_64),
 	    RAS_INSTALL) == 0) {
 		_atomic_cas_64_fn = _atomic_cas_64_up;
-		return;
 	}
 #endif
 
 	if (rasctl(RAS_ADDR(_atomic_cas_16), RAS_SIZE(_atomic_cas_16),
 	    RAS_INSTALL) == 0) {
 		_atomic_cas_16_fn = _atomic_cas_16_up;
-		return;
 	}
 
 	if (rasctl(RAS_ADDR(_atomic_cas_8), RAS_SIZE(_atomic_cas_8),
 	    RAS_INSTALL) == 0) {
 		_atomic_cas_8_fn = _atomic_cas_8_up;
-		return;
 	}
 }
 
@@ -354,7 +352,8 @@ __strong_alias(_atomic_cas_ptr_ni,_atomic_cas_32)
 //atomic_op_alias(atomic_cas_8,_atomic_cas_8)
 //atomic_op_alias(atomic_cas_8_ni,_atomic_cas_8)
 #ifdef	__HAVE_ATOMIC_CAS_64_UP
-//atomic_op_alias(atomic_cas_64_ni,_atomic_cas_64)
+atomic_op_alias(atomic_cas_64_ni,_atomic_cas_64)
+__strong_alias(_atomic_cas_64_ni,_atomic_cas_64)
 crt_alias(__sync_val_compare_and_swap_8,_atomic_cas_64)
 #endif
 crt_alias(__sync_val_compare_and_swap_4,_atomic_cas_32)

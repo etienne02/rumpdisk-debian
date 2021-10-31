@@ -1,4 +1,4 @@
-/*	$NetBSD: frame.h,v 1.42 2015/04/17 17:28:33 matt Exp $	*/
+/*	$NetBSD: frame.h,v 1.48 2020/08/14 16:18:36 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1997 Mark Brinicombe.
@@ -64,7 +64,7 @@ struct switchframe {
 	u_int	sf_sp;
 	u_int	sf_pc;
 };
- 
+
 /*
  * System stack frames.
  */
@@ -95,6 +95,7 @@ void validate_trapframe(trapframe_t *, int);
 #include "opt_cpuoptions.h"
 #include "opt_arm_debug.h"
 #include "opt_cputypes.h"
+#include "opt_dtrace.h"
 
 #include <arm/locore.h>
 
@@ -150,26 +151,16 @@ void validate_trapframe(trapframe_t *, int);
 	msr	cpsr_c, ra		/* Restore interrupts */
 #endif
 
-#ifdef __HAVE_PREEMPTION
-#define DO_CLEAR_ASTPENDING						\
-	mvn	r1, #1			/* complement of 1 */		;\
-	add	r0, r4, #CI_ASTPENDING	/* address of astpending */	;\
-	bl	_C_LABEL(atomic_and_uint) /* clear AST */
-#else
-#define DO_CLEAR_ASTPENDING						\
-	mov	r0, #0							;\
-	str	r0, [r4, #CI_ASTPENDING] /* clear AST */
-#endif
-
 #define DO_PENDING_AST(lbl)						;\
-1:	ldr	r1, [r4, #CI_ASTPENDING] /* Pending AST? */		;\
-	tst	r1, #0x00000001						;\
+1:	ldr	r1, [r5, #L_MD_ASTPENDING] /* Pending AST? */		;\
+	tst	r1, #1							;\
 	beq	lbl			/* Nope. Just bail */		;\
-	DO_CLEAR_ASTPENDING						;\
-	CPSIE_I(r5, r5)			/* Restore interrupts */	;\
+	bic	r0, r1, #1		 /* clear AST */		;\
+	str	r0, [r5, #L_MD_ASTPENDING]				;\
+	CPSIE_I(r6, r6)			/* Restore interrupts */	;\
 	mov	r0, sp							;\
 	bl	_C_LABEL(ast)		/* ast(frame) */		;\
-	CPSID_I(r0, r5)			/* Disable interrupts */	;\
+	CPSID_I(r0, r6)			/* Disable interrupts */	;\
 	b	1b			/* test again */
 
 /*
@@ -178,8 +169,8 @@ void validate_trapframe(trapframe_t *, int);
  * alignment faults when executing old a.out ARM binaries.
  *
  * Note that when ENABLE_ALIGNMENTS_FAULTS finishes r4 will contain
- * pointer to the cpu's cpu_info.  DO_AST_AND_RESTORE_ALIGNMENT_FAULTS
- * relies on r4 being preserved.
+ * curcpu() and r5 containing curlwp.  DO_AST_AND_RESTORE_ALIGNMENT_FAULTS
+ * relies on r4 and r5 being preserved.
  */
 #ifdef EXEC_AOUT
 #define	AST_ALIGNMENT_FAULT_LOCALS					\
@@ -197,10 +188,9 @@ void validate_trapframe(trapframe_t *, int);
 #define	ENABLE_ALIGNMENT_FAULTS						\
 	and	r7, r0, #(PSR_MODE)	/* Test for USR32 mode */	;\
 	cmp	r7, #(PSR_USR32_MODE)					;\
-	GET_CURCPU(r4)			/* r4 = cpuinfo */		;\
+	GET_CURX(r4, r5)		/* r4 = curcpu, r5 = curlwp */	;\
 	bne	1f			/* Not USR mode skip AFLT */	;\
-	ldr	r1, [r4, #CI_CURLWP]	/* get curlwp from cpu_info */	;\
-	ldr	r1, [r1, #L_MD_FLAGS]	/* Fetch l_md.md_flags */	;\
+	ldr	r1, [r5, #L_MD_FLAGS]	/* Fetch l_md.md_flags */	;\
 	tst	r1, #MDLWP_NOALIGNFLT					;\
 	beq	1f			/* AFLTs already enabled */	;\
 	ldr	r2, .Laflt_cpufuncs					;\
@@ -212,13 +202,13 @@ void validate_trapframe(trapframe_t *, int);
 /*
  * This macro must be invoked just before PULLFRAMEFROMSVCANDEXIT or
  * PULLFRAME at the end of interrupt/exception handlers.  We know that
- * r4 points to cpu_info since that is what ENABLE_ALIGNMENT_FAULTS did
- * for use.
+ * r4 points to curcpu() and r5 points to curlwp since that is what
+ * ENABLE_ALIGNMENT_FAULTS did for us.
  */
 #define	DO_AST_AND_RESTORE_ALIGNMENT_FAULTS				\
 	DO_PENDING_SOFTINTS						;\
-	GET_CPSR(r5)			/* save CPSR */			;\
-	CPSID_I(r1, r5)			/* Disable interrupts */	;\
+	GET_CPSR(r6)			/* save CPSR */			;\
+	CPSID_I(r1, r6)			/* Disable interrupts */	;\
 	cmp	r7, #(PSR_USR32_MODE)	/* Returning to USR mode? */	;\
 	bne	3f			/* Nope, get out now */		;\
 	DO_PENDING_AST(2f)		/* Pending AST? */		;\
@@ -239,13 +229,13 @@ void validate_trapframe(trapframe_t *, int);
 
 #define	ENABLE_ALIGNMENT_FAULTS						\
 	and	r7, r0, #(PSR_MODE)	/* Test for USR32 mode */	;\
-	GET_CURCPU(r4)			/* r4 = cpuinfo */
-	
+	GET_CURX(r4, r5)		/* r4 = curcpu, r5 = curlwp */
+
 
 #define	DO_AST_AND_RESTORE_ALIGNMENT_FAULTS				\
 	DO_PENDING_SOFTINTS						;\
-	GET_CPSR(r5)			/* save CPSR */			;\
-	CPSID_I(r1, r5)			/* Disable interrupts */	;\
+	GET_CPSR(r6)			/* save CPSR */			;\
+	CPSID_I(r1, r6)			/* Disable interrupts */	;\
 	cmp	r7, #(PSR_USR32_MODE)					;\
 	bne	2f			/* Nope, get out now */		;\
 	DO_PENDING_AST(2f)		/* Pending AST? */		;\
@@ -401,7 +391,7 @@ LOCK_CAS_DEBUG_LOCALS
 	ldmia   sp, {r0-r14}^;		/* Restore registers (usr mode) */ \
 	mov     r0, r0;                 /* NOP for previous instruction */ \
 	add	sp, sp, #(TF_PC-TF_R0);	/* Adjust the stack pointer */	   \
- 	ldr	lr, [sp], #0x0004	/* Pop the return address */
+ 	ldr	lr, [sp], #4		/* Pop the return address */
 
 #define PULLIDLEFRAME							   \
 	add	sp, sp, #TF_R4;		/* Adjust the stack pointer */	   \
@@ -423,7 +413,7 @@ LOCK_CAS_DEBUG_LOCALS
  * This should only be used if the processor is not currently in SVC32
  * mode. The processor mode is switched to SVC mode and the trap frame is
  * stored. The SVC lr field is used to store the previous value of
- * lr in SVC mode.  
+ * lr in SVC mode.
  *
  * NOTE: r13 and r14 are stored separately as a work around for the
  * SA110 rev 2 STM^ bug
@@ -440,13 +430,26 @@ LOCK_CAS_DEBUG_LOCALS
 	msr     cpsr_c, tmp		/* Punch into SVC mode */
 #endif
 
-#define PUSHFRAMEINSVC							   \
+#define PUSHXXXREGSANDSWITCH						   \
 	stmdb	sp, {r0-r3};		/* Save 4 registers */		   \
 	mov	r0, lr;			/* Save xxx32 r14 */		   \
 	mov	r1, sp;			/* Save xxx32 sp */		   \
 	mrs	r3, spsr;		/* Save xxx32 spsr */		   \
-	SET_CPSR_MODE(r2, PSR_SVC32_MODE);				   \
-	bic	r2, sp, #7;		/* Align new SVC sp */		   \
+	SET_CPSR_MODE(r2, PSR_SVC32_MODE)
+
+#ifdef KDTRACE_HOOKS
+#define PUSHDTRACEGAP							   \
+	and	r2, r3, #(PSR_MODE);					   \
+	cmp	r2, #(PSR_SVC32_MODE);	/* were we in SVC mode? */	   \
+	mov	r2, sp;							   \
+	subeq	r2, r2, #(4 * 16);	/* if so, leave a gap for dtrace */
+#else
+#define PUSHDTRACEGAP							   \
+	mov	r2, sp
+#endif
+
+#define PUSHTRAPFRAME(rX)						   \
+	bic	r2, rX, #7;		/* Align new SVC sp */		   \
 	str	r0, [r2, #-4]!;		/* Push return address */	   \
 	stmdb	r2!, {sp, lr};		/* Push SVC sp, lr */		   \
 	mov	sp, r2;			/* Keep stack aligned */	   \
@@ -458,6 +461,10 @@ LOCK_CAS_DEBUG_LOCALS
 	mrs	r0, spsr;		/* Get the SPSR */		   \
 	str	r0, [sp, #-TF_R0]!	/* Push the SPSR onto the stack */
 
+#define PUSHFRAMEINSVC							   \
+	PUSHXXXREGSANDSWITCH;						   \
+	PUSHTRAPFRAME(sp)
+
 /*
  * PULLFRAMEFROMSVCANDEXIT - macro to pull a trap frame from the stack
  * in SVC32 mode and restore the saved processor mode and PC.
@@ -466,7 +473,7 @@ LOCK_CAS_DEBUG_LOCALS
  */
 
 #define PULLFRAMEFROMSVCANDEXIT						   \
-	ldr     r0, [sp], #0x0008;	/* Pop the SPSR from stack */	   \
+	ldr     r0, [sp], #TF_R0;	/* Pop the SPSR from stack */	   \
 	msr     spsr_fsxc, r0;		/* restore SPSR */		   \
 	ldmia   sp, {r0-r14}^;		/* Restore registers (usr mode) */ \
 	mov     r0, r0;	  		/* NOP for previous instruction */ \

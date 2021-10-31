@@ -1,4 +1,4 @@
-/* $NetBSD: secmodel_suser.c,v 1.42 2015/08/17 06:16:03 knakahara Exp $ */
+/* $NetBSD: secmodel_suser.c,v 1.55 2020/09/08 14:12:57 christos Exp $ */
 /*-
  * Copyright (c) 2006 Elad Efrat <elad@NetBSD.org>
  * All rights reserved.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: secmodel_suser.c,v 1.42 2015/08/17 06:16:03 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: secmodel_suser.c,v 1.55 2020/09/08 14:12:57 christos Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -61,10 +61,8 @@ static kauth_listener_t l_generic, l_system, l_process, l_network, l_machdep,
     l_device, l_vnode;
 
 static secmodel_t suser_sm;
-static struct sysctllog *suser_sysctl_log;
 
-void
-sysctl_security_suser_setup(struct sysctllog **clog)
+SYSCTL_SETUP(sysctl_security_suser_setup, "secmodel_user sysctl")
 {
 	const struct sysctlnode *rnode;
 
@@ -163,11 +161,9 @@ suser_modcmd(modcmd_t cmd, void *arg)
 
 		secmodel_suser_init();
 		secmodel_suser_start();
-		sysctl_security_suser_setup(&suser_sysctl_log);
 		break;
 
 	case MODULE_CMD_FINI:
-		sysctl_teardown(&suser_sysctl_log);
 		secmodel_suser_stop();
 
 		error = secmodel_deregister(suser_sm);
@@ -236,7 +232,7 @@ secmodel_suser_system_cb(kauth_cred_t cred, kauth_action_t action,
 
 	isroot = suser_isroot(cred);
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_system_req)arg0;
+	req = (enum kauth_system_req)(uintptr_t)arg0;
 
 	switch (action) {
 	case KAUTH_SYSTEM_CPU:
@@ -392,17 +388,6 @@ secmodel_suser_system_cb(kauth_cred_t cred, kauth_action_t action,
 		break;
 
 	case KAUTH_SYSTEM_DEBUG:
-		switch (req) {
-		case KAUTH_REQ_SYSTEM_DEBUG_IPKDB:
-			if (isroot)
-				result = KAUTH_RESULT_ALLOW;
-
-			break;
-
-		default:
-			break;
-		}
-
 		break;
 
 	case KAUTH_SYSTEM_CHSYSFLAGS:
@@ -454,6 +439,12 @@ secmodel_suser_system_cb(kauth_cred_t cred, kauth_action_t action,
 		default:
 			break;
 		}
+
+		break;
+
+	case KAUTH_SYSTEM_KERNADDR:
+		if (isroot)
+			result = KAUTH_RESULT_ALLOW;
 
 		break;
 
@@ -510,6 +501,8 @@ secmodel_suser_process_cb(kauth_cred_t cred, kauth_action_t action,
 		case KAUTH_REQ_PROCESS_CANSEE_ARGS:
 		case KAUTH_REQ_PROCESS_CANSEE_ENTRY:
 		case KAUTH_REQ_PROCESS_CANSEE_OPENFILES:
+		case KAUTH_REQ_PROCESS_CANSEE_EPROC:
+		case KAUTH_REQ_PROCESS_CANSEE_KPTR:
 			if (isroot) {
 				result = KAUTH_RESULT_ALLOW;
 				break;
@@ -533,7 +526,7 @@ secmodel_suser_process_cb(kauth_cred_t cred, kauth_action_t action,
 	case KAUTH_PROCESS_RLIMIT: {
 		enum kauth_process_req req;
 
-		req = (enum kauth_process_req)(unsigned long)arg1;
+		req = (enum kauth_process_req)(uintptr_t)arg1;
 
 		switch (req) {
 		case KAUTH_REQ_PROCESS_RLIMIT_SET:
@@ -575,7 +568,7 @@ secmodel_suser_network_cb(kauth_cred_t cred, kauth_action_t action,
 
 	isroot = suser_isroot(cred);
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_network_req)arg0;
+	req = (enum kauth_network_req)(uintptr_t)arg0;
 
 	switch (action) {
 	case KAUTH_NETWORK_ALTQ:
@@ -606,6 +599,7 @@ secmodel_suser_network_cb(kauth_cred_t cred, kauth_action_t action,
 		switch (req) {
 		case KAUTH_REQ_NETWORK_BIND_PORT:
 		case KAUTH_REQ_NETWORK_BIND_PRIVPORT:
+		case KAUTH_REQ_NETWORK_BIND_ANYADDR:
 			if (isroot)
 				result = KAUTH_RESULT_ALLOW;
 			break;
@@ -834,13 +828,13 @@ int
 secmodel_suser_machdep_cb(kauth_cred_t cred, kauth_action_t action,
     void *cookie, void *arg0, void *arg1, void *arg2, void *arg3)
 {
-        bool isroot;
-        int result;
+	bool isroot;
+	int result;
 
-        isroot = suser_isroot(cred);
-        result = KAUTH_RESULT_DEFER;
+	isroot = suser_isroot(cred);
+	result = KAUTH_RESULT_DEFER;
 
-        switch (action) {
+	switch (action) {
 	case KAUTH_MACHDEP_CPU_UCODE_APPLY:
 	case KAUTH_MACHDEP_IOPERM_GET:
 	case KAUTH_MACHDEP_LDT_GET:
@@ -853,6 +847,12 @@ secmodel_suser_machdep_cb(kauth_cred_t cred, kauth_action_t action,
 	case KAUTH_MACHDEP_NVRAM:
 	case KAUTH_MACHDEP_UNMANAGEDMEM:
 	case KAUTH_MACHDEP_PXG:
+		if (isroot)
+			result = KAUTH_RESULT_ALLOW;
+		break;
+
+	case KAUTH_MACHDEP_SVS_DISABLE:
+		/* Deprecated. */
 		if (isroot)
 			result = KAUTH_RESULT_ALLOW;
 		break;
@@ -875,11 +875,11 @@ int
 secmodel_suser_device_cb(kauth_cred_t cred, kauth_action_t action,
     void *cookie, void *arg0, void *arg1, void *arg2, void *arg3)
 {
-        bool isroot;
-        int result;
+	bool isroot;
+	int result;
 
-        isroot = suser_isroot(cred);
-        result = KAUTH_RESULT_DEFER;
+	isroot = suser_isroot(cred);
+	result = KAUTH_RESULT_DEFER;
 
 	switch (action) {
 	case KAUTH_DEVICE_BLUETOOTH_SETPRIV:
@@ -895,6 +895,7 @@ secmodel_suser_device_cb(kauth_cred_t cred, kauth_action_t action,
 	case KAUTH_DEVICE_RND_SETPRIV:
 	case KAUTH_DEVICE_WSCONS_KEYBOARD_BELL:
 	case KAUTH_DEVICE_WSCONS_KEYBOARD_KEYREPEAT:
+	case KAUTH_DEVICE_NVMM_CTL:
 		if (isroot)
 			result = KAUTH_RESULT_ALLOW;
 		break;
@@ -903,7 +904,7 @@ secmodel_suser_device_cb(kauth_cred_t cred, kauth_action_t action,
 	case KAUTH_DEVICE_BLUETOOTH_BTUART: {
 		enum kauth_device_req req;
 
-		req = (enum kauth_device_req)arg0;
+		req = (enum kauth_device_req)(uintptr_t)arg0;
 		switch (req) {
 		case KAUTH_REQ_DEVICE_BLUETOOTH_BCSP_ADD:
 		case KAUTH_REQ_DEVICE_BLUETOOTH_BTUART_ADD:

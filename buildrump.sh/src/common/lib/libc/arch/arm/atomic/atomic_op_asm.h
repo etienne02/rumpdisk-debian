@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic_op_asm.h,v 1.7 2015/05/17 20:57:11 justin Exp $	*/
+/*	$NetBSD: atomic_op_asm.h,v 1.10 2021/07/28 08:01:10 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -22,7 +22,7 @@
  * 4. Neither the name of The NetBSD Foundation nor the names of its
  *    contributors may be used to endorse or promote products derived
  *    from this software without specific prior written permission.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -72,6 +72,14 @@
 
 #ifndef CRT_ALIAS
 #define	CRT_ALIAS(a,s)
+#endif
+
+#ifdef _ARM_ARCH_7
+#define	DMB	dmb	ish
+#define	DMBST	dmb	ishst
+#else
+#define	DMB	mcr	p15, 0, r0, c7, c10, 5	/* Data Memory Barrier */
+#define	DMBST	DMB
 #endif
 
 #endif /* _ATOMIC_OP_ASM_H_ */

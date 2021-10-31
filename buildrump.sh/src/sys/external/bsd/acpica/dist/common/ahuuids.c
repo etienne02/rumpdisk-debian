@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -52,7 +52,7 @@
 /*
  * Table of "known" (ACPI-related) UUIDs
  */
-const AH_UUID  AcpiUuids[] =
+const AH_UUID  Gbl_AcpiUuids[] =
 {
     {"[Controllers]",               NULL},
     {"GPIO Controller",             UUID_GPIO_CONTROLLER},
@@ -63,12 +63,17 @@ const AH_UUID  AcpiUuids[] =
     {"PCI Host Bridge Device",      UUID_PCI_HOST_BRIDGE},
     {"HID I2C Device",              UUID_I2C_DEVICE},
     {"Power Button Device",         UUID_POWER_BUTTON},
+    {"Memory Device",               UUID_MEMORY_DEVICE},
+    {"Generic Buttons Device",      UUID_GENERIC_BUTTONS_DEVICE},
+    {"NVDIMM Root Device",          UUID_NVDIMM_ROOT_DEVICE},
+    {"Control Method Battery",      UUID_CONTROL_METHOD_BATTERY},
 
     {"[Interfaces]",                NULL},
     {"Device Labeling Interface",   UUID_DEVICE_LABELING},
     {"Physical Presence Interface", UUID_PHYSICAL_PRESENCE},
 
     {"[Non-volatile DIMM and NFIT table]",       NULL},
+    {"NVDIMM Device",               UUID_NFIT_DIMM},
     {"Volatile Memory Region",      UUID_VOLATILE_MEMORY},
     {"Persistent Memory Region",    UUID_PERSISTENT_MEMORY},
     {"NVDIMM Control Region",       UUID_CONTROL_REGION},
@@ -77,6 +82,14 @@ const AH_UUID  AcpiUuids[] =
     {"Volatile Virtual CD",         UUID_VOLATILE_VIRTUAL_CD},
     {"Persistent Virtual Disk",     UUID_PERSISTENT_VIRTUAL_DISK},
     {"Persistent Virtual CD",       UUID_PERSISTENT_VIRTUAL_CD},
+    {"Microsoft NVDIMM Command set",UUID_NFIT_DIMM_N_MSFT},
+    {"HP NDIMM HPE1",               UUID_NFIT_DIMM_N_HPE1},
+    {"HP NDIMM HPE2",               UUID_NFIT_DIMM_N_HPE2},
+    {"Virtual NVDIMM",              UUID_NFIT_DIMM_N_HYPERV},
+
+    {"[Processor Properties]",      NULL},
+    {"Cache Properties",            UUID_CACHE_PROPERTIES},
+    {"Physical Package Property",   UUID_PHYSICAL_PROPERTY},
 
     {"[Miscellaneous]",             NULL},
     {"Platform-wide Capabilities",  UUID_PLATFORM_CAPABILITIES},
@@ -84,7 +97,10 @@ const AH_UUID  AcpiUuids[] =
     {"Battery Thermal Limit",       UUID_BATTERY_THERMAL_LIMIT},
     {"Thermal Extensions",          UUID_THERMAL_EXTENSIONS},
     {"Device Properties for _DSD",  UUID_DEVICE_PROPERTIES},
-
+    {"Device Graphs for _DSD",      UUID_DEVICE_GRAPHS},
+    {"Hierarchical Data Extension", UUID_HIERARCHICAL_DATA_EXTENSION},
+    {"ARM Coresight Graph",         UUID_CORESIGHT_GRAPH},
+    {"USB4 Capabilities",           UUID_USB4_CAPABILITIES},
     {NULL, NULL}
 };
 
@@ -112,9 +128,9 @@ AcpiAhMatchUuid (
 
     /* Walk the table of known ACPI-related UUIDs */
 
-    for (Info = AcpiUuids; Info->Description; Info++)
+    for (Info = Gbl_AcpiUuids; Info->Description; Info++)
     {
-        /* Null string means desciption is a UUID class */
+        /* Null string means description is a UUID class */
 
         if (!Info->String)
         {

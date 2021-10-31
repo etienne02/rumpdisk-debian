@@ -1,4 +1,4 @@
-/*	$NetBSD: igmp.c,v 1.61 2016/07/08 04:33:30 ozaki-r Exp $	*/
+/*	$NetBSD: igmp.c,v 1.70 2020/05/15 06:34:34 maxv Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -40,17 +40,17 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: igmp.c,v 1.61 2016/07/08 04:33:30 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: igmp.c,v 1.70 2020/05/15 06:34:34 maxv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_mrouting.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-#include <sys/protosw.h>
 #include <sys/systm.h>
 #include <sys/cprng.h>
 #include <sys/sysctl.h>
@@ -182,7 +182,7 @@ igmp_init(void)
 }
 
 void
-igmp_input(struct mbuf *m, ...)
+igmp_input(struct mbuf *m, int off, int proto)
 {
 	ifnet_t *ifp;
 	struct ip *ip = mtod(m, struct ip *);
@@ -190,14 +190,10 @@ igmp_input(struct mbuf *m, ...)
 	u_int minlen, timer;
 	struct in_multi *inm;
 	struct in_ifaddr *ia;
-	int proto, ip_len, iphlen;
-	va_list ap;
+	int ip_len, iphlen;
 	struct psref psref;
 
-	va_start(ap, m);
-	iphlen = va_arg(ap, int);
-	proto = va_arg(ap, int);
-	va_end(ap);
+	iphlen = off;
 
 	IGMP_STATINC(IGMP_STAT_RCV_TOTAL);
 
@@ -361,9 +357,11 @@ igmp_input(struct mbuf *m, ...)
 		 * determine the arrival interface of an incoming packet.
 		 */
 		if ((ip->ip_src.s_addr & IN_CLASSA_NET) == 0) {
-			ia = in_get_ia_from_ifp(ifp);		/* XXX */
+			int s = pserialize_read_enter();
+			ia = in_get_ia_from_ifp(ifp); /* XXX */
 			if (ia)
 				ip->ip_src.s_addr = ia->ia_subnet;
+			pserialize_read_exit(s);
 		}
 
 		/*
@@ -394,26 +392,32 @@ igmp_input(struct mbuf *m, ...)
 		in_multi_unlock();
 		break;
 
-	case IGMP_v2_HOST_MEMBERSHIP_REPORT:
+	case IGMP_v2_HOST_MEMBERSHIP_REPORT: {
+		int s = pserialize_read_enter();
 #ifdef MROUTING
 		/*
 		 * Make sure we don't hear our own membership report.  Fast
 		 * leave requires knowing that we are the only member of a
 		 * group.
 		 */
-		ia = in_get_ia_from_ifp(ifp);			/* XXX */
-		if (ia && in_hosteq(ip->ip_src, ia->ia_addr.sin_addr))
+		ia = in_get_ia_from_ifp(ifp);	/* XXX */
+		if (ia && in_hosteq(ip->ip_src, ia->ia_addr.sin_addr)) {
+			pserialize_read_exit(s);
 			break;
+		}
 #endif
 
 		IGMP_STATINC(IGMP_STAT_RCV_REPORTS);
 
-		if (ifp->if_flags & IFF_LOOPBACK)
+		if (ifp->if_flags & IFF_LOOPBACK) {
+			pserialize_read_exit(s);
 			break;
+		}
 
 		if (!IN_MULTICAST(igmp->igmp_group.s_addr) ||
 		    !in_hosteq(igmp->igmp_group, ip->ip_dst)) {
 			IGMP_STATINC(IGMP_STAT_RCV_BADREPORTS);
+			pserialize_read_exit(s);
 			goto drop;
 		}
 
@@ -428,11 +432,12 @@ igmp_input(struct mbuf *m, ...)
 		 */
 		if ((ip->ip_src.s_addr & IN_CLASSA_NET) == 0) {
 #ifndef MROUTING
-			ia = in_get_ia_from_ifp(ifp);		/* XXX */
+			ia = in_get_ia_from_ifp(ifp); /* XXX */
 #endif
 			if (ia)
 				ip->ip_src.s_addr = ia->ia_subnet;
 		}
+		pserialize_read_exit(s);
 
 		/*
 		 * If we belong to the group being reported, stop
@@ -457,7 +462,7 @@ igmp_input(struct mbuf *m, ...)
 		}
 		in_multi_unlock();
 		break;
-
+	    }
 	}
 	m_put_rcvif_psref(ifp, &psref);
 
@@ -465,6 +470,11 @@ igmp_input(struct mbuf *m, ...)
 	 * Pass all valid IGMP packets up to any process(es) listening
 	 * on a raw IGMP socket.
 	 */
+	/*
+	 * Currently, igmp_input() is always called holding softnet_lock
+	 * by ipintr()(!NET_MPSAFE) or PR_INPUT_WRAP()(NET_MPSAFE).
+	 */
+	KASSERT(mutex_owned(softnet_lock));
 	rip_input(m, iphlen, proto);
 	return;
 
@@ -534,7 +544,7 @@ igmp_fasttimo(void)
 	}
 
 	/* XXX: Needed for ip_output(). */
-	mutex_enter(softnet_lock);
+	SOFTNET_LOCK_UNLESS_NET_MPSAFE();
 
 	in_multi_lock(RW_WRITER);
 	igmp_timers_on = false;
@@ -558,7 +568,7 @@ igmp_fasttimo(void)
 		inm = in_next_multi(&step);
 	}
 	in_multi_unlock();
-	mutex_exit(softnet_lock);
+	SOFTNET_UNLOCK_UNLESS_NET_MPSAFE();
 }
 
 void
@@ -593,11 +603,8 @@ igmp_sendpkt(struct in_multi *inm, int type)
 	MGETHDR(m, M_DONTWAIT, MT_HEADER);
 	if (m == NULL)
 		return;
+	KASSERT(max_linkhdr + sizeof(struct ip) + IGMP_MINLEN <= MHLEN);
 
-	/*
-	 * Assume max_linkhdr + sizeof(struct ip) + IGMP_MINLEN
-	 * is smaller than mbuf size returned by MGETHDR.
-	 */
 	m->m_data += max_linkhdr;
 	m->m_len = sizeof(struct ip) + IGMP_MINLEN;
 	m->m_pkthdr.len = sizeof(struct ip) + IGMP_MINLEN;
@@ -606,6 +613,7 @@ igmp_sendpkt(struct in_multi *inm, int type)
 	ip->ip_tos = 0;
 	ip->ip_len = htons(sizeof(struct ip) + IGMP_MINLEN);
 	ip->ip_off = htons(0);
+	ip->ip_ttl = IP_DEFAULT_MULTICAST_TTL;
 	ip->ip_p = IPPROTO_IGMP;
 	ip->ip_src = zeroin_addr;
 	ip->ip_dst = inm->inm_addr;
@@ -623,9 +631,7 @@ igmp_sendpkt(struct in_multi *inm, int type)
 
 	imo.imo_multicast_if_index = if_get_index(inm->inm_ifp);
 	imo.imo_multicast_ttl = 1;
-#ifdef RSVP_ISI
-	imo.imo_multicast_vif = -1;
-#endif
+
 	/*
 	 * Request loopback of the report if we are acting as a multicast
 	 * router, so that the process-level routing demon can hear it.
@@ -641,7 +647,9 @@ igmp_sendpkt(struct in_multi *inm, int type)
 	 * Note: IP_IGMP_MCAST indicates that in_multilock is held.
 	 * The caller must still acquire softnet_lock for ip_output().
 	 */
+#ifndef NET_MPSAFE
 	KASSERT(mutex_owned(softnet_lock));
+#endif
 	ip_output(m, NULL, NULL, IP_IGMP_MCAST, &imo, NULL);
 	IGMP_STATINC(IGMP_STAT_SND_REPORTS);
 }

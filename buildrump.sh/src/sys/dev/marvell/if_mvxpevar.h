@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpevar.h,v 1.3 2016/02/13 08:05:06 hikaru Exp $	*/
+/*	$NetBSD: if_mvxpevar.h,v 1.5 2019/09/13 07:55:07 msaitoh Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -164,7 +164,7 @@ struct mvxpe_tx_ring {
 	int				tx_queue_th_free;
 };
 
-static inline int
+static __inline int
 tx_counter_adv(int ctr, int n)
 {
 	/* XXX: lock or atomic */
@@ -175,7 +175,7 @@ tx_counter_adv(int ctr, int n)
 	return ctr;
 }
 
-static inline int
+static __inline int
 rx_counter_adv(int ctr, int n)
 {
 	/* XXX: lock or atomic */
@@ -404,7 +404,7 @@ struct mvxpe_softc {
 	struct ethercom sc_ethercom;
 	struct mii_data sc_mii;
 	u_int8_t sc_enaddr[ETHER_ADDR_LEN];	/* station addr */
-	int sc_if_flags;
+	u_short sc_if_flags;
 	int sc_wdogsoft;
 
 	/*

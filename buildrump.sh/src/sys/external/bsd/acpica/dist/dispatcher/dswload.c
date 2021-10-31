@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -48,7 +48,6 @@
 #include "acdispat.h"
 #include "acinterp.h"
 #include "acnamesp.h"
-
 #ifdef ACPI_ASL_COMPILER
 #include "acdisasm.h"
 #endif
@@ -113,12 +112,10 @@ AcpiDsInitCallbacks (
 
         /* Execution pass */
 
-#ifndef ACPI_NO_METHOD_EXECUTION
         WalkState->ParseFlags        |= ACPI_PARSE_EXECUTE  |
                                         ACPI_PARSE_DELETE_TREE;
         WalkState->DescendingCallback = AcpiDsExecBeginOp;
         WalkState->AscendingCallback  = AcpiDsExecEndOp;
-#endif
         break;
 
     default:
@@ -156,7 +153,7 @@ AcpiDsLoad1BeginOp (
     UINT32                  Flags;
 
 
-    ACPI_FUNCTION_TRACE (DsLoad1BeginOp);
+    ACPI_FUNCTION_TRACE_PTR (DsLoad1BeginOp, WalkState->Op);
 
 
     Op = WalkState->Op;
@@ -217,7 +214,7 @@ AcpiDsLoad1BeginOp (
 #endif
         if (ACPI_FAILURE (Status))
         {
-            ACPI_ERROR_NAMESPACE (Path, Status);
+            ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo, Path, Status);
             return_ACPI_STATUS (Status);
         }
 
@@ -270,7 +267,7 @@ AcpiDsLoad1BeginOp (
                 break;
             }
 
-            /*lint -fallthrough */
+            ACPI_FALLTHROUGH;
 
         default:
 
@@ -387,7 +384,7 @@ AcpiDsLoad1BeginOp (
 
             if (ACPI_FAILURE (Status))
             {
-                ACPI_ERROR_NAMESPACE (Path, Status);
+                ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo, Path, Status);
                 return_ACPI_STATUS (Status);
             }
         }
@@ -409,8 +406,8 @@ AcpiDsLoad1BeginOp (
 
     /* Initialize the op */
 
-#if (defined (ACPI_NO_METHOD_EXECUTION) || defined (ACPI_CONSTANT_EVAL_ONLY))
-    Op->Named.Path = ACPI_CAST_PTR (UINT8, Path);
+#ifdef ACPI_CONSTANT_EVAL_ONLY
+    Op->Named.Path = Path;
 #endif
 
     if (Node)
@@ -449,6 +446,9 @@ AcpiDsLoad1EndOp (
     ACPI_PARSE_OBJECT       *Op;
     ACPI_OBJECT_TYPE        ObjectType;
     ACPI_STATUS             Status = AE_OK;
+#ifdef ACPI_ASL_COMPILER
+    UINT8                   ParamCount;
+#endif
 
 
     ACPI_FUNCTION_TRACE (DsLoad1EndOp);
@@ -456,6 +456,28 @@ AcpiDsLoad1EndOp (
 
     Op = WalkState->Op;
     ACPI_DEBUG_PRINT ((ACPI_DB_DISPATCH, "Op=%p State=%p\n", Op, WalkState));
+
+    /*
+     * Disassembler: handle create field operators here.
+     *
+     * CreateBufferField is a deferred op that is typically processed in load
+     * pass 2. However, disassembly of control method contents walk the parse
+     * tree with ACPI_PARSE_LOAD_PASS1 and AML_CREATE operators are processed
+     * in a later walk. This is a problem when there is a control method that
+     * has the same name as the AML_CREATE object. In this case, any use of the
+     * name segment will be detected as a method call rather than a reference
+     * to a buffer field.
+     *
+     * This earlier creation during disassembly solves this issue by inserting
+     * the named object in the ACPI namespace so that references to this name
+     * would be a name string rather than a method call.
+     */
+    if ((WalkState->ParseFlags & ACPI_PARSE_DISASSEMBLE) &&
+        (WalkState->OpInfo->Flags & AML_CREATE))
+    {
+        Status = AcpiDsCreateBufferField (Op, WalkState);
+        return_ACPI_STATUS (Status);
+    }
 
     /* We are only interested in opcodes that have an associated name */
 
@@ -468,7 +490,6 @@ AcpiDsLoad1EndOp (
 
     ObjectType = WalkState->OpInfo->ObjectType;
 
-#ifndef ACPI_NO_METHOD_EXECUTION
     if (WalkState->OpInfo->Flags & AML_FIELD)
     {
         /*
@@ -514,7 +535,6 @@ AcpiDsLoad1EndOp (
             }
         }
     }
-#endif
 
     if (Op->Common.AmlOpcode == AML_NAME_OP)
     {
@@ -533,6 +553,37 @@ AcpiDsLoad1EndOp (
             }
         }
     }
+
+#ifdef ACPI_ASL_COMPILER
+    /*
+     * For external opcode, get the object type from the argument and
+     * get the parameter count from the argument's next.
+     */
+    if (AcpiGbl_DisasmFlag &&
+        Op->Common.Node &&
+        Op->Common.AmlOpcode == AML_EXTERNAL_OP)
+    {
+        /*
+         * Note, if this external is not a method
+         * Op->Common.Value.Arg->Common.Next->Common.Value.Integer == 0
+         * Therefore, ParamCount will be 0.
+         */
+        ParamCount = (UINT8) Op->Common.Value.Arg->Common.Next->Common.Value.Integer;
+        ObjectType = (UINT8) Op->Common.Value.Arg->Common.Value.Integer;
+        Op->Common.Node->Flags |= ANOBJ_IS_EXTERNAL;
+        Op->Common.Node->Type = (UINT8) ObjectType;
+
+        AcpiDmCreateSubobjectForExternal ((UINT8)ObjectType,
+            &Op->Common.Node, ParamCount);
+
+        /*
+         * Add the external to the external list because we may be
+         * emitting code based off of the items within the external list.
+         */
+        AcpiDmAddOpToExternalList (Op, Op->Named.Path, (UINT8)ObjectType, ParamCount,
+           ACPI_EXT_ORIGIN_FROM_OPCODE | ACPI_EXT_RESOLVED_REFERENCE);
+    }
+#endif
 
     /*
      * If we are executing a method, do not create any namespace objects
@@ -581,6 +632,7 @@ AcpiDsLoad1EndOp (
     /* Pop the scope stack (only if loading a table) */
 
     if (!WalkState->MethodNode &&
+        Op->Common.AmlOpcode != AML_EXTERNAL_OP &&
         AcpiNsOpensScope (ObjectType))
     {
         ACPI_DEBUG_PRINT ((ACPI_DB_DISPATCH, "(%s): Popping scope for Op %p\n",

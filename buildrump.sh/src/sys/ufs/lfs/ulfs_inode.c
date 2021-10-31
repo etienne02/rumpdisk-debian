@@ -1,4 +1,4 @@
-/*	$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp $	*/
+/*	$NetBSD: ulfs_inode.c,v 1.26 2020/09/05 16:30:13 riastradh Exp $	*/
 /*  from NetBSD: ufs_inode.c,v 1.95 2015/06/13 14:56:45 hannken Exp  */
 
 /*
@@ -38,11 +38,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.26 2020/09/05 16:30:13 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_lfs.h"
 #include "opt_quota.h"
+#include "opt_uvmhist.h"
 #endif
 
 #include <sys/param.h>
@@ -53,7 +54,6 @@ __KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp
 #include <sys/kernel.h>
 #include <sys/namei.h>
 #include <sys/kauth.h>
-#include <sys/fstrans.h>
 #include <sys/kmem.h>
 
 #include <ufs/lfs/lfs.h>
@@ -70,9 +70,11 @@ __KERNEL_RCSID(0, "$NetBSD: ulfs_inode.c,v 1.15 2016/06/20 03:36:09 dholland Exp
 #include <ufs/lfs/ulfs_extattr.h>
 #endif
 
+#ifdef UVMHIST
 #include <uvm/uvm.h>
-
-extern int prtactive;
+#endif
+#include <uvm/uvm_page.h>
+#include <uvm/uvm_stat.h>
 
 /*
  * Last reference to an inode.  If necessary, write or delete it.
@@ -80,18 +82,15 @@ extern int prtactive;
 int
 ulfs_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		struct bool *a_recycle;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct inode *ip = VTOI(vp);
-	struct mount *transmp;
 	mode_t mode;
 	int error = 0;
 
-	transmp = vp->v_mount;
-	fstrans_start(transmp, FSTRANS_LAZY);
 	/*
 	 * Ignore inodes related to stale file handles.
 	 */
@@ -112,13 +111,13 @@ ulfs_inactive(void *v)
 		ip->i_mode = 0;
 		ip->i_omode = mode;
 		DIP_ASSIGN(ip, mode, 0);
-		ip->i_flag |= IN_CHANGE | IN_UPDATE;
+		ip->i_state |= IN_CHANGE | IN_UPDATE;
 		/*
 		 * Defer final inode free and update to ulfs_reclaim().
 		 */
 	}
 
-	if (ip->i_flag & (IN_CHANGE | IN_UPDATE | IN_MODIFIED)) {
+	if (ip->i_state & (IN_CHANGE | IN_UPDATE | IN_MODIFIED)) {
 		lfs_update(vp, NULL, NULL, 0);
 	}
 
@@ -128,8 +127,7 @@ out:
 	 * so that it can be reused immediately.
 	 */
 	*ap->a_recycle = (ip->i_mode == 0);
-	VOP_UNLOCK(vp);
-	fstrans_done(transmp);
+
 	return (error);
 }
 
@@ -141,18 +139,10 @@ ulfs_reclaim(struct vnode *vp)
 {
 	struct inode *ip = VTOI(vp);
 
-	if (prtactive && vp->v_usecount > 1)
-		vprint("ulfs_reclaim: pushing active", vp);
-
 	/* XXX: do we really need two of these? */
 	/* note: originally the first was inside a wapbl txn */
 	lfs_update(vp, NULL, NULL, UPDATE_CLOSE);
 	lfs_update(vp, NULL, NULL, UPDATE_CLOSE);
-
-	/*
-	 * Remove the inode from the vnode cache.
-	 */
-	vcache_remove(vp->v_mount, &ip->i_number, sizeof(ip->i_number));
 
 	if (ip->i_devvp) {
 		vrele(ip->i_devvp);
@@ -191,8 +181,8 @@ ulfs_balloc_range(struct vnode *vp, off_t off, off_t len, kauth_cred_t cred,
 	struct vm_page **pgs;
 	size_t pgssize;
 	UVMHIST_FUNC("ulfs_balloc_range"); UVMHIST_CALLED(ubchist);
-	UVMHIST_LOG(ubchist, "vp %p off 0x%x len 0x%x u_size 0x%x",
-		    vp, off, len, vp->v_size);
+	UVMHIST_LOG(ubchist, "vp %#jx off 0x%jx len 0x%jx u_size 0x%jx",
+		    (uintptr_t)vp, off, len, vp->v_size);
 
 	neweof = MAX(vp->v_size, off + len);
 	GOP_SIZE(vp, neweof, &neweob, 0);
@@ -221,7 +211,7 @@ ulfs_balloc_range(struct vnode *vp, off_t off, off_t len, kauth_cred_t cred,
 	len += delta;
 
 	genfs_node_wrlock(vp);
-	mutex_enter(uobj->vmobjlock);
+	rw_enter(uobj->vmobjlock, RW_WRITER);
 	error = VOP_GETPAGES(vp, pagestart, pgs, &npages, 0,
 	    VM_PROT_WRITE, 0, PGO_SYNCIO | PGO_PASTEOF | PGO_NOBLOCKALLOC |
 	    PGO_NOTIMESTAMP | PGO_GLOCKHELD);
@@ -238,18 +228,17 @@ ulfs_balloc_range(struct vnode *vp, off_t off, off_t len, kauth_cred_t cred,
 	genfs_node_unlock(vp);
 
 	/*
-	 * if the allocation succeeded, clear PG_CLEAN on all the pages
-	 * and clear PG_RDONLY on any pages that are now fully backed
-	 * by disk blocks.  if the allocation failed, we do not invalidate
-	 * the pages since they might have already existed and been dirty,
-	 * in which case we need to keep them around.  if we created the pages,
-	 * they will be clean and read-only, and leaving such pages
-	 * in the cache won't cause any problems.
+	 * if the allocation succeeded, mark all pages dirty and clear
+	 * PG_RDONLY on any pages that are now fully backed by disk blocks. 
+	 * if the allocation failed, we do not invalidate the pages since
+	 * they might have already existed and been dirty, in which case we
+	 * need to keep them around.  if we created the pages, they will be
+	 * clean and read-only, and leaving such pages in the cache won't
+	 * cause any problems.
 	 */
 
 	GOP_SIZE(vp, off + len, &eob, 0);
-	mutex_enter(uobj->vmobjlock);
-	mutex_enter(&uvm_pageqlock);
+	rw_enter(uobj->vmobjlock, RW_WRITER);
 	for (i = 0; i < npages; i++) {
 		KASSERT((pgs[i]->flags & PG_RELEASED) == 0);
 		if (!error) {
@@ -257,13 +246,14 @@ ulfs_balloc_range(struct vnode *vp, off_t off, off_t len, kauth_cred_t cred,
 			    pagestart + ((i + 1) << PAGE_SHIFT) <= eob) {
 				pgs[i]->flags &= ~PG_RDONLY;
 			}
-			pgs[i]->flags &= ~PG_CLEAN;
+			uvm_pagemarkdirty(pgs[i], UVM_PAGE_STATUS_DIRTY);
 		}
+		uvm_pagelock(pgs[i]);
 		uvm_pageactivate(pgs[i]);
+		uvm_pageunlock(pgs[i]);
 	}
-	mutex_exit(&uvm_pageqlock);
 	uvm_page_unbusy(pgs, npages);
-	mutex_exit(uobj->vmobjlock);
+	rw_exit(uobj->vmobjlock);
 
  out:
  	kmem_free(pgs, pgssize);

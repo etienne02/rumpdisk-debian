@@ -1,4 +1,4 @@
-/* $NetBSD: pms.c,v 1.35 2011/09/09 14:29:47 jakllsch Exp $ */
+/* $NetBSD: pms.c,v 1.39 2021/08/07 16:19:15 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2004 Kentaro Kurahone.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pms.c,v 1.35 2011/09/09 14:29:47 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pms.c,v 1.39 2021/08/07 16:19:15 thorpej Exp $");
 
 #include "opt_pms.h"
 
@@ -45,6 +45,9 @@ __KERNEL_RCSID(0, "$NetBSD: pms.c,v 1.35 2011/09/09 14:29:47 jakllsch Exp $");
 #endif
 #ifdef PMS_ELANTECH_TOUCHPAD
 #include <dev/pckbport/elantechvar.h>
+#endif
+#ifdef PMS_ALPS_TOUCHPAD
+#include <dev/pckbport/alpsvar.h>
 #endif
 
 #include <dev/pckbport/pmsreg.h>
@@ -207,6 +210,11 @@ pmsattach(device_t parent, device_t self, void *aux)
 		sc->protocol = PMS_ELANTECH;
 	} else
 #endif
+#ifdef PMS_ALPS_TOUCHPAD
+	if (pms_alps_probe_init(sc) == 0) {
+		sc->protocol = PMS_ALPS;
+	} else
+#endif
 		/* Install generic handler. */
 		pckbport_set_inputhandler(sc->sc_kbctag, sc->sc_kbcslot,
 		    pmsinput, sc, device_xname(sc->sc_dev));
@@ -220,7 +228,7 @@ pmsattach(device_t parent, device_t self, void *aux)
 	 * here or in pmsintr, because if this fails pms_enable() will
 	 * never be called, so pmsinput() will never be called.
 	 */
-	sc->sc_wsmousedev = config_found_ia(self, "wsmousedev", &a, wsmousedevprint);
+	sc->sc_wsmousedev = config_found(self, &a, wsmousedevprint, CFARGS_NONE);
 
 	/* no interrupts until enabled */
 	cmd[0] = PMS_DEV_DISABLE;
@@ -254,6 +262,10 @@ do_enable(struct pms_softc *sc)
 #ifdef PMS_ELANTECH_TOUCHPAD
 	if (sc->protocol == PMS_ELANTECH)
 		pms_elantech_enable(sc);
+#endif
+#ifdef PMS_ALPS_TOUCHPAD
+	if (sc->protocol == PMS_ALPS)
+		pms_alps_enable(sc);
 #endif
 
 	cmd[0] = PMS_DEV_ENABLE;
@@ -371,6 +383,14 @@ pms_resume(device_t dv, const pmf_qual_t *qual)
 		}
 	} else
 #endif
+#ifdef PMS_ALPS_TOUCHPAD
+	if (sc->protocol == PMS_ALPS) {
+		pms_alps_resume(sc);
+		if (sc->sc_enabled) {
+			do_enable(sc);
+		}
+	} else
+#endif
 	if (sc->sc_enabled) {
 		/* recheck protocol & init mouse */
 		sc->protocol = PMS_UNKNOWN;
@@ -445,7 +465,8 @@ pms_reset_thread(void *arg)
 		}
 
 		/* For the synaptics and elantech case, leave the protocol alone. */
-		if (sc->protocol != PMS_SYNAPTICS && sc->protocol != PMS_ELANTECH)
+		if (sc->protocol != PMS_SYNAPTICS && sc->protocol != PMS_ELANTECH
+			&& sc->protocol != PMS_ALPS)
 			sc->protocol = PMS_UNKNOWN;
 
 		pms_enable(sc);
@@ -654,6 +675,10 @@ pmsinput(void *vsc, int data)
 	}
 }
 
+/* 
+ * Touchpad special command sequence used by Synaptics and others.
+ * Sends 0xE6 0xE8 rr 0xE8 ss 0xE8 tt 0xE8 uu where (rr*64)+(ss*16)+(tt*4)+uu
+ */
 int
 pms_sliced_command(pckbport_tag_t tag, pckbport_slot_t slot, u_char scmd)
 {

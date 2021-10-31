@@ -1,4 +1,4 @@
-/*	$NetBSD: tulipreg.h,v 1.37 2012/01/16 17:58:02 jakllsch Exp $	*/
+/*	$NetBSD: tulipreg.h,v 1.41 2021/08/19 20:43:58 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000 The NetBSD Foundation, Inc.
@@ -135,7 +135,7 @@
  *	
  *	- ASIX AX88140
  *	
- *	  21433 clone with a few differences:
+ *	  21143 clone with a few differences:
  *
  *	  	- Specific broadcast bit in the OPMODE register.
  *	  	- Transmit buffer must be 32-bit aligned.
@@ -578,7 +578,8 @@ struct tulip_desc {
 #define	OPMODE_SR		0x00000002	/* start receive */
 #define	OPMODE_HO		0x00000004	/* hash only mode (ro) */
 #define	OPMODE_PB		0x00000008	/* pass bad frames */
-#define	OPMODE_WINB_APP		0x00000008	/* accept all physcal packet */
+#define	OPMODE_WINB_APP		0x00000008	/* accept all physical 
+						   packets */
 #define	OPMODE_IF		0x00000010	/* inverse filter mode (ro) */
 #define	OPMODE_WINB_AMP		0x00000010	/* accept multicast packet */
 #define	OPMODE_SB		0x00000020	/* start backoff counter */
@@ -588,7 +589,7 @@ struct tulip_desc {
 #define	OPMODE_PM		0x00000080	/* pass all multicast */
 #define	OPMODE_WINB_AEP		0x00000080	/* accept error packet */
 #define	OPMODE_FKD		0x00000100	/* flaky oscillator disable */
-#define OPMODE_AX_RB		0x00000100	/* recieve broadcast packets */
+#define OPMODE_AX_RB		0x00000100	/* receive broadcast packets */
 #define	OPMODE_FD		0x00000200	/* full-duplex mode */
 #define	OPMODE_OM		0x00000c00	/* operating mode */
 #define	OPMODE_OM_NORMAL	0x00000000	/*     normal mode */

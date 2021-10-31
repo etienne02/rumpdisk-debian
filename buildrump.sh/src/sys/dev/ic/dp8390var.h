@@ -1,4 +1,4 @@
-/*	$NetBSD: dp8390var.h,v 1.33 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: dp8390var.h,v 1.36 2021/08/09 20:49:10 andvar Exp $	*/
 
 /*
  * Device driver for National Semiconductor DS8390/WD83C690 based ethernet
@@ -19,6 +19,7 @@
  * We include MII glue here -- some DP8390 compatible chips have
  * MII interfaces on them (scary, isn't it...).
  */
+#include <sys/callout.h>
 #include <dev/mii/miivar.h>
 
 #define INTERFACE_NAME_LEN	32
@@ -33,7 +34,8 @@ struct dp8390_softc {
 
 	struct ethercom sc_ec;		/* ethernet common */
 	struct mii_data sc_mii;		/* MII glue */
-#define	sc_media sc_mii.mii_media	/* compatibilty definition */
+#define	sc_media sc_mii.mii_media	/* compatibility definition */
+	callout_t	sc_tick_ch;	/* MII tick callout */
 
 	bus_space_tag_t	sc_regt;	/* NIC register space tag */
 	bus_space_handle_t sc_regh;	/* NIC register space handle */
@@ -179,7 +181,3 @@ int	dp8390_mediachange(struct ifnet *);
 void	dp8390_mediastatus(struct ifnet *, struct ifmediareq *);
 
 void	dp8390_media_init(struct dp8390_softc *);
-
-#ifdef IPKDB_DP8390
-int	dp8390_ipkdb_attach(struct ipkdb_if *);
-#endif

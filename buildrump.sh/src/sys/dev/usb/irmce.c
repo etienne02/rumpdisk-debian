@@ -1,4 +1,4 @@
-/* $NetBSD: irmce.c,v 1.2 2016/04/23 10:15:32 skrll Exp $ */
+/* $NetBSD: irmce.c,v 1.8 2021/08/07 16:19:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2011 Jared D. McNeill <jmcneill@invisible.ca>
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: irmce.c,v 1.2 2016/04/23 10:15:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: irmce.c,v 1.8 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -150,7 +150,8 @@ irmce_attach(device_t parent, device_t self, void *opaque)
 	unsigned int i;
 	uint8_t nep;
 
-	pmf_device_register(self, NULL, NULL);
+	if (!pmf_device_register(self, NULL, NULL))
+		aprint_error_dev(self, "couldn't establish power handler\n");
 
 	aprint_naive("\n");
 
@@ -224,7 +225,7 @@ irmce_attach(device_t parent, device_t self, void *opaque)
 
 	int error;
 	error = usbd_create_xfer(sc->sc_bulkin_pipe, sc->sc_bulkin_maxpktsize,
-	    USBD_SHORT_XFER_OK, 0, &sc->sc_bulkin_xfer);
+	    0, 0, &sc->sc_bulkin_xfer);
 	if (error) {
 		goto fail;
 	}
@@ -306,8 +307,8 @@ irmce_rescan(device_t self, const char *ifattr, const int *locators)
 		iaa.ia_type = IR_TYPE_CIR;
 		iaa.ia_methods = &irmce_cir_methods;
 		iaa.ia_handle = sc;
-		sc->sc_cirdev = config_found_ia(self, "irbus",
-		    &iaa, irmce_print);
+		sc->sc_cirdev =
+		    config_found(self, &iaa, irmce_print, CFARGS_NONE);
 	}
 
 	return 0;

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_de.c,v 1.30 2016/02/09 08:32:11 ozaki-r Exp $	*/
+/*	$NetBSD: if_de.c,v 1.36 2021/08/01 15:29:30 andvar Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989 Regents of the University of California.
@@ -45,13 +45,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -64,8 +57,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)if_de.c	7.12 (Berkeley) 12/16/90
  */
 
 /*
@@ -81,7 +72,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_de.c,v 1.30 2016/02/09 08:32:11 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_de.c,v 1.36 2021/08/01 15:29:30 andvar Exp $");
 
 #include "opt_inet.h"
 
@@ -99,14 +90,12 @@ __KERNEL_RCSID(0, "$NetBSD: if_de.c,v 1.30 2016/02/09 08:32:11 ozaki-r Exp $");
 #include <net/if.h>
 #include <net/if_ether.h>
 #include <net/if_dl.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
 #include <netinet/if_inarp.h>
 #endif
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/bus.h>
 
@@ -437,7 +426,7 @@ destart(struct ifnet *ifp)
 		rp = &dc->dc_xrent[sc->sc_xfree];
 		if (rp->r_flags & XFLG_OWN)
 			panic("deuna xmit in progress");
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		len = if_ubaput(&sc->sc_ifuba, &sc->sc_ifw[sc->sc_xfree], m);
 		rp->r_slen = len;
@@ -491,19 +480,19 @@ deintr(void *arg)
 		if (rp->r_flags & XFLG_OWN)
 			break;
 
-		sc->sc_if.if_opackets++;
+		if_statinc(&sc->sc_if, if_opackets);
 		ifxp = &sc->sc_ifw[sc->sc_xindex];
 		/* check for unusual conditions */
 		if (rp->r_flags & (XFLG_ERRS|XFLG_MTCH|XFLG_ONE|XFLG_MORE)) {
 			if (rp->r_flags & XFLG_ERRS) {
 				/* output error */
-				sc->sc_if.if_oerrors++;
+				if_statinc(&sc->sc_if, if_oerrors);
 			} else if (rp->r_flags & XFLG_ONE) {
 				/* one collision */
-				sc->sc_if.if_collisions++;
+				if_statinc(&sc->sc_if, if_collisions);
 			} else if (rp->r_flags & XFLG_MORE) {
-				/* more than one collision */
-				sc->sc_if.if_collisions += 2;	/* guess */
+				/* more than one collision (guess...) */
+				if_statadd(&sc->sc_if, if_collisions, 2);
 			}
 		}
 		if_ubaend(&sc->sc_ifuba, ifxp);
@@ -525,7 +514,7 @@ deintr(void *arg)
  * If input error just drop packet.
  * Otherwise purge input buffered data path and examine
  * packet to determine type.  If can't determine length
- * from type, then have to drop packet.	 Othewise decapsulate
+ * from type, then have to drop packet.	 Otherwise decapsulate
  * packet based on type and pass to type specific higher-level
  * input routine.
  */
@@ -541,21 +530,19 @@ derecv(struct de_softc *sc)
 	dc = sc->sc_dedata;
 	rp = &dc->dc_rrent[sc->sc_rindex];
 	while ((rp->r_flags & RFLG_OWN) == 0) {
-		sc->sc_if.if_ipackets++;
 		len = (rp->r_lenerr&RERR_MLEN) - ETHER_CRC_LEN;
 		/* check for errors */
 		if ((rp->r_flags & (RFLG_ERRS|RFLG_FRAM|RFLG_OFLO|RFLG_CRC)) ||
 		    (rp->r_lenerr & (RERR_BUFL|RERR_UBTO))) {
-			sc->sc_if.if_ierrors++;
+			if_statinc(&sc->sc_if, if_ierrors);
 			goto next;
 		}
 		m = if_ubaget(&sc->sc_ifuba, &sc->sc_ifr[sc->sc_rindex],
 		    ifp, len);
 		if (m == 0) {
-			sc->sc_if.if_ierrors++;
+			if_statinc(&sc->sc_if, if_ierrors);
 			goto next;
 		}
-		bpf_mtap(ifp, m);
 
 		if_percpuq_enqueue(ifp->if_percpuq, m);
 

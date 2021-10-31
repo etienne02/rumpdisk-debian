@@ -1,4 +1,4 @@
-/* $NetBSD: pcdisplay.c,v 1.42 2016/07/14 04:19:27 msaitoh Exp $ */
+/* $NetBSD: pcdisplay.c,v 1.47 2021/08/07 16:19:12 thorpej Exp $ */
 
 /*
  * Copyright (c) 1998
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcdisplay.c,v 1.42 2016/07/14 04:19:27 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcdisplay.c,v 1.47 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -190,7 +190,7 @@ pcdisplay_init(struct pcdisplay_config *dc, bus_space_tag_t iot,
 	dc->mono = mono;
 
 	if (bus_space_map(memt, mono ? 0xb0000 : 0xb8000, 0x8000,
-			  0, &ph->ph_memh))
+	    BUS_SPACE_MAP_CACHEABLE, &ph->ph_memh))
 		panic("pcdisplay_init: cannot map memory");
 	if (bus_space_map(iot, mono ? 0x3b0 : 0x3d0, 0x10,
 			  0, &ph->ph_ioh_6845))
@@ -269,7 +269,7 @@ pcdisplay_match(device_t parent, cfdata_t match, void *aux)
 	ia->ia_io[0].ir_size = 0x10;
 
 	ia->ia_niomem = 1;
-	ia->ia_iomem[0].ir_size = mono ? 0xb0000 : 0xb8000;
+	ia->ia_iomem[0].ir_addr = mono ? 0xb0000 : 0xb8000;
 	ia->ia_iomem[0].ir_size = 0x8000;
 
 	ia->ia_nirq = 0;
@@ -329,7 +329,7 @@ pcdisplay_attach(device_t parent, device_t self, void *aux)
 	aa.accessops = &pcdisplay_accessops;
 	aa.accesscookie = sc;
 
-	config_found(self, &aa, wsemuldisplaydevprint);
+	config_found(self, &aa, wsemuldisplaydevprint, CFARGS_NONE);
 }
 
 

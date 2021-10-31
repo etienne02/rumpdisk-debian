@@ -1,4 +1,4 @@
-/*	$NetBSD: ugenhc.c,v 1.24 2016/04/23 10:15:30 skrll Exp $	*/
+/*	$NetBSD: ugenhc.c,v 1.29 2021/08/07 16:19:18 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010 Antti Kantee.  All Rights Reserved.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ugenhc.c,v 1.24 2016/04/23 10:15:30 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ugenhc.c,v 1.29 2021/08/07 16:19:18 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -150,7 +150,7 @@ ugenhc_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 		case C(0, UDESC_DEVICE): {
 			usb_device_descriptor_t devd;
 
-			totlen = min(buflen, sizeof(devd));
+			totlen = uimin(buflen, sizeof(devd));
 			memcpy(&devd, buf, totlen);
 			USETW(devd.idVendor, 0x7275);
 			USETW(devd.idProduct, 0x6d72);
@@ -204,7 +204,7 @@ ugenhc_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 
 		USETW(ps.wPortStatus, sc->sc_port_status);
 		USETW(ps.wPortChange, sc->sc_port_change);
-		totlen = min(len, sizeof(ps));
+		totlen = uimin(len, sizeof(ps));
 		memcpy(buf, &ps, totlen);
 		break;
 	}
@@ -239,7 +239,7 @@ rumpusb_device_ctrl_start(struct usbd_xfer *xfer)
 		case UDESC_DEVICE:
 			{
 			usb_device_descriptor_t uddesc;
-			totlen = min(len, USB_DEVICE_DESCRIPTOR_SIZE);
+			totlen = uimin(len, USB_DEVICE_DESCRIPTOR_SIZE);
 			memset(buf, 0, totlen);
 			if (rumpcomp_ugenhc_ioctl(sc->sc_ugenfd[UGEN_EPT_CTRL],
 			    USB_GET_DEVICE_DESC, &uddesc, &ru_error) == -1) {
@@ -489,7 +489,7 @@ rhscintr(void *arg)
 		 */
 
 		for (;;) {
-			fd = rumpuser_open(buf, RUMPUSER_OPEN_RDWR, &error);
+			error = rumpuser_open(buf, RUMPUSER_OPEN_RDWR, &fd);
 			if (fd == -1)
 				break;
 
@@ -603,7 +603,7 @@ rumpusb_device_bulk_start(struct usbd_xfer *xfer)
 	endpt = UE_GET_ADDR(endpt);
 	KASSERT(endpt < UGEN_NEPTS);
 
-	buf = KERNADDR(&xfer->ux_dmabuf, 0);
+	buf = xfer->ux_buf;
 	done = 0;
 	if ((ed->bmAttributes & UE_XFERTYPE) == UE_ISOCHRONOUS) {
 		for (i = 0, len = 0; i < xfer->ux_nframes; i++)
@@ -959,5 +959,5 @@ ugenhc_attach(device_t parent, device_t self, void *aux)
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 
-	config_found(self, &sc->sc_bus, usbctlprint);
+	config_found(self, &sc->sc_bus, usbctlprint, CFARGS_NONE);
 }

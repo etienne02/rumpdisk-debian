@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_paritylogDiskMgr.c,v 1.28 2011/05/11 06:20:33 mrg Exp $	*/
+/*	$NetBSD: rf_paritylogDiskMgr.c,v 1.31 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_paritylogDiskMgr.c,v 1.28 2011/05/11 06:20:33 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_paritylogDiskMgr.c,v 1.31 2021/07/23 00:54:45 oster Exp $");
 
 #include "rf_archs.h"
 
@@ -134,9 +134,7 @@ ReadRegionLog(
 				      RF_IO_NORMAL_PRIORITY);
 
 	/* create and initialize PDA for the core log */
-	/* RF_Malloc(*rrd_pda, sizeof(RF_PhysDiskAddr_t), (RF_PhysDiskAddr_t
-	 * *)); */
-	*rrd_pda = rf_AllocPDAList(1);
+	*rrd_pda = rf_AllocPDAList(raidPtr, 1);
 	rf_MapLogParityLogging(raidPtr, regionID, 0,
 			       &((*rrd_pda)->col), &((*rrd_pda)->startSector));
 	(*rrd_pda)->numSector = raidPtr->regionInfo[regionID].capacity;
@@ -146,8 +144,7 @@ ReadRegionLog(
 		printf("set rrd_pda->next to NULL\n");
 	}
 	/* initialize DAG parameters */
-	RF_Malloc(tracerec,sizeof(RF_AccTraceEntry_t), (RF_AccTraceEntry_t *));
-	memset((char *) tracerec, 0, sizeof(RF_AccTraceEntry_t));
+	tracerec = RF_Malloc(sizeof(*tracerec));
 	(*rrd_dag_h)->tracerec = tracerec;
 	rrd_rdNode = (*rrd_dag_h)->succedents[0]->succedents[0];
 	rrd_rdNode->params[0].p = *rrd_pda;
@@ -187,10 +184,7 @@ WriteCoreLog(
 				      rf_DiskWriteFunc, rf_DiskWriteUndoFunc,
 	    "Wcl", *fwr_alloclist, RF_DAG_FLAGS_NONE, RF_IO_NORMAL_PRIORITY);
 
-	/* create and initialize PDA for the region log */
-	/* RF_Malloc(*fwr_pda, sizeof(RF_PhysDiskAddr_t), (RF_PhysDiskAddr_t
-	 * *)); */
-	*fwr_pda = rf_AllocPDAList(1);
+	*fwr_pda = rf_AllocPDAList(raidPtr, 1);
 	regionOffset = log->diskOffset;
 	rf_MapLogParityLogging(raidPtr, regionID, regionOffset,
 			       &((*fwr_pda)->col),
@@ -198,8 +192,7 @@ WriteCoreLog(
 	(*fwr_pda)->numSector = raidPtr->numSectorsPerLog;
 
 	/* initialize DAG parameters */
-	RF_Malloc(tracerec,sizeof(RF_AccTraceEntry_t), (RF_AccTraceEntry_t *));
-	memset((char *) tracerec, 0, sizeof(RF_AccTraceEntry_t));
+	tracerec = RF_Malloc(sizeof(*tracerec));
 	(*fwr_dag_h)->tracerec = tracerec;
 	fwr_wrNode = (*fwr_dag_h)->succedents[0]->succedents[0];
 	fwr_wrNode->params[0].p = *fwr_pda;
@@ -239,9 +232,7 @@ ReadRegionParity(
 				      RF_IO_NORMAL_PRIORITY);
 
 	/* create and initialize PDA for region parity */
-	/* RF_Malloc(*prd_pda, sizeof(RF_PhysDiskAddr_t), (RF_PhysDiskAddr_t
-	 * *)); */
-	*prd_pda = rf_AllocPDAList(1);
+	*prd_pda = rf_AllocPDAList(raidPtr, 1);
 	rf_MapRegionParity(raidPtr, regionID,
 			   &((*prd_pda)->col), &((*prd_pda)->startSector),
 			   &((*prd_pda)->numSector));
@@ -253,8 +244,7 @@ ReadRegionParity(
 		printf("set prd_pda->next to NULL\n");
 	}
 	/* initialize DAG parameters */
-	RF_Malloc(tracerec,sizeof(RF_AccTraceEntry_t), (RF_AccTraceEntry_t *));
-	memset((char *) tracerec, 0, sizeof(RF_AccTraceEntry_t));
+	tracerec = RF_Malloc(sizeof(*tracerec));
 	(*prd_dag_h)->tracerec = tracerec;
 	prd_rdNode = (*prd_dag_h)->succedents[0]->succedents[0];
 	prd_rdNode->params[0].p = *prd_pda;
@@ -297,16 +287,13 @@ WriteRegionParity(
 				      RF_IO_NORMAL_PRIORITY);
 
 	/* create and initialize PDA for region parity */
-	/* RF_Malloc(*pwr_pda, sizeof(RF_PhysDiskAddr_t), (RF_PhysDiskAddr_t
-	 * *)); */
-	*pwr_pda = rf_AllocPDAList(1);
+	*pwr_pda = rf_AllocPDAList(raidPtr, 1);
 	rf_MapRegionParity(raidPtr, regionID,
 			   &((*pwr_pda)->col), &((*pwr_pda)->startSector),
 			   &((*pwr_pda)->numSector));
 
 	/* initialize DAG parameters */
-	RF_Malloc(tracerec,sizeof(RF_AccTraceEntry_t), (RF_AccTraceEntry_t *));
-	memset((char *) tracerec, 0, sizeof(RF_AccTraceEntry_t));
+	tracerec = RF_Malloc(sizeof(*tracerec));
 	(*pwr_dag_h)->tracerec = tracerec;
 	pwr_wrNode = (*pwr_dag_h)->succedents[0]->succedents[0];
 	pwr_wrNode->params[0].p = *pwr_pda;
@@ -340,7 +327,7 @@ FlushLogsToDisk(
 	RF_AllocListElem_t *fwr_alloclist;
 	RF_PhysDiskAddr_t *fwr_pda;
 
-	fwr_mcpair = rf_AllocMCPair();
+	fwr_mcpair = rf_AllocMCPair(raidPtr);
 	RF_LOCK_MCPAIR(fwr_mcpair);
 
 	RF_ASSERT(logList);
@@ -363,14 +350,14 @@ FlushLogsToDisk(
 			RF_ASSERT(0);
 		}
 		/* RF_Free(fwr_pda, sizeof(RF_PhysDiskAddr_t)); */
-		rf_FreePhysDiskAddr(fwr_pda);
+		rf_FreePhysDiskAddr(raidPtr, fwr_pda);
 		rf_FreeDAG(fwr_dag_h);
 		rf_FreeAllocList(fwr_alloclist);
 
 		log = log->next;
 	}
 	RF_UNLOCK_MCPAIR(fwr_mcpair);
-	rf_FreeMCPair(fwr_mcpair);
+	rf_FreeMCPair(raidPtr, fwr_mcpair);
 	rf_ReleaseParityLogs(raidPtr, logList);
 }
 
@@ -404,7 +391,7 @@ ReintegrateRegion(
 	if (rf_parityLogDebug)
 		printf("[initiating read of parity for region %d]\n",regionID);
 	parityBuffer = AcquireReintBuffer(&raidPtr->parityBufferPool);
-	prd_mcpair = rf_AllocMCPair();
+	prd_mcpair = rf_AllocMCPair(raidPtr);
 	RF_LOCK_MCPAIR(prd_mcpair);
 	prd_mcpair->flag = RF_FALSE;
 	ReadRegionParity(regionID, prd_mcpair, parityBuffer, raidPtr,
@@ -416,7 +403,7 @@ ReintegrateRegion(
 			printf("[initiating read of disk log for region %d]\n",
 			       regionID);
 		regionBuffer = AcquireReintBuffer(&raidPtr->regionBufferPool);
-		rrd_mcpair = rf_AllocMCPair();
+		rrd_mcpair = rf_AllocMCPair(raidPtr);
 		RF_LOCK_MCPAIR(rrd_mcpair);
 		rrd_mcpair->flag = RF_FALSE;
 		ReadRegionLog(regionID, rrd_mcpair, regionBuffer, raidPtr,
@@ -449,17 +436,17 @@ ReintegrateRegion(
 		/* ApplyRegionToParity(regionID, regionBuffer, parityBuffer); */
 		/* release resources associated with region log */
 		/* RF_Free(rrd_pda, sizeof(RF_PhysDiskAddr_t)); */
-		rf_FreePhysDiskAddr(rrd_pda);
+		rf_FreePhysDiskAddr(raidPtr, rrd_pda);
 		rf_FreeDAG(rrd_dag_h);
 		rf_FreeAllocList(rrd_alloclist);
-		rf_FreeMCPair(rrd_mcpair);
+		rf_FreeMCPair(raidPtr, rrd_mcpair);
 		ReleaseReintBuffer(&raidPtr->regionBufferPool, regionBuffer);
 	}
 	/* write reintegrated parity to disk */
 	if (rf_parityLogDebug)
 		printf("[initiating write of parity for region %d]\n",
 		       regionID);
-	pwr_mcpair = rf_AllocMCPair();
+	pwr_mcpair = rf_AllocMCPair(raidPtr);
 	RF_LOCK_MCPAIR(pwr_mcpair);
 	pwr_mcpair->flag = RF_FALSE;
 	WriteRegionParity(regionID, pwr_mcpair, parityBuffer, raidPtr,
@@ -474,18 +461,18 @@ ReintegrateRegion(
 	}
 	/* release resources associated with read of old parity */
 	/* RF_Free(prd_pda, sizeof(RF_PhysDiskAddr_t)); */
-	rf_FreePhysDiskAddr(prd_pda);
+	rf_FreePhysDiskAddr(raidPtr, prd_pda);
 	rf_FreeDAG(prd_dag_h);
 	rf_FreeAllocList(prd_alloclist);
-	rf_FreeMCPair(prd_mcpair);
+	rf_FreeMCPair(raidPtr, prd_mcpair);
 
 	/* release resources associated with write of new parity */
 	ReleaseReintBuffer(&raidPtr->parityBufferPool, parityBuffer);
 	/* RF_Free(pwr_pda, sizeof(RF_PhysDiskAddr_t)); */
-	rf_FreePhysDiskAddr(pwr_pda);
+	rf_FreePhysDiskAddr(raidPtr, pwr_pda);
 	rf_FreeDAG(pwr_dag_h);
 	rf_FreeAllocList(pwr_alloclist);
-	rf_FreeMCPair(pwr_mcpair);
+	rf_FreeMCPair(raidPtr, pwr_mcpair);
 
 	if (rf_parityLogDebug)
 		printf("[finished reintegrating region %d]\n", regionID);
@@ -596,9 +583,10 @@ rf_ShutdownLogging(RF_Raid_t * raidPtr)
 	return (0);
 }
 
-int
-rf_ParityLoggingDiskManager(RF_Raid_t * raidPtr)
+void
+rf_ParityLoggingDiskManager(void *v)
 {
+	RF_Raid_t *raidPtr = v;
 	RF_ParityLog_t *reintQueue, *flushQueue;
 	int     workNeeded, done = RF_FALSE;
 	int s;

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_pflog.c,v 1.20 2016/04/28 00:16:56 ozaki-r Exp $	*/
+/*	$NetBSD: if_pflog.c,v 1.22 2020/01/29 05:52:27 thorpej Exp $	*/
 /*	$OpenBSD: if_pflog.c,v 1.24 2007/05/26 17:13:30 jason Exp $	*/
 
 /*
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_pflog.c,v 1.20 2016/04/28 00:16:56 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_pflog.c,v 1.22 2020/01/29 05:52:27 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -294,11 +294,15 @@ pflog_packet(struct pfi_kif *kif, struct mbuf *m, sa_family_t af, u_int8_t dir,
 	}
 #endif /* INET */
 
+#ifdef __NetBSD__
+	if_statadd2(ifn, if_opackets, 1, if_obytes, m->m_pkthdr.len);
+#else
 	ifn->if_opackets++;
 	ifn->if_obytes += m->m_pkthdr.len;
+#endif /* __NetBSD__ */
 
 #ifdef __NetBSD__
-	bpf_mtap2(ifn->if_bpf, &hdr, PFLOG_HDRLEN, m);
+	bpf_mtap2(ifn->if_bpf, &hdr, PFLOG_HDRLEN, m, BPF_D_OUT);
 #else
 	bpf_mtap_hdr(ifn->if_bpf, (char *)&hdr, PFLOG_HDRLEN, m,
 	    BPF_DIRECTION_OUT);

@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_dagffwr.c,v 1.34 2013/09/15 12:41:17 martin Exp $	*/
+/*	$NetBSD: rf_dagffwr.c,v 1.37 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_dagffwr.c,v 1.34 2013/09/15 12:41:17 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_dagffwr.c,v 1.37 2021/07/23 00:54:45 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -125,6 +125,8 @@ rf_CreateLargeWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
  *
  * DAG creation code begins here
  */
+#define BUF_ALLOC(num) \
+  RF_MallocAndAdd(rf_RaidAddressToByte(raidPtr, num), allocList)
 
 
 /******************************************************************************
@@ -163,7 +165,7 @@ rf_CommonCreateLargeWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 			     RF_DagHeader_t *dag_h, void *bp,
 			     RF_RaidAccessFlags_t flags,
 			     RF_AllocListElem_t *allocList,
-			     int nfaults, int (*redFunc) (RF_DagNode_t *),
+			     int nfaults, void (*redFunc) (RF_DagNode_t *),
 			     int allowBufferRecycle)
 {
 	RF_DagNode_t *wndNodes, *rodNodes, *xorNode, *wnpNode, *tmpNode;
@@ -199,29 +201,29 @@ rf_CommonCreateLargeWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 	nWndNodes = asmap->numStripeUnitsAccessed;
 
 	for (i = 0; i < nWndNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	wndNodes = dag_h->nodes;
 
-	xorNode = rf_AllocDAGNode();
+	xorNode = rf_AllocDAGNode(raidPtr);
 	xorNode->list_next = dag_h->nodes;
 	dag_h->nodes = xorNode;
 
-	wnpNode = rf_AllocDAGNode();
+	wnpNode = rf_AllocDAGNode(raidPtr);
 	wnpNode->list_next = dag_h->nodes;
 	dag_h->nodes = wnpNode;
 
-	blockNode = rf_AllocDAGNode();
+	blockNode = rf_AllocDAGNode(raidPtr);
 	blockNode->list_next = dag_h->nodes;
 	dag_h->nodes = blockNode;
 
-	commitNode = rf_AllocDAGNode();
+	commitNode = rf_AllocDAGNode(raidPtr);
 	commitNode->list_next = dag_h->nodes;
 	dag_h->nodes = commitNode;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 
@@ -237,7 +239,7 @@ rf_CommonCreateLargeWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 					&eosBuffer, allocList);
 	if (nRodNodes > 0) {
 		for (i = 0; i < nRodNodes; i++) {
-			tmpNode = rf_AllocDAGNode();
+			tmpNode = rf_AllocDAGNode(raidPtr);
 			tmpNode->list_next = dag_h->nodes;
 			dag_h->nodes = tmpNode;
 		}
@@ -382,9 +384,8 @@ rf_CommonCreateLargeWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 	         * to get smashed during the P and Q calculation, guaranteeing
 	         * one would be wrong.
 	         */
-		RF_MallocAndAdd(xorNode->results[1],
-				rf_RaidAddressToByte(raidPtr, raidPtr->Layout.sectorsPerStripeUnit),
-				(void *), allocList);
+		xorNode->results[1] =
+		    BUF_ALLOC(raidPtr->Layout.sectorsPerStripeUnit);
 		rf_InitNode(wnqNode, rf_wait, RF_FALSE, rf_DiskWriteFunc,
 			    rf_DiskWriteUndoFunc, rf_GenericWakeupFunc,
 			    1, 1, 4, 0, dag_h, "Wnq", allocList);
@@ -537,8 +538,8 @@ rf_CommonCreateSmallWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 #endif
 	int     i, j, nNodes;
 	RF_ReconUnitNum_t which_ru;
-	int     (*func) (RF_DagNode_t *), (*undoFunc) (RF_DagNode_t *);
-	int     (*qfunc) (RF_DagNode_t *) __unused;
+	void    (*func) (RF_DagNode_t *), (*undoFunc) (RF_DagNode_t *);
+	void    (*qfunc) (RF_DagNode_t *) __unused;
 	int     numDataNodes, numParityNodes;
 	RF_StripeNum_t parityStripeID;
 	RF_PhysDiskAddr_t *pda;
@@ -590,71 +591,71 @@ rf_CommonCreateSmallWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
          * Step 2. create the nodes
          */
 
-	blockNode = rf_AllocDAGNode();
+	blockNode = rf_AllocDAGNode(raidPtr);
 	blockNode->list_next = dag_h->nodes;
 	dag_h->nodes = blockNode;
 
-	commitNode = rf_AllocDAGNode();
+	commitNode = rf_AllocDAGNode(raidPtr);
 	commitNode->list_next = dag_h->nodes;
 	dag_h->nodes = commitNode;
 
 	for (i = 0; i < numDataNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	readDataNodes = dag_h->nodes;
 
 	for (i = 0; i < numParityNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	readParityNodes = dag_h->nodes;
 
 	for (i = 0; i < numDataNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	writeDataNodes = dag_h->nodes;
 
 	for (i = 0; i < numParityNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	writeParityNodes = dag_h->nodes;
 
 	for (i = 0; i < numParityNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	xorNodes = dag_h->nodes;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 
 #if (RF_INCLUDE_DECL_PQ > 0) || (RF_INCLUDE_RAID6 > 0)
 	if (nfaults == 2) {
 		for (i = 0; i < numParityNodes; i++) {
-			tmpNode = rf_AllocDAGNode();
+			tmpNode = rf_AllocDAGNode(raidPtr);
 			tmpNode->list_next = dag_h->nodes;
 			dag_h->nodes = tmpNode;
 		}
 		readQNodes = dag_h->nodes;
 
 		for (i = 0; i < numParityNodes; i++) {
-			tmpNode = rf_AllocDAGNode();
+			tmpNode = rf_AllocDAGNode(raidPtr);
 			tmpNode->list_next = dag_h->nodes;
 			dag_h->nodes = tmpNode;
 		}
 		writeQNodes = dag_h->nodes;
 
 		for (i = 0; i < numParityNodes; i++) {
-			tmpNode = rf_AllocDAGNode();
+			tmpNode = rf_AllocDAGNode(raidPtr);
 			tmpNode->list_next = dag_h->nodes;
 			dag_h->nodes = tmpNode;
 		}
@@ -1229,28 +1230,28 @@ rf_CreateRaidOneWriteDAG(RF_Raid_t *raidPtr, RF_AccessStripeMap_t *asmap,
 	/* total number of nodes = nWndNodes + nWmirNodes + (commit + unblock
 	 * + terminator) */
 	for (i = 0; i < nWndNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	wndNode = dag_h->nodes;
 
 	for (i = 0; i < nWmirNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	wmirNode = dag_h->nodes;
 
-	commitNode = rf_AllocDAGNode();
+	commitNode = rf_AllocDAGNode(raidPtr);
 	commitNode->list_next = dag_h->nodes;
 	dag_h->nodes = commitNode;
 
-	unblockNode = rf_AllocDAGNode();
+	unblockNode = rf_AllocDAGNode(raidPtr);
 	unblockNode->list_next = dag_h->nodes;
 	dag_h->nodes = unblockNode;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 

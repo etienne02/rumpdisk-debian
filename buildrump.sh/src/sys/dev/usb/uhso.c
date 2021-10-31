@@ -1,4 +1,4 @@
-/*	$NetBSD: uhso.c,v 1.22 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: uhso.c,v 1.35 2021/06/13 09:27:20 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 2009 Iain Hibbert
@@ -37,10 +37,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uhso.c,v 1.22 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uhso.c,v 1.35 2021/06/13 09:27:20 mlelstv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
+#include "opt_usb.h"
 #endif
 
 #include <sys/param.h>
@@ -78,6 +79,7 @@ __KERNEL_RCSID(0, "$NetBSD: uhso.c,v 1.22 2016/07/07 06:55:42 msaitoh Exp $");
 #include <dev/scsipi/scsi_disk.h>
 
 #include "usbdevs.h"
+#include "ioconf.h"
 
 #undef DPRINTF
 #ifdef UHSO_DEBUG
@@ -231,7 +233,6 @@ struct uhso_dev {
 #define UHSOTYPE_CONFIG		3
 
 Static const struct uhso_dev uhso_devs[] = {
-    { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_MAXHSDPA,    UHSOTYPE_DEFAULT },
     { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_GSICON72,    UHSOTYPE_DEFAULT },
     { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_ICON225,     UHSOTYPE_DEFAULT },
     { USB_VENDOR_OPTIONNV, USB_PRODUCT_OPTIONNV_GEHSUPA,     UHSOTYPE_DEFAULT },
@@ -331,11 +332,11 @@ struct uhso_softc {
 
 #define UHSO_CONFIG_NO		1
 
-int uhso_match(device_t, cfdata_t, void *);
-void uhso_attach(device_t, device_t, void *);
-int uhso_detach(device_t, int);
+static int uhso_match(device_t, cfdata_t, void *);
+static void uhso_attach(device_t, device_t, void *);
+static int uhso_detach(device_t, int);
 
-extern struct cfdriver uhso_cd;
+
 
 CFATTACH_DECL_NEW(uhso, sizeof(struct uhso_softc), uhso_match, uhso_attach,
     uhso_detach, NULL);
@@ -370,14 +371,14 @@ Static void uhso_tty_detach(struct uhso_port *);
 Static void uhso_tty_read_cb(struct usbd_xfer *, void *, usbd_status);
 Static void uhso_tty_write_cb(struct usbd_xfer *, void *, usbd_status);
 
-dev_type_open(uhso_tty_open);
-dev_type_close(uhso_tty_close);
-dev_type_read(uhso_tty_read);
-dev_type_write(uhso_tty_write);
-dev_type_ioctl(uhso_tty_ioctl);
-dev_type_stop(uhso_tty_stop);
-dev_type_tty(uhso_tty_tty);
-dev_type_poll(uhso_tty_poll);
+static dev_type_open(uhso_tty_open);
+static dev_type_close(uhso_tty_close);
+static dev_type_read(uhso_tty_read);
+static dev_type_write(uhso_tty_write);
+static dev_type_ioctl(uhso_tty_ioctl);
+static dev_type_stop(uhso_tty_stop);
+static dev_type_tty(uhso_tty_tty);
+static dev_type_poll(uhso_tty_poll);
 
 const struct cdevsw uhso_cdevsw = {
 	.d_open = uhso_tty_open,
@@ -433,7 +434,7 @@ Static int  uhso_ifnet_output(struct ifnet *, struct mbuf *,
  *
  */
 
-int
+static int
 uhso_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -451,7 +452,7 @@ uhso_match(device_t parent, cfdata_t match, void *aux)
 	return UMATCH_NONE;
 }
 
-void
+static void
 uhso_attach(device_t parent, device_t self, void *aux)
 {
 	struct uhso_softc *sc = device_private(self);
@@ -526,7 +527,7 @@ uhso_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self, "couldn't establish power handler\n");
 }
 
-int
+static int
 uhso_detach(device_t self, int flags)
 {
 	struct uhso_softc *sc = device_private(self);
@@ -624,7 +625,7 @@ uhso_switch_mode(struct usbd_device *udev)
 	usbd_destroy_xfer(xfer);
 	usbd_close_pipe(pipe);
 
-	return (status == USBD_NORMAL_COMPLETION ? 0 : EIO);
+	return status == USBD_NORMAL_COMPLETION ? 0 : EIO;
 }
 
 Static int
@@ -640,14 +641,14 @@ uhso_get_iface_spec(struct usb_attach_arg *uaa, uint8_t ifnum, uint8_t *spec)
 
 	switch (hd->type) {
 	case UHSOTYPE_DEFAULT:
-		if (ifnum > __arraycount(uhso_spec_default))
+		if (ifnum >= __arraycount(uhso_spec_default))
 			break;
 
 		*spec = uhso_spec_default[ifnum];
 		return 1;
 
 	case UHSOTYPE_ICON321:
-		if (ifnum > __arraycount(uhso_spec_icon321))
+		if (ifnum >= __arraycount(uhso_spec_icon321))
 			break;
 
 		*spec = uhso_spec_icon321[ifnum];
@@ -664,8 +665,8 @@ uhso_get_iface_spec(struct usb_attach_arg *uaa, uint8_t ifnum, uint8_t *spec)
 		if (status != USBD_NORMAL_COMPLETION)
 			break;
 
-		if (ifnum > __arraycount(config)
-		    || config[ifnum] > __arraycount(uhso_spec_config))
+		if (ifnum >= __arraycount(config)
+		    || config[ifnum] >= __arraycount(uhso_spec_config))
 			break;
 
 		*spec = uhso_spec_config[config[ifnum]];
@@ -1162,7 +1163,7 @@ uhso_bulk_init(struct uhso_port *hp)
 	}
 
 	int error = usbd_create_xfer(hp->hp_rpipe, hp->hp_rsize,
-	    USBD_SHORT_XFER_OK, 0, &hp->hp_rxfer);
+	    0, 0, &hp->hp_rxfer);
 	if (error)
 		return error;
 
@@ -1475,7 +1476,7 @@ uhso_tty_read_cb(struct usbd_xfer *xfer, void * p, usbd_status status)
  *
  */
 
-int
+static int
 uhso_tty_open(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct uhso_softc *sc;
@@ -1577,7 +1578,7 @@ uhso_tty_init(struct uhso_port *hp)
 	return 0;
 }
 
-int
+static int
 uhso_tty_close(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1628,7 +1629,7 @@ uhso_tty_clean(struct uhso_port *hp)
 	}
 }
 
-int
+static int
 uhso_tty_read(dev_t dev, struct uio *uio, int flag)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1651,7 +1652,7 @@ uhso_tty_read(dev_t dev, struct uio *uio, int flag)
 	return error;
 }
 
-int
+static int
 uhso_tty_write(dev_t dev, struct uio *uio, int flag)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1674,7 +1675,7 @@ uhso_tty_write(dev_t dev, struct uio *uio, int flag)
 	return error;
 }
 
-int
+static int
 uhso_tty_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1759,7 +1760,7 @@ uhso_tty_do_ioctl(struct uhso_port *hp, u_long cmd, void *data, int flag,
 }
 
 /* this is called with tty_lock held */
-void
+static void
 uhso_tty_stop(struct tty *tp, int flag)
 {
 #if 0
@@ -1769,7 +1770,7 @@ uhso_tty_stop(struct tty *tp, int flag)
 #endif
 }
 
-struct tty *
+static struct tty *
 uhso_tty_tty(dev_t dev)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1778,7 +1779,7 @@ uhso_tty_tty(dev_t dev)
 	return hp->hp_tp;
 }
 
-int
+static int
 uhso_tty_poll(dev_t dev, int events, struct lwp *l)
 {
 	struct uhso_softc *sc = device_lookup_private(&uhso_cd, UHSOUNIT(dev));
@@ -1992,6 +1993,7 @@ uhso_ifnet_detach(struct uhso_port *hp)
 	s = splnet();
 	bpf_detach(ifp);
 	if_detach(ifp);
+	if_free(ifp);
 	splx(s);
 
 	kmem_free(hp, sizeof(struct uhso_port));
@@ -2021,7 +2023,7 @@ uhso_ifnet_write_cb(struct usbd_xfer *xfer, void * p, usbd_status status)
 		else
 			return;
 
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 	} else {
 		usbd_get_xfer_status(xfer, NULL, NULL, &cc, NULL);
 		DPRINTF(5, "wrote %d bytes (of %zd)\n", cc, hp->hp_wlen);
@@ -2029,7 +2031,7 @@ uhso_ifnet_write_cb(struct usbd_xfer *xfer, void * p, usbd_status status)
 		if (cc != hp->hp_wlen)
 			DPRINTF(0, "cc=%u, wlen=%zd\n", cc, hp->hp_wlen);
 
-		ifp->if_opackets++;
+		if_statinc(ifp, if_opackets);
 	}
 
 	s = splnet();
@@ -2062,7 +2064,7 @@ uhso_ifnet_read_cb(struct usbd_xfer *xfer, void * p,
 		else
 			return;
 
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		hp->hp_rlen = 0;
 	} else {
 		usbd_get_xfer_status(xfer, NULL, (void **)&cp, &cc, NULL);
@@ -2094,14 +2096,14 @@ uhso_ifnet_input(struct ifnet *ifp, struct mbuf **mb, uint8_t *cp, size_t cc)
 			MGETHDR(m, M_DONTWAIT, MT_DATA);
 			if (m == NULL) {
 				aprint_error_ifnet(ifp, "no mbufs\n");
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				break;
 			}
 
 			MCLGET(m, M_DONTWAIT);
 			if (!ISSET(m->m_flags, M_EXT)) {
 				aprint_error_ifnet(ifp, "no mbuf clusters\n");
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				m_freem(m);
 				break;
 			}
@@ -2124,7 +2126,7 @@ uhso_ifnet_input(struct ifnet *ifp, struct mbuf **mb, uint8_t *cp, size_t cc)
 			    "bad IP header (v=%d, hl=%zd)\n",
 			    mtod(m, struct ip *)->ip_v, want);
 
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			m_freem(m);
 			break;
 		}
@@ -2164,13 +2166,6 @@ uhso_ifnet_input(struct ifnet *ifp, struct mbuf **mb, uint8_t *cp, size_t cc)
 				*mb = m;
 				break;
 			}
-		} else if (want > got) {
-			aprint_error_ifnet(ifp, "bad IP packet (len=%zd)\n",
-			    want);
-
-			ifp->if_ierrors++;
-			m_freem(m);
-			break;
 		}
 
 		m_set_rcvif(m, ifp);
@@ -2178,13 +2173,12 @@ uhso_ifnet_input(struct ifnet *ifp, struct mbuf **mb, uint8_t *cp, size_t cc)
 
 		s = splnet();
 
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_IN);
 
 		if (__predict_false(!pktq_enqueue(ip_pktq, m, 0))) {
 			m_freem(m);
 		} else {
-			ifp->if_ipackets++;
-			ifp->if_ibytes += got;
+			if_statadd2(ifp, if_ipackets, 1, if_ibytes, got);
 		}
 		splx(s);
 	}
@@ -2337,13 +2331,13 @@ uhso_ifnet_start(struct ifnet *ifp)
 		hp->hp_wlen = hp->hp_wsize;
 	}
 
-	bpf_mtap(ifp, m);
+	bpf_mtap(ifp, m, BPF_D_OUT);
 
 	m_copydata(m, 0, hp->hp_wlen, hp->hp_wbuf);
 	m_freem(m);
 
 	if ((*hp->hp_write)(hp) != 0) {
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 		CLR(ifp->if_flags, IFF_OACTIVE);
 	}
 }

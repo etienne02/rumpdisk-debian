@@ -1,4 +1,4 @@
-/*	$NetBSD: cs4231_sbus.c,v 1.49 2011/11/23 23:07:36 jmcneill Exp $	*/
+/*	$NetBSD: cs4231_sbus.c,v 1.52 2019/05/08 13:40:19 isaki Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2002, 2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs4231_sbus.c,v 1.49 2011/11/23 23:07:36 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs4231_sbus.c,v 1.52 2019/05/08 13:40:19 isaki Exp $");
 
 #include "audio.h"
 #if NAUDIO > 0
@@ -46,7 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: cs4231_sbus.c,v 1.49 2011/11/23 23:07:36 jmcneill Ex
 #include <dev/sbus/sbusvar.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/ic/ad1848reg.h>
 #include <dev/ic/cs4231reg.h>
@@ -97,39 +97,28 @@ static int	cs4231_sbus_halt_output(void *);
 static int	cs4231_sbus_halt_input(void *);
 
 const struct audio_hw_if audiocs_sbus_hw_if = {
-	cs4231_open,
-	cs4231_close,
-	NULL,			/* drain */
-	ad1848_query_encoding,
-	ad1848_set_params,
-	NULL,			/* round_blocksize */
-	ad1848_commit_settings,
-	NULL,			/* init_output */
-	NULL,			/* init_input */
-	NULL,			/* start_output */
-	NULL,			/* start_input */
-	cs4231_sbus_halt_output,
-	cs4231_sbus_halt_input,
-	NULL,			/* speaker_ctl */
-	cs4231_getdev,
-	NULL,			/* setfd */
-	cs4231_set_port,
-	cs4231_get_port,
-	cs4231_query_devinfo,
-	cs4231_malloc,
-	cs4231_free,
-	NULL,			/* round_buffersize */
-	NULL,			/* mappage */
-	cs4231_get_props,
-	cs4231_sbus_trigger_output,
-	cs4231_sbus_trigger_input,
-	NULL,			/* dev_ioctl */
-	ad1848_get_locks,
+	.open			= cs4231_open,
+	.close			= cs4231_close,
+	.query_format		= ad1848_query_format,
+	.set_format		= ad1848_set_format,
+	.commit_settings	= ad1848_commit_settings,
+	.halt_output		= cs4231_sbus_halt_output,
+	.halt_input		= cs4231_sbus_halt_input,
+	.getdev			= cs4231_getdev,
+	.set_port		= cs4231_set_port,
+	.get_port		= cs4231_get_port,
+	.query_devinfo		= cs4231_query_devinfo,
+	.allocm			= cs4231_malloc,
+	.freem			= cs4231_free,
+	.get_props		= cs4231_get_props,
+	.trigger_output		= cs4231_sbus_trigger_output,
+	.trigger_input		= cs4231_sbus_trigger_input,
+	.get_locks		= ad1848_get_locks,
 };
 
 
 #ifdef AUDIO_DEBUG
-static void	cs4231_sbus_regdump(char *, struct cs4231_sbus_softc *);
+static void	cs4231_sbus_regdump(const char *, struct cs4231_sbus_softc *);
 #endif
 
 static int	cs4231_sbus_intr(void *);
@@ -200,30 +189,30 @@ cs4231_sbus_attach(device_t parent, device_t self, void *aux)
 
 #ifdef AUDIO_DEBUG
 static void
-cs4231_sbus_regdump(char *label, struct cs4231_sbus_softc *sc)
+cs4231_sbus_regdump(const char *label, struct cs4231_sbus_softc *sc)
 {
 	char bits[128];
 
 	printf("cs4231regdump(%s): regs:", label);
 	printf("dmapva: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_PVA));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_PVA));
 	printf("dmapc: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_PC));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_PC));
 	printf("dmapnva: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_PNVA));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_PNVA));
 	printf("dmapnc: 0x%x\n",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_PNC));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_PNC));
 	printf("dmacva: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_CVA));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_CVA));
 	printf("dmacc: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_CC));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_CC));
 	printf("dmacnva: 0x%x; ",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_CNVA));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_CNVA));
 	printf("dmacnc: 0x%x\n",
-		bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_CNC));
+		bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_CNC));
 
 	snprintb(bits, sizeof(bits), APC_BITS,
-	    bus_space_read_4(sc->sc_bh, sc->sc_bh, APC_DMA_CSR));
+	    bus_space_read_4(sc->sc_bt, sc->sc_bh, APC_DMA_CSR));
 	printf("apc_dmacsr=%s\n", bits);
 
 	ad1848_dump_regs(&sc->sc_cs4231.sc_ad1848);

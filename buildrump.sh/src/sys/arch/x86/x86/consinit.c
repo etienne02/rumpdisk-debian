@@ -1,4 +1,4 @@
-/*	$NetBSD: consinit.c,v 1.28 2015/01/11 19:54:23 is Exp $	*/
+/*	$NetBSD: consinit.c,v 1.33 2020/05/02 16:44:36 bouyer Exp $	*/
 
 /*
  * Copyright (c) 1998
@@ -27,15 +27,17 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.28 2015/01/11 19:54:23 is Exp $");
+__KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.33 2020/05/02 16:44:36 bouyer Exp $");
 
 #include "opt_kgdb.h"
 #include "opt_puc.h"
+#include "opt_xen.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/bus.h>
+#include <sys/cpu.h>
 #include <machine/bootinfo.h>
 #include <arch/x86/include/genfb_machdep.h>
 
@@ -88,6 +90,17 @@ __KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.28 2015/01/11 19:54:23 is Exp $");
 #include "ukbd.h"
 #if (NUKBD > 0)
 #include <dev/usb/ukbdvar.h>
+#endif
+
+#ifndef XENPV
+#include "hvkbd.h"
+#if NHVKBD > 0
+#include <dev/hyperv/hvkbdvar.h>
+#endif
+#endif
+
+#ifdef XENPVHVM
+#include <xen/xen.h>
 #endif
 
 #ifndef CONSDEVNAME
@@ -158,6 +171,12 @@ consinit(void)
 	int rv;
 #endif
 
+#ifdef XENPVHVM
+	if (vm_guest == VM_GUEST_XENPVH) {
+		xen_pvh_consinit();
+		return;
+	}
+#endif
 	if (initted)
 		return;
 	initted = 1;
@@ -204,6 +223,10 @@ dokbd:
 #if (NPCKBC > 0)
 		error = pckbc_cnattach(x86_bus_space_io, IO_KBD, KBCMDP,
 		    PCKBC_KBD_SLOT, 0);
+#endif
+#if (NHVKBD > 0)
+		if (error && vm_guest == VM_GUEST_HV)
+			error = hvkbd_cnattach();
 #endif
 #if (NUKBD > 0)
 		if (error)

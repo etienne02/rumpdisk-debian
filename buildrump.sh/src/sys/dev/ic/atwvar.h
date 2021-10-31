@@ -1,4 +1,4 @@
-/*	$NetBSD: atwvar.h,v 1.37 2010/03/14 21:25:59 dyoung Exp $	*/
+/*	$NetBSD: atwvar.h,v 1.40 2019/10/05 23:27:20 mrg Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 The NetBSD Foundation, Inc.  All rights reserved.
@@ -146,7 +146,7 @@ struct atw_rx_radiotap_header {
 	uint16_t				ar_chan_freq;
 	uint16_t				ar_chan_flags;
 	uint8_t					ar_antsignal;
-} __packed;
+};
 
 #define ATW_TX_RADIOTAP_PRESENT	((1 << IEEE80211_RADIOTAP_RATE) | \
 				 (1 << IEEE80211_RADIOTAP_CHANNEL))
@@ -157,7 +157,7 @@ struct atw_tx_radiotap_header {
 	uint8_t					at_pad;
 	uint16_t				at_chan_freq;
 	uint16_t				at_chan_flags;
-} __packed;
+};
 
 enum atw_revision {
 	ATW_REVISION_AB = 0x11,	/* ADM8211A */
@@ -180,6 +180,8 @@ struct atw_softc {
 				    int, int, u_int32_t);
 	struct ieee80211_node	*(*sc_node_alloc)(struct ieee80211_node_table*);
 	void			(*sc_node_free)(struct ieee80211_node *);
+
+	void			*sc_soft_ih;
 
 	int			sc_tx_timer;
 	int			sc_rescan_timer;
@@ -395,7 +397,7 @@ do {									\
  * field is only 11 bits, we must subtract 1 from the length to avoid
  * having it truncated to 0!
  */
-static inline void
+static __inline void
 atw_init_rxdesc(struct atw_softc *sc, int x)
 {
 	struct atw_rxsoft *rxs = &sc->sc_rxsoft[x];

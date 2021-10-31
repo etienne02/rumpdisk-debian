@@ -1,4 +1,4 @@
-/*	$NetBSD: sgsmix.c,v 1.7 2010/11/13 13:51:59 uebayasi Exp $	*/
+/*	$NetBSD: sgsmix.c,v 1.10 2021/01/30 01:23:08 thorpej Exp $	*/
 
 /*-
  * Copyright (C) 2005 Michael Lorenz.
@@ -31,7 +31,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sgsmix.c,v 1.7 2010/11/13 13:51:59 uebayasi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sgsmix.c,v 1.10 2021/01/30 01:23:08 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -75,21 +75,32 @@ static void sgsmix_writereg(struct sgsmix_softc *, int, uint8_t);
 CFATTACH_DECL_NEW(sgsmix, sizeof(struct sgsmix_softc),
     sgsmix_match, sgsmix_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "st,tda7433" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 sgsmix_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct i2c_attach_args *args = aux;
 	int ret = -1;
 	uint8_t out[2] = {1, 0x20};
+	int match_result;
+
+	if (iic_use_direct_match(args, cf, compat_data, &match_result))
+		return match_result;
 
 	/* see if we can talk to something at address 0x8a */
-	if (args->ia_addr == 0x8a) {
-		iic_acquire_bus(args->ia_tag, 0);
-		ret = iic_exec(args->ia_tag, I2C_OP_WRITE, args->ia_addr,
-		    out, 2, NULL, 0, 0);
-		iic_release_bus(args->ia_tag, 0);
-	}
-	return (ret >= 0);
+	if (args->ia_addr != 0x8a)
+		return 0;
+
+	iic_acquire_bus(args->ia_tag, 0);
+	ret = iic_exec(args->ia_tag, I2C_OP_WRITE, args->ia_addr,
+	    out, 2, NULL, 0, 0);
+	iic_release_bus(args->ia_tag, 0);
+
+	return (ret >= 0) ? I2C_MATCH_ADDRESS_AND_PROBE : 0;
 }
 
 static void

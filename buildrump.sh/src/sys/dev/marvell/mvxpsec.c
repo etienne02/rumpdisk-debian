@@ -1,4 +1,4 @@
-/*	$NetBSD: mvxpsec.c,v 1.1 2015/06/03 04:20:02 hsuenaga Exp $	*/
+/*	$NetBSD: mvxpsec.c,v 1.8 2021/08/13 20:26:07 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -24,6 +24,11 @@
  * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
+#ifdef _KERNEL_OPT
+#include "opt_ipsec.h"
+#endif
+
 /*
  * Cryptographic Engine and Security Accelerator(MVXPSEC)
  */
@@ -53,8 +58,6 @@
 
 #include <uvm/uvm_extern.h>
 
-#include <crypto/rijndael/rijndael.h>
-
 #include <opencrypto/cryptodev.h>
 #include <opencrypto/xform.h>
 
@@ -65,7 +68,9 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 
+#if NIPSEC > 0
 #include <netipsec/esp_var.h>
+#endif
 
 #include <arm/cpufunc.h>
 #include <arm/marvell/mvsocvar.h>
@@ -207,7 +212,7 @@ STATIC int mvxpsec_header_finalize(struct mvxpsec_packet *);
 INLINE void mvxpsec_drop(struct mvxpsec_softc *, struct cryptop *, struct mvxpsec_packet *, int);
 STATIC int mvxpsec_dispatch_queue(struct mvxpsec_softc *);
 
-/* opencrypto opration */
+/* opencrypto operation */
 INLINE int mvxpsec_parse_crd(struct mvxpsec_packet *, struct cryptodesc *);
 INLINE int mvxpsec_parse_crp(struct mvxpsec_packet *);
 
@@ -647,12 +652,7 @@ mvxpsec_alloc_devmem(struct mvxpsec_softc *sc, paddr_t phys, int size)
 	if (sc == NULL)
 		return NULL;
 
-	devmem = kmem_alloc(sizeof(*devmem), KM_NOSLEEP);
-	if (devmem == NULL) {
-		aprint_error_dev(sc->sc_dev, "can't alloc kmem\n");
-		return NULL;
-	}
-
+	devmem = kmem_alloc(sizeof(*devmem), KM_SLEEP);
 	devmem->size = size;
 
 	if (phys) {
@@ -1102,15 +1102,11 @@ mvxpsec_init_dma(struct mvxpsec_softc *sc, struct marvell_attach_args *mva)
 	/* Init Software DMA Handlers */
 	sc->sc_devmem_desc =
 	    mvxpsec_alloc_devmem(sc, 0, PAGE_SIZE * MVXPSEC_DMA_DESC_PAGES);
-	if (sc->sc_devmem_desc == NULL)
-		panic("Cannot allocate memory\n");
 	ndh = (PAGE_SIZE / sizeof(struct mvxpsec_descriptor))
 	    * MVXPSEC_DMA_DESC_PAGES;
 	sc->sc_desc_ring =
 	    kmem_alloc(sizeof(struct mvxpsec_descriptor_handle) * ndh,
-	        KM_NOSLEEP);
-	if (sc->sc_desc_ring == NULL)
-		panic("Cannot allocate memory\n");
+	        KM_SLEEP);
 	aprint_normal_dev(sc->sc_dev, "%d DMA handles in %zu bytes array\n",
 	    ndh, sizeof(struct mvxpsec_descriptor_handle) * ndh);
 
@@ -1319,7 +1315,7 @@ mvxpsec_intr_cnt(struct mvxpsec_softc *sc, int cause)
  * the header contains descriptor of security accelerator,
  * key material of chiphers, iv of ciphers and macs, ...
  *
- * the header is transfered to MVXPSEC Internal SRAM by TDMA,
+ * the header is transferred to MVXPSEC Internal SRAM by TDMA,
  * and parsed by MVXPSEC H/W.
  */
 STATIC int
@@ -1491,14 +1487,14 @@ mvxpsec_packet_dtor(void *arg, void *obj)
 }
 
 /*
- * allocate new session struture.
+ * allocate new session structure.
  */
 STATIC struct mvxpsec_session *
 mvxpsec_session_alloc(struct mvxpsec_softc *sc)
 {
 	struct mvxpsec_session *mv_s;
 
-	mv_s = pool_cache_get(sc->sc_session_pool, 0);
+	mv_s = pool_cache_get(sc->sc_session_pool, PR_NOWAIT);
 	if (mv_s == NULL) {
 		log(LOG_ERR, "%s: cannot allocate memory\n", __func__);
 		return NULL;
@@ -1614,7 +1610,7 @@ mvxpsec_packet_alloc(struct mvxpsec_session *mv_s)
 		sc->sc_free_qlen--;
 	}
 	else {
-		mv_p = pool_cache_get(sc->sc_packet_pool, 0);
+		mv_p = pool_cache_get(sc->sc_packet_pool, PR_NOWAIT);
 		if (mv_p == NULL) {
 			log(LOG_ERR, "%s: cannot allocate memory\n",
 			    __func__);
@@ -2524,6 +2520,7 @@ mvxpsec_packet_setmbuf(struct mvxpsec_packet *mv_p, struct mbuf *m)
 		}
 	}
 	if (pktlen > SRAM_PAYLOAD_SIZE) {
+#if NIPSEC > 0
 		extern   percpu_t *espstat_percpu;
 	       	/* XXX:
 		 * layer violation. opencrypto knows our max packet size
@@ -2531,6 +2528,7 @@ mvxpsec_packet_setmbuf(struct mvxpsec_packet *mv_p, struct mbuf *m)
 		 */
 
 		_NET_STATINC(espstat_percpu, ESP_STAT_TOOBIG);
+#endif
 		log(LOG_ERR,
 		    "%s: ESP Packet too large: %zu [oct.] > %zu [oct.]\n",
 		    device_xname(sc->sc_dev),
@@ -2573,6 +2571,7 @@ mvxpsec_packet_setuio(struct mvxpsec_packet *mv_p, struct uio *uio)
 	struct mvxpsec_softc *sc = mv_s->sc;
 
 	if (uio->uio_resid > SRAM_PAYLOAD_SIZE) {
+#if NIPSEC > 0
 		extern   percpu_t *espstat_percpu;
 	       	/* XXX:
 		 * layer violation. opencrypto knows our max packet size
@@ -2580,6 +2579,7 @@ mvxpsec_packet_setuio(struct mvxpsec_packet *mv_p, struct uio *uio)
 		 */
 
 		_NET_STATINC(espstat_percpu, ESP_STAT_TOOBIG);
+#endif
 		log(LOG_ERR,
 		    "%s: uio request too large: %zu [oct.] > %zu [oct.]\n",
 		    device_xname(sc->sc_dev),
@@ -3687,4 +3687,3 @@ mvxpsec_dump_acc_maciv(const char *name, uint32_t w)
 	return;
 }
 #endif
-

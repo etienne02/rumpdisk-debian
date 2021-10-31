@@ -1,4 +1,4 @@
-/*	$NetBSD: zskbd.c,v 1.18 2015/01/02 21:32:26 jklos Exp $	*/
+/*	$NetBSD: zskbd.c,v 1.21 2021/08/07 16:19:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zskbd.c,v 1.18 2015/01/02 21:32:26 jklos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zskbd.c,v 1.21 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -199,7 +199,7 @@ zskbd_attach(device_t parent, device_t self, void *aux)
 		zsi = &zskbd_console_internal;
 	} else {
 		zsi = malloc(sizeof(struct zskbd_internal),
-				       M_DEVBUF, M_NOWAIT);
+				       M_DEVBUF, M_WAITOK);
 		zsi->zsi_ks.attmt.sendchar = zskbd_sendchar;
 		zsi->zsi_ks.attmt.cookie = cs;
 		zsi->zsi_cs = cs;
@@ -234,7 +234,7 @@ zskbd_attach(device_t parent, device_t self, void *aux)
 	a.accessops = &zskbd_accessops;
 	a.accesscookie = zskbd;
 
-	zskbd->sc_wskbddev = config_found(self, &a, wskbddevprint);
+	zskbd->sc_wskbddev = config_found(self, &a, wskbddevprint, CFARGS_NONE);
 }
 
 int

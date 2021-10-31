@@ -103,7 +103,7 @@ struct port_info {
     struct ifnet    *ifp;
     struct port_device *pd;
     int     port;
-    int     if_flags;
+    u_short     if_flags;
     const struct port_type_info *port_type;
     struct cphy phy;
     struct cmac mac;
@@ -571,7 +571,7 @@ tdev2adap(struct toedev *d)
 #undef container_of
 
 #define OFFLOAD_DEVMAP_BIT 15
-static inline int offload_running(adapter_t *adapter)
+static __inline int offload_running(adapter_t *adapter)
 {
         return isset(&adapter->open_device_map, OFFLOAD_DEVMAP_BIT);
 }

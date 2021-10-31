@@ -1,4 +1,4 @@
-/* $NetBSD: nilfs_vnops.c,v 1.32 2015/04/20 23:03:08 riastradh Exp $ */
+/*	$NetBSD: nilfs_vnops.c,v 1.44 2021/07/24 21:31:38 andvar Exp $	*/
 
 /*
  * Copyright (c) 2008, 2009 Reinoud Zandijk
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__KERNEL_RCSID(0, "$NetBSD: nilfs_vnops.c,v 1.32 2015/04/20 23:03:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nilfs_vnops.c,v 1.44 2021/07/24 21:31:38 andvar Exp $");
 #endif /* not lint */
 
 
@@ -61,16 +61,13 @@ __KERNEL_RCSID(0, "$NetBSD: nilfs_vnops.c,v 1.32 2015/04/20 23:03:08 riastradh E
 #define VTOI(vnode) ((struct nilfs_node *) (vnode)->v_data)
 
 
-/* externs */
-extern int prtactive;
-
 /* implementations of vnode functions; table follows at end */
 /* --------------------------------------------------------------------- */
 
 int
 nilfs_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		bool         *a_recycle;
 	} */ *ap = v;
@@ -90,7 +87,6 @@ nilfs_inactive(void *v)
 	 * referenced anymore in a directory we ought to free up the resources
 	 * on disc if applicable.
 	 */
-	VOP_UNLOCK(vp);
 
 	return 0;
 }
@@ -100,15 +96,15 @@ nilfs_inactive(void *v)
 int
 nilfs_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct nilfs_node *nilfs_node = VTOI(vp);
 
+	VOP_UNLOCK(vp);
+
 	DPRINTF(NODE, ("nilfs_reclaim called for node %p\n", nilfs_node));
-	if (prtactive && vp->v_usecount > 1)
-		vprint("nilfs_reclaim(): pushing active", vp);
 
 	if (nilfs_node == NULL) {
 		DPRINTF(NODE, ("nilfs_reclaim(): null nilfsnode\n"));
@@ -117,9 +113,6 @@ nilfs_reclaim(void *v)
 
 	/* update note for closure */
 	nilfs_update(vp, NULL, NULL, NULL, UPDATE_CLOSE);
-
-	/* remove from vnode cache. */
-	vcache_remove(vp->v_mount, &nilfs_node->ino, sizeof(nilfs_node->ino));
 
 	/* dispose all node knowledge */
 	genfs_node_destroy(vp);
@@ -186,7 +179,7 @@ nilfs_read(void *v)
 
 		/* ubc, here we come, prepare to trap */
 		error = ubc_uiomove(uobj, uio, len, advice,
-		    UBC_READ | UBC_PARTIALOK | UBC_UNMAP_FLAG(vp));
+		    UBC_READ | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 	}
@@ -276,7 +269,7 @@ nilfs_write(void *v)
 
 		/* ubc, here we come, prepare to trap */
 		error = ubc_uiomove(uobj, uio, len, advice,
-		    UBC_WRITE | UBC_UNMAP_FLAG(vp));
+		    UBC_WRITE | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 	}
@@ -598,12 +591,12 @@ nilfs_readdir(void *v)
 			diroffset += nilfs_rw16(ndirent->rec_len);
 			blkoff    += nilfs_rw16(ndirent->rec_len);
 
-			/* remember the last entry we transfered */
+			/* remember the last entry we transferred */
 			transoffset = diroffset;
 		}
 		brelse(bp, BC_AGE);
 
-		/* pass on last transfered offset */
+		/* pass on last transferred offset */
 		uio->uio_offset = transoffset;
 	}
 
@@ -933,9 +926,9 @@ nilfs_pathconf(void *v)
 #endif
 		*ap->a_retval = bits;
 		return 0;
+	default:
+		return genfs_pathconf(ap);
 	}
-
-	return EINVAL;
 }
 
 
@@ -983,8 +976,8 @@ nilfs_close(void *v)
 	nilfs_node = nilfs_node;	/* shut up gcc */
 
 	mutex_enter(vp->v_interlock);
-		if (vp->v_usecount > 1)
-			nilfs_itimes(nilfs_node, NULL, NULL, NULL);
+	if (vrefcnt(vp) > 1)
+		nilfs_itimes(nilfs_node, NULL, NULL, NULL);
 	mutex_exit(vp->v_interlock);
 
 	return 0;
@@ -994,7 +987,7 @@ nilfs_close(void *v)
 /* --------------------------------------------------------------------- */
 
 static int
-nilfs_check_possible(struct vnode *vp, struct vattr *vap, mode_t mode)
+nilfs_check_possible(struct vnode *vp, struct vattr *vap, accmode_t accmode)
 {
 	int flags;
 
@@ -1007,7 +1000,7 @@ nilfs_check_possible(struct vnode *vp, struct vattr *vap, mode_t mode)
 		 * normal nodes: check if we're on a read-only mounted
 		 * filingsystem and bomb out if we're trying to write.
 		 */
-		if ((mode & VWRITE) && (vp->v_mount->mnt_flag & MNT_RDONLY))
+		if ((accmode & VWRITE) && (vp->v_mount->mnt_flag & MNT_RDONLY))
 			return EROFS;
 		break;
 	case VBLK:
@@ -1027,21 +1020,21 @@ nilfs_check_possible(struct vnode *vp, struct vattr *vap, mode_t mode)
 	/* noone may write immutable files */
 	/* TODO: get chflags(2) flags */
 	flags = 0;
-	if ((mode & VWRITE) && (flags & IMMUTABLE))
+	if ((accmode & VWRITE) && (flags & IMMUTABLE))
 		return EPERM;
 
 	return 0;
 }
 
 static int
-nilfs_check_permitted(struct vnode *vp, struct vattr *vap, mode_t mode,
+nilfs_check_permitted(struct vnode *vp, struct vattr *vap, accmode_t accmode,
     kauth_cred_t cred)
 {
 
 	/* ask the generic genfs_can_access to advice on security */
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(mode,
-	    vp->v_type, vap->va_mode), vp, NULL, genfs_can_access(vp->v_type,
-	    vap->va_mode, vap->va_uid, vap->va_gid, mode, cred));
+	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
+	    vp->v_type, vap->va_mode), vp, NULL, genfs_can_access(vp, cred,
+	    vap->va_uid, vap->va_gid, vap->va_mode, NULL, accmode));
 }
 
 int
@@ -1049,12 +1042,12 @@ nilfs_access(void *v)
 {
 	struct vop_access_args /* {
 		struct vnode *a_vp;
-		int a_mode;
+		accmode_t a_accmode;
 		kauth_cred_t a_cred;
 		struct proc *a_p;
 	} */ *ap = v;
 	struct vnode    *vp   = ap->a_vp;
-	mode_t	         mode = ap->a_mode;
+	accmode_t        accmode = ap->a_accmode;
 	kauth_cred_t     cred = ap->a_cred;
 	/* struct nilfs_node *nilfs_node = VTOI(vp); */
 	struct vattr vap;
@@ -1066,11 +1059,11 @@ nilfs_access(void *v)
 	if (error)
 		return error;
 
-	error = nilfs_check_possible(vp, &vap, mode);
+	error = nilfs_check_possible(vp, &vap, accmode);
 	if (error)
 		return error;
 
-	error = nilfs_check_permitted(vp, &vap, mode, cred);
+	error = nilfs_check_permitted(vp, &vap, accmode, cred);
 
 	return error;
 }
@@ -1408,7 +1401,7 @@ out_unlocked:
 int
 nilfs_remove(void *v)
 {
-	struct vop_remove_args /* {
+	struct vop_remove_v2_args /* {
 		struct vnode *a_dvp;
 		struct vnode *a_vp;
 		struct componentname *a_cnp;
@@ -1439,7 +1432,6 @@ nilfs_remove(void *v)
 		vrele(vp);
 	else
 		vput(vp);
-	vput(dvp);
 
 	return error;
 }
@@ -1449,7 +1441,7 @@ nilfs_remove(void *v)
 int
 nilfs_rmdir(void *v)
 {
-	struct vop_rmdir_args /* {
+	struct vop_rmdir_v2_args /* {
 		struct vnode *a_dvp;
 		struct vnode *a_vp;
 		struct componentname *a_cnp;
@@ -1466,8 +1458,7 @@ nilfs_rmdir(void *v)
 
 	/* don't allow '.' to be deleted */
 	if (dir_node == nilfs_node) {
-		vrele(dvp);
-		vput(vp);
+		vrele(vp);
 		return EINVAL;
 	}
 
@@ -1476,7 +1467,6 @@ nilfs_rmdir(void *v)
 	refcnt = 2; /* XXX */
 	if (refcnt > 1) {
 		/* NOT empty */
-		vput(dvp);
 		vput(vp);
 		return ENOTEMPTY;
 	}
@@ -1490,8 +1480,7 @@ nilfs_rmdir(void *v)
 	}
 	DPRINTFIF(NODE, error, ("\tgot error removing file\n"));
 
-	/* unput the nodes and exit */
-	vput(dvp);
+	/* put the node and exit */
 	vput(vp);
 
 	return error;
@@ -1554,12 +1543,14 @@ int (**nilfs_vnodeop_p) __P((void *));
 
 const struct vnodeopv_entry_desc nilfs_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath }, /* parsepath */
 	{ &vop_lookup_desc, nilfs_lookup },	/* lookup */
 	{ &vop_create_desc, nilfs_create },	/* create */
 	{ &vop_mknod_desc, nilfs_mknod },	/* mknod */	/* TODO */
 	{ &vop_open_desc, nilfs_open },		/* open */
 	{ &vop_close_desc, nilfs_close },	/* close */
 	{ &vop_access_desc, nilfs_access },	/* access */
+	{ &vop_accessx_desc, genfs_accessx },	/* accessx */
 	{ &vop_getattr_desc, nilfs_getattr },	/* getattr */
 	{ &vop_setattr_desc, nilfs_setattr },	/* setattr */	/* TODO chflags */
 	{ &vop_read_desc, nilfs_read },		/* read */

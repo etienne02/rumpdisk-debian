@@ -1,4 +1,4 @@
-/* $NetBSD: wss_acpi.c,v 1.31 2016/07/14 04:19:26 msaitoh Exp $ */
+/* $NetBSD: wss_acpi.c,v 1.35 2021/08/07 16:19:09 thorpej Exp $ */
 
 /*
  * Copyright (c) 2002 Jared D. McNeill <jmcneill@invisible.ca>
@@ -26,14 +26,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wss_acpi.c,v 1.31 2016/07/14 04:19:26 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wss_acpi.c,v 1.35 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/audioio.h>
 #include <sys/device.h>
 #include <sys/systm.h>
 
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/acpi/acpivar.h>
 
@@ -59,7 +59,7 @@ struct wss_acpi_hint {
 	int offset_ad1848;		/* offset from start of DAC region */
 };
 
-static struct wss_acpi_hint wss_acpi_hints[] = {
+static const struct wss_acpi_hint wss_acpi_hints[] = {
 	{ "NMX2210", 1, 2, WSS_CODEC },
 	{ "CSC0000", 0, 1, 0 },		/* Dell Latitude CPi */
 	{ "CSC0100", 0, 1, 0 },		/* CS4610 with CS4236 codec */
@@ -114,7 +114,7 @@ wss_acpi_attach(device_t parent, device_t self, void *aux)
 	struct acpi_drq *playdrq, *recdrq;
 	struct audio_attach_args arg;
 	ACPI_STATUS rv;
-	struct wss_acpi_hint *wah;
+	const struct wss_acpi_hint *wah;
 
 	sc->sc_ad1848.sc_ad1848.sc_dev = self;
 	wah = &wss_acpi_hints[
@@ -187,7 +187,7 @@ wss_acpi_attach(device_t parent, device_t self, void *aux)
 	arg.type = AUDIODEV_TYPE_OPL;
 	arg.hwif = 0;
 	arg.hdl = 0;
-	config_found(self, &arg, audioprint);
+	config_found(self, &arg, audioprint, CFARGS_NONE);
 
  out:
 	acpi_resource_cleanup(&res);

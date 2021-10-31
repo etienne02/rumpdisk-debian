@@ -1,4 +1,4 @@
-/*	$NetBSD: sem.c,v 1.74 2016/04/29 18:18:22 mlelstv Exp $	*/
+/*	$NetBSD: sem.c,v 1.86 2021/08/25 23:07:34 rillig Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: sem.c,v 1.74 2016/04/29 18:18:22 mlelstv Exp $");
+__RCSID("$NetBSD: sem.c,v 1.86 2021/08/25 23:07:34 rillig Exp $");
 
 #include <sys/param.h>
 #include <ctype.h>
@@ -79,7 +79,7 @@ static int has_errobj(struct attrlist *, struct attr *);
 static struct nvlist *addtoattr(struct nvlist *, struct devbase *);
 static int resolve(struct nvlist **, const char *, const char *,
 		   struct nvlist *, int);
-static struct pspec *getpspec(struct attr *, struct devbase *, int);
+static struct pspec *getpspec(struct attr *, struct devbase *, int, int);
 static struct devi *newdevi(const char *, int, struct devbase *d);
 static struct devi *getdevi(const char *);
 static void remove_devi(struct devi *);
@@ -94,6 +94,45 @@ static devmajor_t dev2major(struct devbase *);
 
 extern const char *yyfile;
 extern int vflag;
+
+#define V_ATTRIBUTE	0
+#define V_DEVICE	1
+struct vtype {
+	int type;
+	struct attr *attr;
+	void *value;
+};
+
+static struct nvlist *
+makedevstack(struct devbase *d)
+{
+	struct devi *firsti, *i;
+	struct nvlist *stack = NULL;
+
+	for (firsti = d->d_ihead; firsti != NULL; firsti = firsti->i_bsame)
+		for (i = firsti; i != NULL; i = i->i_alias)
+			stack = newnv(NULL, NULL, i, 0, stack);
+	return stack;
+}
+
+static void
+devcleanup(struct nvlist *stack)
+{
+	struct nvlist *nv;
+	for (nv = stack; nv != NULL; nv = nv->nv_next)
+		remove_devi(nv->nv_ptr);
+	nvfreel(stack);
+}
+
+static void *
+addvalue(int type, struct attr *a, void *value)
+{
+	struct vtype *vt = emalloc(sizeof(*vt));
+	vt->type = type;
+	vt->attr = a;
+	vt->value = value;
+	return vt;
+}
 
 void
 initsem(void)
@@ -174,7 +213,8 @@ fixdev(struct devbase *dev)
 	CFGDBG(4, "fixing devbase `%s'", dev->d_name);
 	for (al = dev->d_attrs; al != NULL; al = al->al_next) {
 		a = al->al_this;
-		CFGDBG(4, "fixing devbase `%s' attr `%s'", dev->d_name, a->a_name);
+		CFGDBG(4, "fixing devbase `%s' attr `%s'", dev->d_name,
+		    a->a_name);
 		if (a->a_iattr) {
 			a->a_refs = addtoattr(a->a_refs, dev);
 			CFGDBG(3, "device `%s' has iattr `%s'", dev->d_name,
@@ -188,8 +228,8 @@ fixdev(struct devbase *dev)
 			}
 			if (dev->d_classattr == NULL) {
 				dev->d_classattr = a;
-				CFGDBG(3, "device `%s' is devclass `%s'", dev->d_name,
-				    a->a_name);
+				CFGDBG(3, "device `%s' is devclass `%s'",
+				    dev->d_name, a->a_name);
 			}
 		} else {
 			if (strcmp(dev->d_name, a->a_name) != 0) {
@@ -236,17 +276,24 @@ setdefmaxusers(int min, int def, int max)
 	}
 }
 
+static const char *maxusers_srcfile;
+static u_short maxusers_srcline;
+
 void
 setmaxusers(int n)
 {
 
 	if (maxusers == n) {
-		cfgerror("duplicate maxusers parameter");
+		cfgerror("duplicate maxusers parameter at %s:%hu",
+		    maxusers_srcfile, maxusers_srcline);
 		return;
 	}
 	if (vflag && maxusers != 0)
-		cfgwarn("warning: maxusers already defined");
+		cfgwarn("warning: maxusers already defined at %s:%hu",
+		    maxusers_srcfile, maxusers_srcline);
 	maxusers = n;
+	maxusers_srcfile = yyfile;
+	maxusers_srcline = currentline();
 	if (n < minmaxusers) {
 		cfgerror("warning: minimum of %d maxusers assumed",
 		    minmaxusers);
@@ -297,6 +344,15 @@ defattr(const char *name, struct loclist *locs, struct attrlist *deps,
 	struct attr *a, *dep;
 	struct attrlist *al;
 
+	if (getrefattr(name, &a)) {
+		cfgerror("attribute `%s' already defined at %s:%hu", name,
+		    a->a_where.w_srcfile, a->a_where.w_srcline);
+		loclist_destroy(locs);
+		return (1);
+	}
+	if (a == NULL)
+		a = mkattr(name);
+
 	/*
 	 * If this attribute depends on any others, make sure none of
 	 * the dependencies are interface attributes.
@@ -308,17 +364,11 @@ defattr(const char *name, struct loclist *locs, struct attrlist *deps,
 			    "attribute", name, dep->a_name);
 			return (1);
 		}
-		(void)ht_insert2(attrdeptab, name, dep->a_name, NULL);
+		(void)ht_insert2(attrdeptab, name, dep->a_name,
+		    addvalue(V_ATTRIBUTE, a, dep));
 		CFGDBG(2, "attr `%s' depends on attr `%s'", name, dep->a_name);
 	}
 
-	if (getrefattr(name, &a)) {
-		cfgerror("attribute `%s' already defined", name);
-		loclist_destroy(locs);
-		return (1);
-	}
-	if (a == NULL)
-		a = mkattr(name);
 
 	a->a_deps = deps;
 	expandattr(a, NULL);
@@ -338,6 +388,8 @@ mkattr(const char *name)
 		return NULL;
 	}
 	a->a_name = name;
+	a->a_where.w_srcfile = yyfile;
+	a->a_where.w_srcline = currentline();
 	TAILQ_INIT(&a->a_files);
 	CFGDBG(3, "attr `%s' allocated", name);
 
@@ -354,7 +406,7 @@ defiattr(const char *name, struct loclist *locs, struct attrlist *deps,
 	struct loclist *ll;
 
 	if (devclass)
-		panic("defattr(%s): locators and devclass", name);
+		panic("%s: %s has both locators and devclass", __func__, name);
 
 	if (defattr(name, locs, deps, devclass) != 0)
 		return (1);
@@ -384,7 +436,8 @@ defdevclass(const char *name, struct loclist *locs, struct attrlist *deps,
 	int errored = 0;
 
 	if (deps)
-		panic("defattr(%s): dependencies and devclass", name);
+		panic("%s: %s has both dependencies and devclass", __func__,
+		    name);
 
 	if (defattr(name, locs, deps, devclass) != 0)
 		return (1);
@@ -392,9 +445,9 @@ defdevclass(const char *name, struct loclist *locs, struct attrlist *deps,
 	a = getattr(name);
 	(void)snprintf(classenum, sizeof(classenum), "DV_%s", name);
 	for (cp = classenum + 3; *cp; cp++) {
-		if (!errored &&
-		    (!isalnum((unsigned char)*cp) ||
-		      (isalpha((unsigned char)*cp) && !islower((unsigned char)*cp)))) {
+		if (!errored && (!isalnum((unsigned char)*cp) ||
+		      (isalpha((unsigned char)*cp)
+		      && !islower((unsigned char)*cp)))) {
 			cfgerror("device class names must be "
 			    "lower-case alphanumeric characters");
 			errored = 1;
@@ -466,7 +519,8 @@ defdev(struct devbase *dev, struct loclist *loclist, struct attrlist *attrs,
 	if (dev == &errdev)
 		goto bad;
 	if (dev->d_isdef) {
-		cfgerror("redefinition of `%s'", dev->d_name);
+		cfgerror("redefinition of `%s' (previously defined at %s:%d)",
+		    dev->d_name, dev->d_where.w_srcfile, dev->d_where.w_srcline);
 		goto bad;
 	}
 
@@ -536,7 +590,8 @@ defdev(struct devbase *dev, struct loclist *loclist, struct attrlist *attrs,
 		 * Implicit attribute definition for device dependencies.
 		 */
 		refattr(al->al_this->a_name);
-		(void)ht_insert2(attrdeptab, dev->d_name, al->al_this->a_name, NULL);
+		(void)ht_insert2(attrdeptab, dev->d_name, al->al_this->a_name, 
+			addvalue(V_DEVICE, al->al_this, dev));
 		CFGDBG(2, "device `%s' depends on attr `%s'", dev->d_name,
 		    al->al_this->a_name);
 	}
@@ -580,9 +635,11 @@ getdevbase(const char *name)
 		dev->d_ahead = NULL;
 		dev->d_app = &dev->d_ahead;
 		dev->d_umax = 0;
+		dev->d_where.w_srcfile = yyfile;
+		dev->d_where.w_srcline = currentline();
 		TAILQ_INSERT_TAIL(&allbases, dev, d_next);
 		if (ht_insert(devbasetab, name, dev))
-			panic("getdevbase(%s)", name);
+			panic("%s: Can't insert %s", __func__, name);
 		CFGDBG(3, "devbase defined `%s'", dev->d_name);
 	}
 	return (dev);
@@ -599,7 +656,6 @@ defdevattach(struct deva *deva, struct devbase *dev, struct nvlist *atlist,
 	struct nvlist *nv;
 	struct attrlist *al;
 	struct attr *a;
-	struct deva *da;
 
 	if (dev == &errdev)
 		goto bad;
@@ -612,7 +668,8 @@ defdevattach(struct deva *deva, struct devbase *dev, struct nvlist *atlist,
 		goto bad;
 	}
 	if (deva->d_isdef) {
-		cfgerror("redefinition of `%s'", deva->d_name);
+		cfgerror("redefinition of `%s' (previously defined at %s:%d)",
+		    deva->d_name, deva->d_where.w_srcfile, deva->d_where.w_srcline);
 		goto bad;
 	}
 	if (dev->d_ispseudo) {
@@ -657,14 +714,16 @@ defdevattach(struct deva *deva, struct devbase *dev, struct nvlist *atlist,
 		if (a == &errattr)
 			continue;		/* already complained */
 
+#if 0
 		/*
 		 * Make sure that an attachment spec doesn't
 		 * already say how to attach to this attribute.
 		 */
-		for (da = dev->d_ahead; da != NULL; da = da->d_bsame)
+		for (struct deva *da = dev->d_ahead; da; da = da->d_bsame)
 			if (onlist(da->d_atlist, a))
 				cfgerror("attach at `%s' already done by `%s'",
 				     a ? a->a_name : "root", da->d_name);
+#endif
 
 		if (a == NULL) {
 			ht_insert(devroottab, dev->d_name, dev);
@@ -719,9 +778,11 @@ getdevattach(const char *name)
 		deva->d_attrs = NULL;
 		deva->d_ihead = NULL;
 		deva->d_ipp = &deva->d_ihead;
+		deva->d_where.w_srcfile = yyfile;
+		deva->d_where.w_srcline = currentline();
 		TAILQ_INSERT_TAIL(&alldevas, deva, d_next);
 		if (ht_insert(devatab, name, deva))
-			panic("getdeva(%s)", name);
+			panic("%s: Can't insert %s", __func__, name);
 	}
 	return (deva);
 }
@@ -767,10 +828,10 @@ getrefattr(const char *name, struct attr **ra)
 	/*
 	 * Check if the existing attr is only referenced, not really defined.
 	 */
+	*ra = a;
 	if (a->a_deps == NULL &&
 	    a->a_iattr == 0 &&
 	    a->a_devclass == 0) {
-		*ra = a;
 		return (0);
 	}
 	return (1);
@@ -889,12 +950,12 @@ resolve(struct nvlist **nvp, const char *name, const char *what,
 	const char *cp;
 	devmajor_t maj;
 	devminor_t min;
-	size_t i, l;
+	size_t l;
 	int unit;
 	char buf[NAMESIZE];
 
 	if ((part -= 'a') >= maxpartitions || part < 0)
-		panic("resolve");
+		panic("%s: Bad partition %c", __func__, part);
 	if ((nv = *nvp) == NULL) {
 		dev_t	d = NODEV;
 		/*
@@ -939,7 +1000,7 @@ resolve(struct nvlist **nvp, const char *name, const char *what,
 	 * suffix, remove it if there, and split into name ("ra") and
 	 * unit (2).
 	 */
-	l = i = strlen(nv->nv_str);
+	l = strlen(nv->nv_str);
 	cp = &nv->nv_str[l];
 	if (l > 1 && *--cp >= 'a' && *cp < 'a' + maxpartitions &&
 	    isdigit((unsigned char)cp[-1])) {
@@ -988,13 +1049,18 @@ addconf(struct config *cf0)
 	const char *name;
 
 	name = cf0->cf_name;
-	cf = ecalloc(1, sizeof *cf);
-	if (ht_insert(cfhashtab, name, cf)) {
-		cfgerror("configuration `%s' already defined", name);
-		free(cf);
+	if ((cf = ht_lookup(cfhashtab, name)) != NULL) {
+		cfgerror("configuration `%s' already defined %s:%hu", name,
+			cf->cf_where.w_srcfile, cf->cf_where.w_srcline);
 		goto bad;
 	}
+	cf = ecalloc(1, sizeof *cf);
+	if (ht_insert(cfhashtab, name, cf)) {
+		free(cf);
+	}
 	*cf = *cf0;
+	cf->cf_where.w_srcfile = yyfile;
+	cf->cf_where.w_srcline = currentline();
 
 	/*
 	 * Resolve the root device.
@@ -1051,13 +1117,14 @@ setconf(struct nvlist **npp, const char *what, struct nvlist *v)
 }
 
 void
-delconf(const char *name)
+delconf(const char *name, int nowarn)
 {
 	struct config *cf;
 
 	CFGDBG(5, "deselecting config `%s'", name);
 	if (ht_lookup(cfhashtab, name) == NULL) {
-		cfgerror("configuration `%s' undefined", name);
+		if (!nowarn)
+			cfgerror("configuration `%s' undefined", name);
 		return;
 	}
 	(void)ht_remove(cfhashtab, name);
@@ -1066,7 +1133,7 @@ delconf(const char *name)
 		if (!strcmp(cf->cf_name, name))
 			break;
 	if (cf == NULL)
-		panic("lost configuration `%s'", name);
+		panic("%s: lost configuration for %s", __func__, name);
 
 	TAILQ_REMOVE(&allcf, cf, cf_next);
 }
@@ -1105,14 +1172,93 @@ newdevi(const char *name, int unit, struct devbase *d)
 	i->i_atdeva = NULL;
 	i->i_locs = NULL;
 	i->i_cfflags = 0;
-	i->i_lineno = currentline();
-	i->i_srcfile = yyfile;
+	i->i_where.w_srcline = currentline();
+	i->i_where.w_srcfile = yyfile;
 	i->i_active = DEVI_ORPHAN; /* Proper analysis comes later */
 	i->i_level = devilevel;
 	i->i_pseudoroot = 0;
+	i->i_where.w_srcfile = yyfile;
+	i->i_where.w_srcline = currentline();
 	if (unit >= d->d_umax)
 		d->d_umax = unit + 1;
 	return (i);
+}
+
+static struct attr *
+finddevattr(const char *name, const char *at, struct devbase *ib,
+    struct devbase **ab, int *atunit)
+{
+	const char *cp;
+	char atbuf[NAMESIZE];
+	struct attrlist *al;
+	struct attr *attr;
+
+	if (at == NULL) {
+		*ab = NULL;
+		*atunit = -1;
+		return &errattr;	/* a convenient "empty" attr */
+	}
+	if (split(at, strlen(at), atbuf, sizeof atbuf, atunit)) {
+		cfgerror("invalid attachment name `%s'", at);
+		/* (void)getdevi(name); -- ??? */
+		return NULL;
+	}
+
+	/*
+	 * Devices can attach to two types of things: Attributes,
+	 * and other devices (which have the appropriate attributes
+	 * to allow attachment).
+	 *
+	 * (1) If we're attached to an attribute, then we don't need
+	 *     look at the parent base device to see what attributes
+	 *     it has, and make sure that we can attach to them.    
+	 *
+	 * (2) If we're attached to a real device (i.e. named in
+	 *     the config file), we want to remember that so that
+	 *     at cross-check time, if the device we're attached to
+	 *     is missing but other devices which also provide the
+	 *     attribute are present, we don't get a false "OK."
+	 *
+	 * (3) If the thing we're attached to is an attribute
+	 *     but is actually named in the config file, we still
+	 *     have to remember its devbase.
+	 */
+	cp = intern(atbuf);
+
+	/* Figure out parent's devbase, to satisfy case (3). */
+	*ab = ht_lookup(devbasetab, cp);
+
+	/* Find out if it's an attribute. */
+	attr = ht_lookup(attrtab, cp);
+
+	/* Make sure we're _really_ attached to the attr.  Case (1). */
+	if (attr != NULL && onlist(attr->a_devs, ib))
+		return attr;
+
+	/*
+	 * Else a real device, and not just an attribute.  Case (2).
+	 *
+	 * Have to work a bit harder to see whether we have
+	 * something like "tg0 at esp0" (where esp is merely
+	 * not an attribute) or "tg0 at nonesuch0" (where
+	 * nonesuch is not even a device).
+	 */
+	if (*ab == NULL) {
+		cfgerror("%s at %s: `%s' unknown", name, at, atbuf);
+		return NULL;
+	}
+
+	/*
+	 * See if the named parent carries an attribute
+	 * that allows it to supervise device ib.
+	 */
+	for (al = (*ab)->d_attrs; al != NULL; al = al->al_next) {
+		attr = al->al_this;
+		if (onlist(attr->a_devs, ib))
+			return attr;
+	}
+	cfgerror("`%s' cannot attach to `%s'", ib->d_name, atbuf);
+	return NULL;
 }
 
 /*
@@ -1127,137 +1273,69 @@ adddev(const char *name, const char *at, struct loclist *loclist, int flags)
 	struct attr *attr;	/* attribute that allows attach */
 	struct devbase *ib;	/* i->i_base */
 	struct devbase *ab;	/* not NULL => at another dev */
-	struct attrlist *al;
 	struct deva *iba;	/* devbase attachment used */
-	const char *cp;
-	int atunit;
-	char atbuf[NAMESIZE];
-	int hit;
+	struct deva *lastiba;
+	int atunit, first;
 
-	ab = NULL;
-	iba = NULL;
-	if (at == NULL) {
-		/* "at root" */
-		p = NULL;
-		if ((i = getdevi(name)) == NULL)
-			goto bad;
-		/*
-		 * Must warn about i_unit > 0 later, after taking care of
-		 * the STAR cases (we could do non-star's here but why
-		 * bother?).  Make sure this device can be at root.
-		 */
-		ib = i->i_base;
-		hit = 0;
-		for (iba = ib->d_ahead; iba != NULL; iba = iba->d_bsame)
-			if (onlist(iba->d_atlist, NULL)) {
-				hit = 1;
-				break;
-			}
-		if (!hit) {
-			cfgerror("`%s' cannot attach to the root", ib->d_name);
-			i->i_active = DEVI_BROKEN;
-			goto bad;
-		}
-		attr = &errattr;	/* a convenient "empty" attr */
-	} else {
-		if (split(at, strlen(at), atbuf, sizeof atbuf, &atunit)) {
-			cfgerror("invalid attachment name `%s'", at);
-			/* (void)getdevi(name); -- ??? */
-			goto bad;
-		}
-		if ((i = getdevi(name)) == NULL)
-			goto bad;
-		ib = i->i_base;
-
-		/*
-		 * Devices can attach to two types of things: Attributes,
-		 * and other devices (which have the appropriate attributes
-		 * to allow attachment).
-		 *
-		 * (1) If we're attached to an attribute, then we don't need
-		 *     look at the parent base device to see what attributes
-		 *     it has, and make sure that we can attach to them.    
-		 *
-		 * (2) If we're attached to a real device (i.e. named in
-		 *     the config file), we want to remember that so that
-		 *     at cross-check time, if the device we're attached to
-		 *     is missing but other devices which also provide the
-		 *     attribute are present, we don't get a false "OK."
-		 *
-		 * (3) If the thing we're attached to is an attribute
-		 *     but is actually named in the config file, we still
-		 *     have to remember its devbase.
-		 */
-		cp = intern(atbuf);
-
-		/* Figure out parent's devbase, to satisfy case (3). */
-		ab = ht_lookup(devbasetab, cp);
-
-		/* Find out if it's an attribute. */
-		attr = ht_lookup(attrtab, cp);
-
-		/* Make sure we're _really_ attached to the attr.  Case (1). */
-		if (attr != NULL && onlist(attr->a_devs, ib))
-			goto findattachment;
-
-		/*
-		 * Else a real device, and not just an attribute.  Case (2).
-		 *
-		 * Have to work a bit harder to see whether we have
-		 * something like "tg0 at esp0" (where esp is merely
-		 * not an attribute) or "tg0 at nonesuch0" (where
-		 * nonesuch is not even a device).
-		 */
-		if (ab == NULL) {
-			cfgerror("%s at %s: `%s' unknown",
-			    name, at, atbuf);
-			i->i_active = DEVI_BROKEN;
-			goto bad;
-		}
-
-		/*
-		 * See if the named parent carries an attribute
-		 * that allows it to supervise device ib.
-		 */
-		for (al = ab->d_attrs; al != NULL; al = al->al_next) {
-			attr = al->al_this;
-			if (onlist(attr->a_devs, ib))
-				goto findattachment;
-		}
-		cfgerror("`%s' cannot attach to `%s'", ib->d_name, atbuf);
-		i->i_active = DEVI_BROKEN;
+	lastiba = NULL;
+	if ((i = getdevi(name)) == NULL)
 		goto bad;
-
- findattachment:
-		/*
-		 * Find the parent spec.  If a matching one has not yet been
-		 * created, create one.
-		 */
-		p = getpspec(attr, ab, atunit);
-		p->p_devs = newnv(NULL, NULL, i, 0, p->p_devs);
-
-		/* find out which attachment it uses */
-		hit = 0;
-		for (iba = ib->d_ahead; iba != NULL; iba = iba->d_bsame)
-			if (onlist(iba->d_atlist, attr)) {
-				hit = 1;
-				break;
-			}
-		if (!hit)
-			panic("adddev: can't figure out attachment");
-	}
-	if ((i->i_locs = fixloc(name, attr, loclist)) == NULL) {
+	ib = i->i_base;
+	attr = finddevattr(name, at, ib, &ab, &atunit);
+	if (attr == NULL) {
 		i->i_active = DEVI_BROKEN;
 		goto bad;
 	}
-	i->i_at = at;
-	i->i_pspec = p;
-	i->i_atdeva = iba;
-	i->i_cfflags = flags;
-	CFGDBG(3, "devi `%s' added", i->i_name);
 
-	*iba->d_ipp = i;
-	iba->d_ipp = &i->i_asame;
+	for (lastiba = ib->d_ahead; lastiba; lastiba = iba->d_bsame) {
+		for (iba = lastiba; iba != NULL; iba = iba->d_bsame)
+			if (onlist(iba->d_atlist,
+			    attr == &errattr ? NULL : attr))
+				break;
+
+		first = lastiba == ib->d_ahead;
+		if (iba == NULL) {
+			if (!first)
+				goto bad;
+			if (attr != &errattr) {
+				panic("%s: can't figure out attachment",
+				    __func__);
+			} else {
+				cfgerror("`%s' cannot attach to the root",
+				    ib->d_name);
+				i->i_active = DEVI_BROKEN;
+			}
+		}
+		// get a new one if it is not the first time
+		if (!first && (i = getdevi(name)) == NULL)
+			goto bad;
+
+		if (attr != &errattr) {
+			/*
+			 * Find the parent spec.  If a matching one has not
+			 * yet been created, create one.
+			 *
+			 * XXX: This creates multiple pspecs that look the
+			 * same in the config file and could be merged.
+			 */
+			p = getpspec(attr, ab, atunit, first);
+			p->p_devs = newnv(NULL, NULL, i, 0, p->p_devs);
+		} else
+			p = NULL;
+
+		if ((i->i_locs = fixloc(name, attr, loclist)) == NULL) {
+			i->i_active = DEVI_BROKEN;
+			goto bad;
+		}
+		i->i_at = at;
+		i->i_pspec = p;
+		i->i_atdeva = iba;
+		i->i_cfflags = flags;
+		CFGDBG(3, "devi `%s' at '%s' added", i->i_name, iba->d_name);
+
+		*iba->d_ipp = i;
+		iba->d_ipp = &i->i_asame;
+	}
 
 	/* all done, fall into ... */
  bad:
@@ -1266,7 +1344,7 @@ adddev(const char *name, const char *at, struct loclist *loclist, int flags)
 }
 
 void
-deldevi(const char *name, const char *at)
+deldevi(const char *name, const char *at, int nowarn)
 {
 	struct devi *firsti, *i;
 	struct devbase *d;
@@ -1275,12 +1353,15 @@ deldevi(const char *name, const char *at)
 
 	CFGDBG(5, "deselecting devi `%s'", name);
 	if (split(name, strlen(name), base, sizeof base, &unit)) {
-		cfgerror("invalid device name `%s'", name);
-		return;
+		if (!nowarn) {
+			cfgerror("invalid device name `%s'", name);
+			return;
+		}
 	}
 	d = ht_lookup(devbasetab, intern(base));
 	if (d == NULL) {
-		cfgerror("%s: unknown device `%s'", name, base);
+		if (!nowarn)
+			cfgerror("%s: unknown device `%s'", name, base);
 		return;
 	}
 	if (d->d_ispseudo) {
@@ -1306,6 +1387,34 @@ deldevi(const char *name, const char *at)
 }
 
 static void
+remove_pspec(struct devi *i)
+{
+	struct pspec *p = i->i_pspec;
+	struct nvlist *nv, *onv;
+
+	if (p == NULL)
+		return;
+
+	/* Double-linked nvlist anyone? */
+	for (nv = p->p_devs; nv->nv_next != NULL; nv = nv->nv_next) {
+		if (nv->nv_next && nv->nv_next->nv_ptr == i) {
+			onv = nv->nv_next;
+			nv->nv_next = onv->nv_next;
+			nvfree(onv);
+			break;
+		}
+		if (nv->nv_ptr == i) {
+			/* nv is p->p_devs in that case */
+			p->p_devs = nv->nv_next;
+			nvfree(nv);
+			break;
+		}
+	}
+	if (p->p_devs == NULL)
+		TAILQ_REMOVE(&allpspecs, p, p_list);
+}
+
+static void
 remove_devi(struct devi *i)
 {
 	struct devbase *d = i->i_base;
@@ -1315,7 +1424,7 @@ remove_devi(struct devi *i)
 	CFGDBG(5, "removing devi `%s'", i->i_name);
 	f = ht_lookup(devitab, i->i_name);
 	if (f == NULL)
-		panic("remove_devi(): instance %s disappeared from devitab",
+		panic("%s: instance %s disappeared from devitab", __func__,
 		    i->i_name);
 
 	if (i->i_active == DEVI_BROKEN) {
@@ -1363,8 +1472,8 @@ remove_devi(struct devi *i)
 		    ppi = &(*ppi)->i_bsame)
 			continue;
 		if (*ppi == NULL)
-			panic("deldev: dev (%s) doesn't list the devi"
-			    " (%s at %s)", d->d_name, i->i_name, i->i_at);
+			panic("%s: dev (%s) doesn't list the devi (%s at %s)",
+			    __func__, d->d_name, i->i_name, i->i_at);
 		f = *ppi;
 		if (f == i)
 			/* That implies d->d_ihead == i */
@@ -1390,7 +1499,7 @@ remove_devi(struct devi *i)
 	    ppi = &(*ppi)->i_asame)
 		continue;
 	if (*ppi == NULL)
-		panic("deldev: deva (%s) doesn't list the devi (%s)",
+		panic("%s: deva (%s) doesn't list the devi (%s)", __func__,
 		    iba->d_name, i->i_name);
 	f = *ppi;
 	if (f == i)
@@ -1407,28 +1516,8 @@ remove_devi(struct devi *i)
 	/*
 	 *   - delete the pspec
 	 */
-	if (i->i_pspec) {
-		struct pspec *p = i->i_pspec;
-		struct nvlist *nv, *onv;
+	remove_pspec(i);
 
-		/* Double-linked nvlist anyone? */
-		for (nv = p->p_devs; nv->nv_next != NULL; nv = nv->nv_next) {
-			if (nv->nv_next && nv->nv_next->nv_ptr == i) {
-				onv = nv->nv_next;
-				nv->nv_next = onv->nv_next;
-				nvfree(onv);
-				break;
-			}
-			if (nv->nv_ptr == i) {
-				/* nv is p->p_devs in that case */
-				p->p_devs = nv->nv_next;
-				nvfree(nv);
-				break;
-			}
-		}
-		if (p->p_devs == NULL)
-			TAILQ_REMOVE(&allpspecs, p, p_list);
-	}
 	/*
 	 *   - delete the alldevi entry
 	 */
@@ -1449,7 +1538,7 @@ remove_devi(struct devi *i)
 	f = ht_lookup(deaddevitab, i->i_name);
 	if (f == NULL) {
 		if (ht_insert(deaddevitab, i->i_name, i))
-			panic("remove_devi(%s) - can't add to deaddevitab",
+			panic("%s: can't add %s to deaddevitab", __func__,
 			    i->i_name);
 	} else {
 		for (j = f; j->i_alias != NULL; j = j->i_alias)
@@ -1466,7 +1555,7 @@ remove_devi(struct devi *i)
 }
 
 void
-deldeva(const char *at)
+deldeva(const char *at, int nowarn)
 {
 	int unit;
 	const char *cp;
@@ -1559,17 +1648,15 @@ out:
 		}
 	}
 
-	for (nv = stack; nv != NULL; nv = nv->nv_next)
-		remove_devi(nv->nv_ptr);
-	nvfreel(stack);
+	devcleanup(stack);
 }
 
 void
-deldev(const char *name)
+deldev(const char *name, int nowarn)
 {
 	size_t l;
 	struct devi *firsti, *i;
-	struct nvlist *nv, *stack = NULL;
+	struct nvlist *stack = NULL;
 
 	CFGDBG(5, "deselecting dev `%s'", name);
 	if (name[0] == '\0')
@@ -1581,7 +1668,8 @@ deldev(const char *name)
 		firsti = ht_lookup(devitab, name);
 		if (firsti == NULL) {
 out:
-			cfgerror("unknown instance %s", name);
+			if (!nowarn)
+				cfgerror("unknown instance %s", name);
 			return;
 		}
 		for (i = firsti; i != NULL; i = i->i_alias)
@@ -1599,16 +1687,10 @@ out:
 			    name);
 			return;
 		}
-
-		for (firsti = d->d_ihead; firsti != NULL;
-		    firsti = firsti->i_bsame)
-			for (i = firsti; i != NULL; i = i->i_alias)
-				stack = newnv(NULL, NULL, i, 0, stack);
+		stack = makedevstack(d);
 	}
 
-	for (nv = stack; nv != NULL; nv = nv->nv_next)
-		remove_devi(nv->nv_ptr);
-	nvfreel(stack);
+	devcleanup(stack);
 }
 
 /*
@@ -1676,7 +1758,8 @@ addpseudoroot(const char *name)
 	/* ok, everything should be set up, so instantiate a fake device */
 	i = getdevi(name);
 	if (i == NULL)
-		panic("device `%s' expected to be present", name);
+		panic("%s: device `%s' expected to be present", __func__,
+		    name);
 	ib = i->i_base;
 	iba = ib->d_ahead;
 
@@ -1690,6 +1773,29 @@ addpseudoroot(const char *name)
 	iba->d_ipp = &i->i_asame;
 
 	ht_insert(devroottab, ib->d_name, ib);
+}
+
+static void
+deldevbase(struct devbase *d)
+{
+	struct devi *i;
+	const char *name = d->d_name;
+
+	if (!d->d_ispseudo) {
+		devcleanup(makedevstack(d));
+		return;
+	}
+
+	if ((i = ht_lookup(devitab, name)) == NULL)
+		return;
+
+	d->d_umax = 0;		/* clear neads-count entries */
+	d->d_ihead = NULL;	/* make sure it won't be considered active */
+	TAILQ_REMOVE(&allpseudo, i, i_next);
+	if (ht_remove(devitab, name))
+		panic("%s: Can't remove %s from devitab", __func__, name);
+	if (ht_insert(deaddevitab, name, i))
+		panic("%s: Can't add %s to deaddevitab", __func__, name);
 }
 
 void
@@ -1707,13 +1813,14 @@ addpseudo(const char *name, int number)
 		cfgerror("%s is a real device, not a pseudo-device", name);
 		return;
 	}
-	if (ht_lookup(devitab, name) != NULL) {
-		cfgerror("`%s' already defined", name);
+	if ((i = ht_lookup(devitab, name)) != NULL) {
+		cfgerror("`%s' already defined at %s:%hu", name,
+		    i->i_where.w_srcfile, i->i_where.w_srcline);
 		return;
 	}
 	i = newdevi(name, number - 1, d);	/* foo 16 => "foo0..foo15" */
 	if (ht_insert(devitab, name, i))
-		panic("addpseudo(%s)", name);
+		panic("%s: %s", __func__, name);
 	/* Useful to retrieve the instance from the devbase */
 	d->d_ihead = i;
 	i->i_active = DEVI_ACTIVE;
@@ -1721,32 +1828,22 @@ addpseudo(const char *name, int number)
 }
 
 void
-delpseudo(const char *name)
+delpseudo(const char *name, int nowarn)
 {
 	struct devbase *d;
-	struct devi *i;
 
 	CFGDBG(5, "deselecting pseudo `%s'", name);
 	d = ht_lookup(devbasetab, name);
 	if (d == NULL) {
-		cfgerror("undefined pseudo-device %s", name);
+		if (!nowarn)
+			cfgerror("undefined pseudo-device %s", name);
 		return;
 	}
 	if (!d->d_ispseudo) {
 		cfgerror("%s is a real device, not a pseudo-device", name);
 		return;
 	}
-	if ((i = ht_lookup(devitab, name)) == NULL) {
-		cfgerror("`%s' not defined", name);
-		return;
-	}
-	d->d_umax = 0;		/* clear neads-count entries */
-	d->d_ihead = NULL;	/* make sure it won't be considered active */
-	TAILQ_REMOVE(&allpseudo, i, i_next);
-	if (ht_remove(devitab, name))
-		panic("delpseudo(%s) - can't remove from devitab", name);
-	if (ht_insert(deaddevitab, name, i))
-		panic("delpseudo(%s) - can't add to deaddevitab", name);
+	deldevbase(d);
 }
 
 void
@@ -1776,8 +1873,8 @@ adddevm(const char *name, devmajor_t cmajor, devmajor_t bmajor,
 	}
 
 	dm = ecalloc(1, sizeof(*dm));
-	dm->dm_srcfile = yyfile;
-	dm->dm_srcline = currentline();
+	dm->dm_where.w_srcfile = yyfile;
+	dm->dm_where.w_srcline = currentline();
 	dm->dm_name = name;
 	dm->dm_cmajor = cmajor;
 	dm->dm_bmajor = bmajor;
@@ -1793,7 +1890,9 @@ adddevm(const char *name, devmajor_t cmajor, devmajor_t bmajor,
 int
 fixdevis(void)
 {
+	const char *msg;
 	struct devi *i;
+	struct pspec *p;
 	int error = 0;
 
 	TAILQ_FOREACH(i, &alldevi, i_next) {
@@ -1806,12 +1905,14 @@ fixdevis(void)
 			 * i_at or i_pspec are NULL.
 			 */
 			++error;
-			cfgxerror(i->i_srcfile, i->i_lineno,
+			p = i->i_pspec;
+			msg = p == NULL ? "no parent" :
+			    (p->p_atunit == WILD ? "nothing matching" : "no");
+			cfgxerror(i->i_where.w_srcfile, i->i_where.w_srcline,
 			    "`%s at %s' is orphaned (%s `%s' found)", 
-			    i->i_name, i->i_at, i->i_pspec->p_atunit == WILD ?
-			    "nothing matching" : "no", i->i_at);
+			    i->i_name, i->i_at, msg, i->i_at);
 		} else if (vflag && i->i_active == DEVI_IGNORED)
-			cfgxwarn(i->i_srcfile, i->i_lineno, "ignoring "
+			cfgxwarn(i->i_where.w_srcfile, i->i_where.w_srcline, "ignoring "
 			    "explicitly orphaned instance `%s at %s'",
 			    i->i_name, i->i_at);
 	}
@@ -1829,15 +1930,24 @@ fixdevis(void)
  * Look up a parent spec, creating a new one if it does not exist.
  */
 static struct pspec *
-getpspec(struct attr *attr, struct devbase *ab, int atunit)
+getpspec(struct attr *attr, struct devbase *ab, int atunit, int first)
 {
 	struct pspec *p;
+	int inst = npspecs;
+	int ref = 1;
 
 	TAILQ_FOREACH(p, &allpspecs, p_list) {
-		if (p->p_iattr == attr &&
-		    p->p_atdev == ab &&
-		    p->p_atunit == atunit)
-			return (p);
+		if (p->p_iattr == attr && p->p_atdev == ab &&
+		    p->p_atunit == atunit) {
+			p->p_ref++;
+			if (first)
+				return p;
+			else {
+				inst = p->p_inst;
+				ref = p->p_ref;
+			}
+				
+		}
 	}
 
 	p = ecalloc(1, sizeof(*p));
@@ -1845,8 +1955,11 @@ getpspec(struct attr *attr, struct devbase *ab, int atunit)
 	p->p_iattr = attr;
 	p->p_atdev = ab;
 	p->p_atunit = atunit;
-	p->p_inst = npspecs++;
+	p->p_inst = inst;
+	if (inst == npspecs)
+		npspecs++;
 	p->p_active = 0;
+	p->p_ref = ref;
 
 	TAILQ_INSERT_TAIL(&allpspecs, p, p_list);
 
@@ -1881,7 +1994,7 @@ getdevi(const char *name)
 	i = newdevi(name, unit, d);
 	if (firsti == NULL) {
 		if (ht_insert(devitab, name, i))
-			panic("getdevi(%s)", name);
+			panic("%s: %s", __func__, name);
 		*d->d_ipp = i;
 		d->d_ipp = &i->i_bsame;
 	} else {
@@ -1969,7 +2082,7 @@ addattr(const char *name)
 }
 
 void
-delattr(const char *name)
+delattr(const char *name, int nowarn)
 {
 	struct attr *a;
 
@@ -1996,19 +2109,42 @@ selectattr(struct attr *a)
 static int
 deselectattrcb2(const char *name1, const char *name2, void *v, void *arg)
 {
-	const char *name = arg;
+	struct attr *a = arg;
+	const char *name = a->a_name;
+	struct vtype *vt = v;
 
-	if (strcmp(name, name2) == 0)
-		delattr(name1);
+	if (strcmp(name, name2) == 0) {
+		delattr(name1, 0);
+		return 0;
+	}
+
+	if (!vt->attr->a_deselected)
+		return 0;
+
+	switch (vt->type) {
+	case V_ATTRIBUTE:
+#ifdef notyet
+		// XXX: Loops
+		deselectattr(vt->value);
+#endif
+		break;
+	case V_DEVICE:
+		CFGDBG(5, "removing device `%s' with attr `%s' because attr `%s'"
+		    " is deselected", name1, name2, name);
+		deldevbase(vt->value);
+		break;
+	default:
+		abort();
+	}
 	return 0;
 }
 
 void
 deselectattr(struct attr *a)
 {
-
 	CFGDBG(5, "deselecting attr `%s'", a->a_name);
-	ht_enumerate2(attrdeptab, deselectattrcb2, __UNCONST(a->a_name));
+	a->a_deselected = 1;
+	ht_enumerate2(attrdeptab, deselectattrcb2, a);
 	if (ht_remove(selecttab, a->a_name) == 0)
 		nattrs--;
 	CFGDBG(3, "attr deselected `%s'", a->a_name);
@@ -2131,7 +2267,7 @@ fixloc(const char *name, struct attr *attr, struct loclist *got)
 		lp[ord] = m->ll_string;
 	}
 	if (ord != attr->a_loclen)
-		panic("fixloc");
+		panic("%s: bad length", __func__);
 	lp[ord] = NULL;
 	nextra = 0;
 	ep = extra;

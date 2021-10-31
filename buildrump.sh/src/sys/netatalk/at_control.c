@@ -1,4 +1,4 @@
-/*	$NetBSD: at_control.c,v 1.38 2016/07/07 09:32:02 ozaki-r Exp $	 */
+/*	$NetBSD: at_control.c,v 1.41 2021/08/02 12:56:25 andvar Exp $	 */
 
 /*
  * Copyright (c) 1990,1994 Regents of The University of Michigan.
@@ -27,7 +27,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: at_control.c,v 1.38 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: at_control.c,v 1.41 2021/08/02 12:56:25 andvar Exp $");
+
+#include "opt_atalk.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -113,7 +115,7 @@ at_control(u_long cmd, void *data, struct ifnet *ifp)
 					break;
 		}
 		/*
-		 * If we a retrying to delete an addres but didn't find such,
+		 * If we a retrying to delete an address but didn't find such,
 		 * then return with an error
 		 */
 		if (cmd == SIOCDIFADDR && aa == 0)
@@ -194,6 +196,7 @@ at_control(u_long cmd, void *data, struct ifnet *ifp)
 				TAILQ_INSERT_TAIL(&at_ifaddr, aa, aa_list);
 			}
 			ifaref(&aa->aa_ifa);
+			ifa_psref_init(&aa->aa_ifa);
 
 			/*
 		         * Find the end of the interface's addresses

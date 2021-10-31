@@ -1,4 +1,4 @@
-/* $NetBSD: radeonfb_bios.c,v 1.4 2010/11/03 00:49:02 macallan Exp $ */
+/* $NetBSD: radeonfb_bios.c,v 1.6 2020/09/18 20:44:20 macallan Exp $ */
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radeonfb_bios.c,v 1.4 2010/11/03 00:49:02 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radeonfb_bios.c,v 1.6 2020/09/18 20:44:20 macallan Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -75,7 +75,7 @@ __KERNEL_RCSID(0, "$NetBSD: radeonfb_bios.c,v 1.4 2010/11/03 00:49:02 macallan E
 #define	MEM_CONFIG_OFFSET		0x48
 
 /*
- * Values related to generic intialization tables.
+ * Values related to generic initialization tables.
  */
 #define	TABLE_ENTRY_FLAG_MASK		0xe000
 #define	TABLE_ENTRY_INDEX_MASK		0x1fff
@@ -305,7 +305,7 @@ rb_wait_mc_busy_mask(struct radeonfb_softc *sc, uint16_t count)
 	DPRINTF(("WAIT_MC_BUSY_MASK: %d ", count));
 	while (count--) {
 		if (!(radeonfb_getpll(sc, RADEON_CLK_PWRMGT_CNTL) &
-			RADEON_MC_BUSY_MASK))
+			RADEON_MC_BUSY))
 			break;
 	}
 	DPRINTF(("%d\n", count));
@@ -330,7 +330,7 @@ rb_wait_dll_ready_mask(struct radeonfb_softc *sc, uint16_t count)
 	DPRINTF(("WAIT_DLL_READY_MASK: %d ", count));
 	while (count--) {
 		if (radeonfb_getpll(sc, RADEON_CLK_PWRMGT_CNTL) &
-		    RADEON_DLL_READY_MASK)
+		    RADEON_DLL_READY)
 			break;
 	}
 	DPRINTF(("%d\n", count));

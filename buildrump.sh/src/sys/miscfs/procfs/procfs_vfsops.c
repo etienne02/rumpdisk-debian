@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs_vfsops.c,v 1.94 2014/11/10 18:46:34 maxv Exp $	*/
+/*	$NetBSD: procfs_vfsops.c,v 1.110 2020/12/28 22:36:16 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1993
@@ -76,28 +76,29 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_vfsops.c,v 1.94 2014/11/10 18:46:34 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_vfsops.c,v 1.110 2020/12/28 22:36:16 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
 #endif
 
 #include <sys/param.h>
-#include <sys/time.h>
-#include <sys/kernel.h>
-#include <sys/systm.h>
-#include <sys/sysctl.h>
-#include <sys/proc.h>
+#include <sys/atomic.h>
 #include <sys/buf.h>
-#include <sys/syslog.h>
-#include <sys/mount.h>
 #include <sys/dirent.h>
-#include <sys/signalvar.h>
-#include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kauth.h>
+#include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/mount.h>
+#include <sys/proc.h>
+#include <sys/signalvar.h>
+#include <sys/sysctl.h>
+#include <sys/syslog.h>
+#include <sys/systm.h>
+#include <sys/time.h>
+#include <sys/vnode.h>
 
 #include <miscfs/genfs/genfs.h>
 
@@ -105,11 +106,9 @@ __KERNEL_RCSID(0, "$NetBSD: procfs_vfsops.c,v 1.94 2014/11/10 18:46:34 maxv Exp 
 
 #include <uvm/uvm_extern.h>			/* for PAGE_SIZE */
 
-MODULE(MODULE_CLASS_VFS, procfs, NULL);
+MODULE(MODULE_CLASS_VFS, procfs, "ptrace_common");
 
 VFS_PROTOS(procfs);
-
-static struct sysctllog *procfs_sysctl_log;
 
 static kauth_listener_t procfs_listener;
 
@@ -173,7 +172,7 @@ procfs_mount(
 	else
 		pmnt->pmnt_flags = 0;
 
-	mp->mnt_iflag |= IMNT_MPSAFE;
+	mp->mnt_iflag |= IMNT_MPSAFE | IMNT_SHRLOOKUP;
 	return error;
 }
 
@@ -201,13 +200,13 @@ procfs_unmount(struct mount *mp, int mntflags)
 }
 
 int
-procfs_root(struct mount *mp, struct vnode **vpp)
+procfs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	int error;
 
 	error = procfs_allocvp(mp, vpp, 0, PFSroot, -1);
 	if (error == 0) {
-		error = vn_lock(*vpp, LK_EXCLUSIVE);
+		error = vn_lock(*vpp, lktype);
 		if (error != 0) {
 			vrele(*vpp);
 			*vpp = NULL;
@@ -238,9 +237,9 @@ procfs_statvfs(struct mount *mp, struct statvfs *sbp)
 	sbp->f_frsize = PAGE_SIZE;
 	sbp->f_iosize = PAGE_SIZE;
 	sbp->f_blocks = 1;
-	sbp->f_files = maxproc;			/* approx */
-	sbp->f_ffree = maxproc - nprocs;	/* approx */
-	sbp->f_favail = maxproc - nprocs;	/* approx */
+	sbp->f_files = maxproc;					/* approx */
+	sbp->f_ffree = maxproc - atomic_load_relaxed(&nprocs);	/* approx */
+	sbp->f_favail = maxproc - atomic_load_relaxed(&nprocs);	/* approx */
 
 	return (0);
 }
@@ -258,7 +257,7 @@ procfs_sync(
 
 /*ARGSUSED*/
 int
-procfs_vget(struct mount *mp, ino_t ino,
+procfs_vget(struct mount *mp, ino_t ino, int lktype,
     struct vnode **vpp)
 {
 	return (EOPNOTSUPP);
@@ -322,9 +321,9 @@ procfs_loadvnode(struct mount *mp, struct vnode *vp,
 			vnode_t *vxp;
 			struct proc *p;
 
-			mutex_enter(proc_lock);
-			p = proc_find(pfs->pfs_pid);
-			mutex_exit(proc_lock);
+			mutex_enter(&proc_lock);
+			p = procfs_proc_find(mp, pfs->pfs_pid);
+			mutex_exit(&proc_lock);
 			if (p == NULL) {
 				error = ENOENT;
 				goto bad;
@@ -379,28 +378,34 @@ procfs_loadvnode(struct mount *mp, struct vnode *vp,
 		vp->v_type = VREG;
 		break;
 
-	case PFSctl:	/* /proc/N/ctl = --w------ */
 	case PFSnote:	/* /proc/N/note = --w------ */
 	case PFSnotepg:	/* /proc/N/notepg = --w------ */
 		pfs->pfs_mode = S_IWUSR;
 		vp->v_type = VREG;
 		break;
 
-	case PFSmap:	/* /proc/N/map = -r--r--r-- */
-	case PFSmaps:	/* /proc/N/maps = -r--r--r-- */
-	case PFSstatus:	/* /proc/N/status = -r--r--r-- */
-	case PFSstat:	/* /proc/N/stat = -r--r--r-- */
+	case PFSmap:		/* /proc/N/map = -r-------- */
+	case PFSmaps:		/* /proc/N/maps = -r-------- */
+	case PFSauxv:		/* /proc/N/auxv = -r-------- */
+	case PFSenviron:	/* /proc/N/environ = -r-------- */
+		pfs->pfs_mode = S_IRUSR;
+		vp->v_type = VREG;
+		break;
+
+	case PFSstatus:		/* /proc/N/status = -r--r--r-- */
+	case PFSstat:		/* /proc/N/stat = -r--r--r-- */
 	case PFScmdline:	/* /proc/N/cmdline = -r--r--r-- */
-	case PFSemul:	/* /proc/N/emul = -r--r--r-- */
+	case PFSemul:		/* /proc/N/emul = -r--r--r-- */
 	case PFSmeminfo:	/* /proc/meminfo = -r--r--r-- */
 	case PFScpustat:	/* /proc/stat = -r--r--r-- */
 	case PFSdevices:	/* /proc/devices = -r--r--r-- */
 	case PFScpuinfo:	/* /proc/cpuinfo = -r--r--r-- */
-	case PFSuptime:	/* /proc/uptime = -r--r--r-- */
-	case PFSmounts:	/* /proc/mounts = -r--r--r-- */
+	case PFSuptime:		/* /proc/uptime = -r--r--r-- */
+	case PFSmounts:		/* /proc/mounts = -r--r--r-- */
 	case PFSloadavg:	/* /proc/loadavg = -r--r--r-- */
-	case PFSstatm:	/* /proc/N/statm = -r--r--r-- */
+	case PFSstatm:		/* /proc/N/statm = -r--r--r-- */
 	case PFSversion:	/* /proc/version = -r--r--r-- */
+	case PFSlimit:		/* /proc/limit = -r--r--r-- */
 		pfs->pfs_mode = S_IRUSR|S_IRGRP|S_IROTH;
 		vp->v_type = VREG;
 		break;
@@ -473,7 +478,7 @@ struct vfsops procfs_vfsops = {
 	.vfs_done = procfs_done,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
@@ -486,19 +491,13 @@ procfs_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 {
 	struct proc *p;
 	struct pfsnode *pfs;
-	enum kauth_process_req req;
 	int result;
 
 	result = KAUTH_RESULT_DEFER;
 	p = arg0;
 	pfs = arg1;
-	req = (enum kauth_process_req)(unsigned long)arg2;
 
 	if (action != KAUTH_PROCESS_PROCFS)
-		return result;
-
-	/* Privileged; let secmodel handle that. */
-	if (req == KAUTH_REQ_PROCESS_PROCFS_CTL)
 		return result;
 
 	switch (pfs->pfs_type) {
@@ -518,6 +517,21 @@ procfs_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	return result;
 }
 
+SYSCTL_SETUP(procfs_sysctl_setup, "procfs sysctl")
+{
+
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_NODE, "procfs",
+		       SYSCTL_DESCR("Process file system"),
+		       NULL, 0, NULL, 0,
+		       CTL_VFS, 12, CTL_EOL);
+	/*
+	 * XXX the "12" above could be dynamic, thereby eliminating
+	 * one more instance of the "number to vfs" mapping problem,
+	 * but "12" is the order as taken from sys/mount.h
+	 */
+}
 
 static int
 procfs_modcmd(modcmd_t cmd, void *arg)
@@ -529,17 +543,6 @@ procfs_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_attach(&procfs_vfsops);
 		if (error != 0)
 			break;
-		sysctl_createv(&procfs_sysctl_log, 0, NULL, NULL,
-			       CTLFLAG_PERMANENT,
-			       CTLTYPE_NODE, "procfs",
-			       SYSCTL_DESCR("Process file system"),
-			       NULL, 0, NULL, 0,
-			       CTL_VFS, 12, CTL_EOL);
-		/*
-		 * XXX the "12" above could be dynamic, thereby eliminating
-		 * one more instance of the "number to vfs" mapping problem,
-		 * but "12" is the order as taken from sys/mount.h
-		 */
 
 		procfs_listener = kauth_listen_scope(KAUTH_SCOPE_PROCESS,
 		    procfs_listener_cb, NULL);
@@ -549,7 +552,6 @@ procfs_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_detach(&procfs_vfsops);
 		if (error != 0)
 			break;
-		sysctl_teardown(&procfs_sysctl_log);
 		kauth_unlisten_scope(procfs_listener);
 		break;
 	default:

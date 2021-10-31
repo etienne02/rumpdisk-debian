@@ -1,4 +1,4 @@
-/*	$NetBSD: bivideo.c,v 1.33 2012/10/27 17:18:17 chs Exp $	*/
+/*	$NetBSD: bivideo.c,v 1.36 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1999-2001
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bivideo.c,v 1.33 2012/10/27 17:18:17 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bivideo.c,v 1.36 2021/08/07 16:19:11 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_hpcfb.h"
@@ -195,7 +195,7 @@ bivideoattach(device_t parent, device_t self, void *aux)
 	ha.ha_ndspconf = 1;
 	ha.ha_dspconflist = &sc->sc_dspconf;
 
-	config_found(self, &ha, hpcfbprint);
+	config_found(self, &ha, hpcfbprint, CFARGS_NONE);
 }
 
 int
@@ -402,8 +402,8 @@ bivideo_ioctl(void *v, u_long cmd, void *data, int flag, struct lwp *l)
 
 		if (sc->sc_fbconf.hf_class != HPCFB_CLASS_INDEXCOLOR ||
 		    sc->sc_fbconf.hf_pack_width != 8 ||
-		    256 <= cmap->index ||
-		    256 < (cmap->index + cmap->count))
+		    cmap->index >= 256 ||
+		    cmap->count > 256 - cmap->index)
 			return (EINVAL);
 
 		error = copyout(&bivideo_cmap_r[cmap->index], cmap->red,

@@ -1,4 +1,4 @@
-/*	$NetBSD: nor.c,v 1.5 2014/02/25 18:30:10 pooka Exp $	*/
+/*	$NetBSD: nor.c,v 1.7 2021/08/07 16:19:13 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2011 Department of Software Engineering,
@@ -34,7 +34,7 @@
 /* Common driver for NOR chips implementing the ONFI CFI specification */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nor.c,v 1.5 2014/02/25 18:30:10 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nor.c,v 1.7 2021/08/07 16:19:13 thorpej Exp $");
 
 #include "locators.h"
 #include "opt_nor.h"
@@ -182,7 +182,8 @@ nor_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Attach all our devices
 	 */
-	config_search_ia(nor_search, self, NULL, NULL);
+	config_search(self, NULL,
+	    CFARGS(.search = nor_search));
 
 	return;
 
@@ -217,8 +218,9 @@ nor_search(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 
 	faa.flash_if = &sc->sc_flash_if;
 
-	if (config_match(parent, cf, &faa)) {
-		if (config_attach(parent, cf, &faa, nor_print) != NULL) {
+	if (config_probe(parent, cf, &faa)) {
+		if (config_attach(parent, cf, &faa, nor_print,
+				  CFARGS_NONE) != NULL) {
 			return 0;
 		} else {
 			return 1;
@@ -283,7 +285,8 @@ nor_attach_mi(struct nor_interface * const nor_if, device_t parent)
 
 	arg.naa_nor_if = nor_if;
 
-	device_t dev = config_found_ia(parent, "norbus", &arg, nor_print);
+	device_t dev = config_found(parent, &arg, nor_print,
+	    CFARGS(.iattr = "norbus"));
 
 	return dev;
 }

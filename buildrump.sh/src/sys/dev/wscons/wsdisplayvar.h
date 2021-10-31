@@ -1,4 +1,4 @@
-/* $NetBSD: wsdisplayvar.h,v 1.51 2014/01/21 00:08:27 mlelstv Exp $ */
+/* $NetBSD: wsdisplayvar.h,v 1.55 2019/01/30 11:24:48 jmcneill Exp $ */
 
 /*
  * Copyright (c) 1996, 1997 Christopher G. Demetriou.  All rights reserved.
@@ -83,6 +83,12 @@ struct wsdisplay_emulops {
 #define WSATTR_BLINK	4
 #define WSATTR_UNDERLINE 8
 #define WSATTR_WSCOLORS 16
+#define WSATTR_USERMASK 0x0fff
+/* private flags used by the driver */
+#define WSATTR_PRIVATE1  4096
+#define WSATTR_PRIVATE2  8192
+#define WSATTR_PRIVATE3 16384
+#define WSATTR_PRIVATE4 32768
 	/* XXX need a free_attr() ??? */
 	void	(*replaceattr)(void *, long, long);
 };
@@ -98,6 +104,9 @@ struct wsscreen_descr {
 #define WSSCREEN_HILIT		4	/* can highlight (however) */
 #define WSSCREEN_BLINK		8	/* can blink */
 #define WSSCREEN_UNDERLINE	16	/* can underline */
+#define WSSCREEN_RESIZE		32	/* can resize */
+#define WSSCREEN_FREE		64	/* free() this struct when deleting
+					 * internal only, do not set */
 	void *modecookie;
 };
 
@@ -164,6 +173,7 @@ void	wsdisplay_cnattach(const struct wsscreen_descr *, void *, int, int,
 void	wsdisplay_preattach(const struct wsscreen_descr *, void *, int, int,
             long);
 void	wsdisplay_cndetach(void);
+void	wsdisplay_multicons_suspend(bool);
 
 int	wsdisplaydevprint(void *, const char *);
 int	wsemuldisplaydevprint(void *, const char *);
@@ -204,6 +214,8 @@ int wsdisplay_stat_ioctl(struct wsdisplay_softc *, u_long, void *,
 
 int wsdisplay_cfg_ioctl(struct wsdisplay_softc *, u_long, void *,
 			int, struct lwp *);
+
+bool wsdisplay_isconsole(struct wsdisplay_softc *);
 
 struct wsdisplayio_edid_info;
 int wsdisplayio_get_edid(device_t, struct wsdisplayio_edid_info *);

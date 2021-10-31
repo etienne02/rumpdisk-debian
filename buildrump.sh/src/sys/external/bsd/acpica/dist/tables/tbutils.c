@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -149,9 +149,9 @@ AcpiTbCheckDsdtHeader (
  *
  * FUNCTION:    AcpiTbCopyDsdt
  *
- * PARAMETERS:  TableDesc           - Installed table to copy
+ * PARAMETERS:  TableIndex          - Index of installed table to copy
  *
- * RETURN:      None
+ * RETURN:      The copied DSDT
  *
  * DESCRIPTION: Implements a subsystem option to copy the DSDT to local memory.
  *              Some very bad BIOSs are known to either corrupt the DSDT or
@@ -228,8 +228,9 @@ AcpiTbGetRootTableEntry (
          * 32-bit platform, RSDT: Return 32-bit table entry
          * 64-bit platform, RSDT: Expand 32-bit to 64-bit and return
          */
-        return ((ACPI_PHYSICAL_ADDRESS) (*ACPI_CAST_PTR (
-            UINT32, TableEntry)));
+        UINT32 addr;
+        memcpy(&addr, ACPI_CAST_PTR (UINT32, TableEntry), sizeof(addr));
+        return (ACPI_PHYSICAL_ADDRESS) addr;
     }
     else
     {
@@ -260,7 +261,7 @@ AcpiTbGetRootTableEntry (
  *
  * FUNCTION:    AcpiTbParseRootTable
  *
- * PARAMETERS:  Rsdp                    - Pointer to the RSDP
+ * PARAMETERS:  RsdpAddress         - Pointer to the RSDP
  *
  * RETURN:      Status
  *
@@ -273,7 +274,7 @@ AcpiTbGetRootTableEntry (
  *
  ******************************************************************************/
 
-ACPI_STATUS
+ACPI_STATUS ACPI_INIT_FUNCTION
 AcpiTbParseRootTable (
     ACPI_PHYSICAL_ADDRESS   RsdpAddress)
 {
@@ -395,7 +396,7 @@ AcpiTbParseRootTable (
             ACPI_TABLE_ORIGIN_INTERNAL_PHYSICAL, FALSE, TRUE, &TableIndex);
 
         if (ACPI_SUCCESS (Status) &&
-            ACPI_COMPARE_NAME (
+            ACPI_COMPARE_NAMESEG (
                 &AcpiGbl_RootTableList.Tables[TableIndex].Signature,
                 ACPI_SIG_FADT))
         {
@@ -410,4 +411,112 @@ NextTable:
 
     AcpiOsUnmapMemory (Table, Length);
     return_ACPI_STATUS (AE_OK);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiTbGetTable
+ *
+ * PARAMETERS:  TableDesc           - Table descriptor
+ *              OutTable            - Where the pointer to the table is returned
+ *
+ * RETURN:      Status and pointer to the requested table
+ *
+ * DESCRIPTION: Increase a reference to a table descriptor and return the
+ *              validated table pointer.
+ *              If the table descriptor is an entry of the root table list,
+ *              this API must be invoked with ACPI_MTX_TABLES acquired.
+ *
+ ******************************************************************************/
+
+ACPI_STATUS
+AcpiTbGetTable (
+    ACPI_TABLE_DESC        *TableDesc,
+    ACPI_TABLE_HEADER      **OutTable)
+{
+    ACPI_STATUS            Status;
+
+
+    ACPI_FUNCTION_TRACE (AcpiTbGetTable);
+
+
+    if (TableDesc->ValidationCount == 0)
+    {
+        /* Table need to be "VALIDATED" */
+
+        Status = AcpiTbValidateTable (TableDesc);
+        if (ACPI_FAILURE (Status))
+        {
+            return_ACPI_STATUS (Status);
+        }
+    }
+
+    if (TableDesc->ValidationCount < ACPI_MAX_TABLE_VALIDATIONS)
+    {
+        TableDesc->ValidationCount++;
+
+        /*
+         * Detect ValidationCount overflows to ensure that the warning
+         * message will only be printed once.
+         */
+        if (TableDesc->ValidationCount >= ACPI_MAX_TABLE_VALIDATIONS)
+        {
+            ACPI_WARNING((AE_INFO,
+                "Table %p, Validation count overflows\n", TableDesc));
+        }
+    }
+
+    *OutTable = TableDesc->Pointer;
+    return_ACPI_STATUS (AE_OK);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiTbPutTable
+ *
+ * PARAMETERS:  TableDesc           - Table descriptor
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decrease a reference to a table descriptor and release the
+ *              validated table pointer if no references.
+ *              If the table descriptor is an entry of the root table list,
+ *              this API must be invoked with ACPI_MTX_TABLES acquired.
+ *
+ ******************************************************************************/
+
+void
+AcpiTbPutTable (
+    ACPI_TABLE_DESC        *TableDesc)
+{
+
+    ACPI_FUNCTION_TRACE (AcpiTbPutTable);
+
+
+    if (TableDesc->ValidationCount < ACPI_MAX_TABLE_VALIDATIONS)
+    {
+        TableDesc->ValidationCount--;
+
+        /*
+         * Detect ValidationCount underflows to ensure that the warning
+         * message will only be printed once.
+         */
+        if (TableDesc->ValidationCount >= ACPI_MAX_TABLE_VALIDATIONS)
+        {
+            ACPI_WARNING ((AE_INFO,
+                "Table %p, Validation count underflows\n", TableDesc));
+            return_VOID;
+        }
+    }
+
+    if (TableDesc->ValidationCount == 0)
+    {
+        /* Table need to be "INVALIDATED" */
+
+        AcpiTbInvalidateTable (TableDesc);
+    }
+
+    return_VOID;
 }

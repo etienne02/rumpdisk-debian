@@ -1,4 +1,4 @@
-/* $NetBSD: genfb_machdep.c,v 1.11 2013/07/25 15:09:27 macallan Exp $ */
+/* $NetBSD: genfb_machdep.c,v 1.16 2021/01/28 01:57:31 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2009 Jared D. McNeill <jmcneill@invisible.ca>
@@ -31,20 +31,18 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: genfb_machdep.c,v 1.11 2013/07/25 15:09:27 macallan Exp $");
-
-#include "opt_mtrr.h"
+__KERNEL_RCSID(0, "$NetBSD: genfb_machdep.c,v 1.16 2021/01/28 01:57:31 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
+#include <sys/kmem.h>
 #include <sys/lwp.h>
 
 #include <sys/bus.h>
 #include <machine/bootinfo.h>
-#include <machine/mtrr.h>
 
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wsdisplayvar.h>
@@ -61,6 +59,7 @@ __KERNEL_RCSID(0, "$NetBSD: genfb_machdep.c,v 1.11 2013/07/25 15:09:27 macallan 
 
 #if NWSDISPLAY > 0 && NGENFB > 0
 struct vcons_screen x86_genfb_console_screen;
+bool x86_genfb_use_shadowfb = true;
 
 #if NACPICA > 0
 extern int acpi_md_vesa_modenum;
@@ -97,60 +96,20 @@ x86_genfb_ddb_trap_callback(int where)
 	}
 }
 
-void
-x86_genfb_mtrr_init(uint64_t physaddr, uint32_t size)
-{
-#if notyet
-#ifdef MTRR
-	struct mtrr mtrr;
-	int error, n;
-
-	if (mtrr_funcs == NULL) {
-		aprint_debug("%s: no mtrr funcs\n", __func__);
-		return;
-	}
-
-	mtrr.base = physaddr;
-	mtrr.len = size;
-	mtrr.type = MTRR_TYPE_WC;
-	mtrr.flags = MTRR_VALID;
-	mtrr.owner = 0;
-
-	aprint_debug("%s: 0x%" PRIx64 "-0x%" PRIx64 "\n", __func__,
-	    mtrr.base, mtrr.base + mtrr.len - 1);
-
-	n = 1;
-	KERNEL_LOCK(1, NULL);
-	error = mtrr_set(&mtrr, &n, curlwp->l_proc, MTRR_GETSET_KERNEL);
-	if (n != 0)
-		mtrr_commit();
-	KERNEL_UNLOCK_ONE(NULL);
-
-	aprint_debug("%s: mtrr_set returned %d\n", __func__, error);
-#else
-	aprint_debug("%s: kernel lacks MTRR option\n", __func__);
-#endif
-#endif
-}
-
 int
-x86_genfb_cnattach(void)
+x86_genfb_init(void)
 {
-	static int ncalls = 0;
+	static int inited, attached;
 	struct rasops_info *ri = &x86_genfb_console_screen.scr_ri;
 	const struct btinfo_framebuffer *fbinfo;
 	bus_space_tag_t t = x86_bus_space_mem;
 	bus_space_handle_t h;
 	void *bits;
-	long defattr;
 	int err;
 
-	/* XXX jmcneill
-	 *  Defer console initialization until UVM is initialized
-	 */
-	++ncalls;
-	if (ncalls < 3)
-		return -1;
+	if (inited)
+		return attached;
+	inited = 1;
 
 	memset(&x86_genfb_console_screen, 0, sizeof(x86_genfb_console_screen));
 
@@ -182,9 +141,15 @@ x86_genfb_cnattach(void)
 	ri->ri_height = fbinfo->height;
 	ri->ri_depth = fbinfo->depth;
 	ri->ri_stride = fbinfo->stride;
-	ri->ri_bits = bits;
+	if (x86_genfb_use_shadowfb && lookup_bootinfo(BTINFO_EFI) != NULL) {
+		/* XXX The allocated memory is never released... */
+		ri->ri_bits = kmem_alloc(ri->ri_stride * ri->ri_height,
+		    KM_SLEEP);
+		ri->ri_hwbits = bits;
+	} else
+		ri->ri_bits = bits;
 	ri->ri_flg = RI_CENTER | RI_FULLCLEAR | RI_CLEAR;
-	rasops_init(ri, ri->ri_width / 8, ri->ri_height / 8);
+	rasops_init(ri, ri->ri_height / 8, ri->ri_width / 8);
 	ri->ri_caps = WSSCREEN_WSCOLORS;
 	rasops_reconfig(ri, ri->ri_height / ri->ri_font->fontheight,
 	    ri->ri_width / ri->ri_font->fontwidth);
@@ -194,12 +159,39 @@ x86_genfb_cnattach(void)
 	x86_genfb_stdscreen.textops = &ri->ri_ops;
 	x86_genfb_stdscreen.capabilities = ri->ri_caps;
 
+	attached = 1;
+	return 1;
+}
+
+int
+x86_genfb_cnattach(void)
+{
+	static int ncalls = 0;
+	struct rasops_info *ri = &x86_genfb_console_screen.scr_ri;
+	long defattr;
+
+	/* XXX jmcneill
+	 *  Defer console initialization until UVM is initialized
+	 */
+	++ncalls;
+	if (ncalls < 3)
+		return -1;
+
+	if (!x86_genfb_init())
+		return 0;
+
 	ri->ri_ops.allocattr(ri, 0, 0, 0, &defattr);
 	wsdisplay_preattach(&x86_genfb_stdscreen, ri, 0, 0, defattr);
 
 	return 1;
 }
 #else	/* NWSDISPLAY > 0 && NGENFB > 0 */
+int
+x86_genfb_init(void)
+{
+	return 0;
+}
+
 int
 x86_genfb_cnattach(void)
 {

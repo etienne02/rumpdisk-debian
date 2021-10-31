@@ -1,4 +1,4 @@
-/*	$NetBSD: slcompress.h,v 1.18 2008/02/20 17:05:53 matt Exp $	*/
+/*	$NetBSD: slcompress.h,v 1.20 2020/03/05 07:46:36 riastradh Exp $	*/
 /*	Id: slcompress.h,v 1.4 1994/09/21 06:50:08 paulus Exp 	*/
 
 /*
@@ -42,6 +42,10 @@
 #ifndef _NET_SLCOMPRESS_H_
 #define _NET_SLCOMPRESS_H_
 
+#ifdef _KERNEL_OPT
+#include "opt_inet.h"
+#endif
+
 #define MAX_STATES 16		/* must be > 2 and < 256 */
 #define MAX_HDR MLEN		/* XXX 4bsd-ism: should really be 128 */
 
@@ -60,7 +64,7 @@
  *
  * There are 5 numbers which can change (they are always inserted
  * in the following order): TCP urgent pointer, window,
- * acknowlegement, sequence number and IP ID.  (The urgent pointer
+ * acknowledgement, sequence number and IP ID.  (The urgent pointer
  * is different from the others in that its value is sent, not the
  * change in value.)  Since typical use of SLIP links is biased
  * toward small packets (see comments on MTU/MSS below), changes

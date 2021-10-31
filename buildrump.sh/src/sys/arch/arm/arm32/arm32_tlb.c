@@ -27,10 +27,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_cputypes.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: arm32_tlb.c,v 1.10 2016/07/11 16:09:27 matt Exp $");
+__KERNEL_RCSID(1, "$NetBSD: arm32_tlb.c,v 1.14 2020/10/30 18:54:36 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -40,6 +41,7 @@ __KERNEL_RCSID(1, "$NetBSD: arm32_tlb.c,v 1.10 2016/07/11 16:09:27 matt Exp $");
 #include <arm/locore.h>
 
 bool arm_has_tlbiasid_p;	// CPU supports TLBIASID system coprocessor op
+bool arm_has_mpext_p;		// CPU supports MP extensions
 
 tlb_asid_t
 tlb_get_asid(void)
@@ -50,26 +52,26 @@ tlb_get_asid(void)
 void
 tlb_set_asid(tlb_asid_t asid)
 {
-	arm_dsb();
+	dsb(sy);
 	if (asid == KERNEL_PID) {
 		armreg_ttbcr_write(armreg_ttbcr_read() | TTBCR_S_PD0);
-		arm_isb();
+		isb();
 	}
 	armreg_contextidr_write(asid);
-	arm_isb();
+	isb();
 }
 
 void
 tlb_invalidate_all(void)
 {
 	const bool vivt_icache_p = arm_pcache.icache_type == CACHE_TYPE_VIVT;
-	arm_dsb();
-#ifdef MULTIPROCESSOR
-	armreg_tlbiallis_write(0);
-#else
-	armreg_tlbiall_write(0);
-#endif
-	arm_isb();
+	dsb(sy);
+	if (arm_has_mpext_p) {
+		armreg_tlbiallis_write(0);
+	} else {
+		armreg_tlbiall_write(0);
+	}
+	isb();
 	if (__predict_false(vivt_icache_p)) {
 		if (arm_has_tlbiasid_p) {
 			armreg_icialluis_write(0);
@@ -77,8 +79,8 @@ tlb_invalidate_all(void)
 			armreg_iciallu_write(0);
 		}
 	}
-	arm_dsb();
-	arm_isb();
+	dsb(sy);
+	isb();
 }
 
 void
@@ -91,48 +93,47 @@ void
 tlb_invalidate_asids(tlb_asid_t lo, tlb_asid_t hi)
 {
 	const bool vivt_icache_p = arm_pcache.icache_type == CACHE_TYPE_VIVT;
-	arm_dsb();
+	dsb(sy);
 	if (arm_has_tlbiasid_p) {
 		for (; lo <= hi; lo++) {
-#ifdef MULTIPROCESSOR
-			armreg_tlbiasidis_write(lo);
-#else
-			armreg_tlbiasid_write(lo);
-#endif
+			if (arm_has_mpext_p) {
+				armreg_tlbiasidis_write(lo);
+			} else {
+				armreg_tlbiasid_write(lo);
+			}
 		}
-		arm_dsb();
-		arm_isb();
+		dsb(sy);
+		isb();
 		if (__predict_false(vivt_icache_p)) {
-#ifdef MULTIPROCESSOR
-			armreg_icialluis_write(0);
-#else
-			armreg_iciallu_write(0);
-#endif
+			if (arm_has_mpext_p) {
+				armreg_icialluis_write(0);
+			} else {
+				armreg_iciallu_write(0);
+			}
 		}
 	} else {
 		armreg_tlbiall_write(0);
-		arm_isb();
+		isb();
 		if (__predict_false(vivt_icache_p)) {
 			armreg_iciallu_write(0);
 		}
 	}
-	arm_isb();
+	isb();
 }
 
 void
 tlb_invalidate_addr(vaddr_t va, tlb_asid_t asid)
 {
-	arm_dsb();
+	dsb(sy);
 	va = trunc_page(va) | asid;
 	for (vaddr_t eva = va + PAGE_SIZE; va < eva; va += L2_S_SIZE) {
-#ifdef MULTIPROCESSOR
-		armreg_tlbimvais_write(va);
-#else
-		armreg_tlbimva_write(va);
-#endif
-		//armreg_tlbiall_write(asid);
+		if (arm_has_mpext_p) {
+			armreg_tlbimvais_write(va);
+		} else {
+			armreg_tlbimva_write(va);
+		}
 	}
-	arm_isb();
+	isb();
 }
 
 bool
@@ -142,7 +143,7 @@ tlb_update_addr(vaddr_t va, tlb_asid_t asid, pt_entry_t pte, bool insert_p)
 	return true;
 }
 
-#if !defined(MULTIPROCESSOR) && defined(CPU_CORTEXA5)
+#if !defined(MULTIPROCESSOR)
 static u_int
 tlb_cortex_a5_record_asids(u_long *mapp, tlb_asid_t asid_max)
 {
@@ -152,7 +153,7 @@ tlb_cortex_a5_record_asids(u_long *mapp, tlb_asid_t asid_max)
 			armreg_tlbdataop_write(
 			     __SHIFTIN(way, ARM_TLBDATAOP_WAY)
 			     | __SHIFTIN(va_index, ARM_A5_TLBDATAOP_INDEX));
-			arm_isb();
+			isb();
 			const uint64_t d = ((uint64_t) armreg_tlbdata1_read())
 			    | armreg_tlbdata0_read();
 			if (!(d & ARM_TLBDATA_VALID)
@@ -174,7 +175,7 @@ tlb_cortex_a5_record_asids(u_long *mapp, tlb_asid_t asid_max)
 }
 #endif
 
-#if !defined(MULTIPROCESSOR) && defined(CPU_CORTEXA7)
+#if !defined(MULTIPROCESSOR)
 static u_int
 tlb_cortex_a7_record_asids(u_long *mapp, tlb_asid_t asid_max)
 {
@@ -184,7 +185,7 @@ tlb_cortex_a7_record_asids(u_long *mapp, tlb_asid_t asid_max)
 			armreg_tlbdataop_write(
 			     __SHIFTIN(way, ARM_TLBDATAOP_WAY)
 			     | __SHIFTIN(va_index, ARM_A7_TLBDATAOP_INDEX));
-			arm_isb();
+			isb();
 			const uint32_t d0 = armreg_tlbdata0_read();
 			const uint32_t d1 = armreg_tlbdata1_read();
 			if (!(d0 & ARM_TLBDATA_VALID)
@@ -211,14 +212,10 @@ u_int
 tlb_record_asids(u_long *mapp, tlb_asid_t asid_max)
 {
 #ifndef MULTIPROCESSOR
-#ifdef CPU_CORTEXA5
 	if (CPU_ID_CORTEX_A5_P(curcpu()->ci_arm_cpuid))
 		return tlb_cortex_a5_record_asids(mapp, asid_max);
-#endif
-#ifdef CPU_CORTEXA7
 	if (CPU_ID_CORTEX_A7_P(curcpu()->ci_arm_cpuid))
 		return tlb_cortex_a7_record_asids(mapp, asid_max);
-#endif
 #endif /* MULTIPROCESSOR */
 #ifdef DIAGNOSTIC
 	mapp[0] = 0xfffffffe;

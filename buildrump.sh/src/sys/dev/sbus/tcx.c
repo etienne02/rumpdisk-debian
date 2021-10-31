@@ -1,4 +1,4 @@
-/*	$NetBSD: tcx.c,v 1.56 2014/07/25 08:10:38 dholland Exp $ */
+/*	$NetBSD: tcx.c,v 1.60 2021/08/07 16:19:15 thorpej Exp $ */
 
 /*
  *  Copyright (c) 1996, 1998, 2009 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcx.c,v 1.56 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcx.c,v 1.60 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,8 +87,8 @@ struct tcx_softc {
 	bus_space_handle_t sc_bt;	/* Brooktree registers */
 	bus_space_handle_t sc_thc;	/* THC registers */
 	uint8_t 	*sc_fbaddr;	/* framebuffer */
-	uint64_t 	*sc_rblit;	/* blitspace */
-	uint64_t 	*sc_rstip;	/* stipple space */
+	volatile uint64_t 	*sc_rblit;	/* blitspace */
+	volatile uint64_t 	*sc_rstip;	/* stipple space */
 
 	short		sc_8bit;	/* true if 8-bit hardware */
 	short		sc_blanked;	/* true if blanked */
@@ -423,7 +423,7 @@ tcxattach(device_t parent, device_t self, void *args)
 	aa.accessops = &tcx_accessops;
 	aa.accesscookie = &sc->vd;
 
-	config_found(self, &aa, wsemuldisplaydevprint);
+	config_found(self, &aa, wsemuldisplaydevprint, CFARGS_NONE);
 	/*
 	 * we need to do this again - something overwrites a handful
 	 * palette registers and we end up with white in reg. 0
@@ -474,6 +474,8 @@ tcxioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 
 	case FBIOGETCMAP:
 #define	p ((struct fbcmap *)data)
+		if (p->index > 256 || p->count > 256 - p->index)
+			return EINVAL;
 		if (copyout(&sc->sc_cmap_red[p->index], p->red, p->count) != 0)
 			return EINVAL;
 		if (copyout(&sc->sc_cmap_green[p->index], p->green, p->count)
@@ -486,6 +488,8 @@ tcxioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 
 	case FBIOPUTCMAP:
 		/* copy to software map */
+		if (p->index > 256 || p->count > 256 - p->index)
+			return EINVAL;
 		if (copyin(p->red, &sc->sc_cmap_red[p->index], p->count) != 0)
 			return EINVAL;
 		if (copyin(p->green, &sc->sc_cmap_green[p->index], p->count)
@@ -884,11 +888,11 @@ static void
 tcx_clearscreen(struct tcx_softc *sc, int spc)
 {
 	/* ROP in the upper 4bit is necessary, tcx actually uses it */
-	uint64_t bg = 0x30000000ffffffffLL;
-	uint64_t spc64;
+	volatile uint64_t bg = 0x30000000ffffffffLL;
+	volatile uint64_t spc64;
 	int i, len;
 
-	spc64 = ((spc & 3) << 24) | sc->sc_bg;
+	spc64 = ((spc & 3) << 24);
 	bg |= (spc64 << 32);
 
 	len = sc->sc_fb.fb_type.fb_width * sc->sc_fb.fb_type.fb_height;
@@ -947,7 +951,7 @@ tcx_eraserows(void *cookie, int start, int nrows, long attr)
 	struct rasops_info *ri = cookie;
 	struct vcons_screen *scr = ri->ri_hw;
 	struct tcx_softc *sc = scr->scr_cookie;
-	uint64_t temp;
+	volatile uint64_t temp;
 	int i, last, first, len, leftover;
 
 	i = ri->ri_width * ri->ri_font->fontheight * nrows;
@@ -957,14 +961,14 @@ tcx_eraserows(void *cookie, int start, int nrows, long attr)
 	    (ri->ri_font->fontheight * start + ri->ri_yorigin);
 	last = first + len;
 	temp = 0x30000000ffffffffLL | 
-	    ((uint64_t)ri->ri_devcmap[(attr >> 16) & 0xff] << 32);
+	    ((uint64_t)((ri->ri_devcmap[(attr >> 16) & 0xff]) & 0xff) << 32);
 
-	for (i = first; i <= last; i+= 32)
-		sc->sc_rblit[i] = temp;
+	for (i = first; i < last; i+= 32)
+		sc->sc_rstip[i] = temp;
 
 	if (leftover > 0) {
 		temp &= 0xffffffffffffffffLL << (32 - leftover);
-		sc->sc_rblit[i] = temp;
+		sc->sc_rstip[i] = temp;
 	}
 }
 /*
@@ -979,7 +983,7 @@ tcx_putchar(void *cookie, int row, int col, u_int c, long attr)
 	struct wsdisplay_font *font = PICK_FONT(ri, c);
 	struct vcons_screen *scr = ri->ri_hw;
 	struct tcx_softc *sc = scr->scr_cookie;
-	uint64_t bg, fg, temp, mask;
+	volatile uint64_t bg, fg, temp, mask;
 	int addr, i, uc, shift;
 	uint32_t fmask;
 	uint8_t *cdata;
@@ -1045,7 +1049,7 @@ tcx_putchar(void *cookie, int row, int col, u_int c, long attr)
 		}
 	} else {
 		/* and now the split case ( man this hardware is dumb ) */
-		uint64_t bgr, maskr, fgr;
+		volatile uint64_t bgr, maskr, fgr;
 		uint32_t bork;
 
 		shift = addr & 0x1f;

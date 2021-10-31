@@ -1,4 +1,4 @@
-/*	$NetBSD: ufs_vfsops.c,v 1.54 2015/03/17 09:39:29 hannken Exp $	*/
+/*	$NetBSD: ufs_vfsops.c,v 1.60 2020/05/01 08:43:37 hannken Exp $	*/
 
 /*
  * Copyright (c) 1991, 1993, 1994
@@ -37,18 +37,19 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ufs_vfsops.c,v 1.54 2015/03/17 09:39:29 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ufs_vfsops.c,v 1.60 2020/05/01 08:43:37 hannken Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
 #include "opt_quota.h"
+#include "opt_wapbl.h"
 #endif
 
 #include <sys/param.h>
-#include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/buf.h>
+#include <sys/module.h>
 #include <sys/vnode.h>
 #include <sys/kmem.h>
 #include <sys/kauth.h>
@@ -85,12 +86,12 @@ ufs_start(struct mount *mp, int flags)
  * Return the root of a filesystem.
  */
 int
-ufs_root(struct mount *mp, struct vnode **vpp)
+ufs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *nvp;
 	int error;
 
-	if ((error = VFS_VGET(mp, (ino_t)UFS_ROOTINO, &nvp)) != 0)
+	if ((error = VFS_VGET(mp, (ino_t)UFS_ROOTINO, lktype, &nvp)) != 0)
 		return (error);
 	*vpp = nvp;
 	return (0);
@@ -100,14 +101,14 @@ ufs_root(struct mount *mp, struct vnode **vpp)
  * Look up and return a vnode/inode pair by inode number.
  */
 int
-ufs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+ufs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 	int error;
 
 	error = vcache_get(mp, &ino, sizeof(ino), vpp);
 	if (error)
 		return error;
-	error = vn_lock(*vpp, LK_EXCLUSIVE);
+	error = vn_lock(*vpp, lktype);
 	if (error) {
 		vrele(*vpp);
 		*vpp = NULL;
@@ -132,16 +133,16 @@ ufs_quotactl(struct mount *mp, struct quotactl_args *args)
 	int error;
 
 	/* Mark the mount busy, as we're passing it to kauth(9). */
-	error = vfs_busy(mp, NULL);
+	error = vfs_busy(mp);
 	if (error) {
 		return (error);
 	}
-	mutex_enter(&mp->mnt_updating);
+	mutex_enter(mp->mnt_updating);
 
 	error = quota_handle_cmd(mp, l, args);
 
-	mutex_exit(&mp->mnt_updating);
-	vfs_unbusy(mp, false, NULL);
+	mutex_exit(mp->mnt_updating);
+	vfs_unbusy(mp);
 	return (error);
 #endif
 }
@@ -188,11 +189,11 @@ ufs_quotactl(struct mount *mp, struct quotactl_args *args)
 	}
 
 	if (error) {
-		vfs_unbusy(mp, false, NULL);
+		vfs_unbusy(mp);
 		return (error);
 	}
 
-	mutex_enter(&mp->mnt_updating);
+	mutex_enter(mp->mnt_updating);
 	switch (cmd) {
 
 	case Q_QUOTAON:
@@ -222,8 +223,8 @@ ufs_quotactl(struct mount *mp, struct quotactl_args *args)
 	default:
 		error = EINVAL;
 	}
-	mutex_exit(&mp->mnt_updating);
-	vfs_unbusy(mp, false, NULL);
+	mutex_exit(mp->mnt_updating);
+	vfs_unbusy(mp);
 	return (error);
 #endif
 
@@ -232,13 +233,13 @@ ufs_quotactl(struct mount *mp, struct quotactl_args *args)
  * filesystem has validated the file handle.
  */
 int
-ufs_fhtovp(struct mount *mp, struct ufid *ufhp, struct vnode **vpp)
+ufs_fhtovp(struct mount *mp, struct ufid *ufhp, int lktype, struct vnode **vpp)
 {
 	struct vnode *nvp;
 	struct inode *ip;
 	int error;
 
-	if ((error = VFS_VGET(mp, ufhp->ufid_ino, &nvp)) != 0) {
+	if ((error = VFS_VGET(mp, ufhp->ufid_ino, lktype, &nvp)) != 0) {
 		if (error == ENOENT)
 			error = ESTALE;
 		*vpp = NULLVP;
@@ -246,7 +247,8 @@ ufs_fhtovp(struct mount *mp, struct ufid *ufhp, struct vnode **vpp)
 	}
 	ip = VTOI(nvp);
 	KASSERT(ip != NULL);
-	if (ip->i_mode == 0 || ip->i_gen != ufhp->ufid_gen) {
+	if (ip->i_mode == 0 || ip->i_gen != ufhp->ufid_gen ||
+	    ((ip->i_mode & IFMT) == IFDIR && ip->i_size == 0)) {
 		vput(nvp);
 		*vpp = NULLVP;
 		return (ESTALE);
@@ -305,4 +307,36 @@ ufs_done(void)
 #ifdef UFS_EXTATTR
 	ufs_extattr_done();
 #endif
+}
+
+/*
+ * module interface
+ */
+
+#ifdef WAPBL
+MODULE(MODULE_CLASS_MISC, ufs, "wapbl");
+#else
+MODULE(MODULE_CLASS_MISC, ufs, NULL);
+#endif
+
+static int
+ufs_modcmd(modcmd_t cmd, void *arg)
+{
+        int error;
+ 
+        switch (cmd) {
+        case MODULE_CMD_INIT:
+		ufs_init();
+		error = 0;
+		break;
+        case MODULE_CMD_FINI:
+		ufs_done();
+		error = 0;
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+
+	return error;
 }

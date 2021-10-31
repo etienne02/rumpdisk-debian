@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_vnops.c,v 1.193 2015/02/04 07:09:37 msaitoh Exp $	*/
+/*	$NetBSD: vfs_vnops.c,v 1.221 2021/07/18 09:30:36 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_vnops.c,v 1.193 2015/02/04 07:09:37 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_vnops.c,v 1.221 2021/07/18 09:30:36 dholland Exp $");
 
 #include "veriexec.h"
 
@@ -123,6 +123,7 @@ static int vn_mmap(struct file *, off_t *, size_t, int, int *, int *,
 		   struct uvm_object **, int *);
 
 const struct fileops vnops = {
+	.fo_name = "vn",
 	.fo_read = vn_read,
 	.fo_write = vn_write,
 	.fo_ioctl = vn_ioctl,
@@ -138,60 +139,106 @@ const struct fileops vnops = {
 /*
  * Common code for vnode open operations.
  * Check permissions, and call the VOP_OPEN or VOP_CREATE routine.
+ *
+ * at_dvp is the directory for openat(), if any.
+ * pb is the path.
+ * nmode is additional namei flags, restricted to TRYEMULROOT and NOCHROOT.
+ * fmode is the open flags, converted from O_* to F*
+ * cmode is the creation file permissions.
+ *
+ * XXX shouldn't cmode be mode_t?
+ *
+ * On success produces either a vnode in *ret_vp, or if that is NULL,
+ * a file descriptor number in ret_fd.
+ *
+ * The caller may pass NULL for ret_fd (and ret_domove), in which case
+ * EOPNOTSUPP will be produced in the cases that would otherwise return
+ * a file descriptor.
+ *
+ * Note that callers that want no-follow behavior should pass
+ * O_NOFOLLOW in fmode. Neither FOLLOW nor NOFOLLOW in nmode is
+ * honored.
  */
 int
-vn_open(struct nameidata *ndp, int fmode, int cmode)
+vn_open(struct vnode *at_dvp, struct pathbuf *pb,
+	int nmode, int fmode, int cmode,
+	struct vnode **ret_vp, bool *ret_domove, int *ret_fd)
 {
-	struct vnode *vp;
+	struct nameidata nd;
+	struct vnode *vp = NULL;
 	struct lwp *l = curlwp;
 	kauth_cred_t cred = l->l_cred;
 	struct vattr va;
 	int error;
 	const char *pathstring;
 
+	KASSERT((nmode & (TRYEMULROOT | NOCHROOT)) == nmode);
+
+	KASSERT(ret_vp != NULL);
+	KASSERT((ret_domove == NULL) == (ret_fd == NULL));
+
 	if ((fmode & (O_CREAT | O_DIRECTORY)) == (O_CREAT | O_DIRECTORY))
 		return EINVAL;
 
-	ndp->ni_cnd.cn_flags &= TRYEMULROOT | NOCHROOT;
+	NDINIT(&nd, LOOKUP, nmode, pb);
+	if (at_dvp != NULL)
+		NDAT(&nd, at_dvp);
+
+	nd.ni_cnd.cn_flags &= TRYEMULROOT | NOCHROOT;
 
 	if (fmode & O_CREAT) {
-		ndp->ni_cnd.cn_nameiop = CREATE;
-		ndp->ni_cnd.cn_flags |= LOCKPARENT | LOCKLEAF;
+		nd.ni_cnd.cn_nameiop = CREATE;
+		nd.ni_cnd.cn_flags |= LOCKPARENT | LOCKLEAF;
 		if ((fmode & O_EXCL) == 0 &&
 		    ((fmode & O_NOFOLLOW) == 0))
-			ndp->ni_cnd.cn_flags |= FOLLOW;
+			nd.ni_cnd.cn_flags |= FOLLOW;
+		if ((fmode & O_EXCL) == 0)
+			nd.ni_cnd.cn_flags |= NONEXCLHACK;
 	} else {
-		ndp->ni_cnd.cn_nameiop = LOOKUP;
-		ndp->ni_cnd.cn_flags |= LOCKLEAF;
+		nd.ni_cnd.cn_nameiop = LOOKUP;
+		nd.ni_cnd.cn_flags |= LOCKLEAF;
 		if ((fmode & O_NOFOLLOW) == 0)
-			ndp->ni_cnd.cn_flags |= FOLLOW;
+			nd.ni_cnd.cn_flags |= FOLLOW;
 	}
 
-	pathstring = pathbuf_stringcopy_get(ndp->ni_pathbuf);
+	pathstring = pathbuf_stringcopy_get(nd.ni_pathbuf);
 	if (pathstring == NULL) {
 		return ENOMEM;
 	}
 
-	error = namei(ndp);
+	/*
+	 * When this "interface" was exposed to do_open() it used
+	 * to initialize l_dupfd to -newfd-1 (thus passing in the
+	 * new file handle number to use)... but nothing in the
+	 * kernel uses that value. So just send 0.
+	 */
+	l->l_dupfd = 0;
+
+	error = namei(&nd);
 	if (error)
 		goto out;
 
-	vp = ndp->ni_vp;
+	vp = nd.ni_vp;
 
 #if NVERIEXEC > 0
-	error = veriexec_openchk(l, ndp->ni_vp, pathstring, fmode);
+	error = veriexec_openchk(l, nd.ni_vp, pathstring, fmode);
 	if (error) {
 		/* We have to release the locks ourselves */
-		if (fmode & O_CREAT) {
+		/*
+		 * 20210604 dholland passing NONEXCLHACK means we can
+		 * get ni_dvp == NULL back if ni_vp exists, and we should
+		 * treat that like the non-O_CREAT case.
+		 */
+		if ((fmode & O_CREAT) != 0 && nd.ni_dvp != NULL) {
 			if (vp == NULL) {
-				vput(ndp->ni_dvp);
+				vput(nd.ni_dvp);
 			} else {
-				VOP_ABORTOP(ndp->ni_dvp, &ndp->ni_cnd);
-				if (ndp->ni_dvp == ndp->ni_vp)
-					vrele(ndp->ni_dvp);
+				VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
+				if (nd.ni_dvp == nd.ni_vp)
+					vrele(nd.ni_dvp);
 				else
-					vput(ndp->ni_dvp);
-				ndp->ni_dvp = NULL;
+					vput(nd.ni_dvp);
+				nd.ni_dvp = NULL;
 				vput(vp);
 			}
 		} else {
@@ -201,43 +248,59 @@ vn_open(struct nameidata *ndp, int fmode, int cmode)
 	}
 #endif /* NVERIEXEC > 0 */
 
-	if (fmode & O_CREAT) {
-		if (ndp->ni_vp == NULL) {
+	/*
+	 * 20210604 dholland ditto
+	 */
+	if ((fmode & O_CREAT) != 0 && nd.ni_dvp != NULL) {
+		if (nd.ni_vp == NULL) {
 			vattr_null(&va);
 			va.va_type = VREG;
 			va.va_mode = cmode;
 			if (fmode & O_EXCL)
 				 va.va_vaflags |= VA_EXCLUSIVE;
-			error = VOP_CREATE(ndp->ni_dvp, &ndp->ni_vp,
-					   &ndp->ni_cnd, &va);
-			vput(ndp->ni_dvp);
-			if (error)
+			error = VOP_CREATE(nd.ni_dvp, &nd.ni_vp,
+					   &nd.ni_cnd, &va);
+			if (error) {
+				vput(nd.ni_dvp);
 				goto out;
+			}
 			fmode &= ~O_TRUNC;
-			vp = ndp->ni_vp;
+			vp = nd.ni_vp;
 			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+			vput(nd.ni_dvp);
 		} else {
-			VOP_ABORTOP(ndp->ni_dvp, &ndp->ni_cnd);
-			if (ndp->ni_dvp == ndp->ni_vp)
-				vrele(ndp->ni_dvp);
+			VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
+			if (nd.ni_dvp == nd.ni_vp)
+				vrele(nd.ni_dvp);
 			else
-				vput(ndp->ni_dvp);
-			ndp->ni_dvp = NULL;
-			vp = ndp->ni_vp;
+				vput(nd.ni_dvp);
+			nd.ni_dvp = NULL;
+			vp = nd.ni_vp;
 			if (fmode & O_EXCL) {
 				error = EEXIST;
 				goto bad;
 			}
 			fmode &= ~O_CREAT;
 		}
+	} else if ((fmode & O_CREAT) != 0) {
+		/*
+		 * 20210606 dholland passing NONEXCLHACK means this
+		 * case exists; it is the same as the following one
+		 * but also needs to do things in the second (exists)
+		 * half of the following block. (Besides handle
+		 * ni_dvp, anyway.)
+		 */
+		vp = nd.ni_vp;
+		KASSERT((fmode & O_EXCL) == 0);
+		fmode &= ~O_CREAT;
 	} else {
-		vp = ndp->ni_vp;
+		vp = nd.ni_vp;
 	}
 	if (vp->v_type == VSOCK) {
 		error = EOPNOTSUPP;
 		goto bad;
 	}
-	if (ndp->ni_vp->v_type == VLNK) {
+	if (nd.ni_vp->v_type == VLNK) {
 		error = EFTYPE;
 		goto bad;
 	}
@@ -267,8 +330,27 @@ bad:
 	if (error)
 		vput(vp);
 out:
-	pathbuf_stringcopy_put(ndp->ni_pathbuf, pathstring);
-	return (error);
+	pathbuf_stringcopy_put(nd.ni_pathbuf, pathstring);
+
+	switch (error) {
+	case EDUPFD:
+	case EMOVEFD:
+		/* if the caller isn't prepared to handle fds, fail for them */
+		if (ret_fd == NULL) {
+			error = EOPNOTSUPP;
+			break;
+		}
+		*ret_vp = NULL;
+		*ret_domove = error == EMOVEFD;
+		*ret_fd = l->l_dupfd;
+		error = 0;
+		break;
+	case 0:
+		*ret_vp = vp;
+		break;
+	}
+	l->l_dupfd = 0;
+	return error;
 }
 
 /*
@@ -294,11 +376,20 @@ vn_openchk(struct vnode *vp, kauth_cred_t cred, int fflags)
 	int permbits = 0;
 	int error;
 
+	if (vp->v_type == VNON || vp->v_type == VBAD)
+		return ENXIO;
+
 	if ((fflags & O_DIRECTORY) != 0 && vp->v_type != VDIR)
 		return ENOTDIR;
 
+	if ((fflags & O_REGULAR) != 0 && vp->v_type != VREG)
+		return EFTYPE;
+
 	if ((fflags & FREAD) != 0) {
 		permbits = VREAD;
+	}
+	if ((fflags & FEXEC) != 0) {
+		permbits |= VEXEC;
 	}
 	if ((fflags & (FWRITE | O_TRUNC)) != 0) {
 		permbits |= VWRITE;
@@ -327,13 +418,14 @@ vn_markexec(struct vnode *vp)
 		return;
 	}
 
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	mutex_enter(vp->v_interlock);
 	if ((vp->v_iflag & VI_EXECMAP) == 0) {
-		atomic_add_int(&uvmexp.filepages, -vp->v_uobj.uo_npages);
-		atomic_add_int(&uvmexp.execpages, vp->v_uobj.uo_npages);
+		cpu_count(CPU_COUNT_EXECPAGES, vp->v_uobj.uo_npages);
 		vp->v_iflag |= VI_EXECMAP;
 	}
 	mutex_exit(vp->v_interlock);
+	rw_exit(vp->v_uobj.vmobjlock);
 }
 
 /*
@@ -349,18 +441,20 @@ vn_marktext(struct vnode *vp)
 		return (0);
 	}
 
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	mutex_enter(vp->v_interlock);
 	if (vp->v_writecount != 0) {
 		KASSERT((vp->v_iflag & VI_TEXT) == 0);
 		mutex_exit(vp->v_interlock);
+		rw_exit(vp->v_uobj.vmobjlock);
 		return (ETXTBSY);
 	}
 	if ((vp->v_iflag & VI_EXECMAP) == 0) {
-		atomic_add_int(&uvmexp.filepages, -vp->v_uobj.uo_npages);
-		atomic_add_int(&uvmexp.execpages, vp->v_uobj.uo_npages);
+		cpu_count(CPU_COUNT_EXECPAGES, vp->v_uobj.uo_npages);
 	}
 	vp->v_iflag |= (VI_TEXT | VI_EXECMAP);
 	mutex_exit(vp->v_interlock);
+	rw_exit(vp->v_uobj.vmobjlock);
 	return (0);
 }
 
@@ -374,13 +468,13 @@ vn_close(struct vnode *vp, int flags, kauth_cred_t cred)
 {
 	int error;
 
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	if (flags & FWRITE) {
 		mutex_enter(vp->v_interlock);
 		KASSERT(vp->v_writecount > 0);
 		vp->v_writecount--;
 		mutex_exit(vp->v_interlock);
 	}
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	error = VOP_CLOSE(vp, flags, cred);
 	vput(vp);
 	return (error);
@@ -403,9 +497,9 @@ enforce_rlimit_fsize(struct vnode *vp, struct uio *uio, int ioflag)
 
 	if (testoff + uio->uio_resid >
 	    l->l_proc->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		psignal(l->l_proc, SIGXFSZ);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		return EFBIG;
 	}
 
@@ -476,7 +570,7 @@ vn_readdir(file_t *fp, char *bf, int segflg, u_int count, int *done,
 	int error, eofflag;
 
 	/* Limit the size on any kernel buffers used by VOP_READDIR */
-	count = min(MAXBSIZE, count);
+	count = uimin(MAXBSIZE, count);
 
 unionread:
 	if (vp->v_type != VDIR)
@@ -742,7 +836,10 @@ vn_ioctl(file_t *fp, u_long com, void *data)
 			if (*(daddr_t *)data < 0)
 				return (EINVAL);
 			block = (daddr_t *)data;
-			return (VOP_BMAP(vp, *block, NULL, block, NULL));
+			vn_lock(vp, LK_SHARED | LK_RETRY);
+			error = VOP_BMAP(vp, *block, NULL, block, NULL);
+			VOP_UNLOCK(vp);
+			return error;
 		}
 		if (com == OFIOGETBMAP) {
 			daddr_t ibn, obn;
@@ -750,13 +847,15 @@ vn_ioctl(file_t *fp, u_long com, void *data)
 			if (*(int32_t *)data < 0)
 				return (EINVAL);
 			ibn = (daddr_t)*(int32_t *)data;
+			vn_lock(vp, LK_SHARED | LK_RETRY);
 			error = VOP_BMAP(vp, ibn, NULL, &obn, NULL);
+			VOP_UNLOCK(vp);
 			*(int32_t *)data = (int32_t)obn;
 			return error;
 		}
 		if (com == FIONBIO || com == FIOASYNC)	/* XXX */
 			return (0);			/* XXX */
-		/* fall into ... */
+		/* FALLTHROUGH */
 	case VFIFO:
 	case VCHR:
 	case VBLK:
@@ -764,10 +863,10 @@ vn_ioctl(file_t *fp, u_long com, void *data)
 		    kauth_cred_get());
 		if (error == 0 && com == TIOCSCTTY) {
 			vref(vp);
-			mutex_enter(proc_lock);
+			mutex_enter(&proc_lock);
 			ovp = curproc->p_session->s_ttyvp;
 			curproc->p_session->s_ttyvp = vp;
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 			if (ovp != NULL)
 				vrele(ovp);
 		}
@@ -967,9 +1066,11 @@ vn_mmap(struct file *fp, off_t *offp, size_t size, int prot, int *flagsp,
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 		vp->v_vflag |= VV_MAPPED;
 		if (needwritemap) {
+			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 			mutex_enter(vp->v_interlock);
 			vp->v_iflag |= VI_WRMAP;
 			mutex_exit(vp->v_interlock);
+			rw_exit(vp->v_uobj.vmobjlock);
 		}
 		VOP_UNLOCK(vp);
 	}
@@ -1018,22 +1119,31 @@ vn_mmap(struct file *fp, off_t *offp, size_t size, int prot, int *flagsp,
 int
 vn_lock(struct vnode *vp, int flags)
 {
+	struct lwp *l;
 	int error;
 
 #if 0
-	KASSERT(vp->v_usecount > 0 || (vp->v_iflag & VI_ONWORKLST) != 0);
+	KASSERT(vrefcnt(vp) > 0 || (vp->v_iflag & VI_ONWORKLST) != 0);
 #endif
-	KASSERT((flags & ~(LK_SHARED|LK_EXCLUSIVE|LK_NOWAIT|LK_RETRY)) == 0);
-	KASSERT(!mutex_owned(vp->v_interlock));
+	KASSERT((flags & ~(LK_SHARED|LK_EXCLUSIVE|LK_NOWAIT|LK_RETRY|
+	    LK_UPGRADE|LK_DOWNGRADE)) == 0);
+	KASSERT((flags & LK_NOWAIT) != 0 || !mutex_owned(vp->v_interlock));
 
 #ifdef DIAGNOSTIC
 	if (wapbl_vphaswapbl(vp))
 		WAPBL_JUNLOCK_ASSERT(wapbl_vptomp(vp));
 #endif
 
+	/* Get a more useful report for lockstat. */
+	l = curlwp;
+	KASSERT(l->l_rwcallsite == 0);
+	l->l_rwcallsite = (uintptr_t)__builtin_return_address(0);	
+
 	error = VOP_LOCK(vp, flags);
 	if ((flags & LK_RETRY) != 0 && error == ENOENT)
 		error = VOP_LOCK(vp, flags);
+
+	l->l_rwcallsite = 0;
 
 	KASSERT((flags & LK_RETRY) == 0 || (flags & LK_NOWAIT) != 0 ||
 	    error == 0);
@@ -1077,7 +1187,8 @@ vn_extattr_get(struct vnode *vp, int ioflg, int attrnamespace,
 	if ((ioflg & IO_NODELOCKED) == 0)
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 
-	error = VOP_GETEXTATTR(vp, attrnamespace, attrname, &auio, NULL, NULL);
+	error = VOP_GETEXTATTR(vp, attrnamespace, attrname, &auio, NULL,
+	    NOCRED);
 
 	if ((ioflg & IO_NODELOCKED) == 0)
 		VOP_UNLOCK(vp);
@@ -1113,7 +1224,7 @@ vn_extattr_set(struct vnode *vp, int ioflg, int attrnamespace,
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	}
 
-	error = VOP_SETEXTATTR(vp, attrnamespace, attrname, &auio, NULL);
+	error = VOP_SETEXTATTR(vp, attrnamespace, attrname, &auio, NOCRED);
 
 	if ((ioflg & IO_NODELOCKED) == 0) {
 		VOP_UNLOCK(vp);
@@ -1132,9 +1243,10 @@ vn_extattr_rm(struct vnode *vp, int ioflg, int attrnamespace,
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	}
 
-	error = VOP_DELETEEXTATTR(vp, attrnamespace, attrname, NULL);
+	error = VOP_DELETEEXTATTR(vp, attrnamespace, attrname, NOCRED);
 	if (error == EOPNOTSUPP)
-		error = VOP_SETEXTATTR(vp, attrnamespace, attrname, NULL, NULL);
+		error = VOP_SETEXTATTR(vp, attrnamespace, attrname, NULL,
+		    NOCRED);
 
 	if ((ioflg & IO_NODELOCKED) == 0) {
 		VOP_UNLOCK(vp);
@@ -1143,37 +1255,61 @@ vn_extattr_rm(struct vnode *vp, int ioflg, int attrnamespace,
 	return (error);
 }
 
-void
-vn_ra_allocctx(struct vnode *vp)
-{
-	struct uvm_ractx *ra = NULL;
-
-	KASSERT(mutex_owned(vp->v_interlock));
-
-	if (vp->v_type != VREG) {
-		return;
-	}
-	if (vp->v_ractx != NULL) {
-		return;
-	}
-	if (vp->v_ractx == NULL) {
-		mutex_exit(vp->v_interlock);
-		ra = uvm_ra_allocctx();
-		mutex_enter(vp->v_interlock);
-		if (ra != NULL && vp->v_ractx == NULL) {
-			vp->v_ractx = ra;
-			ra = NULL;
-		}
-	}
-	if (ra != NULL) {
-		uvm_ra_freectx(ra);
-	}
-}
-
 int
 vn_fifo_bypass(void *v)
 {
 	struct vop_generic_args *ap = v;
 
 	return VOCALL(fifo_vnodeop_p, ap->a_desc->vdesc_offset, v);
+}
+
+/*
+ * Open block device by device number
+ */
+int
+vn_bdev_open(dev_t dev, struct vnode **vpp, struct lwp *l)
+{
+	int     error;
+
+	if ((error = bdevvp(dev, vpp)) != 0)
+		return error;
+
+	if ((error = VOP_OPEN(*vpp, FREAD | FWRITE, l->l_cred)) != 0) {
+		vrele(*vpp);
+		return error;
+	}
+	mutex_enter((*vpp)->v_interlock);
+	(*vpp)->v_writecount++;
+	mutex_exit((*vpp)->v_interlock);
+
+	return 0;
+}
+
+/*
+ * Lookup the provided name in the filesystem.  If the file exists,
+ * is a valid block device, and isn't being used by anyone else,
+ * set *vpp to the file's vnode.
+ */
+int
+vn_bdev_openpath(struct pathbuf *pb, struct vnode **vpp, struct lwp *l)
+{
+	struct vnode *vp;
+	dev_t dev;
+	enum vtype vt;
+	int     error;
+
+	error = vn_open(NULL, pb, 0, FREAD | FWRITE, 0, &vp, NULL, NULL);
+	if (error != 0)
+		return error;
+
+	dev = vp->v_rdev;
+	vt = vp->v_type;
+
+	VOP_UNLOCK(vp);
+	(void) vn_close(vp, FREAD | FWRITE, l->l_cred);
+
+	if (vt != VBLK)
+		return ENOTBLK;
+
+	return vn_bdev_open(dev, vpp, l);
 }

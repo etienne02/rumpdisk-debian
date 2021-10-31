@@ -1,4 +1,4 @@
-/* $NetBSD: dwc_gmac_reg.h,v 1.15 2015/11/21 16:04:11 martin Exp $ */
+/* $NetBSD: dwc_gmac_reg.h,v 1.20 2020/05/17 21:50:47 chs Exp $ */
 
 /*-
  * Copyright (c) 2013, 2014 The NetBSD Foundation, Inc.
@@ -79,6 +79,46 @@
 #define	AWIN_GMAC_MAC_FLOWCTRL_TFE	__BIT(1)
 #define	AWIN_GMAC_MAC_FLOWCTRL_BUSY	__BIT(0)
 
+#define	GMAC_MMC_CTRL			0x0100	/* MMC control */
+#define	GMAC_MMC_RX_INTR		0x0104	/* MMC RX interrupt */
+#define	GMAC_MMC_TX_INTR		0x0108	/* MMC TX interrupt */
+#define	GMAC_MMC_RX_INT_MSK		0x010c	/* MMC RX interrupt mask */
+#define	GMAC_MMC_TX_INT_MSK		0x0110	/* MMC TX interrupt mask */
+#define	GMAC_MMC_TXOCTETCNT_GB		0x0114	/* TX octet good+bad */
+#define	GMAC_MMC_TXFRMCNT_GB		0x0118	/* TX frame good+bad */
+#define	GMAC_MMC_TXUNDFLWERR		0x0148	/* TX underflow */
+#define	GMAC_MMC_TXCARERR		0x0160	/* TX carrier error */
+#define	GMAC_MMC_TXOCTETCNT_G		0x0164	/* TX octet good */
+#define	GMAC_MMC_TXFRMCNT_G		0x0168	/* TX frame good */
+#define	GMAC_MMC_RXFRMCNT_GB		0x0180	/* RX frame good+bad */
+#define	GMAC_MMC_RXOCTETCNT_GB		0x0184	/* RX octet good+bad */
+#define	GMAC_MMC_RXOCTETCNT_G		0x0188	/* RX octet good */
+#define	GMAC_MMC_RXMCFRMCNT_G		0x0190	/* RX mcast frame good */
+#define	GMAC_MMC_RXCRCERR		0x0194	/* RX CRC error */
+#define	GMAC_MMC_RXLENERR		0x01c8	/* RX length error */
+#define	GMAC_MMC_RXFIFOOVRFLW		0x01d4	/* RX FIFO overflow */
+#define	GMAC_MMC_IPC_INT_MSK		0x0200	/* RX csum offload intr mask */
+#define	GMAC_MMC_IPC_INTR		0x0208	/* RX csum offload interrupt */
+#define	GMAC_MMC_RXIPV4GFRM		0x0210	/* RX IPv4 good frame */
+#define	GMAC_MMC_RXIPV4HDERRFRM		0x0214	/* RX IPv4 header error */
+#define	GMAC_MMC_RXIPV6GFRM		0x0224	/* RX IPv6 good frame */
+#define	GMAC_MMC_RXIPV6HDERRFRM		0x0228	/* RX IPv6 header error */
+#define	GMAC_MMC_RXUDPERRFRM		0x0234	/* RX UDP csum error frame */
+#define	GMAC_MMC_RXTCPERRFRM		0x023c	/* RX TCP csum error frame */
+#define	GMAC_MMC_RXICMPERRFRM		0x0244	/* RX ICMP csum error frame */
+#define	GMAC_MMC_RXIPV4HDERROCT		0x0254	/* RX IPv4 header error octets */
+#define	GMAC_MMC_RXIPV6HDERROCT		0x0268	/* RX IPv6 header error octets */
+#define	GMAC_MMC_RXUDPERROCT		0x0274	/* RX UDP error octets */
+#define	GMAC_MMC_RXTCPERROCT		0x027c	/* RX TCP error octets */
+#define	GMAC_MMC_RXICMPERROCT		0x0280	/* RX ICMP error octets */
+
+#define	GMAC_MMC_CTRL_FHP		__BIT(5) /* Full-Half preset */
+#define	GMAC_MMC_CTRL_CP		__BIT(4) /* Counters preset */
+#define	GMAC_MMC_CTRL_MCF		__BIT(3) /* MMC counter freeze */
+#define	GMAC_MMC_CTRL_ROR		__BIT(2) /* reset on read */
+#define	GMAC_MMC_CTRL_CSR		__BIT(1) /* Counter stop rollover */
+#define	GMAC_MMC_CTRL_CR		__BIT(0) /* Counters reset */
+
 #define	AWIN_GMAC_DMA_BUSMODE		0x1000
 #define	AWIN_GMAC_DMA_TXPOLL		0x1004
 #define	AWIN_GMAC_DMA_RXPOLL		0x1008
@@ -128,7 +168,12 @@
 						        burst len */
 #define	GMAC_BUSMODE_RESET		__BIT(0)
 
-#define	AWIN_GMAC_MII_IRQ		__BIT(0)
+#define	AWIN_GMAC_MRCOIS		__BIT(7) /* MMC RX csum offload intr */
+#define	AWIN_GMAC_MTIS			__BIT(6) /* MMC TX interrupt */
+#define	AWIN_GMAC_MRIS			__BIT(3) /* MMC RX interrupt */
+#define	AWIN_GMAC_MIS			__BIT(4) /* MMC interrupt */
+#define	AWIN_GMAC_PIS			__BIT(3) /* PMT interrupt */
+#define	AWIN_GMAC_MII_IRQ		__BIT(0) /* RGMII interrupt */
 
 
 #define	GMAC_DMA_OP_DISABLECSDROP	__BIT(26) /* disable dropping of
@@ -141,9 +186,12 @@
 #define	GMAC_DMA_OP_TXSTOREFORWARD	__BIT(21) /* start TX when a
  						    full frame is available */
 #define	GMAC_DMA_OP_FLUSHTX		__BIT(20) /* flush TX fifo */
+#define	GMAC_DMA_OP_TTC			__BITS(16,14) /* TX thresh control */
 #define	GMAC_DMA_OP_TXSTART		__BIT(13) /* start TX DMA engine */
+#define	GMAC_DMA_OP_RTC			__BITS(4,3) /* RX thres control */
 #define	GMAC_DMA_OP_RXSTART		__BIT(1)  /* start RX DMA engine */
 
+#define	GMAC_DMA_INT_MMC		__BIT(27) /* MMC interrupt */
 #define	GMAC_DMA_INT_NIE		__BIT(16) /* Normal/Summary */
 #define	GMAC_DMA_INT_AIE		__BIT(15) /* Abnormal/Summary */
 #define	GMAC_DMA_INT_ERE		__BIT(14) /* Early receive */
@@ -162,8 +210,11 @@
 
 #define	GMAC_DMA_INT_MASK	__BITS(0,16)	  /* all possible intr bits */
 
+#define GMAC_DMA_FEAT_ENHANCED_DESC	__BIT(24)
+#define GMAC_DMA_FEAT_RMON		__BIT(11) /* MMC */
+
 struct dwc_gmac_dev_dmadesc {
-	uint32_t ddesc_status;
+	uint32_t ddesc_status0;		/* Status / TDES0 */
 /* both: */
 #define	DDESC_STATUS_OWNEDBYDEV		__BIT(31)
 
@@ -187,7 +238,7 @@ struct dwc_gmac_dev_dmadesc {
 #define	DDESC_STATUS_RXDRIBBLING	__BIT(2)
 #define	DDESC_STATUS_RXCRC		__BIT(1)
 
-	uint32_t ddesc_cntl;
+	uint32_t ddesc_cntl1;		/* Control / TDES1 */
 
 /* for TX descriptors */
 #define	DDESC_CNTL_TXINT		__BIT(31)
@@ -219,3 +270,25 @@ struct dwc_gmac_dev_dmadesc {
 	uint32_t ddesc_data;	/* pointer to buffer data */
 	uint32_t ddesc_next;	/* link to next descriptor */
 };
+
+/* Common to enhanced descriptors */
+
+#define DDESC_DES0_OWN			__BIT(31)
+
+#define DDESC_DES1_SIZE2MASK		__BITS(28,16)
+#define DDESC_DES1_SIZE1MASK		__BITS(12,0)
+
+/* For enhanced TX descriptors */
+
+#define DDESC_TDES0_IC			__BIT(30)
+#define DDESC_TDES0_LS			__BIT(29)
+#define DDESC_TDES0_FS			__BIT(28)
+#define DDESC_TDES0_TCH			__BIT(20)
+
+/* For enhanced RX descriptors */
+
+#define DDESC_RDES0_FL			__BITS(29,16)
+#define DDESC_RDES0_ES			__BIT(15)
+#define DDESC_RDES0_LE			__BIT(12)
+
+#define DDESC_RDES1_RCH			__BIT(14)

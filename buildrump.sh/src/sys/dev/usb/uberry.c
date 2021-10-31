@@ -1,4 +1,4 @@
-/*	$NetBSD: uberry.c,v 1.10 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: uberry.c,v 1.16 2019/12/15 16:48:27 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific pberryr written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -37,7 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uberry.c,v 1.10 2016/04/23 10:15:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uberry.c,v 1.16 2019/12/15 16:48:27 tsutsui Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -69,7 +66,7 @@ int	uberrydebug = 0;
 #endif
 
 struct uberry_softc {
- 	device_t		sc_dev;
+	device_t		sc_dev;
 	struct usbd_device *	sc_udev;
 };
 
@@ -85,11 +82,10 @@ static const struct usb_devno uberry_devs[] = {
 #define uberry_lookup(v, p) usb_lookup(uberry_devs, v, p)
 #define UBERRY_CONFIG_NO 1
 
-int	uberry_match(device_t, cfdata_t, void *);
-void	uberry_attach(device_t, device_t, void *);
-int	uberry_detach(device_t, int);
-int	uberry_activate(device_t, enum devact);
-extern struct cfdriver uberry_cd;
+static int	uberry_match(device_t, cfdata_t, void *);
+static void	uberry_attach(device_t, device_t, void *);
+static int	uberry_detach(device_t, int);
+
 CFATTACH_DECL_NEW(uberry, sizeof(struct uberry_softc), uberry_match,
     uberry_attach, uberry_detach, NULL);
 
@@ -99,15 +95,15 @@ uberry_cmd(struct uberry_softc *sc, uint8_t requestType, uint8_t reqno,
 {
 	usb_device_request_t req;
 	usbd_status err;
- 
+
 	DPRINTF(("berry cmd type=%x, number=%x, value=%d, index=%d, len=%d\n",
 	    requestType, reqno, value, index, length));
         req.bmRequestType = requestType;
         req.bRequest = reqno;
-        USETW(req.wValue, value); 
+        USETW(req.wValue, value);
         USETW(req.wIndex, index);
         USETW(req.wLength, length);
-   
+
         if ((err = usbd_do_request(sc->sc_udev, &req, data)) != 0)
 		aprint_error_dev(sc->sc_dev, "sending command failed %d\n",
 		    err);
@@ -152,7 +148,7 @@ uberry_dual_mode(struct uberry_softc *sc)
 }
 
 
-int 
+static int
 uberry_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -162,7 +158,7 @@ uberry_match(device_t parent, cfdata_t match, void *aux)
 		UMATCH_VENDOR_PRODUCT : UMATCH_NONE);
 }
 
-void 
+static void
 uberry_attach(device_t parent, device_t self, void *aux)
 {
 	struct uberry_softc *sc = device_private(self);
@@ -195,7 +191,7 @@ uberry_attach(device_t parent, device_t self, void *aux)
 	return;
 }
 
-int 
+static int
 uberry_detach(device_t self, int flags)
 {
 	struct uberry_softc *sc = device_private(self);
@@ -205,5 +201,5 @@ uberry_detach(device_t self, int flags)
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
 
-	return (0);
+	return 0;
 }

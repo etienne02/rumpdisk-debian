@@ -1,4 +1,4 @@
-/*	$NetBSD: profile.h,v 1.18 2016/04/11 14:15:30 bouyer Exp $	*/
+/*	$NetBSD: profile.h,v 1.20 2021/04/17 20:12:55 rillig Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -79,7 +79,7 @@ __asm(" .globl __mcount		\n"			\
 
 
 #ifdef _KERNEL
-#ifdef XEN
+#ifdef XENPV
 static inline void
 mcount_disable_intr(void)
 {
@@ -100,10 +100,10 @@ mcount_write_psl(u_long psl)
 	curcpu()->ci_vcpu->evtchn_upcall_mask = psl;
 	/* can't call x86_lfence because it calls mcount() */
 	__asm volatile("lfence" ::: "memory"); /* x86_lfence() */
-	/* XXX can't call hypervisor_force_callback() because we're in mcount*/ 
+	/* XXX can't call hypervisor_force_callback() because we're in mcount*/
 }
 
-#else /* XEN */
+#else /* XENPV */
 static inline void
 mcount_disable_intr(void)
 {
@@ -125,7 +125,7 @@ mcount_write_psl(u_long ef)
 	__asm volatile("pushq %0; popfq" : : "r" (ef));
 }
 
-#endif /* XEN */
+#endif /* XENPV */
 
 #define MCOUNT_ENTER	\
 	do { s = (int)mcount_read_psl(); mcount_disable_intr(); } while (0)

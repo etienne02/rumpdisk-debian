@@ -1,4 +1,4 @@
-/*	$NetBSD: sysmon_power.c,v 1.57 2015/12/14 01:08:47 pgoyette Exp $	*/
+/*	$NetBSD: sysmon_power.c,v 1.66 2020/12/18 01:46:39 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007 Juan Romero Pardines.
@@ -69,7 +69,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sysmon_power.c,v 1.57 2015/12/14 01:08:47 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sysmon_power.c,v 1.66 2020/12/18 01:46:39 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -89,6 +89,7 @@ __KERNEL_RCSID(0, "$NetBSD: sysmon_power.c,v 1.57 2015/12/14 01:08:47 pgoyette E
 #include <sys/rndsource.h>
 #include <sys/module.h>
 #include <sys/once.h>
+#include <sys/compat_stub.h>
 
 #include <dev/sysmon/sysmonvar.h>
 #include <prop/proplib.h>
@@ -330,6 +331,8 @@ sysmon_power_daemon_task(struct power_event_dictionary *ped,
 	if (!ped || !ped->dict || !pev_data)
 		return EINVAL;
 
+	memset(&pev, 0, sizeof(pev));
+
 	mutex_enter(&sysmon_power_event_queue_mtx);
 	
 	switch (event) {
@@ -344,16 +347,10 @@ sysmon_power_daemon_task(struct power_event_dictionary *ped,
 		    (struct sysmon_pswitch *)pev_data;
 
 		pev.pev_type = POWER_EVENT_SWITCH_STATE_CHANGE;
-#ifdef COMPAT_40
-		pev.pev_switch.psws_state = event;
-		pev.pev_switch.psws_type = pswitch->smpsw_type;
 
-		if (pswitch->smpsw_name) {
-			(void)strlcpy(pev.pev_switch.psws_name,
-			          pswitch->smpsw_name,
-			          sizeof(pev.pev_switch.psws_name));
-		}
-#endif
+		MODULE_HOOK_CALL_VOID(compat_sysmon_power_40_hook,
+		    (&pev, pswitch, event), __nothing);
+
 		error = sysmon_power_make_dictionary(ped->dict,
 						     pswitch,
 						     event,
@@ -541,8 +538,7 @@ filt_sysmon_power_rdetach(struct knote *kn)
 {
 
 	mutex_enter(&sysmon_power_event_queue_mtx);
-	SLIST_REMOVE(&sysmon_power_event_queue_selinfo.sel_klist,
-	    kn, knote, kn_selnext);
+	selremove_knote(&sysmon_power_event_queue_selinfo, kn);
 	mutex_exit(&sysmon_power_event_queue_mtx);
 }
 
@@ -557,11 +553,19 @@ filt_sysmon_power_read(struct knote *kn, long hint)
 	return kn->kn_data > 0;
 }
 
-static const struct filterops sysmon_power_read_filtops =
-    { 1, NULL, filt_sysmon_power_rdetach, filt_sysmon_power_read };
+static const struct filterops sysmon_power_read_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_sysmon_power_rdetach,
+	.f_event = filt_sysmon_power_read,
+};
 
-static const struct filterops sysmon_power_write_filtops =
-    { 1, NULL, filt_sysmon_power_rdetach, filt_seltrue };
+static const struct filterops sysmon_power_write_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_sysmon_power_rdetach,
+	.f_event = filt_seltrue,
+};
 
 /*
  * sysmonkqfilter_power:
@@ -571,16 +575,13 @@ static const struct filterops sysmon_power_write_filtops =
 int
 sysmonkqfilter_power(dev_t dev, struct knote *kn)
 {
-	struct klist *klist;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &sysmon_power_event_queue_selinfo.sel_klist;
 		kn->kn_fop = &sysmon_power_read_filtops;
 		break;
 
 	case EVFILT_WRITE:
-		klist = &sysmon_power_event_queue_selinfo.sel_klist;
 		kn->kn_fop = &sysmon_power_write_filtops;
 		break;
 
@@ -589,7 +590,7 @@ sysmonkqfilter_power(dev_t dev, struct knote *kn)
 	}
 
 	mutex_enter(&sysmon_power_event_queue_mtx);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(&sysmon_power_event_queue_selinfo, kn);
 	mutex_exit(&sysmon_power_event_queue_mtx);
 
 	return 0;
@@ -703,7 +704,7 @@ sysmon_power_make_dictionary(prop_dictionary_t dict, void *power_data,
 
 #define SETPROP(key, str)						\
 do {									\
-	if ((str) != NULL && !prop_dictionary_set_cstring(dict,		\
+	if ((str) != NULL && !prop_dictionary_set_string(dict,		\
 						  (key),		\
 						  (str))) {		\
 		printf("%s: failed to set %s\n", __func__, (str));	\
@@ -787,7 +788,7 @@ sysmon_power_destroy_dictionary(struct power_event_dictionary *ped)
 
 	while ((obj = prop_object_iterator_next(iter)) != NULL) {
 		prop_dictionary_remove(ped->dict,
-		    prop_dictionary_keysym_cstring_nocopy(obj));
+		    prop_dictionary_keysym_value(obj));
 		prop_object_iterator_reset(iter);
 	}
 
@@ -859,7 +860,7 @@ sysmon_penvsys_event(struct penvsys_state *pes, int event)
 		switch (event) {
 		case PENVSYS_EVENT_LOW_POWER:
 			printf("sysmon: LOW POWER! SHUTTING DOWN.\n");
-			cpu_reboot(RB_POWERDOWN, NULL);
+			kern_reboot(RB_POWERDOWN, NULL);
 			break;
 		case PENVSYS_EVENT_STATE_CHANGED:
 			printf("%s: state changed on '%s' to '%s'\n",
@@ -1026,7 +1027,7 @@ sysmon_pswitch_event(struct sysmon_pswitch *smpsw, int event)
 		 */
 		printf("%s: power button pressed, shutting down!\n",
 		    smpsw->smpsw_name);
-		cpu_reboot(RB_POWERDOWN, NULL);
+		kern_reboot(RB_POWERDOWN, NULL);
 		break;
 
 	case PSWITCH_TYPE_RESET:
@@ -1041,7 +1042,7 @@ sysmon_pswitch_event(struct sysmon_pswitch *smpsw, int event)
 		 */
 		printf("%s: reset button pressed, rebooting!\n",
 		    smpsw->smpsw_name);
-		cpu_reboot(0, NULL);
+		kern_reboot(0, NULL);
 		break;
 
 	case PSWITCH_TYPE_SLEEP:

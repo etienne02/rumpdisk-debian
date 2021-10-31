@@ -1,4 +1,4 @@
-/*	$NetBSD: pciide_common.c,v 1.61 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: pciide_common.c,v 1.67 2020/08/24 05:37:41 msaitoh Exp $	*/
 
 
 /*
@@ -70,10 +70,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pciide_common.c,v 1.61 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pciide_common.c,v 1.67 2020/08/24 05:37:41 msaitoh Exp $");
 
 #include <sys/param.h>
-#include <sys/malloc.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
@@ -209,9 +208,6 @@ pciide_common_detach(struct pciide_softc *sc, int flags)
 			pciide_dma_table_teardown(sc, channel, drive);
 #endif
 		}
-
-		free(cp->ata_channel.ch_queue, M_DEVBUF);
-		cp->ata_channel.atabus = NULL;
 	}
 
 #if NATA_DMA
@@ -323,7 +319,7 @@ pciide_mapregs_compat(const struct pci_attach_args *pa,
 			goto bad;
 		}
 	}
-	wdc_init_shadow_regs(wdc_cp);
+	wdc_init_shadow_regs(wdr);
 	wdr->data32iot = wdr->cmd_iot;
 	wdr->data32ioh = wdr->cmd_iohs[0];
 	return;
@@ -354,8 +350,9 @@ pciide_mapregs_native(const struct pci_attach_args *pa,
 			goto bad;
 		}
 		intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf, sizeof(intrbuf));
-		sc->sc_pci_ih = pci_intr_establish(pa->pa_pc,
-		    intrhandle, IPL_BIO, pci_intr, sc);
+		sc->sc_pci_ih = pci_intr_establish_xname(pa->pa_pc,
+		    intrhandle, IPL_BIO, pci_intr, sc,
+		    device_xname(sc->sc_wdcdev.sc_atac.atac_dev));
 		if (sc->sc_pci_ih != NULL) {
 			aprint_normal_dev(sc->sc_wdcdev.sc_atac.atac_dev,
 			    "using %s for native-PCI interrupt\n",
@@ -409,7 +406,7 @@ pciide_mapregs_native(const struct pci_attach_args *pa,
 			goto bad;
 		}
 	}
-	wdc_init_shadow_regs(wdc_cp);
+	wdc_init_shadow_regs(wdr);
 	wdr->data32iot = wdr->cmd_iot;
 	wdr->data32ioh = wdr->cmd_iohs[0];
 	return;
@@ -552,6 +549,7 @@ pciide_pci_intr(void *arg)
 		/* If a compat channel skip. */
 		if (cp->compat)
 			continue;
+
 		/* if this channel not waiting for intr, skip */
 		if ((wdc_cp->ch_flags & ATACH_IRQ_WAIT) == 0)
 			continue;
@@ -603,7 +601,7 @@ pciide_channel_dma_setup(struct pciide_channel *cp)
 }
 
 #define NIDEDMA_TABLES(sc)	\
-	(MAXPHYS/(min((sc)->sc_dma_maxsegsz, PAGE_SIZE)) + 1)
+	(MAXPHYS/(uimin((sc)->sc_dma_maxsegsz, PAGE_SIZE)) + 1)
 
 int
 pciide_dma_table_setup(struct pciide_softc *sc, int channel, int drive)
@@ -876,14 +874,7 @@ pciide_chansetup(struct pciide_softc *sc, int channel, pcireg_t interface)
 	cp->name = PCIIDE_CHANNEL_NAME(channel);
 	cp->ata_channel.ch_channel = channel;
 	cp->ata_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-	cp->ata_channel.ch_queue =
-	    malloc(sizeof(struct ata_queue), M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (cp->ata_channel.ch_queue == NULL) {
-		aprint_error("%s %s channel: "
-		    "can't allocate memory for command queue",
-		device_xname(sc->sc_wdcdev.sc_atac.atac_dev), cp->name);
-		return 0;
-	}
+
 	aprint_verbose_dev(sc->sc_wdcdev.sc_atac.atac_dev,
 	    "%s channel %s to %s mode\n", cp->name,
 	    (interface & PCIIDE_INTERFACE_SETTABLE(channel)) ?
@@ -1035,7 +1026,7 @@ default_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 			wdcattach(&cp->ata_channel);
 			continue;
 		}
-		if (!wdcprobe(&cp->ata_channel)) {
+		if (!wdcprobe(CHAN_TO_WDC_REGS(&cp->ata_channel))) {
 			failreason = "not responding; disabled or no drives?";
 			goto next;
 		}
@@ -1050,7 +1041,7 @@ default_chip_map(struct pciide_softc *sc, const struct pci_attach_args *pa)
 		    PCI_COMMAND_STATUS_REG);
 		pci_conf_write(sc->sc_pc, sc->sc_tag, PCI_COMMAND_STATUS_REG,
 		    csr & ~PCI_COMMAND_IO_ENABLE);
-		if (wdcprobe(&cp->ata_channel))
+		if (wdcprobe(CHAN_TO_WDC_REGS(&cp->ata_channel)))
 			failreason = "other hardware responding at addresses";
 		pci_conf_write(sc->sc_pc, sc->sc_tag,
 		    PCI_COMMAND_STATUS_REG, csr);
@@ -1082,7 +1073,7 @@ next:
 		for (drive = 0; drive < sc->sc_wdcdev.wdc_maxdrives; drive++) {
 			/*
 			 * we have not probed the drives yet, allocate
-			 * ressources for all of them.
+			 * resources for all of them.
 			 */
 			if (pciide_dma_table_setup(sc, channel, drive) != 0) {
 				/* Abort DMA setup */

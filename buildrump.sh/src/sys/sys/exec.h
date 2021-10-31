@@ -1,4 +1,4 @@
-/*	$NetBSD: exec.h,v 1.150 2016/01/23 14:03:48 christos Exp $	*/
+/*	$NetBSD: exec.h,v 1.159 2020/01/23 10:05:44 ad Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -139,6 +139,7 @@ struct ps_strings32 {
  */
 
 #include <sys/uio.h>
+#include <sys/rwlock.h>
 
 struct lwp;
 struct proc;
@@ -188,7 +189,8 @@ struct exec_fakearg {
 
 struct exec_package {
 	const char *ep_kname;		/* kernel-side copy of file's name */
-	char *ep_resolvedname;		/* fully resolved path from namei */
+	char	*ep_resolvedname;	/* fully resolved path from namei */
+	int	ep_xfd;			/* fexecve file descriptor */
 	void	*ep_hdr;		/* file's exec header */
 	u_int	ep_hdrlen;		/* length of ep_hdr */
 	u_int	ep_hdrvalid;		/* bytes of ep_hdr that are valid */
@@ -215,7 +217,6 @@ struct exec_package {
 	struct vnode *ep_emul_root;     /* base of emulation filesystem */
 	struct vnode *ep_interp;        /* vnode of (elf) interpeter */
 	uint32_t ep_pax_flags;		/* pax flags */
-	char	*ep_path;		/* absolute path of executable */
 	void	(*ep_emul_arg_free)(void *);
 					/* free ep_emul_arg */
 	uint32_t ep_osversion;		/* OS version */
@@ -250,6 +251,7 @@ struct exec_vmcmd {
  * funtions used either by execve() or the various CPU-dependent execve()
  * hooks.
  */
+vaddr_t	exec_vm_minaddr		(vaddr_t);
 void	kill_vmcmd		(struct exec_vmcmd **);
 int	exec_makecmds		(struct lwp *, struct exec_package *);
 int	exec_runcmds		(struct lwp *, struct exec_package *);
@@ -268,15 +270,11 @@ void	setregs			(struct lwp *, struct exec_package *, vaddr_t);
 int	check_veriexec		(struct lwp *, struct vnode *,
 				     struct exec_package *, int);
 int	check_exec		(struct lwp *, struct exec_package *,
-				     struct pathbuf *);
+				     struct pathbuf *, char **);
 int	exec_init		(int);
-int	exec_read_from		(struct lwp *, struct vnode *, u_long off,
-				    void *, size_t);
+int	exec_read		(struct lwp *, struct vnode *, u_long off,
+				    void *, size_t, int);
 int	exec_setup_stack	(struct lwp *, struct exec_package *);
-
-int	coredump_write		(struct coredump_iostate *, enum uio_seg,
-				    const void *, size_t);
-off_t	coredump_offset		(struct coredump_iostate *);
 
 void	exec_free_emul_arg	(struct exec_package *);
 
@@ -301,18 +299,27 @@ void	new_vmcmd(struct exec_vmcmd_set *,
 	new_vmcmd(evsp,lwp,len,addr,vp,offset,prot,flags)
 
 typedef	int (*execve_fetch_element_t)(char * const *, size_t, char **);
-int	execve1(struct lwp *, const char *, char * const *, char * const *,
-    execve_fetch_element_t);
+int	execve1(struct lwp *, bool, const char *, int, char * const *,
+    char * const *, execve_fetch_element_t);
 
 struct posix_spawn_file_actions;
 struct posix_spawnattr;
 int	check_posix_spawn	(struct lwp *);
 void	posix_spawn_fa_free(struct posix_spawn_file_actions *, size_t);
-int	do_posix_spawn(struct lwp *, pid_t *, bool*, const char *,
+int	do_posix_spawn(struct lwp *, pid_t *, bool *, const char *,
     struct posix_spawn_file_actions *, struct posix_spawnattr *,
-    char *const *argv, char *const *, execve_fetch_element_t);
+    char *const *, char *const *, execve_fetch_element_t);
+int      exec_makepathbuf(struct lwp *, const char *, enum uio_seg,
+    struct pathbuf **, size_t *);
 
 extern int	maxexec;
+extern krwlock_t exec_lock;
+
+/*
+ * Utility functions
+ */
+void emul_find_root(struct lwp *, struct exec_package *);
+int emul_find_interp(struct lwp *, struct exec_package *, const char *);
 
 #endif /* _KERNEL */
 

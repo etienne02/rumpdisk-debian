@@ -1,4 +1,4 @@
-/*	$NetBSD: mpt_netbsd.h,v 1.11 2014/04/01 23:57:54 buhrow Exp $	*/
+/*	$NetBSD: mpt_netbsd.h,v 1.13 2019/09/21 07:08:27 maxv Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -193,8 +193,6 @@ typedef struct mpt_softc {
 			fCONFIG_PAGE_SCSI_DEVICE_1	_dev_page1[16];
 			uint16_t			_tag_enable;
 			uint16_t			_disc_enable;
-			uint16_t			_update_params0;
-			uint16_t			_update_params1;
 			uint16_t			_report_xfer_mode;
 		} spi;
 #define	mpt_port_page0		cfg.spi._port_page0
@@ -204,8 +202,6 @@ typedef struct mpt_softc {
 #define	mpt_dev_page1		cfg.spi._dev_page1
 #define	mpt_tag_enable		cfg.spi._tag_enable
 #define	mpt_disc_enable		cfg.spi._disc_enable
-#define	mpt_update_params0	cfg.spi._update_params0
-#define	mpt_update_params1	cfg.spi._update_params1
 #define	mpt_report_xfer_mode	cfg.spi._report_xfer_mode
 
 		struct mpt_fc_cfg {
@@ -257,7 +253,7 @@ typedef struct mpt_softc {
 void	mpt_scsipi_attach(mpt_softc_t *);
 int	mpt_dma_mem_alloc(mpt_softc_t *);
 int	mpt_intr(void *);
-void	mpt_prt(mpt_softc_t *, const char *, ...);
+void	mpt_prt(mpt_softc_t *, const char *, ...) __printflike(2, 3);
 
 #define	mpt_set_config_regs(mpt)				\
 do {								\

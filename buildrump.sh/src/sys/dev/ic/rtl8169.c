@@ -1,4 +1,4 @@
-/*	$NetBSD: rtl8169.c,v 1.147 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: rtl8169.c,v 1.167 2020/09/21 06:57:00 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998-2003
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtl8169.c,v 1.147 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtl8169.c,v 1.167 2020/09/21 06:57:00 msaitoh Exp $");
 /* $FreeBSD: /repoman/r/ncvs/src/sys/dev/re/if_re.c,v 1.20 2004/04/11 20:34:08 ru Exp $ */
 
 /*
@@ -163,105 +163,153 @@ static void re_watchdog(struct ifnet *);
 static int re_enable(struct rtk_softc *);
 static void re_disable(struct rtk_softc *);
 
-static int re_gmii_readreg(device_t, int, int);
-static void re_gmii_writereg(device_t, int, int, int);
+static int re_gmii_readreg(device_t, int, int, uint16_t *);
+static int re_gmii_writereg(device_t, int, int, uint16_t);
 
-static int re_miibus_readreg(device_t, int, int);
-static void re_miibus_writereg(device_t, int, int, int);
+static int re_miibus_readreg(device_t, int, int, uint16_t *);
+static int re_miibus_writereg(device_t, int, int, uint16_t);
 static void re_miibus_statchg(struct ifnet *);
 
 static void re_reset(struct rtk_softc *);
+
+static const struct re_revision {
+	uint32_t		re_chipid;
+	const char		*re_name;
+} re_revisions[] = {
+	{ RTK_HWREV_8100,	"RTL8100" },
+	{ RTK_HWREV_8100E,	"RTL8100E" },
+	{ RTK_HWREV_8100E_SPIN2, "RTL8100E 2" },
+	{ RTK_HWREV_8101,	"RTL8101" },
+	{ RTK_HWREV_8101E,	"RTL8101E" },
+	{ RTK_HWREV_8102E,	"RTL8102E" },
+	{ RTK_HWREV_8106E,	"RTL8106E" },
+	{ RTK_HWREV_8401E,	"RTL8401E" },
+	{ RTK_HWREV_8402,	"RTL8402" },
+	{ RTK_HWREV_8411,	"RTL8411" },
+	{ RTK_HWREV_8411B,	"RTL8411B" },
+	{ RTK_HWREV_8102EL,	"RTL8102EL" },
+	{ RTK_HWREV_8102EL_SPIN1, "RTL8102EL 1" },
+	{ RTK_HWREV_8103E,       "RTL8103E" },
+	{ RTK_HWREV_8110S,	"RTL8110S" },
+	{ RTK_HWREV_8139CPLUS,	"RTL8139C+" },
+	{ RTK_HWREV_8168B_SPIN1, "RTL8168 1" },
+	{ RTK_HWREV_8168B_SPIN2, "RTL8168 2" },
+	{ RTK_HWREV_8168B_SPIN3, "RTL8168 3" },
+	{ RTK_HWREV_8168C,	"RTL8168C/8111C" },
+	{ RTK_HWREV_8168C_SPIN2, "RTL8168C/8111C" },
+	{ RTK_HWREV_8168CP,	"RTL8168CP/8111CP" },
+	{ RTK_HWREV_8168F,	"RTL8168F/8111F" },
+	{ RTK_HWREV_8168G,	"RTL8168G/8111G" },
+	{ RTK_HWREV_8168GU,	"RTL8168GU/8111GU" },
+	{ RTK_HWREV_8168H,	"RTL8168H/8111H" },
+	{ RTK_HWREV_8105E,	"RTL8105E" },
+	{ RTK_HWREV_8105E_SPIN1, "RTL8105E" },
+	{ RTK_HWREV_8168D,	"RTL8168D/8111D" },
+	{ RTK_HWREV_8168DP,	"RTL8168DP/8111DP" },
+	{ RTK_HWREV_8168E,	"RTL8168E/8111E" },
+	{ RTK_HWREV_8168E_VL,	"RTL8168E/8111E-VL" },
+	{ RTK_HWREV_8168EP,	"RTL8168EP/8111EP" },
+	{ RTK_HWREV_8168FP,	"RTL8168FP/8117" },
+	{ RTK_HWREV_8169,	"RTL8169" },
+	{ RTK_HWREV_8169_8110SB, "RTL8169/8110SB" },
+	{ RTK_HWREV_8169_8110SBL, "RTL8169SBL" },
+	{ RTK_HWREV_8169_8110SC, "RTL8169/8110SCd" },
+	{ RTK_HWREV_8169_8110SCE, "RTL8169/8110SCe" },
+	{ RTK_HWREV_8169S,	"RTL8169S" },
+
+	{ 0, NULL }
+};
 
 static inline void
 re_set_bufaddr(struct re_desc *d, bus_addr_t addr)
 {
 
-	d->re_bufaddr_lo = htole32((uint32_t)addr);
-	if (sizeof(bus_addr_t) == sizeof(uint64_t))
-		d->re_bufaddr_hi = htole32((uint64_t)addr >> 32);
-	else
-		d->re_bufaddr_hi = 0;
+	d->re_bufaddr_lo = htole32(RE_ADDR_LO(addr));
+	d->re_bufaddr_hi = htole32(RE_ADDR_HI(addr));
 }
 
 static int
-re_gmii_readreg(device_t dev, int phy, int reg)
+re_gmii_readreg(device_t dev, int phy, int reg, uint16_t *val)
 {
 	struct rtk_softc *sc = device_private(dev);
-	uint32_t rval;
+	uint32_t data;
 	int i;
 
 	if (phy != 7)
-		return 0;
+		return -1;
 
 	/* Let the rgephy driver read the GMEDIASTAT register */
 
 	if (reg == RTK_GMEDIASTAT) {
-		rval = CSR_READ_1(sc, RTK_GMEDIASTAT);
-		return rval;
+		*val = CSR_READ_1(sc, RTK_GMEDIASTAT);
+		return 0;
 	}
 
 	CSR_WRITE_4(sc, RTK_PHYAR, reg << 16);
 	DELAY(1000);
 
 	for (i = 0; i < RTK_TIMEOUT; i++) {
-		rval = CSR_READ_4(sc, RTK_PHYAR);
-		if (rval & RTK_PHYAR_BUSY)
+		data = CSR_READ_4(sc, RTK_PHYAR);
+		if (data & RTK_PHYAR_BUSY)
 			break;
 		DELAY(100);
 	}
 
 	if (i == RTK_TIMEOUT) {
 		printf("%s: PHY read failed\n", device_xname(sc->sc_dev));
-		return 0;
+		return ETIMEDOUT;
 	}
 
-	return rval & RTK_PHYAR_PHYDATA;
+	*val = data & RTK_PHYAR_PHYDATA;
+	return 0;
 }
 
-static void
-re_gmii_writereg(device_t dev, int phy, int reg, int data)
+static int
+re_gmii_writereg(device_t dev, int phy, int reg, uint16_t val)
 {
 	struct rtk_softc *sc = device_private(dev);
-	uint32_t rval;
+	uint32_t data;
 	int i;
 
 	CSR_WRITE_4(sc, RTK_PHYAR, (reg << 16) |
-	    (data & RTK_PHYAR_PHYDATA) | RTK_PHYAR_BUSY);
+	    (val & RTK_PHYAR_PHYDATA) | RTK_PHYAR_BUSY);
 	DELAY(1000);
 
 	for (i = 0; i < RTK_TIMEOUT; i++) {
-		rval = CSR_READ_4(sc, RTK_PHYAR);
-		if (!(rval & RTK_PHYAR_BUSY))
+		data = CSR_READ_4(sc, RTK_PHYAR);
+		if (!(data & RTK_PHYAR_BUSY))
 			break;
 		DELAY(100);
 	}
 
 	if (i == RTK_TIMEOUT) {
-		printf("%s: PHY write reg %x <- %x failed\n",
-		    device_xname(sc->sc_dev), reg, data);
+		printf("%s: PHY write reg %x <- %hx failed\n",
+		    device_xname(sc->sc_dev), reg, val);
+		return ETIMEDOUT;
 	}
+
+	return 0;
 }
 
 static int
-re_miibus_readreg(device_t dev, int phy, int reg)
+re_miibus_readreg(device_t dev, int phy, int reg, uint16_t *val)
 {
 	struct rtk_softc *sc = device_private(dev);
-	uint16_t rval = 0;
 	uint16_t re8139_reg = 0;
-	int s;
+	int s, rv = 0;
 
 	s = splnet();
 
 	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0) {
-		rval = re_gmii_readreg(dev, phy, reg);
+		rv = re_gmii_readreg(dev, phy, reg, val);
 		splx(s);
-		return rval;
+		return rv;
 	}
 
 	/* Pretend the internal PHY is only at address 0 */
 	if (phy) {
 		splx(s);
-		return 0;
+		return -1;
 	}
 	switch (reg) {
 	case MII_BMCR:
@@ -281,6 +329,7 @@ re_miibus_readreg(device_t dev, int phy, int reg)
 		break;
 	case MII_PHYIDR1:
 	case MII_PHYIDR2:
+		*val = 0;
 		splx(s);
 		return 0;
 	/*
@@ -290,49 +339,49 @@ re_miibus_readreg(device_t dev, int phy, int reg)
 	 * us the results of parallel detection.
 	 */
 	case RTK_MEDIASTAT:
-		rval = CSR_READ_1(sc, RTK_MEDIASTAT);
+		*val = CSR_READ_1(sc, RTK_MEDIASTAT);
 		splx(s);
-		return rval;
+		return 0;
 	default:
 		printf("%s: bad phy register\n", device_xname(sc->sc_dev));
 		splx(s);
-		return 0;
+		return -1;
 	}
-	rval = CSR_READ_2(sc, re8139_reg);
+	*val = CSR_READ_2(sc, re8139_reg);
 	if ((sc->sc_quirk & RTKQ_8139CPLUS) != 0 && re8139_reg == RTK_BMCR) {
 		/* 8139C+ has different bit layout. */
-		rval &= ~(BMCR_LOOP | BMCR_ISO);
+		*val &= ~(BMCR_LOOP | BMCR_ISO);
 	}
 	splx(s);
-	return rval;
+	return 0;
 }
 
-static void
-re_miibus_writereg(device_t dev, int phy, int reg, int data)
+static int
+re_miibus_writereg(device_t dev, int phy, int reg, uint16_t val)
 {
 	struct rtk_softc *sc = device_private(dev);
 	uint16_t re8139_reg = 0;
-	int s;
+	int s, rv;
 
 	s = splnet();
 
 	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0) {
-		re_gmii_writereg(dev, phy, reg, data);
+		rv = re_gmii_writereg(dev, phy, reg, val);
 		splx(s);
-		return;
+		return rv;
 	}
 
 	/* Pretend the internal PHY is only at address 0 */
 	if (phy) {
 		splx(s);
-		return;
+		return -1;
 	}
 	switch (reg) {
 	case MII_BMCR:
 		re8139_reg = RTK_BMCR;
 		if ((sc->sc_quirk & RTKQ_8139CPLUS) != 0) {
 			/* 8139C+ has different bit layout. */
-			data &= ~(BMCR_LOOP | BMCR_ISO);
+			val &= ~(BMCR_LOOP | BMCR_ISO);
 		}
 		break;
 	case MII_BMSR:
@@ -350,16 +399,16 @@ re_miibus_writereg(device_t dev, int phy, int reg, int data)
 	case MII_PHYIDR1:
 	case MII_PHYIDR2:
 		splx(s);
-		return;
+		return 0;
 		break;
 	default:
 		printf("%s: bad phy register\n", device_xname(sc->sc_dev));
 		splx(s);
-		return;
+		return -1;
 	}
-	CSR_WRITE_2(sc, re8139_reg, data);
+	CSR_WRITE_2(sc, re8139_reg, val);
 	splx(s);
-	return;
+	return 0;
 }
 
 static void
@@ -556,14 +605,28 @@ re_attach(struct rtk_softc *sc)
 {
 	uint8_t eaddr[ETHER_ADDR_LEN];
 	struct ifnet *ifp;
+	struct mii_data *mii = &sc->mii;
 	int error = 0, i;
+	const struct re_revision *rr;
+	const char *re_name = NULL;
 
 	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0) {
-		uint32_t hwrev;
-
 		/* Revision of 8169/8169S/8110s in bits 30..26, 23 */
-		hwrev = CSR_READ_4(sc, RTK_TXCFG) & RTK_TXCFG_HWREV;
-		switch (hwrev) {
+		sc->sc_hwrev = CSR_READ_4(sc, RTK_TXCFG) & RTK_TXCFG_HWREV;
+
+		for (rr = re_revisions; rr->re_name != NULL; rr++) {
+			if (rr->re_chipid == sc->sc_hwrev)
+				re_name = rr->re_name;
+		}
+
+		if (re_name == NULL)
+			aprint_normal_dev(sc->sc_dev,
+			    "unknown ASIC (0x%04x)\n", sc->sc_hwrev >> 16);
+		else
+			aprint_normal_dev(sc->sc_dev,
+			    "%s (0x%04x)\n", re_name, sc->sc_hwrev >> 16);
+
+		switch (sc->sc_hwrev) {
 		case RTK_HWREV_8169:
 			sc->sc_quirk |= RTKQ_8169NONS;
 			break;
@@ -574,9 +637,9 @@ re_attach(struct rtk_softc *sc)
 		case RTK_HWREV_8169_8110SC:
 			sc->sc_quirk |= RTKQ_MACLDPS;
 			break;
-		case RTK_HWREV_8168_SPIN1:
-		case RTK_HWREV_8168_SPIN2:
-		case RTK_HWREV_8168_SPIN3:
+		case RTK_HWREV_8168B_SPIN1:
+		case RTK_HWREV_8168B_SPIN2:
+		case RTK_HWREV_8168B_SPIN3:
 			sc->sc_quirk |= RTKQ_MACSTAT;
 			break;
 		case RTK_HWREV_8168C:
@@ -602,21 +665,28 @@ re_attach(struct rtk_softc *sc)
 			sc->sc_quirk |= RTKQ_NOJUMBO;
 			break;
 		case RTK_HWREV_8168E:
-		case RTK_HWREV_8168H:
 		case RTK_HWREV_8168H_SPIN1:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_PHYWAKE_PM |
 			    RTKQ_NOJUMBO;
 			break;
+		case RTK_HWREV_8168H:
+		case RTK_HWREV_8168FP:
+			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
+			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_PHYWAKE_PM |
+			    RTKQ_NOJUMBO | RTKQ_RXDV_GATED | RTKQ_TXRXEN_LATER;
+			break;
 		case RTK_HWREV_8168E_VL:
 		case RTK_HWREV_8168F:
+		case RTK_HWREV_8411:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_NOJUMBO;
 			break;
+		case RTK_HWREV_8168EP:
 		case RTK_HWREV_8168G:
 		case RTK_HWREV_8168G_SPIN1:
 		case RTK_HWREV_8168G_SPIN2:
-		case RTK_HWREV_8168G_SPIN4:
+		case RTK_HWREV_8411B:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_NOJUMBO | 
 			    RTKQ_RXDV_GATED;
@@ -628,13 +698,29 @@ re_attach(struct rtk_softc *sc)
 			break;
 		case RTK_HWREV_8102E:
 		case RTK_HWREV_8102EL:
-		case RTK_HWREV_8103E:
+		case RTK_HWREV_8102EL_SPIN1:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_NOJUMBO;
 			break;
+		case RTK_HWREV_8103E:
+			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
+			    RTKQ_MACSTAT | RTKQ_CMDSTOP;
+			break;
+		case RTK_HWREV_8401E:
+		case RTK_HWREV_8105E:
+		case RTK_HWREV_8105E_SPIN1: /* XXX */
+		case RTK_HWREV_8106E:
+			sc->sc_quirk |= RTKQ_PHYWAKE_PM |
+			    RTKQ_DESCV2 | RTKQ_NOEECMD | RTKQ_MACSTAT |
+			    RTKQ_CMDSTOP;
+			break;
+		case RTK_HWREV_8402:
+			sc->sc_quirk |= RTKQ_PHYWAKE_PM |
+			    RTKQ_DESCV2 | RTKQ_NOEECMD | RTKQ_MACSTAT |
+			    RTKQ_CMDSTOP; /* CMDSTOP_WAIT_TXQ */
+			break;
 		default:
-			aprint_normal_dev(sc->sc_dev,
-			    "Unknown revision (0x%08x)\n", hwrev);
+			aprint_normal_dev(sc->sc_dev, "Use default quirks\n");
 			/* assume the latest features */
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD;
 			sc->sc_quirk |= RTKQ_NOJUMBO;
@@ -837,14 +923,6 @@ re_attach(struct rtk_softc *sc)
 	    IFCAP_CSUM_UDPv4_Tx | IFCAP_CSUM_UDPv4_Rx |
 	    IFCAP_TSOv4;
 
-	/*
-	 * XXX
-	 * Still have no idea how to make TSO work on 8168C, 8168CP,
-	 * 8102E, 8111C and 8111CP.
-	 */
-	if ((sc->sc_quirk & RTKQ_DESCV2) != 0)
-		ifp->if_capabilities &= ~IFCAP_TSOv4;
-
 	ifp->if_watchdog = re_watchdog;
 	ifp->if_init = re_init;
 	ifp->if_snd.ifq_maxlen = RE_IFQ_MAXLEN;
@@ -852,23 +930,25 @@ re_attach(struct rtk_softc *sc)
 	IFQ_SET_READY(&ifp->if_snd);
 
 	callout_init(&sc->rtk_tick_ch, 0);
+	callout_setfunc(&sc->rtk_tick_ch, re_tick, sc);
 
 	/* Do MII setup */
-	sc->mii.mii_ifp = ifp;
-	sc->mii.mii_readreg = re_miibus_readreg;
-	sc->mii.mii_writereg = re_miibus_writereg;
-	sc->mii.mii_statchg = re_miibus_statchg;
-	sc->ethercom.ec_mii = &sc->mii;
-	ifmedia_init(&sc->mii.mii_media, IFM_IMASK, ether_mediachange,
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = re_miibus_readreg;
+	mii->mii_writereg = re_miibus_writereg;
+	mii->mii_statchg = re_miibus_statchg;
+	sc->ethercom.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
 	    ether_mediastatus);
-	mii_attach(sc->sc_dev, &sc->mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(sc->sc_dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
-	ifmedia_set(&sc->mii.mii_media, IFM_ETHER | IFM_AUTO);
+	ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 
 	/*
 	 * Call MI attach routine.
 	 */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, eaddr);
 
 	rnd_attach_source(&sc->rnd_source, device_xname(sc->sc_dev),
@@ -962,12 +1042,12 @@ re_detach(struct rtk_softc *sc)
 	/* Detach all PHYs. */
 	mii_detach(&sc->mii, MII_PHY_ANY, MII_OFFSET_ANY);
 
-	/* Delete all remaining media. */
-	ifmedia_delete_instance(&sc->mii.mii_media, IFM_INST_ANY);
-
 	rnd_detach_source(&sc->rnd_source);
 	ether_ifdetach(ifp);
 	if_detach(ifp);
+
+	/* Delete all remaining media. */
+	ifmedia_fini(&sc->mii.mii_media);
 
 	/* Destroy DMA maps for RX buffers. */
 	for (i = 0; i < RE_RX_DESC_CNT; i++)
@@ -1053,6 +1133,7 @@ re_newbuf(struct rtk_softc *sc, int idx, struct mbuf *m)
 		if (n == NULL)
 			return ENOBUFS;
 
+		MCLAIM(n, &sc->ethercom.ec_rx_mowner);
 		MCLGET(n, M_DONTWAIT);
 		if ((n->m_flags & M_EXT) == 0) {
 			m_freem(n);
@@ -1196,7 +1277,7 @@ re_rxeof(struct rtk_softc *sc)
 			if (sc->re_head == NULL)
 				sc->re_head = sc->re_tail = m;
 			else {
-				m->m_flags &= ~M_PKTHDR;
+				m_remove_pkthdr(m);
 				sc->re_tail->m_next = m;
 				sc->re_tail = m;
 			}
@@ -1241,7 +1322,7 @@ re_rxeof(struct rtk_softc *sc)
 				printf(", CRC error");
 			printf("\n");
 #endif
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			/*
 			 * If this is part of a multi-fragment packet,
 			 * discard all the pieces.
@@ -1260,7 +1341,7 @@ re_rxeof(struct rtk_softc *sc)
 		 */
 
 		if (__predict_false(re_newbuf(sc, i, NULL) != 0)) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			if (sc->re_head != NULL) {
 				m_freem(sc->re_head);
 				sc->re_head = sc->re_tail = NULL;
@@ -1283,7 +1364,7 @@ re_rxeof(struct rtk_softc *sc)
 				m_freem(m);
 			} else {
 				m->m_len -= ETHER_CRC_LEN;
-				m->m_flags &= ~M_PKTHDR;
+				m_remove_pkthdr(m);
 				sc->re_tail->m_next = m;
 			}
 			m = sc->re_head;
@@ -1293,7 +1374,6 @@ re_rxeof(struct rtk_softc *sc)
 			m->m_pkthdr.len = m->m_len =
 			    (total_len - ETHER_CRC_LEN);
 
-		ifp->if_ipackets++;
 		m_set_rcvif(m, ifp);
 
 		/* Do RX checksumming */
@@ -1353,11 +1433,9 @@ re_rxeof(struct rtk_softc *sc)
 		}
 
 		if (rxvlan & RE_RDESC_VLANCTL_TAG) {
-			VLAN_INPUT_TAG(ifp, m,
-			     bswap16(rxvlan & RE_RDESC_VLANCTL_DATA),
-			     continue);
+			vlan_set_tag(m,
+			     bswap16(rxvlan & RE_RDESC_VLANCTL_DATA));
 		}
-		bpf_mtap(ifp, m);
 		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 
@@ -1399,12 +1477,14 @@ re_txeof(struct rtk_softc *sc)
 		m_freem(txq->txq_mbuf);
 		txq->txq_mbuf = NULL;
 
+		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (txstat & (RE_TDESC_STAT_EXCESSCOL | RE_TDESC_STAT_COLCNT))
-			ifp->if_collisions++;
+			if_statinc_ref(nsr, if_collisions);
 		if (txstat & RE_TDESC_STAT_TXERRSUM)
-			ifp->if_oerrors++;
+			if_statinc_ref(nsr, if_oerrors);
 		else
-			ifp->if_opackets++;
+			if_statinc_ref(nsr, if_opackets);
+		IF_STAT_PUTREF(ifp);
 	}
 
 	sc->re_ldata.re_txq_considx = idx;
@@ -1419,7 +1499,8 @@ re_txeof(struct rtk_softc *sc)
 	 * This is done in case the transmitter has gone idle.
 	 */
 	if (sc->re_ldata.re_txq_free < RE_TX_QLEN) {
-		CSR_WRITE_4(sc, RTK_TIMERCNT, 1);
+		if ((sc->sc_quirk & RTKQ_IM_HW) == 0)
+			CSR_WRITE_4(sc, RTK_TIMERCNT, 1);
 		if ((sc->sc_quirk & RTKQ_PCIE) != 0) {
 			/*
 			 * Some chips will ignore a second TX request
@@ -1448,7 +1529,7 @@ re_tick(void *arg)
 	mii_tick(&sc->mii);
 	splx(s);
 
-	callout_reset(&sc->rtk_tick_ch, hz, re_tick, sc);
+	callout_schedule(&sc->rtk_tick_ch, hz);
 }
 
 int
@@ -1467,6 +1548,9 @@ re_intr(void *arg)
 	if ((ifp->if_flags & IFF_UP) == 0)
 		return 0;
 
+	const uint16_t status_mask = (sc->sc_quirk & RTKQ_IM_HW) ?
+	    RTK_INTRS_IM_HW : RTK_INTRS_CPLUS;
+
 	for (;;) {
 
 		status = CSR_READ_2(sc, RTK_ISR);
@@ -1478,14 +1562,14 @@ re_intr(void *arg)
 			CSR_WRITE_2(sc, RTK_ISR, status);
 		}
 
-		if ((status & RTK_INTRS_CPLUS) == 0)
+		if ((status & status_mask) == 0)
 			break;
 
 		if (status & (RTK_ISR_RX_OK | RTK_ISR_RX_ERR))
 			re_rxeof(sc);
 
 		if (status & (RTK_ISR_TIMEOUT_EXPIRED | RTK_ISR_TX_ERR |
-		    RTK_ISR_TX_DESC_UNAVAIL))
+		    RTK_ISR_TX_DESC_UNAVAIL | RTK_ISR_TX_OK))
 			re_txeof(sc);
 
 		if (status & RTK_ISR_SYSTEM_ERR) {
@@ -1498,8 +1582,8 @@ re_intr(void *arg)
 		}
 	}
 
-	if (handled && !IFQ_IS_EMPTY(&ifp->if_snd))
-		re_start(ifp);
+	if (handled)
+		if_schedule_deferred_start(ifp);
 
 	rnd_add_uint32(&sc->rnd_source, status);
 
@@ -1520,7 +1604,6 @@ re_start(struct ifnet *ifp)
 	bus_dmamap_t map;
 	struct re_txq *txq;
 	struct re_desc *d;
-	struct m_tag *mtag;
 	uint32_t cmdstat, re_flags, vlanctl;
 	int ofree, idx, error, nsegs, seg;
 	int startdesc, curdesc, lastdesc;
@@ -1553,8 +1636,14 @@ re_start(struct ifnet *ifp)
 		if ((m->m_pkthdr.csum_flags & M_CSUM_TSOv4) != 0) {
 			uint32_t segsz = m->m_pkthdr.segsz;
 
-			re_flags = RE_TDESC_CMD_LGSEND |
-			    (segsz << RE_TDESC_CMD_MSSVAL_SHIFT);
+			if ((sc->sc_quirk & RTKQ_DESCV2) == 0) {
+				re_flags = RE_TDESC_CMD_LGSEND |
+				    (segsz << RE_TDESC_CMD_MSSVAL_SHIFT);
+			} else {
+				re_flags = RE_TDESC_CMD_LGSEND_V4;
+				vlanctl |=
+				    (segsz << RE_TDESC_VLANCTL_MSSVAL_SHIFT);
+			}
 		} else {
 			/*
 			 * set RE_TDESC_CMD_IPCSUM if any checksum offloading
@@ -1603,7 +1692,7 @@ re_start(struct ifnet *ifp)
 
 			IFQ_DEQUEUE(&ifp->if_snd, m);
 			m_freem(m);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
@@ -1639,8 +1728,8 @@ re_start(struct ifnet *ifp)
 		 * appear in all descriptors of a multi-descriptor
 		 * transmission attempt.
 		 */
-		if ((mtag = VLAN_OUTPUT_TAG(&sc->ethercom, m)) != NULL)
-			vlanctl |= bswap16(VLAN_TAG_VALUE(mtag)) |
+		if (vlan_has_tag(m))
+			vlanctl |= bswap16(vlan_get_tag(m)) |
 			    RE_TDESC_VLANCTL_TAG;
 
 		/*
@@ -1727,7 +1816,7 @@ re_start(struct ifnet *ifp)
 		 * If there's a BPF listener, bounce a copy of this frame
 		 * to him.
 		 */
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 	}
 
 	if (sc->re_ldata.re_txq_free < ofree) {
@@ -1747,15 +1836,17 @@ re_start(struct ifnet *ifp)
 		else
 			CSR_WRITE_1(sc, RTK_GTXSTART, RTK_TXSTART_START);
 
-		/*
-		 * Use the countdown timer for interrupt moderation.
-		 * 'TX done' interrupts are disabled. Instead, we reset the
-		 * countdown timer, which will begin counting until it hits
-		 * the value in the TIMERINT register, and then trigger an
-		 * interrupt. Each time we write to the TIMERCNT register,
-		 * the timer count is reset to 0.
-		 */
-		CSR_WRITE_4(sc, RTK_TIMERCNT, 1);
+		if ((sc->sc_quirk & RTKQ_IM_HW) == 0) {
+			/*
+			 * Use the countdown timer for interrupt moderation.
+			 * 'TX done' interrupts are disabled. Instead, we reset
+			 * the countdown timer, which will begin counting until
+			 * it hits the value in the TIMERINT register, and then
+			 * trigger an interrupt. Each time we write to the
+			 * TIMERCNT register, the timer count is reset to 0.
+			 */
+			CSR_WRITE_4(sc, RTK_TIMERCNT, 1);
+		}
 
 		/*
 		 * Set a timeout in case the chip goes out to lunch.
@@ -1814,8 +1905,13 @@ re_init(struct ifnet *ifp)
 	CSR_WRITE_2(sc, RTK_CPLUS_CMD, cfg);
 
 	/* XXX: from Realtek-supplied Linux driver. Wholly undocumented. */
-	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0)
-		CSR_WRITE_2(sc, RTK_IM, 0x0000);
+	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0) {
+		if ((sc->sc_quirk & RTKQ_IM_HW) == 0) {
+			CSR_WRITE_2(sc, RTK_IM, 0x0000);
+		} else {
+			CSR_WRITE_2(sc, RTK_IM, 0x5151);
+		}
+	}
 
 	DELAY(10000);
 
@@ -1862,7 +1958,8 @@ re_init(struct ifnet *ifp)
 	/*
 	 * Enable transmit and receive.
 	 */
-	CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
+	if ((sc->sc_quirk & RTKQ_TXRXEN_LATER) == 0)
+		CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
 
 	/*
 	 * Set the initial TX and RX configuration.
@@ -1904,10 +2001,18 @@ re_init(struct ifnet *ifp)
 	rtk_setmulti(sc);
 
 	/*
+	 * some chips require to enable TX/RX *AFTER* TX/RX configuration
+	 */
+	if ((sc->sc_quirk & RTKQ_TXRXEN_LATER) != 0)
+		CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
+
+	/*
 	 * Enable interrupts.
 	 */
 	if (sc->re_testmode)
 		CSR_WRITE_2(sc, RTK_IMR, 0);
+	else if ((sc->sc_quirk & RTKQ_IM_HW) != 0)
+		CSR_WRITE_2(sc, RTK_IMR, RTK_INTRS_IM_HW);
 	else
 		CSR_WRITE_2(sc, RTK_IMR, RTK_INTRS_CPLUS);
 
@@ -1926,11 +2031,50 @@ re_init(struct ifnet *ifp)
 	 * moderation, which dramatically improves TX frame rate.
 	 */
 
-	if ((sc->sc_quirk & RTKQ_8139CPLUS) != 0)
-		CSR_WRITE_4(sc, RTK_TIMERINT, 0x400);
-	else {
-		CSR_WRITE_4(sc, RTK_TIMERINT_8169, 0x800);
+	unsigned defer;		/* timer interval / ns */
+	unsigned period;	/* busclock period / ns */
 
+	/*
+	 * Maximum frame rate
+	 * 1500 byte PDU -> 81274 Hz
+	 *   46 byte PDU -> 1488096 Hz
+	 *
+	 * Deferring interrupts by up to 128us needs descriptors for
+	 * 1500 byte PDU -> 10.4 frames
+	 *   46 byte PDU -> 190.4 frames
+	 *
+	 */
+	defer = 128000;
+
+	if ((sc->sc_quirk & RTKQ_IM_HW) != 0) {
+		period = 1;
+		defer = 0;
+	} else if ((sc->sc_quirk & RTKQ_PCIE) != 0) {
+		period = 8;
+	} else {
+		switch (CSR_READ_1(sc, RTK_CFG2_BUSFREQ) & 0x7) {
+		case RTK_BUSFREQ_33MHZ:
+			period = 30;
+			break;
+		case RTK_BUSFREQ_66MHZ:
+			period = 15;
+			break;
+		default:
+			/* lowest possible clock */
+			period = 60;
+			break;
+		}
+	}
+
+	/* Timer Interrupt register address varies */
+	uint16_t re8139_reg;
+	if ((sc->sc_quirk & RTKQ_8139CPLUS) != 0)
+		re8139_reg = RTK_TIMERINT;
+	else
+		re8139_reg = RTK_TIMERINT_8169;
+	CSR_WRITE_4(sc, re8139_reg, defer / period);
+
+	if ((sc->sc_quirk & RTKQ_8139CPLUS) == 0) {
 		/*
 		 * For 8169 gigE NICs, set the max allowed RX packet
 		 * size so we can receive jumbo frames.
@@ -1946,7 +2090,7 @@ re_init(struct ifnet *ifp)
 	ifp->if_flags |= IFF_RUNNING;
 	ifp->if_flags &= ~IFF_OACTIVE;
 
-	callout_reset(&sc->rtk_tick_ch, hz, re_tick, sc);
+	callout_schedule(&sc->rtk_tick_ch, hz);
 
  out:
 	if (error) {
@@ -2014,7 +2158,7 @@ re_watchdog(struct ifnet *ifp)
 	sc = ifp->if_softc;
 	s = splnet();
 	printf("%s: watchdog timeout\n", device_xname(sc->sc_dev));
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	re_txeof(sc);
 	re_rxeof(sc);

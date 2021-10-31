@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_priq.c,v 1.23 2016/04/20 08:58:48 knakahara Exp $	*/
+/*	$NetBSD: altq_priq.c,v 1.27 2021/08/30 08:40:31 riastradh Exp $	*/
 /*	$KAME: altq_priq.c,v 1.13 2005/04/13 03:44:25 suz Exp $	*/
 /*
  * Copyright (C) 2000-2003
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_priq.c,v 1.23 2016/04/20 08:58:48 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_priq.c,v 1.27 2021/08/30 08:40:31 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -219,6 +219,7 @@ priq_getqstats(struct pf_altq *a, void *ubuf, int *nbytes)
 	if (*nbytes < sizeof(stats))
 		return (EINVAL);
 
+	memset(&stats, 0, sizeof(stats));
 	get_class_stats(&stats, cl);
 
 	if ((error = copyout((void *)&stats, ubuf, sizeof(stats))) != 0)
@@ -316,8 +317,10 @@ priq_class_create(struct priq_if *pif, int pri, int qlimit, int flags, int qid)
 
 		cl->cl_q = malloc(sizeof(class_queue_t), M_DEVBUF,
 		    M_WAITOK|M_ZERO);
-		if (cl->cl_q == NULL)
-			goto err_ret;
+		if (cl->cl_q == NULL) {
+			free(cl, M_DEVBUF);
+			return (NULL);
+		}
 	}
 
 	pif->pif_classes[pri] = cl;
@@ -371,22 +374,6 @@ priq_class_create(struct priq_if *pif, int pri, int qlimit, int flags, int qid)
 #endif /* ALTQ_RED */
 
 	return (cl);
-
- err_ret:
-	if (cl->cl_red != NULL) {
-#ifdef ALTQ_RIO
-		if (q_is_rio(cl->cl_q))
-			rio_destroy((rio_t *)cl->cl_red);
-#endif
-#ifdef ALTQ_RED
-		if (q_is_red(cl->cl_q))
-			red_destroy(cl->cl_red);
-#endif
-	}
-	if (cl->cl_q != NULL)
-		free(cl->cl_q, M_DEVBUF);
-	free(cl, M_DEVBUF);
-	return (NULL);
 }
 
 static int
@@ -455,7 +442,7 @@ priq_enqueue(struct ifaltq *ifq, struct mbuf *m)
 		return (ENOBUFS);
 	}
 	cl = NULL;
-	if ((t = m_tag_find(m, PACKET_TAG_ALTQ_QID, NULL)) != NULL)
+	if ((t = m_tag_find(m, PACKET_TAG_ALTQ_QID)) != NULL)
 		cl = clh_to_clp(pif, ((struct altq_tag *)(t+1))->qid);
 #ifdef ALTQ3_COMPAT
 	else if (ifq->altq_flags & ALTQF_CLASSIFY)
@@ -971,10 +958,9 @@ priqcmd_class_stats(struct priq_class_stats *ap)
 	usp = ap->stats;
 	for (pri = 0; pri <= pif->pif_maxpri; pri++) {
 		cl = pif->pif_classes[pri];
+		memset(&stats, 0, sizeof(stats));
 		if (cl != NULL)
 			get_class_stats(&stats, cl);
-		else
-			memset(&stats, 0, sizeof(stats));
 		if ((error = copyout((void *)&stats, (void *)usp++,
 				     sizeof(stats))) != 0)
 			return (error);

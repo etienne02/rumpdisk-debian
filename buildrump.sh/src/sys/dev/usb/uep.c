@@ -1,4 +1,4 @@
-/*	$NetBSD: uep.c,v 1.20 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: uep.c,v 1.25 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2004 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
  *  eGalax USB touchpanel controller driver.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uep.c,v 1.20 2016/04/23 10:15:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uep.c,v 1.25 2021/08/07 16:19:17 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,6 +54,14 @@ __KERNEL_RCSID(0, "$NetBSD: uep.c,v 1.20 2016/04/23 10:15:32 skrll Exp $");
 #include <dev/wscons/tpcalibvar.h>
 
 #define UIDSTR	"eGalax USB SN000000"
+/* calibration - integer values, perhaps sysctls?  */
+#define X_RATIO   293 
+#define X_OFFSET  -28
+#define Y_RATIO   -348
+#define Y_OFFSET  537
+/* an X_RATIO of ``312''  means : reduce by a factor 3.12 x axis amplitude */
+/* an Y_RATIO of ``-157'' means : reduce by a factor 1.57 y axis amplitude,
+ * and reverse y motion */
 
 struct uep_softc {
 	device_t sc_dev;
@@ -87,22 +95,22 @@ Static int	uep_enable(void *);
 Static void	uep_disable(void *);
 Static int	uep_ioctl(void *, u_long, void *, int, struct lwp *);
 
-const struct wsmouse_accessops uep_accessops = {
+static const struct wsmouse_accessops uep_accessops = {
 	uep_enable,
 	uep_ioctl,
 	uep_disable,
 };
 
-int uep_match(device_t, cfdata_t, void *);
-void uep_attach(device_t, device_t, void *);
-void uep_childdet(device_t, device_t);
-int uep_detach(device_t, int);
-int uep_activate(device_t, enum devact);
-extern struct cfdriver uep_cd;
+static int uep_match(device_t, cfdata_t, void *);
+static void uep_attach(device_t, device_t, void *);
+static void uep_childdet(device_t, device_t);
+static int uep_detach(device_t, int);
+static int uep_activate(device_t, enum devact);
+
 CFATTACH_DECL2_NEW(uep, sizeof(struct uep_softc), uep_match, uep_attach,
     uep_detach, uep_activate, NULL, uep_childdet);
 
-int
+static int
 uep_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -120,7 +128,7 @@ uep_match(device_t parent, cfdata_t match, void *aux)
 	return UMATCH_NONE;
 }
 
-void
+static void
 uep_attach(device_t parent, device_t self, void *aux)
 {
 	struct uep_softc *sc = device_private(self);
@@ -215,7 +223,7 @@ uep_attach(device_t parent, device_t self, void *aux)
 	a.accessops = &uep_accessops;
 	a.accesscookie = sc;
 
-	sc->sc_wsmousedev = config_found(self, &a, wsmousedevprint);
+	sc->sc_wsmousedev = config_found(self, &a, wsmousedevprint, CFARGS_NONE);
 
 	tpcalib_init(&sc->sc_tpcalib);
 	tpcalib_ioctl(&sc->sc_tpcalib, WSMOUSEIO_SCALIBCOORDS,
@@ -224,7 +232,7 @@ uep_attach(device_t parent, device_t self, void *aux)
 	return;
 }
 
-int
+static int
 uep_detach(device_t self, int flags)
 {
 	struct uep_softc *sc = device_private(self);
@@ -247,7 +255,7 @@ uep_detach(device_t self, int flags)
 	return rv;
 }
 
-void
+static void
 uep_childdet(device_t self, device_t child)
 {
 	struct uep_softc *sc = device_private(self);
@@ -256,7 +264,7 @@ uep_childdet(device_t self, device_t child)
 	sc->sc_wsmousedev = NULL;
 }
 
-int
+static int
 uep_activate(device_t self, enum devact act)
 {
 	struct uep_softc *sc = device_private(self);
@@ -358,6 +366,17 @@ uep_ioctl(void *v, u_long cmd, void *data, int flag, struct lwp *l)
 	return EPASSTHROUGH;
 }
 
+static int
+uep_adjust(int v, int off, int rat)
+{
+	int num = 100 * v;
+	int quot = num / rat;
+	int rem = num % rat;
+	if (num >= 0 && rem < 0)
+		quot++;
+	return quot + off;
+}
+
 void
 uep_intr(struct usbd_xfer *xfer, void *addr, usbd_status status)
 {
@@ -429,8 +448,8 @@ uep_intr(struct usbd_xfer *xfer, void *addr, usbd_status status)
 		default:
 			msk = 0x0f;	/* H=0, L=0 */
 		}
-		x = ((p[3] & msk) << 7) | p[4];
-		y = ((p[1] & msk) << 7) | p[2];
+		x = uep_adjust(((p[3] & msk) << 7) | p[4], X_OFFSET, X_RATIO);
+		y = uep_adjust(((p[1] & msk) << 7) | p[2], Y_OFFSET, Y_RATIO);
 
 		tpcalib_trans(&sc->sc_tpcalib, x, y, &x, &y);
 

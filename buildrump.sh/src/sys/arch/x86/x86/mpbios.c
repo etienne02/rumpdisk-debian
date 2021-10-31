@@ -1,4 +1,4 @@
-/*	$NetBSD: mpbios.c,v 1.65 2015/07/17 06:41:18 msaitoh Exp $	*/
+/*	$NetBSD: mpbios.c,v 1.70 2021/08/07 16:19:08 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -96,7 +96,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpbios.c,v 1.65 2015/07/17 06:41:18 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpbios.c,v 1.70 2021/08/07 16:19:08 thorpej Exp $");
 
 #include "acpica.h"
 #include "lapic.h"
@@ -752,7 +752,7 @@ mpbios_scan(device_t self, int *ncpup)
 					struct ioapic_softc *sc;
 					for (sc = ioapics ; sc != NULL;
 					     sc = sc->sc_next) {
-						ie.dst_apic_id = sc->sc_apicid;
+						ie.dst_apic_id = sc->sc_pic.pic_apicid;
 						mpbios_int((char *)&ie, type,
 						    &mp_intrs[cur_intr++]);
 					}
@@ -818,8 +818,10 @@ mpbios_cpu(const uint8_t *ent, device_t self)
 	caa.cpu_func = &mp_cpu_funcs;
 	locs[CPUBUSCF_APID] = caa.cpu_number;
 
-	config_found_sm_loc(self, "cpubus", locs, &caa, mp_cpuprint,
-			    config_stdsubmatch);
+	config_found(self, &caa, mp_cpuprint,
+	    CFARGS(.submatch = config_stdsubmatch,
+		   .iattr = "cpubus",
+		   .locators = locs));
 }
 
 static void
@@ -1245,8 +1247,10 @@ mpbios_ioapic(const uint8_t *ent, device_t self)
 	aaa.flags = (mp_fps->mpfb2 & 0x80) ? IOAPIC_PICMODE : IOAPIC_VWIRE;
 	locs[IOAPICBUSCF_APID] = aaa.apic_id;
 
-	config_found_sm_loc(self, "ioapicbus", locs, &aaa, mp_ioapicprint,
-			    config_stdsubmatch);
+	config_found(self, &aaa, mp_ioapicprint,
+	    CFARGS(.submatch = config_stdsubmatch,
+		   .iattr = "ioapicbus",
+		   .locators = locs));
 	}
 #endif
 }

@@ -1,25 +1,26 @@
-#	$NetBSD: Makefile,v 1.81 2016/03/06 10:19:01 aymeric Exp $
+#	$NetBSD: Makefile,v 1.89 2021/02/25 13:41:58 christos Exp $
 
 HOSTLIB=	nbcompat
 
-.include <bsd.own.mk>
+.include <bsd.hostinit.mk>
 
 SRCS=		atoll.c basename.c cdbr.c cdbw.c dirname.c \
 		dprintf.c fgetln.c flock.c fparseln.c fpurge.c \
 		getcap.c getline.c getmode.c getopt_long.c gettemp.c \
-		heapsort.c \
+		heapsort.c getsubopt.c \
 		issetugid.c lchflags.c lchmod.c lchown.c libyywrap.c \
 		md2.c md2hl.c md4c.c md4hl.c md5c.c md5hl.c \
 		mi_vector_hash.c mkdtemp.c \
 		mkstemp.c pread.c putc_unlocked.c pwcache.c pwrite.c \
 		pw_scan.c \
-		raise_default_signal.c reallocarr.c rmd160.c rmd160hl.c \
+		raise_default_signal.c rb.c reallocarr.c reallocarray.c \
+		rmd160.c rmd160hl.c \
 		regcomp.c regerror.c regexec.c regfree.c \
 		setenv.c setgroupent.c \
 		setpassent.c setprogname.c sha1.c sha1hl.c sha2.c \
 		sha256hl.c sha384hl.c sha512hl.c snprintb.c snprintf.c \
 		stat_flags.c strlcat.c strlcpy.c strmode.c \
-		strndup.c strnlen.c \
+		strcasecmp.c strncasecmp.c strndup.c strnlen.c \
 		strsep.c strsuftoll.c strtoll.c \
 		strtoi.c strtou.c \
 		unvis.c vis.c err.c errx.c errc.c verr.c verrx.c verrc.c \
@@ -54,6 +55,7 @@ CPPFLAGS+=	-I. -I./include -I${.CURDIR} -I${.CURDIR}/sys \
 		${.CURDIR}/../../lib/libc/string \
 		${.CURDIR}/../../lib/libutil \
 		${.CURDIR}/../../common/lib/libc/cdb \
+		${.CURDIR}/../../common/lib/libc/gen \
 		${.CURDIR}/../../common/lib/libc/string \
 		${.CURDIR}/../../common/lib/libc/hash/rmd160 \
 		${.CURDIR}/../../common/lib/libc/hash/sha1 \
@@ -75,10 +77,15 @@ _CURDIR:=	${.CURDIR}
 
 SRCS:=		${SRCS:M*.c}
 
+CONFIGURE_ARGS=	--cache-file=config.cache
+.if ${MAKEVERBOSE} == 0
+CONFIGURE_ARGS+=--silent
+.endif
+
 config.cache: include/.stamp configure nbtool_config.h.in defs.mk.in
 	rm -f ${.TARGET}
 	CC=${HOST_CC:Q} CFLAGS=${HOST_CFLAGS:Q} LDFLAGS=${HOST_LDFLAGS:Q} \
-		${HOST_SH} ${.CURDIR}/configure --cache-file=config.cache
+		${HOST_SH} ${.CURDIR}/configure ${CONFIGURE_ARGS}
 
 defs.mk: config.cache
 	@touch ${.TARGET}

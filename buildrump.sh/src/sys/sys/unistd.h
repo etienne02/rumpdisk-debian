@@ -1,4 +1,4 @@
-/*	$NetBSD: unistd.h,v 1.60 2016/07/21 16:01:59 njoly Exp $	*/
+/*	$NetBSD: unistd.h,v 1.63 2020/05/16 18:31:53 christos Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -217,6 +217,11 @@
 /* From OpenSolaris, used by SEEK_DATA/SEEK_HOLE. */
 #define	_PC_MIN_HOLE_SIZE	15
 
+#ifdef _NETBSD_SOURCE
+#define _PC_ACL_PATH_MAX        16
+#define _PC_ACL_NFS4            17
+#endif
+
 /* configurable system variables; use as argument to sysconf(3) */
 /*
  * XXX The value of _SC_CLK_TCK is embedded in <time.h>.
@@ -318,6 +323,9 @@
 #define	_SC_CPUTIME			90
 #define	_SC_THREAD_CPUTIME		91
 #define	_SC_DELAYTIMER_MAX		92
+#define	_SC_SIGQUEUE_MAX		93
+#define	_SC_REALTIME_SIGNALS		94
+#define	_SC_RTSIG_MAX			95
 
 /* Extensions found in Solaris and Linux. */
 #define	_SC_PHYS_PAGES		121

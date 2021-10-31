@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -140,7 +140,7 @@ OtCreateXrefFile (
 
     /* Build cross-reference output file if requested */
 
-    if (!Gbl_CrossReferenceOutput)
+    if (!AslGbl_CrossReferenceOutput)
     {
         return;
     }
@@ -152,7 +152,7 @@ OtCreateXrefFile (
     OtPrintHeaders ("Part 2: Method Reference Map "
         "(Invocations of each user-defined control method)");
 
-    TrWalkParseTree (Gbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
+    TrWalkParseTree (AslGbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
         OtXrefWalkPart2, NULL, &XrefInfo);
 
     /* Cross-reference output file, part 3 (All other object refs) */
@@ -160,7 +160,7 @@ OtCreateXrefFile (
     OtPrintHeaders ("Part 3: Full Object Reference Map "
         "(Methods that reference each object in namespace");
 
-    TrWalkParseTree (Gbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
+    TrWalkParseTree (AslGbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
         OtXrefWalkPart3, NULL, &XrefInfo);
 
     /* Cross-reference summary */
@@ -512,7 +512,7 @@ OtXrefWalkPart2 (
     XrefInfo->ThisMethodInvocations = 0;
     XrefInfo->MethodOp = Op;
 
-    (void) TrWalkParseTree (Gbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
+    (void) TrWalkParseTree (AslGbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
         OtXrefAnalysisWalkPart2, NULL, XrefInfo);
 
     if (!XrefInfo->ThisMethodInvocations)
@@ -679,7 +679,7 @@ OtXrefWalkPart3 (
     XrefInfo->ThisObjectReferences = 0;
     XrefInfo->TotalObjects = 0;
 
-    (void) TrWalkParseTree (Gbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
+    (void) TrWalkParseTree (AslGbl_ParseTreeRoot, ASL_WALK_VISIT_DOWNWARD,
         OtXrefAnalysisWalkPart3, NULL, XrefInfo);
 
     if (!XrefInfo->ThisObjectReferences)
@@ -691,7 +691,7 @@ OtXrefWalkPart3 (
     else
     {
         FlPrintFile (ASL_FILE_XREF_OUTPUT,
-            "            %u references to this object in this module\n",
+            "            %u references to this object in this module [%s]\n",
             XrefInfo->ThisObjectReferences, ParentPath);
     }
 

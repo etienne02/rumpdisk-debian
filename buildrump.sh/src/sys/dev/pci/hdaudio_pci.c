@@ -1,4 +1,4 @@
-/* $NetBSD: hdaudio_pci.c,v 1.4 2016/07/14 04:19:27 msaitoh Exp $ */
+/* $NetBSD: hdaudio_pci.c,v 1.10 2018/09/12 09:49:03 mrg Exp $ */
 
 /*
  * Copyright (c) 2009 Precedence Technologies Ltd <support@precedence.co.uk>
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hdaudio_pci.c,v 1.4 2016/07/14 04:19:27 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hdaudio_pci.c,v 1.10 2018/09/12 09:49:03 mrg Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -58,6 +58,7 @@ struct hdaudio_pci_softc {
 	pci_chipset_tag_t	sc_pc;
 	void			*sc_ih;
 	pcireg_t		sc_id;
+	pci_intr_handle_t	*sc_pihp;
 };
 
 static int	hdaudio_pci_match(device_t, cfdata_t, void *);
@@ -105,10 +106,9 @@ hdaudio_pci_attach(device_t parent, device_t self, void *opaque)
 {
 	struct hdaudio_pci_softc *sc = device_private(self);
 	struct pci_attach_args *pa = opaque;
-	pci_intr_handle_t ih;
 	const char *intrstr;
-	pcireg_t csr;
-	int err;
+	pcireg_t csr, maptype;
+	int err, reg;
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	aprint_naive("\n");
@@ -127,7 +127,9 @@ hdaudio_pci_attach(device_t parent, device_t self, void *opaque)
 	pci_conf_write(sc->sc_pc, sc->sc_tag, PCI_COMMAND_STATUS_REG, csr);
 
 	/* Map MMIO registers */
-	err = pci_mapreg_map(pa, HDAUDIO_PCI_AZBARL, PCI_MAPREG_TYPE_MEM, 0,
+	reg = HDAUDIO_PCI_AZBARL;
+	maptype = pci_mapreg_type(sc->sc_pc, sc->sc_tag, reg);
+	err = pci_mapreg_map(pa, reg, maptype, 0,
 			     &sc->sc_hdaudio.sc_memt,
 			     &sc->sc_hdaudio.sc_memh,
 			     &sc->sc_hdaudio.sc_membase,
@@ -137,17 +139,20 @@ hdaudio_pci_attach(device_t parent, device_t self, void *opaque)
 		return;
 	}
 	sc->sc_hdaudio.sc_memvalid = true;
-	sc->sc_hdaudio.sc_dmat = pa->pa_dmat;
+	if (pci_dma64_available(pa))
+		sc->sc_hdaudio.sc_dmat = pa->pa_dmat64;
+	else
+		sc->sc_hdaudio.sc_dmat = pa->pa_dmat;
 
 	/* Map interrupt and establish handler */
-	err = pci_intr_map(pa, &ih);
-	if (err) {
+	if (pci_intr_alloc(pa, &sc->sc_pihp, NULL, 0)) {
 		aprint_error_dev(self, "couldn't map interrupt\n");
 		return;
 	}
-	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_AUDIO,
-	    hdaudio_pci_intr, sc);
+	intrstr = pci_intr_string(pa->pa_pc, sc->sc_pihp[0], intrbuf,
+	    sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish_xname(pa->pa_pc, sc->sc_pihp[0],
+	    IPL_AUDIO, hdaudio_pci_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr)
@@ -157,14 +162,12 @@ hdaudio_pci_attach(device_t parent, device_t self, void *opaque)
 	}
 	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
 
-	if (!pmf_device_register(self, NULL, hdaudio_pci_resume))
-		aprint_error_dev(self, "couldn't establish power handler\n");
-
 	hdaudio_pci_reinit(sc);
 
 	/* Attach bus-independent HD audio layer */
 	if (hdaudio_attach(self, &sc->sc_hdaudio)) {
 		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
+		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
 		sc->sc_ih = NULL;
 		bus_space_unmap(sc->sc_hdaudio.sc_memt,
 				sc->sc_hdaudio.sc_memh,
@@ -175,8 +178,12 @@ hdaudio_pci_attach(device_t parent, device_t self, void *opaque)
 		csr &= ~(PCI_COMMAND_MASTER_ENABLE | PCI_COMMAND_BACKTOBACK_ENABLE);
 		pci_conf_write(sc->sc_pc, sc->sc_tag,
 		    PCI_COMMAND_STATUS_REG, csr);
-		pmf_device_deregister(self);
+
+		if (!pmf_device_register(self, NULL, NULL))
+			aprint_error_dev(self, "couldn't establish power handler\n");
 	}
+	else if (!pmf_device_register(self, NULL, hdaudio_pci_resume))
+		aprint_error_dev(self, "couldn't establish power handler\n");
 }
 
 static int
@@ -205,6 +212,7 @@ hdaudio_pci_detach(device_t self, int flags)
 
 	if (sc->sc_ih != NULL) {
 		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
+		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
 		sc->sc_ih = NULL;
 	}
 	if (sc->sc_hdaudio.sc_memvalid == true) {
@@ -266,27 +274,41 @@ hdaudio_pci_resume(device_t self, const pmf_qual_t *qual)
 	return hdaudio_resume(&sc->sc_hdaudio);
 }
 
-MODULE(MODULE_CLASS_DRIVER, hdaudio_pci, "hdaudio");
+MODULE(MODULE_CLASS_DRIVER, hdaudio_pci, "pci,hdaudio,audio");
 
 #ifdef _MODULE
+/*
+ * XXX Don't allow ioconf.c to redefine the "struct cfdriver hdaudio_cd"
+ * XXX it will be defined in the common hdaudio module
+ */
+
+#undef CFDRIVER_DECL
+#define CFDRIVER_DECL(name, class, attr) /* nothing */
 #include "ioconf.c"
 #endif
 
 static int
 hdaudio_pci_modcmd(modcmd_t cmd, void *opaque)
 {
+#ifdef _MODULE
+	/*
+	 * We ignore the cfdriver_vec[] that ioconf provides, since
+	 * the cfdrivers are attached already.
+	 */
+	static struct cfdriver * const no_cfdriver_vec[] = { NULL };
+#endif
 	int error = 0;
 
 	switch (cmd) {
 	case MODULE_CMD_INIT:
 #ifdef _MODULE
-		error = config_init_component(cfdriver_ioconf_hdaudio_pci,
+		error = config_init_component(no_cfdriver_vec,
 		    cfattach_ioconf_hdaudio_pci, cfdata_ioconf_hdaudio_pci);
 #endif
 		return error;
 	case MODULE_CMD_FINI:
 #ifdef _MODULE
-		error = config_fini_component(cfdriver_ioconf_hdaudio_pci,
+		error = config_fini_component(no_cfdriver_vec,
 		    cfattach_ioconf_hdaudio_pci, cfdata_ioconf_hdaudio_pci);
 #endif
 		return error;

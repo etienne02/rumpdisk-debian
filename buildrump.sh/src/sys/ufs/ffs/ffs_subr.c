@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs_subr.c,v 1.49 2016/05/07 11:59:08 maxv Exp $	*/
+/*	$NetBSD: ffs_subr.c,v 1.52 2020/04/21 15:04:12 christos Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -36,7 +36,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ffs_subr.c,v 1.49 2016/05/07 11:59:08 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ffs_subr.c,v 1.52 2020/04/21 15:04:12 christos Exp $");
 
 #include <sys/param.h>
 
@@ -195,7 +195,7 @@ ffs_isblock(struct fs *fs, u_char *cp, int32_t h)
 		mask = 0x01 << (h & 0x7);
 		return ((cp[h >> 3] & mask) == mask);
 	default:
-		panic("ffs_isblock: unknown fs_fragshift %d",
+		panic("%s: unknown fs_fragshift %d", __func__,
 		    (int)fs->fs_fragshift);
 	}
 }
@@ -219,7 +219,7 @@ ffs_isfreeblock(struct fs *fs, u_char *cp, int32_t h)
 	case 0:
 		return ((cp[h >> 3] & (0x01 << (h & 0x7))) == 0);
 	default:
-		panic("ffs_isfreeblock: unknown fs_fragshift %d",
+		panic("%s: unknown fs_fragshift %d", __func__,
 		    (int)fs->fs_fragshift);
 	}
 }
@@ -245,7 +245,7 @@ ffs_clrblock(struct fs *fs, u_char *cp, int32_t h)
 		cp[h >> 3] &= ~(0x01 << (h & 0x7));
 		return;
 	default:
-		panic("ffs_clrblock: unknown fs_fragshift %d",
+		panic("%s: unknown fs_fragshift %d", __func__,
 		    (int)fs->fs_fragshift);
 	}
 }
@@ -271,7 +271,7 @@ ffs_setblock(struct fs *fs, u_char *cp, int32_t h)
 		cp[h >> 3] |= (0x01 << (h & 0x7));
 		return;
 	default:
-		panic("ffs_setblock: unknown fs_fragshift %d",
+		panic("%s: unknown fs_fragshift %d", __func__,
 		    (int)fs->fs_fragshift);
 	}
 }
@@ -287,7 +287,8 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, int32_t blkno, int cnt)
 	int32_t *sump;
 	int32_t *lp;
 	u_char *freemapp, *mapp;
-	int i, start, end, forw, back, map, bit;
+	int i, start, end, forw, back, map;
+	unsigned int bit;
 	const int needswap = UFS_FSNEEDSWAP(fs);
 
 	/* KASSERT(mutex_owned(&ump->um_lock)); */
@@ -312,7 +313,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, int32_t blkno, int cnt)
 		end = ufs_rw32(cgp->cg_nclusterblks, needswap);
 	mapp = &freemapp[start / NBBY];
 	map = *mapp++;
-	bit = 1 << (start % NBBY);
+	bit = 1U << ((unsigned int)start % NBBY);
 	for (i = start; i < end; i++) {
 		if ((map & bit) == 0)
 			break;
@@ -333,7 +334,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, int32_t blkno, int cnt)
 		end = -1;
 	mapp = &freemapp[start / NBBY];
 	map = *mapp--;
-	bit = 1 << (start % NBBY);
+	bit = 1U << ((unsigned int)start % NBBY);
 	for (i = start; i > end; i--) {
 		if ((map & bit) == 0)
 			break;
@@ -341,7 +342,7 @@ ffs_clusteracct(struct fs *fs, struct cg *cgp, int32_t blkno, int cnt)
 			bit >>= 1;
 		} else {
 			map = *mapp--;
-			bit = 1 << (NBBY - 1);
+			bit = 1U << (NBBY - 1);
 		}
 	}
 	back = start - i;

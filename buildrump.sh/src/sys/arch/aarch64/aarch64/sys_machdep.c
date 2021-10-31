@@ -1,4 +1,4 @@
-/* $NetBSD: sys_machdep.c,v 1.1 2014/08/10 05:47:37 matt Exp $ */
+/* $NetBSD: sys_machdep.c,v 1.4 2019/12/06 18:16:22 kamil Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,11 +31,15 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: sys_machdep.c,v 1.1 2014/08/10 05:47:37 matt Exp $");
+__KERNEL_RCSID(1, "$NetBSD: sys_machdep.c,v 1.4 2019/12/06 18:16:22 kamil Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
+#include <sys/cpu.h>
 #include <sys/syscallargs.h>
+
+#include <aarch64/armreg.h>
+#include <aarch64/cpu.h>
 
 int
 sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap,

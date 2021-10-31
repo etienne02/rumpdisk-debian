@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_dirent.c,v 1.13 2011/10/14 09:23:29 hannken Exp $ */
+/*	$NetBSD: linux32_dirent.c,v 1.20 2019/08/23 07:53:36 maxv Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -33,7 +33,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: linux32_dirent.c,v 1.13 2011/10/14 09:23:29 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux32_dirent.c,v 1.20 2019/08/23 07:53:36 maxv Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -139,10 +139,10 @@ linux32_sys_getdents(struct lwp *l, const struct linux32_sys_getdents_args *uap,
 	nbytes = SCARG(uap, count);
 	if (nbytes == 1) {	/* emulating old, broken behaviour */
 		nbytes = sizeof (idb);
-		buflen = max(va.va_blocksize, nbytes);
+		buflen = uimax(va.va_blocksize, nbytes);
 		oldcall = 1;
 	} else {
-		buflen = min(MAXBSIZE, nbytes);
+		buflen = uimin(MAXBSIZE, nbytes);
 		if (buflen < va.va_blocksize)
 			buflen = va.va_blocksize;
 		oldcall = 0;
@@ -178,8 +178,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic("linux32_readdir");
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if (bdp->d_fileno == 0) {
 			inp += reclen;	/* it is a hole; squish it out */
 			if (cookie)
@@ -199,6 +201,7 @@ again:
 		 * we have to worry about touching user memory outside of
 		 * the copyout() call).
 		 */
+		memset(&idb, 0, sizeof(idb));
 		idb.d_ino = bdp->d_fileno;
 		/*
 		 * The old readdir() call misuses the offset and reclen fields.
@@ -215,8 +218,9 @@ again:
 			idb.d_off = (linux32_off_t)off;
 			idb.d_reclen = (u_short)linux32_reclen;
 		}
-		strcpy(idb.d_name, bdp->d_name);
-		idb.d_name[strlen(idb.d_name) + 1] = bdp->d_type;
+		size_t dirl = MIN(sizeof(idb.d_name) - 1, bdp->d_namlen + 1);
+		memcpy(idb.d_name, bdp->d_name, dirl);
+		idb.d_name[dirl + 1] = bdp->d_type;
 		if ((error = copyout((void *)&idb, outp, linux32_reclen)))
 			goto out;
 		/* advance past this real entry */

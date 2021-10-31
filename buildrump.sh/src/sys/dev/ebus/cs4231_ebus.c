@@ -1,4 +1,4 @@
-/*	$NetBSD: cs4231_ebus.c,v 1.35 2011/11/23 23:07:31 jmcneill Exp $ */
+/*	$NetBSD: cs4231_ebus.c,v 1.39 2019/05/08 13:40:17 isaki Exp $ */
 
 /*
  * Copyright (c) 2002 Valeriy E. Ushakov
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs4231_ebus.c,v 1.35 2011/11/23 23:07:31 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs4231_ebus.c,v 1.39 2019/05/08 13:40:17 isaki Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_sparc_arch.h"
@@ -48,7 +48,7 @@ __KERNEL_RCSID(0, "$NetBSD: cs4231_ebus.c,v 1.35 2011/11/23 23:07:31 jmcneill Ex
 #include <dev/ebus/ebusvar.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/ic/ad1848reg.h>
 #include <dev/ic/cs4231reg.h>
@@ -96,38 +96,28 @@ static int	cs4231_ebus_halt_output(void *);
 static int	cs4231_ebus_halt_input(void *);
 
 const struct audio_hw_if audiocs_ebus_hw_if = {
-	cs4231_open,
-	cs4231_close,
-	NULL,			/* drain */
-	ad1848_query_encoding,
-	ad1848_set_params,
-	cs4231_ebus_round_blocksize,
-	ad1848_commit_settings,
-	NULL,			/* init_output */
-	NULL,			/* init_input */
-	NULL,			/* start_output */
-	NULL,			/* start_input */
-	cs4231_ebus_halt_output,
-	cs4231_ebus_halt_input,
-	NULL,			/* speaker_ctl */
-	cs4231_getdev,
-	NULL,			/* setfd */
-	cs4231_set_port,
-	cs4231_get_port,
-	cs4231_query_devinfo,
-	cs4231_malloc,
-	cs4231_free,
-	NULL,			/* round_buffersize */
-	NULL,			/* mappage */
-	cs4231_get_props,
-	cs4231_ebus_trigger_output,
-	cs4231_ebus_trigger_input,
-	NULL,			/* dev_ioctl */
-	ad1848_get_locks,
+	.open			= cs4231_open,
+	.close			= cs4231_close,
+	.query_format		= ad1848_query_format,
+	.set_format		= ad1848_set_format,
+	.round_blocksize	= cs4231_ebus_round_blocksize,
+	.commit_settings	= ad1848_commit_settings,
+	.halt_output		= cs4231_ebus_halt_output,
+	.halt_input		= cs4231_ebus_halt_input,
+	.getdev			= cs4231_getdev,
+	.set_port		= cs4231_set_port,
+	.get_port		= cs4231_get_port,
+	.query_devinfo		= cs4231_query_devinfo,
+	.allocm			= cs4231_malloc,
+	.freem			= cs4231_free,
+	.get_props		= cs4231_get_props,
+	.trigger_output		= cs4231_ebus_trigger_output,
+	.trigger_input		= cs4231_ebus_trigger_input,
+	.get_locks		= ad1848_get_locks,
 };
 
 #ifdef AUDIO_DEBUG
-static void	cs4231_ebus_regdump(char *, struct cs4231_ebus_softc *);
+static void	cs4231_ebus_regdump(const char *, struct cs4231_ebus_softc *);
 #endif
 
 static int	cs4231_ebus_dma_reset(bus_space_tag_t, bus_space_handle_t);
@@ -268,15 +258,19 @@ static int
 cs4231_ebus_round_blocksize(void *addr, int blk, int mode,
 			    const audio_params_t *param)
 {
+	int sz;
 
 	/* we want to use DMA burst size of 16 words */
-	return blk & -64;
+	sz = blk & -64;
+	if (sz == 0)
+		sz = 64;	/* zero is not a good blocksize */
+	return sz;
 }
 
 
 #ifdef AUDIO_DEBUG
 static void
-cs4231_ebus_regdump(char *label, struct cs4231_ebus_softc *ebsc)
+cs4231_ebus_regdump(const char *label, struct cs4231_ebus_softc *ebsc)
 {
 	/* char bits[128]; */
 

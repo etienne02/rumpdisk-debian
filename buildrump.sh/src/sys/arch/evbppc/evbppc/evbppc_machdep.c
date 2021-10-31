@@ -1,4 +1,4 @@
-/*	$NetBSD: evbppc_machdep.c,v 1.13 2011/07/01 20:46:39 dyoung Exp $	*/
+/*	$NetBSD: evbppc_machdep.c,v 1.15 2021/08/03 09:25:43 rin Exp $	*/
 
 /*
  * Copyright 2001, 2002 Wasabi Systems, Inc.
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: evbppc_machdep.c,v 1.13 2011/07/01 20:46:39 dyoung Exp $");
+__KERNEL_RCSID(0, "$NetBSD: evbppc_machdep.c,v 1.15 2021/08/03 09:25:43 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -81,9 +81,15 @@ __KERNEL_RCSID(0, "$NetBSD: evbppc_machdep.c,v 1.13 2011/07/01 20:46:39 dyoung E
 #include <machine/pmap.h>
 
 /*
- * ibm4xx kernels need to set module_machine to this for modules to work.
+ * Global variables used here and there.
  */
-char module_machine_ibm4xx[] = "powerpc-ibm4xx";
+struct vm_map *phys_map = NULL;
+
+/*
+ * XXX This should probably be in autoconf.
+ */
+char machine[] = MACHINE;
+char machine_arch[] = MACHINE_ARCH;
 
 int fake_mapiodev = 1;
 

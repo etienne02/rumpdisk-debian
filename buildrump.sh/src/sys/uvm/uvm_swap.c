@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_swap.c,v 1.174 2016/07/08 06:45:34 skrll Exp $	*/
+/*	$NetBSD: uvm_swap.c,v 1.206 2021/08/23 13:08:18 hannken Exp $	*/
 
 /*
  * Copyright (c) 1995, 1996, 1997, 2009 Matthew R. Green
@@ -30,17 +30,20 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.174 2016/07/08 06:45:34 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.206 2021/08/23 13:08:18 hannken Exp $");
 
 #include "opt_uvmhist.h"
 #include "opt_compat_netbsd.h"
 #include "opt_ddb.h"
+#include "opt_vmswap.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/atomic.h>
 #include <sys/buf.h>
 #include <sys/bufq.h>
 #include <sys/conf.h>
+#include <sys/cprng.h>
 #include <sys/proc.h>
 #include <sys/namei.h>
 #include <sys/disklabel.h>
@@ -63,6 +66,9 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.174 2016/07/08 06:45:34 skrll Exp $")
 
 #include <miscfs/specfs/specdev.h>
 
+#include <crypto/aes/aes.h>
+#include <crypto/aes/aes_cbc.h>
+
 /*
  * uvm_swap.c: manage configuration and i/o to swap space.
  */
@@ -75,7 +81,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.174 2016/07/08 06:45:34 skrll Exp $")
  * information that is passed up to the user (via system calls).
  *
  * each swap partition is assigned a "priority" (int) which controls
- * swap parition usage.
+ * swap partition usage.
  *
  * the system maintains a global data structure describing all swap
  * partitions/files.   there is a sorted LIST of "swappri" structures
@@ -142,6 +148,11 @@ struct swapdev {
 	int			swd_maxactive;	/* max active i/o reqs */
 	struct bufq_state	*swd_tab;	/* buffer list */
 	int			swd_active;	/* number of active buffers */
+
+	volatile uint32_t	*swd_encmap;	/* bitmap of encrypted slots */
+	struct aesenc		swd_enckey;	/* AES key expanded for enc */
+	struct aesdec		swd_deckey;	/* AES key expanded for dec */
+	bool			swd_encinit;	/* true if keys initialized */
 };
 
 /*
@@ -176,31 +187,6 @@ struct vndbuf {
 };
 
 /*
- * NetBSD 1.3 swapctl(SWAP_STATS, ...) swapent structure; uses 32 bit
- * dev_t and has no se_path[] member.
- */
-struct swapent13 {
-	int32_t	se13_dev;		/* device id */
-	int	se13_flags;		/* flags */
-	int	se13_nblks;		/* total blocks */
-	int	se13_inuse;		/* blocks in use */
-	int	se13_priority;		/* priority of this device */
-};
-
-/*
- * NetBSD 5.0 swapctl(SWAP_STATS, ...) swapent structure; uses 32 bit
- * dev_t.
- */
-struct swapent50 {
-	int32_t	se50_dev;		/* device id */
-	int	se50_flags;		/* flags */
-	int	se50_nblks;		/* total blocks */
-	int	se50_inuse;		/* blocks in use */
-	int	se50_priority;		/* priority of this device */
-	char	se50_path[PATH_MAX+1];	/* path name */
-};
-
-/*
  * We keep a of pool vndbuf's and vndxfer structures.
  */
 static struct pool vndxfer_pool, vndbuf_pool;
@@ -215,7 +201,9 @@ LIST_HEAD(swap_priority, swappri);
 static struct swap_priority swap_priority;
 
 /* locks */
+static kmutex_t uvm_swap_data_lock __cacheline_aligned;
 static krwlock_t swap_syscall_lock;
+bool uvm_swap_init_done = false;
 
 /* workqueue and use counter for swap to regular files */
 static int sw_reg_count = 0;
@@ -223,6 +211,11 @@ static struct workqueue *sw_reg_workqueue;
 
 /* tuneables */
 u_int uvm_swapisfull_factor = 99;
+#if VMSWAP_DEFAULT_PLAINTEXT
+bool uvm_swap_encrypt = false;
+#else
+bool uvm_swap_encrypt = true;
+#endif
 
 /*
  * prototypes
@@ -244,6 +237,23 @@ static void sw_reg_start(struct swapdev *);
 
 static int uvm_swap_io(struct vm_page **, int, int, int);
 
+static void uvm_swap_genkey(struct swapdev *);
+static void uvm_swap_encryptpage(struct swapdev *, void *, int);
+static void uvm_swap_decryptpage(struct swapdev *, void *, int);
+
+static size_t
+encmap_size(size_t npages)
+{
+	struct swapdev *sdp;
+	const size_t bytesperword = sizeof(sdp->swd_encmap[0]);
+	const size_t bitsperword = NBBY * bytesperword;
+	const size_t nbits = npages; /* one bit for each page */
+	const size_t nwords = howmany(nbits, bitsperword);
+	const size_t nbytes = nwords * bytesperword;
+
+	return nbytes;
+}
+
 /*
  * uvm_swap_init: init the swap system data structures and locks
  *
@@ -253,7 +263,7 @@ static int uvm_swap_io(struct vm_page **, int, int, int);
 void
 uvm_swap_init(void)
 {
-	UVMHIST_FUNC("uvm_swap_init");
+	UVMHIST_FUNC(__func__);
 
 	UVMHIST_CALLED(pdhist);
 	/*
@@ -292,6 +302,8 @@ uvm_swap_init(void)
 	pool_init(&vndbuf_pool, sizeof(struct vndbuf), 0, 0, 0, "swp vnd",
 	    NULL, IPL_BIO);
 
+	uvm_swap_init_done = true;
+
 	UVMHIST_LOG(pdhist, "<- done", 0, 0, 0, 0);
 }
 
@@ -312,7 +324,10 @@ static void
 swaplist_insert(struct swapdev *sdp, struct swappri *newspp, int priority)
 {
 	struct swappri *spp, *pspp;
-	UVMHIST_FUNC("swaplist_insert"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
+
+	KASSERT(rw_write_held(&swap_syscall_lock));
+	KASSERT(mutex_owned(&uvm_swap_data_lock));
 
 	/*
 	 * find entry at or after which to insert the new device.
@@ -329,7 +344,7 @@ swaplist_insert(struct swapdev *sdp, struct swappri *newspp, int priority)
 	 */
 	if (spp == NULL || spp->spi_priority != priority) {
 		spp = newspp;  /* use newspp! */
-		UVMHIST_LOG(pdhist, "created new swappri = %d",
+		UVMHIST_LOG(pdhist, "created new swappri = %jd",
 			    priority, 0, 0, 0);
 
 		spp->spi_priority = priority;
@@ -366,6 +381,10 @@ swaplist_find(struct vnode *vp, bool remove)
 	struct swapdev *sdp;
 	struct swappri *spp;
 
+	KASSERT(rw_lock_held(&swap_syscall_lock));
+	KASSERT(remove ? rw_write_held(&swap_syscall_lock) : 1);
+	KASSERT(mutex_owned(&uvm_swap_data_lock));
+
 	/*
 	 * search the lists for the requested vp
 	 */
@@ -396,6 +415,9 @@ swaplist_trim(void)
 {
 	struct swappri *spp, *nextspp;
 
+	KASSERT(rw_write_held(&swap_syscall_lock));
+	KASSERT(mutex_owned(&uvm_swap_data_lock));
+
 	LIST_FOREACH_SAFE(spp, &swap_priority, spi_swappri, nextspp) {
 		if (!TAILQ_EMPTY(&spp->spi_swapdev))
 			continue;
@@ -417,6 +439,8 @@ swapdrum_getsdp(int pgno)
 	struct swapdev *sdp;
 	struct swappri *spp;
 
+	KASSERT(mutex_owned(&uvm_swap_data_lock));
+
 	LIST_FOREACH(spp, &swap_priority, spi_swappri) {
 		TAILQ_FOREACH(sdp, &spp->spi_swapdev, swd_next) {
 			if (sdp->swd_flags & SWF_FAKE)
@@ -430,6 +454,23 @@ swapdrum_getsdp(int pgno)
 	return NULL;
 }
 
+/*
+ * swapdrum_sdp_is: true iff the swap device for pgno is sdp
+ *
+ * => for use in positive assertions only; result is not stable
+ */
+static bool __debugused
+swapdrum_sdp_is(int pgno, struct swapdev *sdp)
+{
+	bool result;
+
+	mutex_enter(&uvm_swap_data_lock);
+	result = swapdrum_getsdp(pgno) == sdp;
+	mutex_exit(&uvm_swap_data_lock);
+
+	return result;
+}
+
 void swapsys_lock(krw_t op)
 {
 	rw_enter(&swap_syscall_lock, op);
@@ -439,6 +480,23 @@ void swapsys_unlock(void)
 {
 	rw_exit(&swap_syscall_lock);
 }
+
+static void
+swapent_cvt(struct swapent *se, const struct swapdev *sdp, int inuse)
+{
+	se->se_dev = sdp->swd_dev;
+	se->se_flags = sdp->swd_flags;
+	se->se_nblks = sdp->swd_nblks;
+	se->se_inuse = inuse;
+	se->se_priority = sdp->swd_priority;
+	KASSERT(sdp->swd_pathlen < sizeof(se->se_path));
+	strcpy(se->se_path, sdp->swd_path);
+}
+
+int (*uvm_swap_stats13)(const struct sys_swapctl_args *, register_t *) =
+    (void *)enosys;
+int (*uvm_swap_stats50)(const struct sys_swapctl_args *, register_t *) =
+    (void *)enosys;
 
 /*
  * sys_swapctl: main entry point for swapctl(2) system call
@@ -456,13 +514,12 @@ sys_swapctl(struct lwp *l, const struct sys_swapctl_args *uap, register_t *retva
 	struct nameidata nd;
 	struct swappri *spp;
 	struct swapdev *sdp;
-	struct swapent *sep;
 #define SWAP_PATH_MAX (PATH_MAX + 1)
 	char	*userpath;
 	size_t	len = 0;
-	int	error, misc;
+	int	error;
 	int	priority;
-	UVMHIST_FUNC("sys_swapctl"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/*
 	 * we handle the non-priv NSWAP and STATS request first.
@@ -472,12 +529,12 @@ sys_swapctl(struct lwp *l, const struct sys_swapctl_args *uap, register_t *retva
 	 */
 	if (SCARG(uap, cmd) == SWAP_NSWAP) {
 		const int nswapdev = uvmexp.nswapdev;
-		UVMHIST_LOG(pdhist, "<- done SWAP_NSWAP=%d", nswapdev, 0, 0, 0);
+		UVMHIST_LOG(pdhist, "<- done SWAP_NSWAP=%jd", nswapdev,
+		    0, 0, 0);
 		*retval = nswapdev;
 		return 0;
 	}
 
-	misc = SCARG(uap, misc);
 	userpath = kmem_alloc(SWAP_PATH_MAX, KM_SLEEP);
 
 	/*
@@ -493,51 +550,24 @@ sys_swapctl(struct lwp *l, const struct sys_swapctl_args *uap, register_t *retva
 	 * to grab the uvm_swap_data_lock because we may fault&sleep during
 	 * copyout() and we don't want to be holding that lock then!
 	 */
-	if (SCARG(uap, cmd) == SWAP_STATS
-#if defined(COMPAT_50)
-	    || SCARG(uap, cmd) == SWAP_STATS50
-#endif
-#if defined(COMPAT_13)
-	    || SCARG(uap, cmd) == SWAP_STATS13
-#endif
-	    ) {
-		if (misc < 0) {
-			error = EINVAL;
-			goto out;
-		}
-		if (misc == 0 || uvmexp.nswapdev == 0) {
-			error = 0;
-			goto out;
-		}
-		/* Make sure userland cannot exhaust kernel memory */
-		if ((size_t)misc > (size_t)uvmexp.nswapdev)
-			misc = uvmexp.nswapdev;
-		KASSERT(misc > 0);
-#if defined(COMPAT_13)
-		if (SCARG(uap, cmd) == SWAP_STATS13)
-			len = sizeof(struct swapent13) * misc;
-		else
-#endif
-#if defined(COMPAT_50)
-		if (SCARG(uap, cmd) == SWAP_STATS50)
-			len = sizeof(struct swapent50) * misc;
-		else
-#endif
-			len = sizeof(struct swapent) * misc;
-		sep = (struct swapent *)kmem_alloc(len, KM_SLEEP);
-
-		uvm_swap_stats(SCARG(uap, cmd), sep, misc, retval);
-		error = copyout(sep, SCARG(uap, arg), len);
-
-		kmem_free(sep, len);
+	switch (SCARG(uap, cmd)) {
+	case SWAP_STATS13:
+		error = (*uvm_swap_stats13)(uap, retval);
+		goto out;
+	case SWAP_STATS50:
+		error = (*uvm_swap_stats50)(uap, retval);
+		goto out;
+	case SWAP_STATS:
+		error = uvm_swap_stats(SCARG(uap, arg), SCARG(uap, misc),
+		    NULL, sizeof(struct swapent), retval);
 		UVMHIST_LOG(pdhist, "<- done SWAP_STATS", 0, 0, 0, 0);
 		goto out;
-	}
-	if (SCARG(uap, cmd) == SWAP_GETDUMPDEV) {
-		dev_t	*devp = (dev_t *)SCARG(uap, arg);
 
-		error = copyout(&dumpdev, devp, sizeof(dumpdev));
+	case SWAP_GETDUMPDEV:
+		error = copyout(&dumpdev, SCARG(uap, arg), sizeof(dumpdev));
 		goto out;
+	default:
+		break;
 	}
 
 	/*
@@ -730,7 +760,7 @@ out:
 	rw_exit(&swap_syscall_lock);
 	kmem_free(userpath, SWAP_PATH_MAX);
 
-	UVMHIST_LOG(pdhist, "<- done!  error=%d", error, 0, 0, 0);
+	UVMHIST_LOG(pdhist, "<- done!  error=%jd", error, 0, 0, 0);
 	return (error);
 }
 
@@ -743,12 +773,30 @@ out:
  * is not known at build time. Hence it would not be possible to
  * ensure it would fit in the stackgap in any case.
  */
-void
-uvm_swap_stats(int cmd, struct swapent *sep, int sec, register_t *retval)
+int
+uvm_swap_stats(char *ptr, int misc,
+    void (*f)(void *, const struct swapent *), size_t len,
+    register_t *retval)
 {
 	struct swappri *spp;
 	struct swapdev *sdp;
+	struct swapent sep;
 	int count = 0;
+	int error;
+
+	KASSERT(len <= sizeof(sep));
+	if (len == 0)
+		return ENOSYS;
+
+	if (misc < 0)
+		return EINVAL;
+
+	if (misc == 0 || uvmexp.nswapdev == 0)
+		return 0;
+
+	/* Make sure userland cannot exhaust kernel memory */
+	if ((size_t)misc > (size_t)uvmexp.nswapdev)
+		misc = uvmexp.nswapdev;
 
 	KASSERT(rw_lock_held(&swap_syscall_lock));
 
@@ -756,64 +804,24 @@ uvm_swap_stats(int cmd, struct swapent *sep, int sec, register_t *retval)
 		TAILQ_FOREACH(sdp, &spp->spi_swapdev, swd_next) {
 			int inuse;
 
-			if (sec-- <= 0)
+			if (misc-- <= 0)
 				break;
 
-			/*
-			 * backwards compatibility for system call.
-			 * For NetBSD 1.3 and 5.0, we have to use
-			 * the 32 bit dev_t.  For 5.0 and -current
-			 * we have to add the path.
-			 */
 			inuse = btodb((uint64_t)sdp->swd_npginuse <<
 			    PAGE_SHIFT);
 
-#if defined(COMPAT_13) || defined(COMPAT_50)
-			if (cmd == SWAP_STATS) {
-#endif
-				sep->se_dev = sdp->swd_dev;
-				sep->se_flags = sdp->swd_flags;
-				sep->se_nblks = sdp->swd_nblks;
-				sep->se_inuse = inuse;
-				sep->se_priority = sdp->swd_priority;
-				KASSERT(sdp->swd_pathlen <
-				    sizeof(sep->se_path));
-				strcpy(sep->se_path, sdp->swd_path);
-				sep++;
-#if defined(COMPAT_13)
-			} else if (cmd == SWAP_STATS13) {
-				struct swapent13 *sep13 =
-				    (struct swapent13 *)sep;
-
-				sep13->se13_dev = sdp->swd_dev;
-				sep13->se13_flags = sdp->swd_flags;
-				sep13->se13_nblks = sdp->swd_nblks;
-				sep13->se13_inuse = inuse;
-				sep13->se13_priority = sdp->swd_priority;
-				sep = (struct swapent *)(sep13 + 1);
-#endif
-#if defined(COMPAT_50)
-			} else if (cmd == SWAP_STATS50) {
-				struct swapent50 *sep50 =
-				    (struct swapent50 *)sep;
-
-				sep50->se50_dev = sdp->swd_dev;
-				sep50->se50_flags = sdp->swd_flags;
-				sep50->se50_nblks = sdp->swd_nblks;
-				sep50->se50_inuse = inuse;
-				sep50->se50_priority = sdp->swd_priority;
-				KASSERT(sdp->swd_pathlen <
-				    sizeof(sep50->se50_path));
-				strcpy(sep50->se50_path, sdp->swd_path);
-				sep = (struct swapent *)(sep50 + 1);
-#endif
-#if defined(COMPAT_13) || defined(COMPAT_50)
-			}
-#endif
+			memset(&sep, 0, sizeof(sep));
+			swapent_cvt(&sep, sdp, inuse);
+			if (f)
+				(*f)(&sep, &sep);
+			if ((error = copyout(&sep, ptr, len)) != 0)
+				return error;
+			ptr += len;
 			count++;
 		}
 	}
 	*retval = count;
+	return 0;
 }
 
 /*
@@ -835,7 +843,7 @@ swap_on(struct lwp *l, struct swapdev *sdp)
 	vmem_addr_t result;
 	struct vattr va;
 	dev_t dev;
-	UVMHIST_FUNC("swap_on"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/*
 	 * we want to enable swapping on sdp.   the swd_vp contains
@@ -859,7 +867,7 @@ swap_on(struct lwp *l, struct swapdev *sdp)
 	}
 
 	/* XXX this only works for block devices */
-	UVMHIST_LOG(pdhist, "  dev=%d, major(dev)=%d", dev, major(dev), 0,0);
+	UVMHIST_LOG(pdhist, "  dev=%jd, major(dev)=%jd", dev, major(dev), 0, 0);
 
 	/*
 	 * we now need to determine the size of the swap area.   for
@@ -933,7 +941,7 @@ swap_on(struct lwp *l, struct swapdev *sdp)
 		goto bad;
 	}
 
-	UVMHIST_LOG(pdhist, "  dev=%x: size=%d addr=%ld", dev, size, addr, 0);
+	UVMHIST_LOG(pdhist, "  dev=%#jx: size=%jd addr=%jd", dev, size, addr, 0);
 
 	/*
 	 * now we need to allocate an extent to manage this swap device
@@ -942,6 +950,13 @@ swap_on(struct lwp *l, struct swapdev *sdp)
 	sdp->swd_blist = blist_create(npages);
 	/* mark all expect the `saved' region free. */
 	blist_free(sdp->swd_blist, addr, size);
+
+	/*
+	 * allocate space to for swap encryption state and mark the
+	 * keys uninitialized so we generate them lazily
+	 */
+	sdp->swd_encmap = kmem_zalloc(encmap_size(npages), KM_SLEEP);
+	sdp->swd_encinit = false;
 
 	/*
 	 * if the vnode we are swapping to is the root vnode
@@ -1044,8 +1059,11 @@ swap_off(struct lwp *l, struct swapdev *sdp)
 	int npages = sdp->swd_npages;
 	int error = 0;
 
-	UVMHIST_FUNC("swap_off"); UVMHIST_CALLED(pdhist);
-	UVMHIST_LOG(pdhist, "  dev=%x, npages=%d", sdp->swd_dev,npages,0,0);
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "  dev=%#jx, npages=%jd", sdp->swd_dev,npages, 0, 0);
+
+	KASSERT(rw_write_held(&swap_syscall_lock));
+	KASSERT(mutex_owned(&uvm_swap_data_lock));
 
 	/* disable the swap area being removed */
 	sdp->swd_flags &= ~SWF_ENABLE;
@@ -1115,6 +1133,10 @@ swap_off(struct lwp *l, struct swapdev *sdp)
 	vmem_free(swapmap, sdp->swd_drumoffset, sdp->swd_drumsize);
 	blist_destroy(sdp->swd_blist);
 	bufq_free(sdp->swd_tab);
+	kmem_free(__UNVOLATILE(sdp->swd_encmap),
+	    encmap_size(sdp->swd_drumsize));
+	explicit_memset(&sdp->swd_enckey, 0, sizeof sdp->swd_enckey);
+	explicit_memset(&sdp->swd_deckey, 0, sizeof sdp->swd_deckey);
 	kmem_free(sdp, sizeof(*sdp));
 	return (0);
 }
@@ -1127,7 +1149,9 @@ uvm_swap_shutdown(struct lwp *l)
 	struct vnode *vp;
 	int error;
 
-	printf("turning of swap...");
+	if (!uvm_swap_init_done || uvmexp.nswapdev == 0)
+		return;
+	printf("turning off swap...");
 	rw_enter(&swap_syscall_lock, RW_WRITER);
 	mutex_enter(&uvm_swap_data_lock);
 again:
@@ -1138,27 +1162,20 @@ again:
 			if ((sdp->swd_flags & (SWF_INUSE|SWF_ENABLE)) == 0)
 				continue;
 #ifdef DEBUG
-			printf("\nturning off swap on %s...",
-			    sdp->swd_path);
+			printf("\nturning off swap on %s...", sdp->swd_path);
 #endif
-			if (vn_lock(vp = sdp->swd_vp, LK_EXCLUSIVE)) {
-				error = EBUSY;
-				vp = NULL;
-			} else
-				error = 0;
-			if (!error) {
-				error = swap_off(l, sdp);
-				mutex_enter(&uvm_swap_data_lock);
-			}
+			/* Have to lock and reference vnode for swap_off(). */
+			vn_lock(vp = sdp->swd_vp, LK_EXCLUSIVE|LK_RETRY);
+			vref(vp);
+			error = swap_off(l, sdp);
+			vput(vp);
+			mutex_enter(&uvm_swap_data_lock);
 			if (error) {
 				printf("stopping swap on %s failed "
 				    "with error %d\n", sdp->swd_path, error);
-				TAILQ_REMOVE(&spp->spi_swapdev, sdp,
-				    swd_next);
+				TAILQ_REMOVE(&spp->spi_swapdev, sdp, swd_next);
 				uvmexp.nswapdev--;
 				swaplist_trim();
-				if (vp)
-					vput(vp);
 			}
 			goto again;
 		}
@@ -1183,7 +1200,7 @@ swstrategy(struct buf *bp)
 	struct swapdev *sdp;
 	struct vnode *vp;
 	int pageno, bn;
-	UVMHIST_FUNC("swstrategy"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/*
 	 * convert block number to swapdev.   note that swapdev can't
@@ -1209,8 +1226,8 @@ swstrategy(struct buf *bp)
 	pageno -= sdp->swd_drumoffset;	/* page # on swapdev */
 	bn = btodb((uint64_t)pageno << PAGE_SHIFT); /* convert to diskblock */
 
-	UVMHIST_LOG(pdhist, "  %s: mapoff=%x bn=%x bcount=%ld",
-		((bp->b_flags & B_READ) == 0) ? "write" : "read",
+	UVMHIST_LOG(pdhist, "  Rd/Wr (0/1) %jd: mapoff=%#jx bn=%#jx bcount=%jd",
+		((bp->b_flags & B_READ) == 0) ? 1 : 0,
 		sdp->swd_drumoffset, bn, bp->b_bcount);
 
 	/*
@@ -1271,9 +1288,9 @@ swstrategy(struct buf *bp)
 static int
 swread(dev_t dev, struct uio *uio, int ioflag)
 {
-	UVMHIST_FUNC("swread"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "  dev=%#jx offset=%#jx", dev, uio->uio_offset, 0, 0);
 
-	UVMHIST_LOG(pdhist, "  dev=%x offset=%qx", dev, uio->uio_offset, 0, 0);
 	return (physio(swstrategy, NULL, dev, B_READ, minphys, uio));
 }
 
@@ -1284,9 +1301,9 @@ swread(dev_t dev, struct uio *uio, int ioflag)
 static int
 swwrite(dev_t dev, struct uio *uio, int ioflag)
 {
-	UVMHIST_FUNC("swwrite"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "  dev=%#jx offset=%#jx", dev, uio->uio_offset, 0, 0);
 
-	UVMHIST_LOG(pdhist, "  dev=%x offset=%qx", dev, uio->uio_offset, 0, 0);
 	return (physio(swstrategy, NULL, dev, B_WRITE, minphys, uio));
 }
 
@@ -1328,7 +1345,7 @@ sw_reg_strategy(struct swapdev *sdp, struct buf *bp, int bn)
 	char 		*addr;
 	off_t		byteoff;
 	int		s, off, nra, error, sz, resid;
-	UVMHIST_FUNC("sw_reg_strategy"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/*
 	 * allocate a vndxfer head for this transfer and point it to
@@ -1346,7 +1363,7 @@ sw_reg_strategy(struct swapdev *sdp, struct buf *bp, int bn)
 	 * our buffer.
 	 */
 	error = 0;
-	bp->b_resid = bp->b_bcount;	/* nothing transfered yet! */
+	bp->b_resid = bp->b_bcount;	/* nothing transferred yet! */
 	addr = bp->b_data;		/* current position in buffer */
 	byteoff = dbtob((uint64_t)bn);
 
@@ -1401,8 +1418,8 @@ sw_reg_strategy(struct swapdev *sdp, struct buf *bp, int bn)
 			sz = resid;
 
 		UVMHIST_LOG(pdhist, "sw_reg_strategy: "
-			    "vp %p/%p offset 0x%x/0x%x",
-			    sdp->swd_vp, vp, byteoff, nbn);
+		    "vp %#jx/%#jx offset %#jx/%#jx",
+		    (uintptr_t)sdp->swd_vp, (uintptr_t)vp, byteoff, nbn);
 
 		/*
 		 * now get a buf structure.   note that the vb_buf is
@@ -1477,7 +1494,7 @@ sw_reg_start(struct swapdev *sdp)
 {
 	struct buf	*bp;
 	struct vnode	*vp;
-	UVMHIST_FUNC("sw_reg_start"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/* recursion control */
 	if ((sdp->swd_flags & SWF_BUSY) != 0)
@@ -1492,8 +1509,9 @@ sw_reg_start(struct swapdev *sdp)
 		sdp->swd_active++;
 
 		UVMHIST_LOG(pdhist,
-		    "sw_reg_start:  bp %p vp %p blkno %p cnt %lx",
-		    bp, bp->b_vp, bp->b_blkno, bp->b_bcount);
+		    "sw_reg_start:  bp %#jx vp %#jx blkno %#jx cnt %#jx",
+		    (uintptr_t)bp, (uintptr_t)bp->b_vp, (uintptr_t)bp->b_blkno,
+		    bp->b_bcount);
 		vp = bp->b_vp;
 		KASSERT(bp->b_objlock == vp->v_interlock);
 		if ((bp->b_flags & B_READ) == 0) {
@@ -1529,11 +1547,11 @@ sw_reg_iodone(struct work *wk, void *dummy)
 	struct swapdev	*sdp = vnx->vx_sdp;
 	int s, resid, error;
 	KASSERT(&vbp->vb_buf.b_work == wk);
-	UVMHIST_FUNC("sw_reg_iodone"); UVMHIST_CALLED(pdhist);
-
-	UVMHIST_LOG(pdhist, "  vbp=%p vp=%p blkno=%x addr=%p",
-	    vbp, vbp->vb_buf.b_vp, vbp->vb_buf.b_blkno, vbp->vb_buf.b_data);
-	UVMHIST_LOG(pdhist, "  cnt=%lx resid=%lx",
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "  vbp=%#jx vp=%#jx blkno=%#jx addr=%#jx",
+	    (uintptr_t)vbp, (uintptr_t)vbp->vb_buf.b_vp, vbp->vb_buf.b_blkno,
+	    (uintptr_t)vbp->vb_buf.b_data);
+	UVMHIST_LOG(pdhist, "  cnt=%#jx resid=%#jx",
 	    vbp->vb_buf.b_bcount, vbp->vb_buf.b_resid, 0, 0);
 
 	/*
@@ -1548,7 +1566,7 @@ sw_reg_iodone(struct work *wk, void *dummy)
 	if (vbp->vb_buf.b_error != 0) {
 		/* pass error upward */
 		error = vbp->vb_buf.b_error ? vbp->vb_buf.b_error : EIO;
-		UVMHIST_LOG(pdhist, "  got error=%d !", error, 0, 0, 0);
+		UVMHIST_LOG(pdhist, "  got error=%jd !", error, 0, 0, 0);
 		vnx->vx_error = error;
 	}
 
@@ -1573,8 +1591,8 @@ sw_reg_iodone(struct work *wk, void *dummy)
 	} else if (pbp->b_resid == 0) {
 		KASSERT(vnx->vx_pending == 0);
 		if ((vnx->vx_flags & VX_BUSY) == 0) {
-			UVMHIST_LOG(pdhist, "  iodone error=%d !",
-			    pbp, vnx->vx_error, 0, 0);
+			UVMHIST_LOG(pdhist, "  iodone, pbp=%#jx error=%jd !",
+			    (uintptr_t)pbp, vnx->vx_error, 0, 0);
 			biodone(pbp);
 			pool_put(&vndxfer_pool, vnx);
 		}
@@ -1604,7 +1622,7 @@ uvm_swap_alloc(int *nslots /* IN/OUT */, bool lessok)
 {
 	struct swapdev *sdp;
 	struct swappri *spp;
-	UVMHIST_FUNC("uvm_swap_alloc"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	/*
 	 * no swap devices configured yet?   definite failure.
@@ -1656,7 +1674,7 @@ ReTry:	/* XXXMRG */
 			mutex_exit(&uvm_swap_data_lock);
 			/* done!  return drum slot number */
 			UVMHIST_LOG(pdhist,
-			    "success!  returning %d slots starting at %d",
+			    "success!  returning %jd slots starting at %jd",
 			    *nslots, result + sdp->swd_drumoffset, 0, 0);
 			return (result + sdp->swd_drumoffset);
 		}
@@ -1686,6 +1704,10 @@ uvm_swapisfull(void)
 	int swpgonly;
 	bool rv;
 
+	if (uvmexp.swpages == 0) {
+		return true;
+	}
+
 	mutex_enter(&uvm_swap_data_lock);
 	KASSERT(uvmexp.swpgonly <= uvmexp.swpages);
 	swpgonly = (int)((uint64_t)uvmexp.swpgonly * 100 /
@@ -1705,7 +1727,7 @@ void
 uvm_swap_markbad(int startslot, int nslots)
 {
 	struct swapdev *sdp;
-	UVMHIST_FUNC("uvm_swap_markbad"); UVMHIST_CALLED(pdhist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
 	mutex_enter(&uvm_swap_data_lock);
 	sdp = swapdrum_getsdp(startslot);
@@ -1719,9 +1741,9 @@ uvm_swap_markbad(int startslot, int nslots)
 	 */
 
 	KASSERT(uvmexp.swpgonly >= nslots);
-	uvmexp.swpgonly -= nslots;
+	atomic_add_int(&uvmexp.swpgonly, -nslots);
 	sdp->swd_npgbad += nslots;
-	UVMHIST_LOG(pdhist, "now %d bad", sdp->swd_npgbad, 0,0,0);
+	UVMHIST_LOG(pdhist, "now %jd bad", sdp->swd_npgbad, 0,0,0);
 	mutex_exit(&uvm_swap_data_lock);
 }
 
@@ -1735,9 +1757,8 @@ void
 uvm_swap_free(int startslot, int nslots)
 {
 	struct swapdev *sdp;
-	UVMHIST_FUNC("uvm_swap_free"); UVMHIST_CALLED(pdhist);
-
-	UVMHIST_LOG(pdhist, "freeing %d slots starting at %d", nslots,
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "freeing %jd slots starting at %jd", nslots,
 	    startslot, 0, 0);
 
 	/*
@@ -1792,7 +1813,7 @@ uvm_swap_get(struct vm_page *page, int swslot, int flags)
 {
 	int error;
 
-	uvmexp.nswget++;
+	atomic_inc_uint(&uvmexp.nswget);
 	KASSERT(flags & PGO_SYNCIO);
 	if (swslot == SWSLOT_BAD) {
 		return EIO;
@@ -1806,10 +1827,8 @@ uvm_swap_get(struct vm_page *page, int swslot, int flags)
 		 * this page is no longer only in swap.
 		 */
 
-		mutex_enter(&uvm_swap_data_lock);
 		KASSERT(uvmexp.swpgonly > 0);
-		uvmexp.swpgonly--;
-		mutex_exit(&uvm_swap_data_lock);
+		atomic_dec_uint(&uvmexp.swpgonly);
 	}
 	return error;
 }
@@ -1825,14 +1844,14 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 	struct	buf *bp;
 	vaddr_t kva;
 	int	error, mapinflags;
-	bool write, async;
-	UVMHIST_FUNC("uvm_swap_io"); UVMHIST_CALLED(pdhist);
-
-	UVMHIST_LOG(pdhist, "<- called, startslot=%d, npages=%d, flags=%d",
+	bool write, async, swap_encrypt;
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(pdhist, "<- called, startslot=%jd, npages=%jd, flags=%#jx",
 	    startslot, npages, flags, 0);
 
 	write = (flags & B_READ) == 0;
 	async = (flags & B_ASYNC) != 0;
+	swap_encrypt = atomic_load_relaxed(&uvm_swap_encrypt);
 
 	/*
 	 * allocate a buf for the i/o.
@@ -1858,7 +1877,66 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 	mapinflags = !write ?
 		UVMPAGER_MAPIN_WAITOK|UVMPAGER_MAPIN_READ :
 		UVMPAGER_MAPIN_WAITOK|UVMPAGER_MAPIN_WRITE;
+	if (write && swap_encrypt)	/* need to encrypt in-place */
+		mapinflags |= UVMPAGER_MAPIN_READ;
 	kva = uvm_pagermapin(pps, npages, mapinflags);
+
+	/*
+	 * encrypt writes in place if requested
+	 */
+
+	if (write) do {
+		struct swapdev *sdp;
+		int i;
+
+		/*
+		 * Get the swapdev so we can discriminate on the
+		 * encryption state.  There may or may not be an
+		 * encryption key generated; we may or may not be asked
+		 * to encrypt swap.
+		 *
+		 * 1. NO KEY, NO ENCRYPTION: Nothing to do.
+		 *
+		 * 2. NO KEY, BUT ENCRYPTION: Generate a key, encrypt,
+		 *    and mark the slots encrypted.
+		 *
+		 * 3. KEY, BUT NO ENCRYPTION: The slots may already be
+		 *    marked encrypted from a past life.  Mark them not
+		 *    encrypted.
+		 *
+		 * 4. KEY, ENCRYPTION: Encrypt and mark the slots
+		 *    encrypted.
+		 */
+		mutex_enter(&uvm_swap_data_lock);
+		sdp = swapdrum_getsdp(startslot);
+		if (!sdp->swd_encinit) {
+			if (!swap_encrypt) {
+				mutex_exit(&uvm_swap_data_lock);
+				break;
+			}
+			uvm_swap_genkey(sdp);
+		}
+		KASSERT(sdp->swd_encinit);
+		mutex_exit(&uvm_swap_data_lock);
+
+		for (i = 0; i < npages; i++) {
+			int s = startslot + i;
+			KDASSERT(swapdrum_sdp_is(s, sdp));
+			KASSERT(s >= sdp->swd_drumoffset);
+			s -= sdp->swd_drumoffset;
+			KASSERT(s < sdp->swd_drumsize);
+
+			if (swap_encrypt) {
+				uvm_swap_encryptpage(sdp,
+				    (void *)(kva + (vsize_t)i*PAGE_SIZE), s);
+				atomic_or_32(&sdp->swd_encmap[s/32],
+				    __BIT(s%32));
+			} else {
+				atomic_and_32(&sdp->swd_encmap[s/32],
+				    ~__BIT(s%32));
+			}
+		}
+	} while (0);
 
 	/*
 	 * fill in the bp/sbp.   we currently route our i/o through
@@ -1888,7 +1966,7 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 	 */
 
 	if (async) {
-		bp->b_iodone = uvm_aio_biodone;
+		bp->b_iodone = uvm_aio_aiodone;
 		UVMHIST_LOG(pdhist, "doing async!", 0, 0, 0, 0);
 		if (curlwp == uvm.pagedaemon_lwp)
 			BIO_SETPRIO(bp, BPRIO_TIMECRITICAL);
@@ -1899,23 +1977,73 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 		BIO_SETPRIO(bp, BPRIO_TIMECRITICAL);
 	}
 	UVMHIST_LOG(pdhist,
-	    "about to start io: data = %p blkno = 0x%x, bcount = %ld",
-	    bp->b_data, bp->b_blkno, bp->b_bcount, 0);
+	    "about to start io: data = %#jx blkno = %#jx, bcount = %jd",
+	    (uintptr_t)bp->b_data, bp->b_blkno, bp->b_bcount, 0);
 
 	/*
 	 * now we start the I/O, and if async, return.
 	 */
 
 	VOP_STRATEGY(swapdev_vp, bp);
-	if (async)
+	if (async) {
+		/*
+		 * Reads are always synchronous; if this changes, we
+		 * need to add an asynchronous path for decryption.
+		 */
+		KASSERT(write);
 		return 0;
+	}
 
 	/*
 	 * must be sync i/o.   wait for it to finish
 	 */
 
 	error = biowait(bp);
+	if (error)
+		goto out;
 
+	/*
+	 * decrypt reads in place if needed
+	 */
+
+	if (!write) do {
+		struct swapdev *sdp;
+		bool encinit;
+		int i;
+
+		/*
+		 * Get the sdp.  Everything about it except the encinit
+		 * bit, saying whether the encryption key is
+		 * initialized or not, and the encrypted bit for each
+		 * page, is stable until all swap pages have been
+		 * released and the device is removed.
+		 */
+		mutex_enter(&uvm_swap_data_lock);
+		sdp = swapdrum_getsdp(startslot);
+		encinit = sdp->swd_encinit;
+		mutex_exit(&uvm_swap_data_lock);
+
+		if (!encinit)
+			/*
+			 * If there's no encryption key, there's no way
+			 * any of these slots can be encrypted, so
+			 * nothing to do here.
+			 */
+			break;
+		for (i = 0; i < npages; i++) {
+			int s = startslot + i;
+			KDASSERT(swapdrum_sdp_is(s, sdp));
+			KASSERT(s >= sdp->swd_drumoffset);
+			s -= sdp->swd_drumoffset;
+			KASSERT(s < sdp->swd_drumsize);
+			if ((atomic_load_relaxed(&sdp->swd_encmap[s/32]) &
+				__BIT(s%32)) == 0)
+				continue;
+			uvm_swap_decryptpage(sdp,
+			    (void *)(kva + (vsize_t)i*PAGE_SIZE), s);
+		}
+	} while (0);
+out:
 	/*
 	 * kill the pager mapping
 	 */
@@ -1932,7 +2060,81 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 		mutex_exit(swapdev_vp->v_interlock);
 	}
 	putiobuf(bp);
-	UVMHIST_LOG(pdhist, "<- done (sync)  error=%d", error, 0, 0, 0);
+	UVMHIST_LOG(pdhist, "<- done (sync)  error=%jd", error, 0, 0, 0);
 
 	return (error);
+}
+
+/*
+ * uvm_swap_genkey(sdp)
+ *
+ *	Generate a key for swap encryption.
+ */
+static void
+uvm_swap_genkey(struct swapdev *sdp)
+{
+	uint8_t key[32];
+
+	KASSERT(!sdp->swd_encinit);
+
+	cprng_strong(kern_cprng, key, sizeof key, 0);
+	aes_setenckey256(&sdp->swd_enckey, key);
+	aes_setdeckey256(&sdp->swd_deckey, key);
+	explicit_memset(key, 0, sizeof key);
+
+	sdp->swd_encinit = true;
+}
+
+/*
+ * uvm_swap_encryptpage(sdp, kva, slot)
+ *
+ *	Encrypt one page of data at kva for the specified slot number
+ *	in the swap device.
+ */
+static void
+uvm_swap_encryptpage(struct swapdev *sdp, void *kva, int slot)
+{
+	uint8_t preiv[16] __aligned(16) = {0}, iv[16] __aligned(16);
+
+	/* iv := AES_k(le32enc(slot) || 0^96) */
+	le32enc(preiv, slot);
+	aes_enc(&sdp->swd_enckey, (const void *)preiv, iv, AES_256_NROUNDS);
+
+	/* *kva := AES-CBC_k(iv, *kva) */
+	aes_cbc_enc(&sdp->swd_enckey, kva, kva, PAGE_SIZE, iv,
+	    AES_256_NROUNDS);
+
+	explicit_memset(&iv, 0, sizeof iv);
+}
+
+/*
+ * uvm_swap_decryptpage(sdp, kva, slot)
+ *
+ *	Decrypt one page of data at kva for the specified slot number
+ *	in the swap device.
+ */
+static void
+uvm_swap_decryptpage(struct swapdev *sdp, void *kva, int slot)
+{
+	uint8_t preiv[16] __aligned(16) = {0}, iv[16] __aligned(16);
+
+	/* iv := AES_k(le32enc(slot) || 0^96) */
+	le32enc(preiv, slot);
+	aes_enc(&sdp->swd_enckey, (const void *)preiv, iv, AES_256_NROUNDS);
+
+	/* *kva := AES-CBC^{-1}_k(iv, *kva) */
+	aes_cbc_dec(&sdp->swd_deckey, kva, kva, PAGE_SIZE, iv,
+	    AES_256_NROUNDS);
+
+	explicit_memset(&iv, 0, sizeof iv);
+}
+
+SYSCTL_SETUP(sysctl_uvmswap_setup, "sysctl uvmswap setup")
+{
+
+	sysctl_createv(clog, 0, NULL, NULL,
+	    CTLFLAG_PERMANENT|CTLFLAG_READWRITE, CTLTYPE_BOOL, "swap_encrypt",
+	    SYSCTL_DESCR("Encrypt data when swapped out to disk"),
+	    NULL, 0, &uvm_swap_encrypt, 0,
+	    CTL_VM, CTL_CREATE, CTL_EOL);
 }

@@ -1,5 +1,5 @@
 /*	$KAME: sctputil.c,v 1.39 2005/06/16 20:54:06 jinmei Exp $	*/
-/*	$NetBSD: sctputil.c,v 1.10 2016/07/07 09:32:02 ozaki-r Exp $	*/
+/*	$NetBSD: sctputil.c,v 1.17 2021/07/24 21:31:39 andvar Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctputil.c,v 1.10 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctputil.c,v 1.17 2021/07/24 21:31:39 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -54,6 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: sctputil.c,v 1.10 2016/07/07 09:32:02 ozaki-r Exp $"
 #include <sys/proc.h>
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
+#include <sys/cprng.h>
 
 #include <sys/callout.h>
 
@@ -614,52 +615,10 @@ find_next_best_mtu(int totsz)
 	return (sctp_mtu_sizes[perfer]);
 }
 
-void
-sctp_fill_random_store(struct sctp_pcb *m)
-{
-	/*
-	 * Here we use the MD5/SHA-1 to hash with our good randomNumbers
-	 * and our counter. The result becomes our good random numbers and
-	 * we then setup to give these out. Note that we do no lockig
-	 * to protect this. This is ok, since if competing folks call
-	 * this we will get more gobbled gook in the random store whic
-	 * is what we want. There is a danger that two guys will use
-	 * the same random numbers, but thats ok too since that
-	 * is random as well :->
-	 */
-	m->store_at = 0;
-	sctp_hash_digest((char *)m->random_numbers, sizeof(m->random_numbers),
-			 (char *)&m->random_counter, sizeof(m->random_counter),
-			 (char *)m->random_store);
-	m->random_counter++;
-}
-
 uint32_t
 sctp_select_initial_TSN(struct sctp_pcb *m)
 {
-	/*
-	 * A true implementation should use random selection process to
-	 * get the initial stream sequence number, using RFC1750 as a
-	 * good guideline
-	 */
-	u_long x, *xp;
-	uint8_t *p;
-
-	if (m->initial_sequence_debug != 0) {
-		u_int32_t ret;
-		ret = m->initial_sequence_debug;
-		m->initial_sequence_debug++;
-		return (ret);
-	}
-	if ((m->store_at+sizeof(u_long)) > SCTP_SIGNATURE_SIZE) {
-		/* Refill the random store */
-		sctp_fill_random_store(m);
-	}
-	p = &m->random_store[(int)m->store_at];
-	xp = (u_long *)p;
-	x = *xp;
-	m->store_at += sizeof(u_long);
-	return (x);
+	return cprng_strong32();
 }
 
 u_int32_t sctp_select_a_tag(struct sctp_inpcb *m)
@@ -773,7 +732,7 @@ sctp_init_asoc(struct sctp_inpcb *m, struct sctp_association *asoc,
 	}
 
 
-	asoc->my_rwnd = max(m->sctp_socket->so_rcv.sb_hiwat, SCTP_MINIMAL_RWND);
+	asoc->my_rwnd = uimax(m->sctp_socket->so_rcv.sb_hiwat, SCTP_MINIMAL_RWND);
 	asoc->peers_rwnd = m->sctp_socket->so_rcv.sb_hiwat;
 
 	asoc->smallest_mtu = m->sctp_frag_point;
@@ -1309,7 +1268,7 @@ sctp_timer_start(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	case SCTP_TIMER_TYPE_INPKILL:
 		/*
 		 * The inp is setup to die. We re-use the
-		 * signature_chage timer since that has
+		 * signature_change timer since that has
 		 * stopped and we are in the GONE state.
 		 */
 		tmr = &inp->sctp_ep.signature_change;
@@ -1497,7 +1456,7 @@ sctp_timer_stop(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	case SCTP_TIMER_TYPE_INPKILL:
 		/*
 		 * The inp is setup to die. We re-use the
-		 * signature_chage timer since that has
+		 * signature_change timer since that has
 		 * stopped and we are in the GONE state.
 		 */
 		tmr = &inp->sctp_ep.signature_change;
@@ -1572,47 +1531,6 @@ sctp_timer_stop(int t_type, struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	return (0);
 }
 
-#ifdef SCTP_USE_ADLER32
-static uint32_t
-update_adler32(uint32_t adler, uint8_t *buf, int32_t len)
-{
-	u_int32_t s1 = adler & 0xffff;
-	u_int32_t s2 = (adler >> 16) & 0xffff;
-	int n;
-
-	for (n = 0; n < len; n++, buf++) {
-		/* s1 = (s1 + buf[n]) % BASE */
-		/* first we add */
-		s1 = (s1 + *buf);
-		/*
-		 * now if we need to, we do a mod by subtracting. It seems
-		 * a bit faster since I really will only ever do one subtract
-		 * at the MOST, since buf[n] is a max of 255.
-		 */
-		if (s1 >= SCTP_ADLER32_BASE) {
-			s1 -= SCTP_ADLER32_BASE;
-		}
-		/* s2 = (s2 + s1) % BASE */
-		/* first we add */
-		s2 = (s2 + s1);
-		/*
-		 * again, it is more efficent (it seems) to subtract since
-		 * the most s2 will ever be is (BASE-1 + BASE-1) in the worse
-		 * case. This would then be (2 * BASE) - 2, which will still
-		 * only do one subtract. On Intel this is much better to do
-		 * this way and avoid the divide. Have not -pg'd on sparc.
-		 */
-		if (s2 >= SCTP_ADLER32_BASE) {
-			s2 -= SCTP_ADLER32_BASE;
-		}
-	}
-	/* Return the adler32 of the bytes buf[0..len-1] */
-	return ((s2 << 16) + s1);
-}
-
-#endif
-
-
 u_int32_t
 sctp_calculate_len(struct mbuf *m)
 {
@@ -1626,8 +1544,6 @@ sctp_calculate_len(struct mbuf *m)
 	return (tlen);
 }
 
-#if defined(SCTP_WITH_NO_CSUM)
-
 uint32_t
 sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
 {
@@ -1635,72 +1551,14 @@ sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
 	 * given a mbuf chain with a packetheader offset by 'offset'
 	 * pointing at a sctphdr (with csum set to 0) go through
 	 * the chain of m_next's and calculate the SCTP checksum.
-	 * This is currently Adler32 but will change to CRC32x
-	 * soon. Also has a side bonus calculate the total length
-	 * of the mbuf chain.
-	 * Note: if offset is greater than the total mbuf length,
-	 * checksum=1, pktlen=0 is returned (ie. no real error code)
-	 */
-	if (pktlen == NULL)
-		return (0);
-	*pktlen = sctp_calculate_len(m);
-	return (0);
-}
-
-#elif defined(SCTP_USE_INCHKSUM)
-
-#include <machine/in_cksum.h>
-
-uint32_t
-sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
-{
-	/*
-	 * given a mbuf chain with a packetheader offset by 'offset'
-	 * pointing at a sctphdr (with csum set to 0) go through
-	 * the chain of m_next's and calculate the SCTP checksum.
-	 * This is currently Adler32 but will change to CRC32x
-	 * soon. Also has a side bonus calculate the total length
+	 * This is CRC32c.
+	 * Also has a side bonus calculate the total length
 	 * of the mbuf chain.
 	 * Note: if offset is greater than the total mbuf length,
 	 * checksum=1, pktlen=0 is returned (ie. no real error code)
 	 */
 	int32_t tlen=0;
-	struct mbuf *at;
-	uint32_t the_sum, retsum;
-
-	at = m;
-	while (at) {
-		tlen += at->m_len;
-		at = at->m_next;
-	}
-	the_sum = (uint32_t)(in_cksum_skip(m, tlen, offset));
-	if (pktlen != NULL)
-		*pktlen = (tlen-offset);
-	retsum = htons(the_sum);
-	return (the_sum);
-}
-
-#else
-
-uint32_t
-sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
-{
-	/*
-	 * given a mbuf chain with a packetheader offset by 'offset'
-	 * pointing at a sctphdr (with csum set to 0) go through
-	 * the chain of m_next's and calculate the SCTP checksum.
-	 * This is currently Adler32 but will change to CRC32x
-	 * soon. Also has a side bonus calculate the total length
-	 * of the mbuf chain.
-	 * Note: if offset is greater than the total mbuf length,
-	 * checksum=1, pktlen=0 is returned (ie. no real error code)
-	 */
-	int32_t tlen=0;
-#ifdef SCTP_USE_ADLER32
-	uint32_t base = 1L;
-#else
 	uint32_t base = 0xffffffff;
-#endif /* SCTP_USE_ADLER32 */
 	struct mbuf *at;
 	at = m;
 	/* find the correct mbuf and offset into mbuf */
@@ -1710,13 +1568,8 @@ sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
 	}
 
 	while (at != NULL) {
-#ifdef SCTP_USE_ADLER32
-		base = update_adler32(base, at->m_data + offset,
-		    at->m_len - offset);
-#else
 		base = update_crc32(base, at->m_data + offset,
 		    at->m_len - offset);
-#endif /* SCTP_USE_ADLER32 */
 		tlen += at->m_len - offset;
 		/* we only offset once into the first mbuf */
 		if (offset) {
@@ -1727,18 +1580,10 @@ sctp_calculate_sum(struct mbuf *m, int32_t *pktlen, uint32_t offset)
 	if (pktlen != NULL) {
 		*pktlen = tlen;
 	}
-#ifdef SCTP_USE_ADLER32
-	/* Adler32 */
-	base = htonl(base);
-#else
 	/* CRC-32c */
 	base = sctp_csum_finalize(base);
-#endif
 	return (base);
 }
-
-
-#endif
 
 void
 sctp_mtu_size_reset(struct sctp_inpcb *inp,
@@ -1931,7 +1776,7 @@ sctp_m_getptr(struct mbuf *m, int off, int len, u_int8_t *in_ptr)
 	} else {
 		/* else, it spans more than one mbuf, so save a temp copy... */
 		while ((m != NULL) && (len > 0)) {
-			count = min(m->m_len - off, len);
+			count = uimin(m->m_len - off, len);
 			memcpy(ptr, (void *)(mtod(m, vaddr_t) + off), count);
 			len -= count;
 			ptr += count;
@@ -2027,7 +1872,7 @@ sctp_notify_assoc_change(u_int32_t event, struct sctp_tcb *stcb,
 	printf("notify: %d\n", event);
 #endif
 	/*
-	 * First if we are are going down dump everything we
+	 * First if we are going down dump everything we
 	 * can to the socket rcv queue.
 	 */
 	if ((event == SCTP_SHUTDOWN_COMP) || (event == SCTP_COMM_LOST)) {
@@ -3048,12 +2893,13 @@ sctp_cmpaddr(const struct sockaddr *sa1, const struct sockaddr *sa2)
 void
 sctp_print_address(const struct sockaddr *sa)
 {
+	char ip6buf[INET6_ADDRSTRLEN];
 
 	if (sa->sa_family == AF_INET6) {
 		const struct sockaddr_in6 *sin6;
 		sin6 = (const struct sockaddr_in6 *)sa;
 		printf("IPv6 address: %s:%d scope:%u\n",
-		    ip6_sprintf(&sin6->sin6_addr), ntohs(sin6->sin6_port),
+		    IN6_PRINT(ip6buf, &sin6->sin6_addr), ntohs(sin6->sin6_port),
 		    sin6->sin6_scope_id);
 	} else if (sa->sa_family == AF_INET) {
 		const struct sockaddr_in *sin;

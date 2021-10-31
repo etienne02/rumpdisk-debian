@@ -1,4 +1,4 @@
-/*	$NetBSD: if_malo_pcmcia.c,v 1.10 2016/03/11 22:09:54 macallan Exp $	*/
+/*	$NetBSD: if_malo_pcmcia.c,v 1.26 2021/06/16 00:21:19 riastradh Exp $	*/
 /*      $OpenBSD: if_malo.c,v 1.65 2009/03/29 21:53:53 sthen Exp $ */
 
 /*
@@ -18,7 +18,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_malo_pcmcia.c,v 1.10 2016/03/11 22:09:54 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_malo_pcmcia.c,v 1.26 2021/06/16 00:21:19 riastradh Exp $");
 
 #ifdef _MODULE
 #include <sys/module.h>
@@ -82,6 +82,7 @@ static void	malo_pcmcia_disable(struct malo_softc *);
 static void	cmalo_attach(void *);
 static void	cmalo_detach(void *);
 static int	cmalo_intr(void *);
+static void	cmalo_softintr(void *);
 
 static void	cmalo_start(struct ifnet *);
 static int	cmalo_ioctl(struct ifnet *, u_long, void *);
@@ -172,9 +173,15 @@ malo_pcmcia_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	psc->sc_pf = pa->pf;
 
-        error = pcmcia_function_configure(pa->pf, malo_pcmcia_validate_config);
+	error = pcmcia_function_configure(pa->pf, malo_pcmcia_validate_config);
 	if (error) {
 		aprint_error_dev(self, "configure failed, error=%d\n", error);
+		return;
+	}
+
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, cmalo_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(self, "couldn't establish softint\n");
 		return;
 	}
 
@@ -199,6 +206,9 @@ fail:
 	if (sc->sc_flags & MALO_DEVICE_ATTACHED)
 		return;
 
+	softint_disestablish(sc->sc_soft_ih);
+	sc->sc_soft_ih = NULL;
+
 	pcmcia_function_unconfigure(pa->pf);
 	return;
 }
@@ -211,6 +221,8 @@ malo_pcmcia_detach(device_t dev, int flags)
 
 	cmalo_detach(sc);
 	malo_pcmcia_disable(sc);
+	softint_disestablish(sc->sc_soft_ih);
+	sc->sc_soft_ih = NULL;
 	pcmcia_function_unconfigure(psc->sc_pf);
 
 	return 0;
@@ -230,6 +242,7 @@ malo_pcmcia_activate(device_t dev, devact_t act)
 		if_deactivate(ifp);
 		break;
 	default:
+		splx(s);
 		return EOPNOTSUPP;
 	}
 	splx(s);
@@ -305,15 +318,15 @@ cmalo_attach(void *arg)
 	    cmalo_fw_load_main(sc) != 0) {
 		/* free firmware */
 		cmalo_fw_free(sc);
-		return;
+		goto fail;
 	}
 	sc->sc_flags |= MALO_FW_LOADED;
 
 	/* allocate command buffer */
-	sc->sc_cmd = malloc(MALO_CMD_BUFFER_SIZE, M_DEVBUF, M_NOWAIT);
+	sc->sc_cmd = malloc(MALO_CMD_BUFFER_SIZE, M_DEVBUF, M_WAITOK);
 
 	/* allocate data buffer */
-	sc->sc_data = malloc(MALO_DATA_BUFFER_SIZE, M_DEVBUF, M_NOWAIT);
+	sc->sc_data = malloc(MALO_DATA_BUFFER_SIZE, M_DEVBUF, M_WAITOK);
 
 	/* enable interrupts */
 	cmalo_intr_mask(sc, 1);
@@ -355,8 +368,11 @@ cmalo_attach(void *arg)
 	}
 
 	/* attach interface */
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
 
 	sc->sc_newstate = ic->ic_newstate;
 	ic->ic_newstate = cmalo_newstate;
@@ -370,6 +386,11 @@ cmalo_attach(void *arg)
 
 	/* device attached */
 	sc->sc_flags |= MALO_DEVICE_ATTACHED;
+
+	return;
+
+fail:
+	cmalo_fw_free(sc);
 }
 
 static void
@@ -413,7 +434,7 @@ static int
 cmalo_intr(void *arg)
 {
 	struct malo_softc *sc = arg;
-	uint16_t intr = 0;
+	uint16_t intr;
 
 	/* read interrupt reason */
 	intr = MALO_READ_2(sc, MALO_REG_HOST_INTR_CAUSE);
@@ -427,15 +448,27 @@ cmalo_intr(void *arg)
 	/* disable interrupts */
 	cmalo_intr_mask(sc, 0);
 
+	DPRINTF(2, "%s: interrupt handler called (intr = 0x%04x)\n",
+	    device_xname(sc->sc_dev), intr);
+
+	softint_schedule(sc->sc_soft_ih);
+	return 1;
+}
+
+static void
+cmalo_softintr(void *arg)
+{
+	struct malo_softc *sc = arg;
+	uint16_t intr;
+
+	/* read interrupt reason */
+	intr = MALO_READ_2(sc, MALO_REG_HOST_INTR_CAUSE);
+	if (intr == 0 || intr == 0xffff)
+		goto out;
+
 	/* acknowledge interrupt */
 	MALO_WRITE_2(sc, MALO_REG_HOST_INTR_CAUSE,
 	    intr & MALO_VAL_HOST_INTR_MASK_ON);
-
-	/* enable interrupts */
-	cmalo_intr_mask(sc, 1);
-
-	DPRINTF(2, "%s: interrupt handler called (intr = 0x%04x)\n",
-	    device_xname(sc->sc_dev), intr);
 
 	if (intr & MALO_VAL_HOST_INTR_TX)
 		/* TX frame sent */
@@ -455,7 +488,9 @@ cmalo_intr(void *arg)
 		/* event */
 		cmalo_event(sc);
 
-	return 1;
+ out:
+	/* enable interrupts */
+	cmalo_intr_mask(sc, 1);
 }
 
 
@@ -478,11 +513,10 @@ cmalo_start(struct ifnet *ifp)
 
 	IFQ_DEQUEUE(&ifp->if_snd, m);
 
-	if (ifp->if_bpf)
-		bpf_ops->bpf_mtap(ifp->if_bpf, m);
+	bpf_mtap(ifp, m, BPF_D_OUT);
 
 	if (cmalo_tx(sc, m) != 0)
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 }
 
 static int
@@ -873,7 +907,7 @@ cmalo_fw_load_main(struct malo_softc *sc)
 		for (i = 0; i < bsize / 2; i++)
 			MALO_WRITE_2(sc, MALO_REG_CMD_WRITE, htole16(uc[i]));
 		MALO_WRITE_1(sc, MALO_REG_HOST_STATUS, MALO_VAL_CMD_DL_OVER);
-                MALO_WRITE_2(sc, MALO_REG_CARD_INTR_CAUSE,
+		MALO_WRITE_2(sc, MALO_REG_CARD_INTR_CAUSE,
 		    MALO_VAL_CMD_DL_OVER);
 
 		/* poll for an acknowledgement */
@@ -913,7 +947,7 @@ static void
 cmalo_stop(struct malo_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
-        struct ifnet *ifp = &sc->sc_if;
+	struct ifnet *ifp = &sc->sc_if;
 
 	/* device down */
 	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
@@ -998,23 +1032,21 @@ cmalo_rx(struct malo_softc *sc)
 	memcpy(data + (ETHER_ADDR_LEN * 2), data + i, rxdesc->pkglen - i);
 	rxdesc->pkglen -= sizeof(struct llc);
 
-#define ETHER_ALIGN	2 /* XXX */
 	/* prepare mbuf */
 	m = m_devget(sc->sc_data + rxdesc->pkgoffset,
-	    rxdesc->pkglen, ETHER_ALIGN, ifp, NULL);
+	    rxdesc->pkglen, ETHER_ALIGN, ifp);
 	if (m == NULL) {
 		DPRINTF(1, "RX m_devget failed\n");
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
-
-	if (ifp->if_bpf)
-		bpf_ops->bpf_mtap(ifp->if_bpf, m);
 
 	/* push the frame up to the network stack if not in monitor mode */
 	if (ic->ic_opmode != IEEE80211_M_MONITOR) {
 		if_percpuq_enqueue(ifp->if_percpuq, m);
-		ifp->if_ipackets++;
+	} else {
+		/* XXX: we don't do anything with it? */
+		m_freem(m);
 	}
 }
 
@@ -1064,13 +1096,16 @@ static void
 cmalo_tx_done(struct malo_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_if;
+	int s;
 
 	DPRINTF(2, "%s: TX done\n", device_xname(sc->sc_dev));
 
-	ifp->if_opackets++;
+	s = splnet();
+	if_statinc(ifp, if_opackets);
 	ifp->if_flags &= ~IFF_OACTIVE;
 	ifp->if_timer = 0;
 	cmalo_start(ifp);
+	splx(s);
 }
 
 static void
@@ -1264,13 +1299,11 @@ cmalo_cmd_rsp_hwspec(struct malo_softc *sc)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct malo_cmd_header *hdr = (struct malo_cmd_header *)sc->sc_cmd;
 	struct malo_cmd_body_spec *body;
-	int i;
 
 	body = (struct malo_cmd_body_spec *)(hdr + 1);
 
 	/* get our MAC address */
-	for (i = 0; i < ETHER_ADDR_LEN; i++)
-		ic->ic_myaddr[i] = body->macaddr[i];
+	memcpy(ic->ic_myaddr, body->macaddr, ETHER_ADDR_LEN);
 
 	return 0;
 }
@@ -1956,6 +1989,7 @@ cmalo_cmd_response(struct malo_softc *sc)
 	if (psize > MALO_CMD_BUFFER_SIZE) {
 		aprint_error_dev(sc->sc_dev,
 		    "command response too large: %dbyte\n", psize);
+		splx(s);
 		return EIO;
 	}
 

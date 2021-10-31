@@ -1,4 +1,4 @@
-/*	$NetBSD: ulfs_lookup.c,v 1.39 2016/06/20 02:25:03 dholland Exp $	*/
+/*	$NetBSD: ulfs_lookup.c,v 1.46 2020/09/05 02:55:38 riastradh Exp $	*/
 /*  from NetBSD: ufs_lookup.c,v 1.135 2015/07/11 11:04:48 mlelstv  */
 
 /*
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ulfs_lookup.c,v 1.39 2016/06/20 02:25:03 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ulfs_lookup.c,v 1.46 2020/09/05 02:55:38 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_lfs.h"
@@ -54,7 +54,6 @@ __KERNEL_RCSID(0, "$NetBSD: ulfs_lookup.c,v 1.39 2016/06/20 02:25:03 dholland Ex
 #include <sys/vnode.h>
 #include <sys/kernel.h>
 #include <sys/kauth.h>
-#include <sys/fstrans.h>
 #include <sys/proc.h>
 #include <sys/kmem.h>
 
@@ -163,14 +162,6 @@ ulfs_lookup(void *v)
 	endsearch = 0; /* silence compiler warning */
 
 	/*
-	 * Produce the auxiliary lookup results into i_crap. Increment
-	 * its serial number so elsewhere we can tell if we're using
-	 * stale results. This should not be done this way. XXX.
-	 */
-	results = &dp->i_crap;
-	dp->i_crapcounter++;
-
-	/*
 	 * Check accessiblity of directory.
 	 */
 	if ((error = VOP_ACCESS(vdp, VEXEC, cred)) != 0)
@@ -194,6 +185,19 @@ ulfs_lookup(void *v)
 		}
 		return *vpp == NULLVP ? ENOENT : 0;
 	}
+
+	/* May need to restart the lookup with an exclusive lock. */
+	if (VOP_ISLOCKED(vdp) != LK_EXCLUSIVE)
+		return ENOLCK;
+
+	/*
+	 * Produce the auxiliary lookup results into i_crap. Increment
+	 * its serial number so elsewhere we can tell if we're using
+	 * stale results. This should not be done this way. XXX.
+	 */
+	results = &dp->i_crap;
+	dp->i_crapcounter++;
+
 	if (iswhiteout) {
 		/*
 		 * The namecache set iswhiteout without finding a
@@ -207,8 +211,6 @@ ulfs_lookup(void *v)
 		 */
 		cnp->cn_flags |= ISWHITEOUT;
 	}
-
-	fstrans_start(vdp->v_mount, FSTRANS_SHARED);
 
 	/*
 	 * Suppress search for slots unless creating
@@ -295,8 +297,8 @@ ulfs_lookup(void *v)
 
 searchloop:
 	while (results->ulr_offset < endsearch) {
-		if (curcpu()->ci_schedstate.spc_flags & SPCF_SHOULDYIELD)
-			preempt();
+		preempt_point();
+
 		/*
 		 * If necessary, get the next directory block.
 		 */
@@ -481,7 +483,7 @@ notfound:
 		}
 		results->ulr_endoff = roundup(enduseful, dirblksiz);
 #if 0 /* commented out by dbj. none of the on disk fields changed */
-		dp->i_flag |= IN_CHANGE | IN_UPDATE;
+		dp->i_state |= IN_CHANGE | IN_UPDATE;
 #endif
 		/*
 		 * We return with the directory locked, so that
@@ -519,7 +521,7 @@ found:
 		dp->i_size =
 		    results->ulr_offset + LFS_DIRSIZ(fs, ep);
 		DIP_ASSIGN(dp, size, dp->i_size);
-		dp->i_flag |= IN_CHANGE | IN_UPDATE;
+		dp->i_state |= IN_CHANGE | IN_UPDATE;
 	}
 	brelse(bp, 0);
 
@@ -572,7 +574,7 @@ found:
 		 */
 		if (dp->i_mode & ISVTX) {
 			error = kauth_authorize_vnode(cred, KAUTH_VNODE_DELETE,
-			    tdp, vdp, genfs_can_sticky(cred, dp->i_uid,
+			    tdp, vdp, genfs_can_sticky(vdp, cred, dp->i_uid,
 			    VTOI(tdp)->i_uid));
 			if (error) {
 				vrele(tdp);
@@ -630,7 +632,6 @@ found:
 	error = 0;
 
 out:
-	fstrans_done(vdp->v_mount);
 	return error;
 }
 
@@ -799,7 +800,7 @@ ulfs_direnter(struct vnode *dvp, const struct ulfs_lookup_results *ulr,
 		}
 		dp->i_size = ulr->ulr_offset + dirblksiz;
 		DIP_ASSIGN(dp, size, dp->i_size);
-		dp->i_flag |= IN_CHANGE | IN_UPDATE;
+		dp->i_state |= IN_CHANGE | IN_UPDATE;
 		uvm_vnp_setsize(dvp, dp->i_size);
 		lfs_blkoff = ulr->ulr_offset & (ump->um_mountp->mnt_stat.f_iosize - 1);
 		ep = (LFS_DIRHEADER *)((char *)bp->b_data + lfs_blkoff);
@@ -844,7 +845,7 @@ ulfs_direnter(struct vnode *dvp, const struct ulfs_lookup_results *ulr,
 #endif
 		dp->i_size = ulr->ulr_offset + ulr->ulr_count;
 		DIP_ASSIGN(dp, size, dp->i_size);
-		dp->i_flag |= IN_CHANGE | IN_UPDATE;
+		dp->i_state |= IN_CHANGE | IN_UPDATE;
 	}
 	/*
 	 * Get the block containing the space for the new directory entry.
@@ -935,7 +936,7 @@ ulfs_direnter(struct vnode *dvp, const struct ulfs_lookup_results *ulr,
 		    ulr->ulr_offset & ~(dirblksiz - 1));
 #endif
 	error = VOP_BWRITE(bp->b_vp, bp);
-	dp->i_flag |= IN_CHANGE | IN_UPDATE;
+	dp->i_state |= IN_CHANGE | IN_UPDATE;
 	/*
 	 * If all went well, and the directory can be shortened, proceed
 	 * with the truncation. Note that we have to unlock the inode for
@@ -1051,7 +1052,7 @@ out:
 	if (ip) {
 		ip->i_nlink--;
 		DIP_ASSIGN(ip, nlink, ip->i_nlink);
-		ip->i_flag |= IN_CHANGE;
+		ip->i_state |= IN_CHANGE;
 	}
 	/*
 	 * XXX did it ever occur to anyone that it might be a good
@@ -1061,7 +1062,7 @@ out:
 	 * definitely do not take this into account.
 	 */
 	error = VOP_BWRITE(bp->b_vp, bp);
-	dp->i_flag |= IN_CHANGE | IN_UPDATE;
+	dp->i_state |= IN_CHANGE | IN_UPDATE;
 	/*
 	 * If the last named reference to a snapshot goes away,
 	 * drop its snapshot reference so that it will be reclaimed
@@ -1107,9 +1108,9 @@ ulfs_dirrewrite(struct inode *dp, off_t offset,
 	lfs_dir_settype(fs, ep, newtype);
 	oip->i_nlink--;
 	DIP_ASSIGN(oip, nlink, oip->i_nlink);
-	oip->i_flag |= IN_CHANGE;
+	oip->i_state |= IN_CHANGE;
 	error = VOP_BWRITE(bp->b_vp, bp);
-	dp->i_flag |= iflags;
+	dp->i_state |= iflags;
 	/*
 	 * If the last named reference to a snapshot goes away,
 	 * drop its snapshot reference so that it will be reclaimed

@@ -1,4 +1,4 @@
-/*	$NetBSD: lm_i2c.c,v 1.2 2008/10/13 11:16:00 pgoyette Exp $	*/
+/*	$NetBSD: lm_i2c.c,v 1.7 2021/06/13 09:48:44 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -30,13 +30,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lm_i2c.c,v 1.2 2008/10/13 11:16:00 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lm_i2c.c,v 1.7 2021/06/13 09:48:44 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/conf.h>
+#include <sys/kmem.h>
 
 #include <dev/i2c/i2cvar.h>
 
@@ -49,7 +50,7 @@ void 	lm_i2c_attach(device_t, device_t, void *);
 int 	lm_i2c_detach(device_t, int);
 
 uint8_t lm_i2c_readreg(struct lm_softc *, int);
-void 	lm_i2c_writereg(struct lm_softc *, int, int);
+void 	lm_i2c_writereg(struct lm_softc *, int, uint8_t);
 
 struct lm_i2c_softc {
 	struct lm_softc sc_lmsc;
@@ -65,20 +66,24 @@ lm_i2c_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
 	int rv = 0;
-	struct lm_i2c_softc sc;
+	struct lm_i2c_softc *sc;
 
 	/* Must supply an address */
 	if (ia->ia_addr < 1)
 		return 0;
 
-	/* Bus independent probe */
-	sc.sc_lmsc.lm_writereg = lm_i2c_writereg;
-	sc.sc_lmsc.lm_readreg = lm_i2c_readreg;
-	sc.sc_tag = ia->ia_tag;
-	sc.sc_addr = ia->ia_addr;
-	rv = lm_probe(&sc.sc_lmsc);
+	/* XXXJRT filter addresses //at all// please? */
 
-	return rv;
+	/* Bus independent probe */
+	sc = kmem_zalloc(sizeof(*sc), KM_SLEEP);
+	sc->sc_lmsc.lm_writereg = lm_i2c_writereg;
+	sc->sc_lmsc.lm_readreg = lm_i2c_readreg;
+	sc->sc_tag = ia->ia_tag;
+	sc->sc_addr = ia->ia_addr;
+	rv = lm_match(&sc->sc_lmsc);
+	kmem_free(sc, sizeof(*sc));
+
+	return rv ? I2C_MATCH_ADDRESS_AND_PROBE : 0;
 }
 
 
@@ -114,7 +119,8 @@ lm_i2c_readreg(struct lm_softc *lmsc, int reg)
 	struct lm_i2c_softc *sc = (struct lm_i2c_softc *)lmsc;
 	uint8_t cmd, data;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return 0;
 
 	cmd = reg;
 	iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
@@ -127,12 +133,13 @@ lm_i2c_readreg(struct lm_softc *lmsc, int reg)
 
 
 void
-lm_i2c_writereg(struct lm_softc *lmsc, int reg, int val)
+lm_i2c_writereg(struct lm_softc *lmsc, int reg, uint8_t val)
 {
 	struct lm_i2c_softc *sc = (struct lm_i2c_softc *)lmsc;
 	uint8_t cmd, data;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0))
+		return;
 
 	cmd = reg;
 	data = val;

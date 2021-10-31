@@ -1,4 +1,4 @@
-/*	$NetBSD: proc.h,v 1.42 2014/02/20 18:19:10 dsl Exp $	*/
+/*	$NetBSD: proc.h,v 1.48 2020/06/13 23:58:52 ad Exp $	*/
 
 /*
  * Copyright (c) 1991 Regents of the University of California.
@@ -43,16 +43,17 @@
 struct pmap;
 struct vm_page;
 
+#define	MDL_FPU_IN_CPU		0x0020	/* the FPU state is in the CPU */
+
 struct mdlwp {
+	volatile uint64_t md_tsc;	/* last TSC reading */
 	struct	trapframe *md_regs;	/* registers on current frame */
 	int	md_flags;		/* machine-dependent flags */
 	volatile int md_astpending;	/* AST pending for this process */
-	struct pmap *md_gc_pmap;	/* pmap being garbage collected */
-	struct vm_page *md_gc_ptp;	/* pages from pmap g/c */
 };
 
 /* md_flags */
-#define	MDL_IOPL	0x0002	/* XEN: i/o privilege */
+#define	MDL_IOPL		0x0002	/* XEN: i/o privilege */
 
 struct mdproc {
 	int	md_flags;

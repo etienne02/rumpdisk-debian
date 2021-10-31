@@ -1,4 +1,4 @@
-/*	$NetBSD: ptrace.h,v 1.15 2015/09/25 16:05:17 christos Exp $	*/
+/*	$NetBSD: ptrace.h,v 1.26 2020/05/30 08:41:23 maxv Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -84,8 +84,14 @@
 #define	__HAVE_PROCFS_MACHDEP
 
 /* The machine-dependent ptrace(2) requests. */
-#define	PT_GETXMMREGS	(PT_FIRSTMACH + 5)
-#define	PT_SETXMMREGS	(PT_FIRSTMACH + 6)
+#define	PT_GETXMMREGS		(PT_FIRSTMACH + 5)
+#define	PT_SETXMMREGS		(PT_FIRSTMACH + 6)
+#define	PT_GETDBREGS		(PT_FIRSTMACH + 7)
+#define	PT_SETDBREGS		(PT_FIRSTMACH + 8)
+#define	PT_SETSTEP		(PT_FIRSTMACH + 9)
+#define	PT_CLEARSTEP		(PT_FIRSTMACH + 10)
+#define	PT_GETXSTATE		(PT_FIRSTMACH + 11)
+#define	PT_SETXSTATE		(PT_FIRSTMACH + 12)
 
 #define PT_MACHDEP_STRINGS \
 	"PT_STEP", \
@@ -94,15 +100,25 @@
 	"PT_GETFPREGS", \
 	"PT_SETFPREGS", \
 	"PT_GETXMMREGS", \
-	"PT_SETXMMREGS",
+	"PT_SETXMMREGS", \
+	"PT_GETDBREGS", \
+	"PT_SETDBREGS", \
+	"PT_SETSTEP", \
+	"PT_CLEARSTEP", \
+	"PT_GETXSTATE", \
+	"PT_SETXSTATE"
 
 #include <machine/reg.h>
 #define PTRACE_REG_PC(r)	(r)->r_eip
+#define PTRACE_REG_FP(r)	(r)->r_ebp
 #define PTRACE_REG_SET_PC(r, v)	(r)->r_eip = (v)
 #define PTRACE_REG_SP(r)	(r)->r_esp
 #define PTRACE_REG_INTRV(r)	(r)->r_eax
 
+#define PTRACE_ILLEGAL_ASM	__asm __volatile ("ud2" : : : "memory")
+
 #define PTRACE_BREAKPOINT	((const uint8_t[]) { 0xcc })
+#define PTRACE_BREAKPOINT_ASM	__asm __volatile ("int3" : : : "memory")
 #define PTRACE_BREAKPOINT_SIZE	1
 #define PTRACE_BREAKPOINT_ADJ	sizeof(PTRACE_BREAKPOINT)
 
@@ -113,7 +129,9 @@
  */
 #define	PTRACE_MACHDEP_REQUEST_CASES					\
 	case PT_GETXMMREGS:						\
-	case PT_SETXMMREGS:
+	case PT_SETXMMREGS:						\
+	case PT_GETXSTATE:						\
+	case PT_SETXSTATE:
 
 /*
  * These are used to define machine-dependent procfs node types.
@@ -141,11 +159,26 @@
 	{ DT_REG, N("xmmregs"), Pmachdep_xmmregs,			\
 	  procfs_machdep_validxmmregs },
 
+#define PT32_GETXSTATE		PT_GETXSTATE
+#define COREDUMP_MACHDEP_LWP_NOTES(l, ns, name)				\
+{									\
+	struct xstate xstate;						\
+	memset(&xstate, 0, sizeof(xstate));				\
+	if (!process_read_xstate(l, &xstate))				\
+	{								\
+		ELFNAMEEND(coredump_savenote)(ns,			\
+		    CONCAT(CONCAT(PT, ELFSIZE), _GETXSTATE), name,	\
+		    &xstate, sizeof(xstate));				\
+	}								\
+}
+
 struct xmmregs;
 
 /* Functions used by both ptrace(2) and procfs. */
 int	process_machdep_doxmmregs(struct lwp *, struct lwp *, struct uio *);
 int	process_machdep_validxmmregs(struct proc *);
+int	process_machdep_doxstate(struct lwp *, struct lwp *, struct uio *);
+int	process_machdep_validxstate(struct proc *);
 
 /* Functions used by procfs. */
 struct mount;
@@ -153,6 +186,12 @@ struct pfsnode;
 int	procfs_machdep_doxmmregs(struct lwp *, struct lwp *,
 	    struct pfsnode *, struct uio *);
 int	procfs_machdep_validxmmregs(struct lwp *, struct mount *);
+
+/*
+ * The fpregs structure contains an fxsave area, which must have 16-byte
+ * alignment.
+ */
+#define PTRACE_REGS_ALIGN __aligned(16)
 
 #endif /* _KERNEL */
 

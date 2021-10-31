@@ -1,4 +1,4 @@
-/*	$NetBSD: trap_subr.S,v 1.78 2014/07/29 16:19:45 joerg Exp $	*/
+/*	$NetBSD: trap_subr.S,v 1.85 2021/02/24 16:42:38 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -37,7 +37,13 @@
  *
  *	#include <powerpc/powerpc/trap_subr.S>
  */
+
+#ifdef _KERNEL_OPT
 #include "opt_altivec.h"
+#include "opt_ddb.h"
+#include "opt_kgdb.h"
+#include "opt_ppcarch.h"
+#endif
 
 /* LINTSTUB: include <sys/param.h> */
 /* LINTSTUB: include <powerpc/oea/bat.h> */
@@ -170,8 +176,7 @@
 
 /*
  * This code gets copied to all the trap vectors
- * (except ISI/DSI, ALI, the interrupts, and possibly the debugging
- * traps when using IPKDB).
+ * (except ISI/DSI, ALI, the interrupts).
  */
 
 /* LINTSTUB: Var: int trapcode[1], trapsize[1]; */
@@ -263,14 +268,20 @@ _C_LABEL(dsitrap):
 	rlwinm	%r31,%r31,3+(32-BAT_ADDR_SHIFT),BAT_ADDR_SHIFT-3,28
 					/* get segment * 8 */
 
+	/* Get address of this CPU's current battable */
+	GET_CPUINFO(%r30)
+	ldreg	%r30,CI_BATTABLE(%r30)
+
+	/* Add offset to the slot we care about. */
+	add	%r31,%r31,%r30
+
 	/* get batu */
-	addis	%r31,%r31,_C_LABEL(battable)@ha
-	ldreg	%r30,_C_LABEL(battable)@l(%r31)
+	ldreg	%r30,0(%r31)
 	mtcr	%r30
 	bf	30,1f			/* branch if supervisor valid is
 					   false */
 	/* get batl */
-	ldreg	%r31,_C_LABEL(battable)+SZREG@l(%r31)
+	ldreg	%r31,SZREG(%r31)
 /* We randomly use the highest two bat registers here */
 	mftb	%r28
 	mtcr	%r28
@@ -358,15 +369,21 @@ _C_LABEL(dsi601trap):
 	mfdar	%r31			/* get fault address */
 	rlwinm	%r31,%r31,12,20,28	/* get "segment" battable offset */
 
+	/* Get address of this CPU's current battable */
+	GET_CPUINFO(%r30)
+	ldreg	%r30,CI_BATTABLE(%r30)
+
+	/* Add offset to the slot we care about. */
+	add	%r31,%r31,%r30
+
 	/* get batl */
-	addis	%r31,%r31,_C_LABEL(battable)@ha
-	ldreg	%r30,_C_LABEL(battable)+SZREG@l(%r31)
+	ldreg	%r30,SZREG(%r31)
 	mtcr	%r30
 	bf	25,1f			/* branch if Valid is false,
 					   presently assumes supervisor only */
 
 	/* get batu */
-	ldreg	%r31,_C_LABEL(battable)@l(%r31)
+	ldreg	%r31,0(%r31)
 /* We randomly use the highest two bat registers here */
 	mfspr	%r28,SPR_RTCL_R
 	andi.	%r28,%r28,128
@@ -598,7 +615,7 @@ _C_LABEL(tlbdlmsize) = .-_C_LABEL(tlbdlmiss)
 	.globl	_C_LABEL(tlbdsmiss),_C_LABEL(tlbdsmsize)
 _C_LABEL(tlbdsmiss):
 	mfspr	%r2,SPR_HASH1		/* get first pointer */
-	li	%r1,%r8
+	li	%r1,8
 	mfctr	%r0			/* save counter */
 	mfspr	%r3,SPR_DCMP		/* get first compare value */
 	addi	%r2,%r2,-8		/* predec pointer */
@@ -728,42 +745,6 @@ _C_LABEL(ddblow):
 #endif
 _C_LABEL(ddbsize) = .-_C_LABEL(ddblow)
 #endif	/* DDB || KGDB */
-
-#if defined(IPKDB) && !defined(DISTANT_KERNEL)
-/* IPKDB doesn't work together with DISTANT_KERNEL at the moment! */
-
-#define	ipkdbsave	0xde0		/* primary save area for IPKDB */
-/*
- * In case of IPKDB we want a separate trap catcher for it
- */
-
-	.local	ipkdbstk
-	.comm	ipkdbstk,INTSTK,8		/* ipkdb stack */
-
-/* LINTSTUB: Var: int ipkdblow[1], ipkdbsize[1]; */
-	.globl	_C_LABEL(ipkdblow),_C_LABEL(ipkdbsize)
-_C_LABEL(ipkdblow):
-	mtsprg1	%r1			/* save SP */
-	ENABLE_64BIT_BRIDGE(%r1)
-	GET_CPUINFO(%r1)
-	streg	%r28,(CI_IPKDBSAVE+CPUSAVE_R28)(%r1) /* save r28 */
-	streg	%r29,(CI_IPKDBSAVE+CPUSAVE_R29)(%r1) /* save r29 */
-	streg	%r30,(CI_IPKDBSAVE+CPUSAVE_R30)(%r1) /* save r30 */
-	streg	%r31,(CI_IPKDBSAVE+CPUSAVE_R31)(%r1) /* save r31 */
-	mflr	%r28			/* save LR */
-	mfcr	%r29			/* save CR */
-	lis	%r1,ipkdbstk+INTSTK@ha	/* get new SP */
-	addi	%r1,%r1,ipkdbstk+INTSTK@l
-#if defined(DISTANT_KERNEL)
-	lis	%r31,ipkdbtrap@ha
-	addi	%r31,%r31,ipkdbtrap@l
-	mtlr	%r31
-	blrl
-#else
-	bla	ipkdbtrap
-#endif
-_C_LABEL(ipkdbsize) = .-_C_LABEL(ipkdblow)
-#endif	/* IPKDB */
 
 /*
  * FRAME_SETUP assumes:
@@ -1254,111 +1235,6 @@ ddbtrap:
 	RFI
 #endif /* DDB || KGDB */
 
-#if defined(IPKDB) && !defined(DISTANT_KERNEL)
-/*
- * Deliberate entry to ipkdbtrap
- */
-	.globl	_C_LABEL(ipkdb_trap)
-_C_LABEL(ipkdb_trap):
-	mtsprg1	%r1
-	mfmsr	%r3
-	mtsrr1	%r3
-	andi.	%r3,%r3,~(PSL_EE|PSL_ME)@l
-	mtmsr	%r3			/* disable interrupts */
-	isync
-	ENABLE_64BIT_BRIDGE(%r3)
-	GET_CPUINFO(%r3)
-	streg	%r28,(CI_IPKDBSAVE+CPUSAVE_R28)(%r3)
-	streg	%r29,(CI_IPKDBSAVE+CPUSAVE_R29)(%r3)
-	streg	%r30,(CI_IPKDBSAVE+CPUSAVE_R30)(%r3)
-	streg	%r31,(CI_IPKDBSAVE+CPUSAVE_R31)(%r3)
-	mflr	%r28
-	li	%r29,EXC_BPT
-	mtlr	%r29
-	mfcr	%r29
-	mtsrr0	%r28
-
-/*
- * Now the ipkdb trap catching code.
- */
-ipkdbtrap:
-	FRAME_SETUP(CI_IPKDBSAVE)
-/* Call C trap code: */
-	addi	%r3,%r1,FRAME_TF
-	bl	_C_LABEL(ipkdb_trap_glue)
-	or.	%r3,%r3,%r3
-	beq	trapagain
-	FRAME_RESTORE_CALLEE
-	FRAME_LEAVE(CI_IPKDBSAVE)
-	RFI
-
-ipkdbfault:
-	ba	_ipkdbfault
-_ipkdbfault:
-	mfsrr0	%r3
-	addi	%r3,%r3,4
-	mtsrr0	%r3
-	li	%r3,-1
-	RFI
-
-/*
- * int ipkdbfbyte(unsigned char *p)
- */
-	.globl	_C_LABEL(ipkdbfbyte)
-_C_LABEL(ipkdbfbyte):
-	li	%r9,EXC_DSI		/* establish new fault routine */
-	ldint	%r5,0(%r9)
-	lis	%r6,ipkdbfault@ha
-	ldint	%r6,ipkdbfault@l(%r6)
-	stint	%r6,0(%r9)
-#ifdef	IPKDBUSERHACK
-	lis	%r8,_C_LABEL(ipkdbsr)@ha
-	ldreg	%r8,_C_LABEL(ipkdbsr)@l(%r8)
-	mtsr	USER_SR,8
-	isync
-#endif
-	dcbst	%r0,%r9			/* flush data... */
-	sync
-	icbi	%r0,%r9			/* and instruction caches */
-	lbz	%r3,0(%r3)		/* fetch data */
-	stint	%r5,0(%r9)		/* restore previous fault handler */
-	dcbst	%r0,%r9			/* and flush data... */
-	sync
-	icbi	%r0,%r9			/* and instruction caches */
-	blr
-
-/*
- * int ipkdbsbyte(unsigned char *p, int c)
- */
-	.globl	_C_LABEL(ipkdbsbyte)
-_C_LABEL(ipkdbsbyte):
-	li	%r9,EXC_DSI		/* establish new fault routine */
-	ldint	%r5,0(%r9)
-	lis	%r6,ipkdbfault@ha
-	ldint	%r6,ipkdbfault@l(%r6)
-	stint	%r6,0(%r9)
-#ifdef	IPKDBUSERHACK
-	lis	%r8,_C_LABEL(ipkdbsr)@ha
-	ldreg	%r8,_C_LABEL(ipkdbsr)@l(%r8)
-	mtsr	USER_SR,%r8
-	isync
-#endif
-	dcbst	%r0,%r9			/* flush data... */
-	sync
-	icbi	%r0,%r9			/* and instruction caches */
-	mr	%r6,%r3
-	li	%r3,0
-	stb	%r4,0(%r6)
-	dcbst	%r0,%r6			/* Now do appropriate flushes
-					   to data... */
-	sync
-	icbi	%r0,%r6			/* and instruction caches */
-	stint	%r5,0(%r9)		/* restore previous fault handler */
-	dcbst	%r0,%r9			/* and flush data... */
-	sync
-	icbi	%r0,%r9			/* and instruction caches */
-	blr
-#endif	/* IPKDB */
 	.globl	_C_LABEL(trapend)
 _C_LABEL(trapend):
 

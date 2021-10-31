@@ -1,12 +1,12 @@
-#	$NetBSD: Makefile.inc,v 1.92 2016/04/01 12:37:48 msaitoh Exp $
+#	$NetBSD: Makefile.inc,v 1.95 2019/03/04 17:30:33 christos Exp $
 #	from: @(#)Makefile.inc	8.3 (Berkeley) 2/4/95
 
 # stdlib sources
 .PATH: ${ARCHDIR}/stdlib ${.CURDIR}/stdlib
 
 SRCS+=	_env.c _rand48.c \
-	a64l.c abort.c aligned_alloc.c atexit.c atof.c atoi.c atol.c atoll.c \
-	bsearch.c drand48.c exit.c \
+	a64l.c abort.c atexit.c atof.c atoi.c atol.c atoll.c \
+	bsearch.c cxa_thread_atexit.c drand48.c exit.c \
 	getenv.c getopt.c getopt_long.c getsubopt.c \
 	hcreate.c heapsort.c imaxdiv.c insque.c jrand48.c l64a.c lldiv.c \
 	lcong48.c lrand48.c lsearch.c merge.c mi_vector_hash.c mrand48.c \
@@ -26,11 +26,15 @@ SRCS+=	div.c ldiv.c imaxdiv.c
 SRCS+= erand48_ieee754.c
 
 .if ${RUMPRUN} != "yes"
-.if (${USE_JEMALLOC} != "no")
-SRCS+=	jemalloc.c
-.else
+.   if (${USE_JEMALLOC} != "no")
+.      if ${HAVE_JEMALLOC} > 100
+.         include "${NETBSDSRCDIR}/external/bsd/jemalloc/lib/Makefile.inc"
+.      else
+SRCS+=	jemalloc.c aligned_alloc.c
+.      endif 
+.   else
 SRCS+=	malloc.c
-.endif
+.   endif
 .endif
 
 CPPFLAGS.strtol.c+=	-I${LIBCDIR}/../../common/lib/libc/stdlib
@@ -85,6 +89,7 @@ MLINKS+=rand48.3 mrand48.3 rand48.3 nrand48.3 rand48.3 jrand48.3
 MLINKS+=rand48.3 srand48.3 rand48.3 seed48.3 rand48.3 lcong48.3
 MLINKS+=random.3 initstate.3 random.3 setstate.3 random.3 srandom.3
 MLINKS+=radixsort.3 sradixsort.3
+MLINKS+=strfmon.3 strfmon_l.3
 MLINKS+=strsuftoll.3 strsuftollx.3
 MLINKS+=strtod.3 strtof.3 strtod.3 strtold.3
 MLINKS+=strtol.3 strtoimax.3

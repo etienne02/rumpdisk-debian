@@ -1,7 +1,7 @@
-/*	$NetBSD: nfs_export.c,v 1.58 2013/12/14 16:19:28 christos Exp $	*/
+/*	$NetBSD: nfs_export.c,v 1.63 2021/06/04 10:44:58 hannken Exp $	*/
 
 /*-
- * Copyright (c) 1997, 1998, 2004, 2005, 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 1997, 1998, 2004, 2005, 2008, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_export.c,v 1.58 2013/12/14 16:19:28 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_export.c,v 1.63 2021/06/04 10:44:58 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -211,16 +211,16 @@ netexport_fini(void)
 		netexport_wrlock();
 		ne = TAILQ_FIRST(&netexport_list);
 		mp = ne->ne_mount;
-		error = vfs_busy(mp, NULL);
+		error = vfs_busy(mp);
 		netexport_wrunlock();
 		if (error != 0) {
 			kpause("nfsfini", false, hz, NULL);
 			continue;
 		}
-		mutex_enter(&mp->mnt_updating);	/* mnt_flag */
+		mutex_enter(mp->mnt_updating);	/* mnt_flag */
 		netexport_unmount(mp);
-		mutex_exit(&mp->mnt_updating);	/* mnt_flag */
-		vfs_unbusy(mp, false, NULL);
+		mutex_exit(mp->mnt_updating);	/* mnt_flag */
+		vfs_unbusy(mp);
 	}
 	rw_destroy(&netexport_lock);
 }
@@ -233,17 +233,14 @@ netexport_fini(void)
  * Returns zero on success or an appropriate error code otherwise.
  *
  * Helper function for the nfssvc(2) system call (NFSSVC_SETEXPORTSLIST
- * command).
+ * and NFSSVC_REPLACEEXPORTSLIST command).
  */
 int
 mountd_set_exports_list(const struct mountd_exports_list *mel, struct lwp *l,
-    struct mount *nmp)
+    struct mount *nmp, int cmd)
 {
 	int error;
-#ifdef notyet
-	/* XXX: See below to see the reason why this is disabled. */
 	size_t i;
-#endif
 	struct mount *mp;
 	struct netexport *ne;
 	struct pathbuf *pb;
@@ -284,12 +281,12 @@ mountd_set_exports_list(const struct mountd_exports_list *mel, struct lwp *l,
 	}
 
 	/* Mark the file system busy. */
-	error = vfs_busy(mp, NULL);
+	error = vfs_busy(mp);
 	vput(vp);
 	if (error != 0)
 		return error;
 	if (nmp == NULL)
-		mutex_enter(&mp->mnt_updating);	/* mnt_flag */
+		mutex_enter(mp->mnt_updating);	/* mnt_flag */
 	netexport_wrlock();
 	ne = netexport_lookup(mp);
 	if (ne == NULL) {
@@ -302,37 +299,30 @@ mountd_set_exports_list(const struct mountd_exports_list *mel, struct lwp *l,
 	KASSERT(ne != NULL);
 	KASSERT(ne->ne_mount == mp);
 
-	/*
-	 * XXX: The part marked as 'notyet' works fine from the kernel's
-	 * point of view, in the sense that it is able to atomically update
-	 * the complete exports list for a file system.  However, supporting
-	 * this in mountd(8) requires a lot of work; so, for now, keep the
-	 * old behavior of updating a single entry per call.
-	 *
-	 * When mountd(8) is fixed, just remove the second branch of this
-	 * preprocessor conditional and enable the first one.
-	 */
-#ifdef notyet
-	netexport_clear(ne);
-	for (i = 0; error == 0 && i < mel->mel_nexports; i++)
-		error = export(ne, &mel->mel_exports[i]);
-#else
-	if (mel->mel_nexports == 0)
+	if (cmd == NFSSVC_SETEXPORTSLIST) {
+		if (mel->mel_nexports == 0)
+			netexport_clear(ne);
+		else if (mel->mel_nexports == 1)
+			error = export(ne, &mel->mel_exports[0]);
+		else {
+			printf("%s: Cannot set more than one "
+			    "entry at once (unimplemented)\n", __func__);
+			error = EOPNOTSUPP;
+		}
+	} else if (cmd == NFSSVC_REPLACEEXPORTSLIST) {
 		netexport_clear(ne);
-	else if (mel->mel_nexports == 1)
-		error = export(ne, &mel->mel_exports[0]);
-	else {
-		printf("%s: Cannot set more than one "
-		    "entry at once (unimplemented)\n", __func__);
+		for (i = 0; error == 0 && i < mel->mel_nexports; i++)
+			error = export(ne, &mel->mel_exports[i]);
+	} else {
+		printf("%s: Command %#x not implemented\n", __func__, cmd);
 		error = EOPNOTSUPP;
 	}
-#endif
 
 out:
 	netexport_wrunlock();
 	if (nmp == NULL)
-		mutex_exit(&mp->mnt_updating);	/* mnt_flag */
-	vfs_unbusy(mp, false, NULL);
+		mutex_exit(mp->mnt_updating);	/* mnt_flag */
+	vfs_unbusy(mp);
 	return error;
 }
 
@@ -455,7 +445,7 @@ nfs_export_update_30(struct mount *mp, const char *path, void *data)
 		mel.mel_exports = (void *)&args->eargs;
 	}
 
-	return mountd_set_exports_list(&mel, curlwp, mp);
+	return mountd_set_exports_list(&mel, curlwp, mp, NFSSVC_SETEXPORTSLIST);
 }
 
 /*
@@ -541,8 +531,10 @@ hang_addrlist(struct mount *mp, struct netexport *nep,
 		goto out;
 	if (saddr->sa_len > argp->ex_addrlen)
 		saddr->sa_len = argp->ex_addrlen;
-	if (sacheck(saddr) == -1)
-		return EINVAL;
+	if (sacheck(saddr) == -1) {
+		error = EINVAL;
+		goto out;
+	}
 	if (argp->ex_masklen) {
 		smask = (struct sockaddr *)((char *)saddr + argp->ex_addrlen);
 		error = copyin(argp->ex_mask, smask, argp->ex_masklen);
@@ -550,10 +542,14 @@ hang_addrlist(struct mount *mp, struct netexport *nep,
 			goto out;
 		if (smask->sa_len > argp->ex_masklen)
 			smask->sa_len = argp->ex_masklen;
-		if (smask->sa_family != saddr->sa_family)
-			return EINVAL;
-		if (sacheck(smask) == -1)
-			return EINVAL;
+		if (smask->sa_family != saddr->sa_family) {
+			error = EINVAL;
+			goto out;
+		}
+		if (sacheck(smask) == -1) {
+			error = EINVAL;
+			goto out;
+		}
 	}
 	i = saddr->sa_family;
 	if ((rnh = nep->ne_rtable[i]) == 0) {
@@ -764,7 +760,7 @@ setpublicfs(struct mount *mp, struct netexport *nep,
 	/*
 	 * Get real filehandle for root of exported FS.
 	 */
-	if ((error = VFS_ROOT(mp, &rvp)))
+	if ((error = VFS_ROOT(mp, LK_EXCLUSIVE, &rvp)))
 		return error;
 
 	fhsize = 0;

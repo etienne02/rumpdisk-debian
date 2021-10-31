@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,6 +43,7 @@
 
 #include "aslcompiler.h"
 #include "aslcompiler.y.h"
+#include "acnamesp.h"
 #include <string.h>
 
 
@@ -313,6 +314,7 @@ AnCheckMethodReturnValue (
 {
     ACPI_PARSE_OBJECT       *OwningOp;
     ACPI_NAMESPACE_NODE     *Node;
+    char                    *ExternalPath;
 
 
     Node = ArgOp->Asl.Node;
@@ -327,25 +329,26 @@ AnCheckMethodReturnValue (
     /* Examine the parent op of this method */
 
     OwningOp = Node->Op;
-    if (OwningOp->Asl.CompileFlags & NODE_METHOD_NO_RETVAL)
+    ExternalPath = AcpiNsGetNormalizedPathname (Node, TRUE);
+
+    if (OwningOp->Asl.CompileFlags & OP_METHOD_NO_RETVAL)
     {
         /* Method NEVER returns a value */
 
-        AslError (ASL_ERROR, ASL_MSG_NO_RETVAL, Op, Op->Asl.ExternalName);
+        AslError (ASL_ERROR, ASL_MSG_NO_RETVAL, Op, ExternalPath);
     }
-    else if (OwningOp->Asl.CompileFlags & NODE_METHOD_SOME_NO_RETVAL)
+    else if (OwningOp->Asl.CompileFlags & OP_METHOD_SOME_NO_RETVAL)
     {
         /* Method SOMETIMES returns a value, SOMETIMES not */
 
-        AslError (ASL_WARNING, ASL_MSG_SOME_NO_RETVAL,
-            Op, Op->Asl.ExternalName);
+        AslError (ASL_WARNING, ASL_MSG_SOME_NO_RETVAL, Op, ExternalPath);
     }
     else if (!(ThisNodeBtype & RequiredBtypes))
     {
         /* Method returns a value, but the type is wrong */
 
-        AnFormatBtype (StringBuffer, ThisNodeBtype);
-        AnFormatBtype (StringBuffer2, RequiredBtypes);
+        AnFormatBtype (AslGbl_StringBuffer, ThisNodeBtype);
+        AnFormatBtype (AslGbl_StringBuffer2, RequiredBtypes);
 
         /*
          * The case where the method does not return any value at all
@@ -355,12 +358,17 @@ AnCheckMethodReturnValue (
          */
         if (ThisNodeBtype != 0)
         {
-            snprintf (MsgBuffer, sizeof(MsgBuffer),
+            snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer),
                 "Method returns [%s], %s operator requires [%s]",
-                StringBuffer, OpInfo->Name, StringBuffer2);
+                AslGbl_StringBuffer, OpInfo->Name, AslGbl_StringBuffer2);
 
-            AslError (ASL_ERROR, ASL_MSG_INVALID_TYPE, ArgOp, MsgBuffer);
+            AslError (ASL_WARNING, ASL_MSG_INVALID_TYPE, ArgOp, AslGbl_MsgBuffer);
         }
+    }
+
+    if (ExternalPath)
+    {
+        ACPI_FREE (ExternalPath);
     }
 }
 
@@ -455,14 +463,14 @@ ApCheckForGpeNameConflict (
 {
     ACPI_PARSE_OBJECT       *NextOp;
     UINT32                  GpeNumber;
-    char                    Name[ACPI_NAME_SIZE + 1];
-    char                    Target[ACPI_NAME_SIZE];
+    char                    Name[ACPI_NAMESEG_SIZE + 1];
+    char                    Target[ACPI_NAMESEG_SIZE];
 
 
     /* Need a null-terminated string version of NameSeg */
 
-    ACPI_MOVE_32_TO_32 (Name, &Op->Asl.NameSeg);
-    Name[ACPI_NAME_SIZE] = 0;
+    ACPI_MOVE_32_TO_32 (Name, Op->Asl.NameSeg);
+    Name[ACPI_NAMESEG_SIZE] = 0;
 
     /*
      * For a GPE method:
@@ -514,7 +522,7 @@ ApCheckForGpeNameConflict (
         if ((NextOp->Asl.ParseOpcode == PARSEOP_METHOD) ||
             (NextOp->Asl.ParseOpcode == PARSEOP_NAME))
         {
-            if (ACPI_COMPARE_NAME (Target, NextOp->Asl.NameSeg))
+            if (ACPI_COMPARE_NAMESEG (Target, NextOp->Asl.NameSeg))
             {
                 /* Found both _Exy and _Lxy in the same scope, error */
 
@@ -558,7 +566,7 @@ ApCheckRegMethod (
 
     /* We are only interested in _REG methods */
 
-    if (!ACPI_COMPARE_NAME (METHOD_NAME__REG, &Op->Asl.NameSeg))
+    if (!ACPI_COMPARE_NAMESEG (METHOD_NAME__REG, &Op->Asl.NameSeg))
     {
         return;
     }
@@ -664,7 +672,7 @@ ApDeviceSubtreeWalk (
 
         /* These are what we are looking for */
 
-        if (ACPI_COMPARE_NAME (Name, Op->Asl.NameSeg))
+        if (ACPI_COMPARE_NAMESEG (Name, Op->Asl.NameSeg))
         {
             return (AE_CTRL_TRUE);
         }
@@ -723,7 +731,7 @@ ApFindNameInScope (
         if ((Next->Asl.ParseOpcode == PARSEOP_METHOD) ||
             (Next->Asl.ParseOpcode == PARSEOP_NAME))
         {
-            if (ACPI_COMPARE_NAME (Name, Next->Asl.NameSeg))
+            if (ACPI_COMPARE_NAMESEG (Name, Next->Asl.NameSeg))
             {
                 return (TRUE);
             }

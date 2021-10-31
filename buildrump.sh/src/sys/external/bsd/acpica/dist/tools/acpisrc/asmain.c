@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,7 +42,6 @@
  */
 
 #include "acpisrc.h"
-#include "acapps.h"
 
 /* Local prototypes */
 
@@ -81,6 +80,7 @@ struct stat             Gbl_StatBuf;
 char                    *Gbl_FileBuffer;
 UINT32                  Gbl_FileSize;
 UINT32                  Gbl_FileType;
+BOOLEAN                 Gbl_CheckAscii = FALSE;
 BOOLEAN                 Gbl_VerboseMode = FALSE;
 BOOLEAN                 Gbl_QuietMode = FALSE;
 BOOLEAN                 Gbl_BatchMode = FALSE;
@@ -94,7 +94,7 @@ BOOLEAN                 Gbl_Cleanup = FALSE;
 BOOLEAN                 Gbl_IgnoreTranslationEscapes = FALSE;
 
 #define AS_UTILITY_NAME             "ACPI Source Code Conversion Utility"
-#define AS_SUPPORTED_OPTIONS        "cdhilqsuv^y"
+#define AS_SUPPORTED_OPTIONS        "acdhilqsuv^y"
 
 
 /******************************************************************************
@@ -254,6 +254,7 @@ AsDisplayUsage (
 
     ACPI_USAGE_HEADER ("acpisrc [-c|l|u] [-dsvy] <SourceDir> <DestinationDir>");
 
+    ACPI_OPTION ("-a <file>",   "Check entire file for non-printable characters");
     ACPI_OPTION ("-c",          "Generate cleaned version of the source");
     ACPI_OPTION ("-h",          "Insert dual-license header into all modules");
     ACPI_OPTION ("-i",          "Cleanup macro indentation");
@@ -265,6 +266,7 @@ AsDisplayUsage (
     ACPI_OPTION ("-s",          "Generate source statistics only");
     ACPI_OPTION ("-v",          "Display version information");
     ACPI_OPTION ("-vb",         "Verbose mode");
+    ACPI_OPTION ("-vd",         "Display build date and time");
     ACPI_OPTION ("-y",          "Suppress file overwrite prompts");
 }
 
@@ -369,6 +371,11 @@ main (
             Gbl_VerboseMode = TRUE;
             break;
 
+        case 'd':
+
+            printf (ACPI_COMMON_BUILD_TIME);
+            return (0);
+
         default:
 
             printf ("Unknown option: -v%s\n", AcpiGbl_Optarg);
@@ -398,6 +405,11 @@ main (
         Gbl_QuietMode = TRUE;
         break;
 
+    case 'a':
+
+        Gbl_CheckAscii = TRUE;
+        break;
+
     default:
 
         AsDisplayUsage ();
@@ -411,6 +423,14 @@ main (
         printf ("Missing source path\n");
         AsDisplayUsage ();
         return (-1);
+    }
+
+    /* This option checks the entire file for printable ascii chars */
+
+    if (Gbl_CheckAscii)
+    {
+        AsProcessOneFile (NULL, NULL, NULL, 0, SourcePath, FILE_TYPE_SOURCE);
+        return (0);
     }
 
     TargetPath = argv[AcpiGbl_Optind+1];
@@ -434,6 +454,13 @@ main (
         ConversionTable->SourceFunctions &= ~CVT_REMOVE_DEBUG_MACROS;
     }
 
+    /*
+     * Set LF only support. Note ACPI_SRC_OS_LF_ONLY indicates that newlines
+     * are represented as LF only rather than CR/LF
+     */
+    ConversionTable->Flags |= ACPI_SRC_OS_LF_ONLY;
+    Gbl_IgnoreLoneLineFeeds = ACPI_SRC_OS_LF_ONLY;
+
     /* Check source and target paths and files */
 
     if (AsExaminePaths (ConversionTable, SourcePath, TargetPath, &FileType))
@@ -451,6 +478,13 @@ main (
     }
     else
     {
+        if (Gbl_CheckAscii)
+        {
+            AsProcessOneFile (NULL, NULL, NULL, 0,
+                SourcePath, FILE_TYPE_SOURCE);
+            return (0);
+        }
+
         /* Process a single file */
 
         /* Differentiate between source and header files */

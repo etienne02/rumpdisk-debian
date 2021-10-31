@@ -1,4 +1,4 @@
-/*        $NetBSD: dm_target.c,v 1.19 2014/10/18 08:33:27 snj Exp $      */
+/*        $NetBSD: dm_target.c,v 1.42 2021/08/21 22:23:33 andvar Exp $      */
 
 /*
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -28,13 +28,13 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: dm_target.c,v 1.42 2021/08/21 22:23:33 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
-
 #include <sys/kmem.h>
 #include <sys/module.h>
-
 
 #include "netbsd-dm.h"
 #include "dm.h"
@@ -46,25 +46,29 @@ TAILQ_HEAD(dm_target_head, dm_target);
 static struct dm_target_head dm_target_list =
 TAILQ_HEAD_INITIALIZER(dm_target_list);
 
-kmutex_t dm_target_mutex;
+static kmutex_t dm_target_mutex;
 
 /*
  * Called indirectly from dm_table_load_ioctl to mark target as used.
  */
 void
-dm_target_busy(dm_target_t * target)
+dm_target_busy(dm_target_t *target)
 {
+
 	atomic_inc_32(&target->ref_cnt);
 }
+
 /*
  * Release reference counter on target.
  */
 void
-dm_target_unbusy(dm_target_t * target)
+dm_target_unbusy(dm_target_t *target)
 {
+
 	KASSERT(target->ref_cnt > 0);
 	atomic_dec_32(&target->ref_cnt);
 }
+
 /*
  * Try to autoload target module if it was not found in current
  * target list.
@@ -73,7 +77,7 @@ dm_target_t *
 dm_target_autoload(const char *dm_target_name)
 {
 	char name[30];
-	u_int gen;
+	unsigned int gen;
 	dm_target_t *dmt;
 
 	snprintf(name, sizeof(name), "dm_target_%s", dm_target_name);
@@ -83,7 +87,7 @@ dm_target_autoload(const char *dm_target_name)
 		gen = module_gen;
 
 		/* Try to autoload target module */
-		(void) module_autoload(name, MODULE_CLASS_MISC);
+		module_autoload(name, MODULE_CLASS_MISC);
 	} while (gen != module_gen);
 
 	mutex_enter(&dm_target_mutex);
@@ -94,6 +98,7 @@ dm_target_autoload(const char *dm_target_name)
 
 	return dmt;
 }
+
 /*
  * Lookup for target in global target list.
  */
@@ -101,8 +106,6 @@ dm_target_t *
 dm_target_lookup(const char *dm_target_name)
 {
 	dm_target_t *dmt;
-
-	dmt = NULL;
 
 	if (dm_target_name == NULL)
 		return NULL;
@@ -117,15 +120,16 @@ dm_target_lookup(const char *dm_target_name)
 
 	return dmt;
 }
+
 /*
- * Search for name in TAIL and return apropriate pointer.
+ * Search for name in TAIL and return appropriate pointer.
  */
 static dm_target_t *
 dm_target_lookup_name(const char *dm_target_name)
 {
 	dm_target_t *dm_target;
-	int dlen;
-	int slen;
+	size_t dlen;
+	size_t slen;
 
 	slen = strlen(dm_target_name) + 1;
 
@@ -140,25 +144,36 @@ dm_target_lookup_name(const char *dm_target_name)
 
 	return NULL;
 }
+
 /*
  * Insert new target struct into the TAIL.
  * dm_target
- *   contains name, version, function pointer to specifif target functions.
+ *   contains name, version, function pointer to specific target functions.
  */
 int
-dm_target_insert(dm_target_t * dm_target)
+dm_target_insert(dm_target_t *dm_target)
 {
 	dm_target_t *dmt;
 
 	/* Sanity check for any missing function */
-	KASSERT(dm_target->init != NULL);
-	KASSERT(dm_target->status != NULL);
-	KASSERT(dm_target->strategy != NULL);
-	KASSERT(dm_target->deps != NULL);
-	KASSERT(dm_target->destroy != NULL);
-	KASSERT(dm_target->upcall != NULL);
-	KASSERT(dm_target->sync != NULL);
-	KASSERT(dm_target->secsize != NULL);
+	if (dm_target->init == NULL) {
+		printf("%s missing init\n", dm_target->name);
+		return EINVAL;
+	}
+	if (dm_target->strategy == NULL) {
+		printf("%s missing strategy\n", dm_target->name);
+		return EINVAL;
+	}
+	if (dm_target->destroy == NULL) {
+		printf("%s missing destroy\n", dm_target->name);
+		return EINVAL;
+	}
+#if 0
+	if (dm_target->upcall == NULL) {
+		printf("%s missing upcall\n", dm_target->name);
+		return EINVAL;
+	}
+#endif
 
 	mutex_enter(&dm_target_mutex);
 
@@ -174,12 +189,11 @@ dm_target_insert(dm_target_t * dm_target)
 	return 0;
 }
 
-
 /*
  * Remove target from TAIL, target is selected with its name.
  */
 int
-dm_target_rem(char *dm_target_name)
+dm_target_rem(const char *dm_target_name)
 {
 	dm_target_t *dmt;
 
@@ -196,15 +210,15 @@ dm_target_rem(char *dm_target_name)
 		mutex_exit(&dm_target_mutex);
 		return EBUSY;
 	}
-	TAILQ_REMOVE(&dm_target_list,
-	    dmt, dm_target_next);
+	TAILQ_REMOVE(&dm_target_list, dmt, dm_target_next);
 
 	mutex_exit(&dm_target_mutex);
 
-	(void) kmem_free(dmt, sizeof(dm_target_t));
+	kmem_free(dmt, sizeof(dm_target_t));
 
 	return 0;
 }
+
 /*
  * Destroy all targets and remove them from queue.
  * This routine is called from dm_detach, before module
@@ -216,50 +230,62 @@ dm_target_destroy(void)
 	dm_target_t *dm_target;
 
 	mutex_enter(&dm_target_mutex);
-	while (TAILQ_FIRST(&dm_target_list) != NULL) {
 
-		dm_target = TAILQ_FIRST(&dm_target_list);
-
-		TAILQ_REMOVE(&dm_target_list, TAILQ_FIRST(&dm_target_list),
-		    dm_target_next);
-
-		(void) kmem_free(dm_target, sizeof(dm_target_t));
+	while ((dm_target = TAILQ_FIRST(&dm_target_list)) != NULL) {
+		TAILQ_REMOVE(&dm_target_list, dm_target, dm_target_next);
+		kmem_free(dm_target, sizeof(dm_target_t));
 	}
+	KASSERT(TAILQ_EMPTY(&dm_target_list));
+
 	mutex_exit(&dm_target_mutex);
 
 	mutex_destroy(&dm_target_mutex);
-
+#if 0
+	/* Target specific module destroy routine. */
+	dm_target_delay_pool_destroy();
+#endif
 	return 0;
 }
+
 /*
  * Allocate new target entry.
  */
 dm_target_t *
 dm_target_alloc(const char *name)
 {
-	return kmem_zalloc(sizeof(dm_target_t), KM_SLEEP);
+	dm_target_t *dmt;
+
+	dmt = kmem_zalloc(sizeof(dm_target_t), KM_SLEEP);
+	if (dmt == NULL)
+		return NULL;
+
+	if (name)
+		strlcpy(dmt->name, name, sizeof(dmt->name));
+
+	return dmt;
 }
+
 /*
  * Return prop_array of dm_target dictionaries.
  */
 prop_array_t
 dm_target_prop_list(void)
 {
-	prop_array_t target_array, ver;
-	prop_dictionary_t target_dict;
+	prop_array_t target_array;
 	dm_target_t *dm_target;
-
-	size_t i;
 
 	target_array = prop_array_create();
 
 	mutex_enter(&dm_target_mutex);
 
 	TAILQ_FOREACH(dm_target, &dm_target_list, dm_target_next) {
+		prop_array_t ver;
+		prop_dictionary_t target_dict;
+		int i;
 
 		target_dict = prop_dictionary_create();
 		ver = prop_array_create();
-		prop_dictionary_set_cstring(target_dict, DM_TARGETS_NAME,
+		prop_dictionary_set_string(target_dict, DM_TARGETS_NAME,
 		    dm_target->name);
 
 		for (i = 0; i < 3; i++)
@@ -276,49 +302,97 @@ dm_target_prop_list(void)
 
 	return target_array;
 }
-/* Initialize dm_target subsystem. */
+
+/*
+ * Initialize dm_target subsystem.
+ */
 int
 dm_target_init(void)
 {
-	dm_target_t *dmt, *dmt3;
-	int r;
-
-	r = 0;
+	dm_target_t *dmt;
 
 	mutex_init(&dm_target_mutex, MUTEX_DEFAULT, IPL_NONE);
 
 	dmt = dm_target_alloc("linear");
-	dmt3 = dm_target_alloc("striped");
-
 	dmt->version[0] = 1;
 	dmt->version[1] = 0;
 	dmt->version[2] = 2;
-	strlcpy(dmt->name, "linear", DM_MAX_TYPE_NAME);
 	dmt->init = &dm_target_linear_init;
-	dmt->status = &dm_target_linear_status;
+	dmt->table = &dm_target_linear_table;
 	dmt->strategy = &dm_target_linear_strategy;
 	dmt->sync = &dm_target_linear_sync;
-	dmt->deps = &dm_target_linear_deps;
 	dmt->destroy = &dm_target_linear_destroy;
-	dmt->upcall = &dm_target_linear_upcall;
+	//dmt->upcall = &dm_target_linear_upcall;
 	dmt->secsize = &dm_target_linear_secsize;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert linear\n");
 
-	r = dm_target_insert(dmt);
+	dmt = dm_target_alloc("striped");
+	dmt->version[0] = 1;
+	dmt->version[1] = 0;
+	dmt->version[2] = 3;
+	dmt->init = &dm_target_stripe_init;
+	dmt->info = &dm_target_stripe_info;
+	dmt->table = &dm_target_stripe_table;
+	dmt->strategy = &dm_target_stripe_strategy;
+	dmt->sync = &dm_target_stripe_sync;
+	dmt->destroy = &dm_target_stripe_destroy;
+	//dmt->upcall = &dm_target_stripe_upcall;
+	dmt->secsize = &dm_target_stripe_secsize;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert striped\n");
 
-	dmt3->version[0] = 1;
-	dmt3->version[1] = 0;
-	dmt3->version[2] = 3;
-	strlcpy(dmt3->name, "striped", DM_MAX_TYPE_NAME);
-	dmt3->init = &dm_target_stripe_init;
-	dmt3->status = &dm_target_stripe_status;
-	dmt3->strategy = &dm_target_stripe_strategy;
-	dmt3->sync = &dm_target_stripe_sync;
-	dmt3->deps = &dm_target_stripe_deps;
-	dmt3->destroy = &dm_target_stripe_destroy;
-	dmt3->upcall = &dm_target_stripe_upcall;
-	dmt3->secsize = &dm_target_stripe_secsize;
+	dmt = dm_target_alloc("error");
+	dmt->version[0] = 1;
+	dmt->version[1] = 0;
+	dmt->version[2] = 0;
+	dmt->init = &dm_target_error_init;
+	dmt->strategy = &dm_target_error_strategy;
+	dmt->destroy = &dm_target_error_destroy;
+	//dmt->upcall = &dm_target_error_upcall;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert error\n");
 
-	r = dm_target_insert(dmt3);
+	dmt = dm_target_alloc("zero");
+	dmt->version[0] = 1;
+	dmt->version[1] = 0;
+	dmt->version[2] = 0;
+	dmt->init = &dm_target_zero_init;
+	dmt->strategy = &dm_target_zero_strategy;
+	dmt->destroy = &dm_target_zero_destroy;
+	//dmt->upcall = &dm_target_zero_upcall;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert zero\n");
+#if 0
+	dmt = dm_target_alloc("delay");
+	dmt->version[0] = 1;
+	dmt->version[1] = 0;
+	dmt->version[2] = 0;
+	dmt->init = &dm_target_delay_init;
+	dmt->info = &dm_target_delay_info;
+	dmt->table = &dm_target_delay_table;
+	dmt->strategy = &dm_target_delay_strategy;
+	dmt->sync = &dm_target_delay_sync;
+	dmt->destroy = &dm_target_delay_destroy;
+	//dmt->upcall = &dm_target_delay_upcall;
+	dmt->secsize = &dm_target_delay_secsize;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert delay\n");
+	dm_target_delay_pool_create();
 
-	return r;
+	dmt = dm_target_alloc("flakey");
+	dmt->version[0] = 1;
+	dmt->version[1] = 0;
+	dmt->version[2] = 0;
+	dmt->init = &dm_target_flakey_init;
+	dmt->table = &dm_target_flakey_table;
+	dmt->strategy = &dm_target_flakey_strategy;
+	dmt->sync = &dm_target_flakey_sync;
+	dmt->destroy = &dm_target_flakey_destroy;
+	//dmt->upcall = &dm_target_flakey_upcall;
+	dmt->secsize = &dm_target_flakey_secsize;
+	if (dm_target_insert(dmt))
+		printf("Failed to insert flakey\n");
+#endif
+	return 0;
 }

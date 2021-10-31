@@ -1,4 +1,4 @@
-/* $NetBSD: spiflash.c,v 1.18 2015/07/22 10:07:59 ryo Exp $ */
+/* $NetBSD: spiflash.c,v 1.25 2021/08/07 16:19:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2006 Urbana-Champaign Independent Media Center.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spiflash.c,v 1.18 2015/07/22 10:07:59 ryo Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spiflash.c,v 1.25 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -178,7 +178,8 @@ spiflash_attach_mi(const struct spiflash_hw_if *hw, void *cookie,
 	sfa.hw = hw;
 	sfa.cookie = cookie;
 
-	return (spiflash_handle_t)config_found(dev, &sfa, spiflash_print);
+	return (spiflash_handle_t)config_found(dev, &sfa, spiflash_print,
+	    CFARGS_NONE);
 }
 
 int
@@ -310,6 +311,8 @@ spiflash_strategy(struct buf *bp)
 	spiflash_handle_t sc;
 	int	s;
 
+	bp->b_resid = bp->b_bcount;
+
 	sc = device_lookup_private(&spiflash_cd, DISKUNIT(bp->b_dev));
 	if (sc == NULL) {
 		bp->b_error = ENXIO;
@@ -335,8 +338,6 @@ spiflash_strategy(struct buf *bp)
 		biodone(bp);
 		return;
 	}
-
-	bp->b_resid = bp->b_bcount;
 
 	/* all ready, hand off to thread for async processing */
 	s = splbio();
@@ -635,7 +636,7 @@ spiflash_common_write(spiflash_handle_t sc, size_t start, size_t size,
 			return rv;
 		}
 
-		cnt = min(size, sc->sc_write_size);
+		cnt = uimin(size, sc->sc_write_size);
 		if ((rv = spiflash_cmd(sc, SPIFLASH_CMD_PROGRAM, 3, start,
 			 cnt, data, NULL)) != 0) {
 			spiflash_write_disable(sc);
@@ -672,7 +673,7 @@ spiflash_common_read(spiflash_handle_t sc, size_t start, size_t size,
 		int cnt;
 
 		if (sc->sc_read_size > 0)
-			cnt = min(size, sc->sc_read_size);
+			cnt = uimin(size, sc->sc_read_size);
 		else 
 			cnt = size;
 

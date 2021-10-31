@@ -1,4 +1,4 @@
-/*	$NetBSD: malo.c,v 1.8 2016/06/10 13:27:13 ozaki-r Exp $ */
+/*	$NetBSD: malo.c,v 1.19 2021/06/16 00:21:18 riastradh Exp $ */
 /*	$OpenBSD: malo.c,v 1.92 2010/08/27 17:08:00 jsg Exp $ */
 
 /*
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: malo.c,v 1.8 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: malo.c,v 1.19 2021/06/16 00:21:18 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -314,13 +314,34 @@ malo_intr(void *arg)
 		/* not for us */
 		return (0);
 
+	/* disable interrupts */
+	malo_ctl_read4(sc, MALO_REG_A2H_INTERRUPT_CAUSE);
+	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_CAUSE, 0);
+	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_MASK, 0);
+	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_STATUS_MASK, 0);
+
+	softint_schedule(sc->sc_soft_ih);
+	return (1);
+}
+
+void
+malo_softintr(void *arg)
+{
+	struct malo_softc *sc = arg;
+	uint32_t status;
+
+	status = malo_ctl_read4(sc, MALO_REG_A2H_INTERRUPT_CAUSE);
+	if (status == 0xffffffff || status == 0)
+		goto out;	/* not for us */
+
 	if (status & MALO_A2HRIC_BIT_TX_DONE)
 		malo_tx_intr(sc);
 	if (status & MALO_A2HRIC_BIT_RX_RDY)
 		malo_rx_intr(sc);
 	if (status & MALO_A2HRIC_BIT_OPC_DONE) {
 		/* XXX cmd done interrupt handling doesn't work yet */
-		DPRINTF(1, "%s: got cmd done interrupt\n", device_xname(sc->sc_dev));
+		DPRINTF(1, "%s: got cmd done interrupt\n",
+		    device_xname(sc->sc_dev));
 		//malo_cmd_response(sc);
 	}
 
@@ -332,7 +353,12 @@ malo_intr(void *arg)
 	/* just ack the interrupt */
 	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_CAUSE, 0);
 
-	return (1);
+out:
+	/* enable interrupts */
+	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_MASK, 0x1f);
+	malo_ctl_barrier(sc, BUS_SPACE_BARRIER_WRITE);
+	malo_ctl_write4(sc, MALO_REG_A2H_INTERRUPT_STATUS_MASK, 0x1f);
+	malo_ctl_barrier(sc, BUS_SPACE_BARRIER_WRITE);
 }
 
 int
@@ -396,8 +422,11 @@ malo_attach(struct malo_softc *sc)
 	aprint_normal(", address %s\n", ether_sprintf(ic->ic_myaddr));
 
 	/* attach interface */
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
 
 	/* post attach vector functions */
 	sc->sc_newstate = ic->ic_newstate;
@@ -432,10 +461,9 @@ malo_detach(void *arg)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &sc->sc_if;
 
-	/* remove channel scanning timer */
-	callout_stop(&sc->sc_scan_to);
-
 	malo_stop(ifp, 1);
+	/* remove channel scanning timer */
+	callout_destroy(&sc->sc_scan_to);
 	ieee80211_ifdetach(ic);
 	if_detach(ifp);
 	malo_free_cmd(sc);
@@ -579,12 +607,7 @@ malo_alloc_rx_ring(struct malo_softc *sc, struct malo_rx_ring *ring, int count)
 	ring->physaddr = ring->map->dm_segs->ds_addr;
 
 	ring->data = malloc(count * sizeof (struct malo_rx_data), M_DEVBUF,
-	    M_NOWAIT);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
+	    M_WAITOK);
 
 	/*
 	 * Pre-allocate Rx buffers and populate Rx ring.
@@ -729,14 +752,8 @@ malo_alloc_tx_ring(struct malo_softc *sc, struct malo_tx_ring *ring,
 	ring->physaddr = ring->map->dm_segs->ds_addr;
 
 	ring->data = malloc(count * sizeof(struct malo_tx_data), M_DEVBUF,
-	    M_NOWAIT);
-	if (ring->data == NULL) {
-		aprint_error_dev(sc->sc_dev, "could not allocate soft data\n");
-		error = ENOMEM;
-		goto fail;
-	}
+	    M_WAITOK | M_ZERO);
 
-	memset(ring->data, 0, count * sizeof(struct malo_tx_data));
 	for (i = 0; i < count; i++) {
 		error = bus_dmamap_create(sc->sc_dmat, MCLBYTES,
 		    MALO_MAX_SCATTER, MCLBYTES, 0, BUS_DMA_NOWAIT,
@@ -1000,7 +1017,7 @@ malo_start(struct ifnet *ifp)
 			ni = M_GETCTX(m0, struct ieee80211_node *);
 			M_CLEARCTX(m0);
 
-			bpf_mtap3(ic->ic_rawbpf, m0);
+			bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 
 			if (malo_tx_data(sc, m0, ni) != 0)
 				break;
@@ -1017,30 +1034,30 @@ malo_start(struct ifnet *ifp)
 
 			if (m0->m_len < sizeof (*eh) &&
 			    (m0 = m_pullup(m0, sizeof (*eh))) == NULL) {
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				continue;
 			}
 			eh = mtod(m0, struct ether_header *);
 			ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 			if (ni == NULL) {
 				m_freem(m0);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				continue;
 			}
 
 			// XXX must I call ieee_classify at this point ?
 
 			IFQ_DEQUEUE(&ifp->if_snd, m0);
-			bpf_mtap(ifp, m0);
+			bpf_mtap(ifp, m0, BPF_D_OUT);
 
 			m0 = ieee80211_encap(ic, m0, ni);
 			if (m0 == NULL)
 				continue;
-			bpf_mtap(ifp, m0);
+			bpf_mtap3(ic->ic_rawbpf, m0, BPF_D_OUT);
 
 			if (malo_tx_data(sc, m0, ni) != 0) {
 				ieee80211_free_node(ni);
-				ifp->if_oerrors++;
+				if_statinc(ifp, if_oerrors);
 				break;
 			}
 		}
@@ -1300,9 +1317,11 @@ malo_tx_intr(struct malo_softc *sc)
 	struct malo_tx_desc *desc;
 	struct malo_tx_data *data;
 	struct malo_node *rn;
-	int stat;
+	int stat, s;
 
 	DPRINTF(2, "%s: %s\n", device_xname(sc->sc_dev), __func__);
+
+	s = splnet();
 
 	stat = sc->sc_txring.stat;
 	for (;;) {
@@ -1324,12 +1343,12 @@ malo_tx_intr(struct malo_softc *sc)
 		case MALO_TXD_STATUS_OK:
 			DPRINTF(2, "%s: data frame was sent successfully\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 			break;
 		default:
 			DPRINTF(1, "%s: data frame sending error\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 		}
 
@@ -1362,6 +1381,8 @@ next:
 	sc->sc_tx_timer = 0;
 	ifp->if_flags &= ~IFF_OACTIVE;
 	malo_start(ifp);
+
+	splx(s);
 }
 
 static int
@@ -1385,7 +1406,7 @@ malo_tx_data(struct malo_softc *sc, struct mbuf *m0,
 	if (m0->m_len < sizeof(struct ieee80211_frame)) {
 		m0 = m_pullup(m0, sizeof(struct ieee80211_frame));
 		if (m0 == NULL) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			return (ENOBUFS);
 		}
 	}
@@ -1412,7 +1433,7 @@ malo_tx_data(struct malo_softc *sc, struct mbuf *m0,
 		if (wh->i_fc[1] & IEEE80211_FC1_WEP)
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m0, BPF_D_OUT);
 	}
 
 	/*
@@ -1498,7 +1519,7 @@ malo_rx_intr(struct malo_softc *sc)
 	struct ieee80211_node *ni;
 	struct mbuf *mnew, *m;
 	uint32_t rxRdPtr, rxWrPtr;
-	int error, i;
+	int error, i, s;
 
 	rxRdPtr = malo_mem_read4(sc, sc->sc_RxPdRdPtr);
 	rxWrPtr = malo_mem_read4(sc, sc->sc_RxPdWrPtr);
@@ -1525,14 +1546,14 @@ malo_rx_intr(struct malo_softc *sc)
 
 		MGETHDR(mnew, M_DONTWAIT, MT_DATA);
 		if (mnew == NULL) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
 		MCLGET(mnew, M_DONTWAIT);
 		if (!(mnew->m_flags & M_EXT)) {
 			m_freem(mnew);
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
@@ -1552,7 +1573,7 @@ malo_rx_intr(struct malo_softc *sc)
 				panic("%s: could not load old rx mbuf",
 				    device_xname(sc->sc_dev));
 			}
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 
@@ -1578,6 +1599,8 @@ malo_rx_intr(struct malo_softc *sc)
 		memmove(m->m_data +6, m->m_data, 26);
 		m_adj(m, 8);
 
+		s = splnet();
+
 		if (sc->sc_drvbpf != NULL) {
 			struct malo_rx_radiotap_hdr *tap = &sc->sc_rxtap;
 
@@ -1587,7 +1610,8 @@ malo_rx_intr(struct malo_softc *sc)
 			tap->wr_chan_flags =
 			    htole16(ic->ic_bss->ni_chan->ic_flags);
 
-			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+			bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m,
+			    BPF_D_IN);
 		}
 
 		wh = mtod(m, struct ieee80211_frame *);
@@ -1598,6 +1622,8 @@ malo_rx_intr(struct malo_softc *sc)
 
 		/* node is no longer needed */
 		ieee80211_free_node(ni);
+
+		splx(s);
 
 skip:
 		desc->rxctrl = 0;
@@ -1680,6 +1706,8 @@ malo_load_bootimg(struct malo_softc *sc)
 	bus_space_write_region_1(sc->sc_mem1_bt, sc->sc_mem1_bh, 0xbf00,
 	    ucode, size);
 
+	firmware_free(ucode, size);
+
 	/*
 	 * we loaded the firmware into card memory now tell the CPU
 	 * to fetch the code and execute it. The memory mapped via the
@@ -1696,10 +1724,8 @@ malo_load_bootimg(struct malo_softc *sc)
 	}
 	if (i == 10) {
 		aprint_error_dev(sc->sc_dev, "timeout at boot firmware load!\n");
-		free(ucode, M_DEVBUF);
 		return (ETIMEDOUT);
 	}
-	firmware_free(ucode, size);
 
 	/* tell the card we're done and... */
 	malo_mem_write2(sc, 0xbef8, 0x001);
@@ -1837,7 +1863,7 @@ malo_hexdump(void *buf, int len)
 
 	for (i = 0; i < len; i += l) {
 		printf("%4i:", i);
-		l = min(sizeof(b), len - i);
+		l = uimin(sizeof(b), len - i);
 		memcpy(b, (char*)buf + i, l);
 		
 		for (j = 0; j < sizeof(b); j++) {
@@ -2110,7 +2136,7 @@ malo_cmd_set_txpower(struct malo_softc *sc, unsigned int powerlevel)
 	body->action = htole16(1);
 	if (powerlevel < 30)
 		body->supportpowerlvl = htole16(5);	/* LOW */
-	else if (powerlevel >= 30 && powerlevel < 60)
+	else if (powerlevel < 60)
 		body->supportpowerlvl = htole16(10);	/* MEDIUM */
 	else
 		body->supportpowerlvl = htole16(15);	/* HIGH */

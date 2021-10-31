@@ -1,4 +1,4 @@
-/* $NetBSD: axp22x.c,v 1.2 2014/11/21 22:31:09 jmcneill Exp $ */
+/* $NetBSD: axp22x.c,v 1.9 2021/01/27 02:29:48 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2014 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: axp22x.c,v 1.2 2014/11/21 22:31:09 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: axp22x.c,v 1.9 2021/01/27 02:29:48 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -39,6 +39,11 @@ __KERNEL_RCSID(0, "$NetBSD: axp22x.c,v 1.2 2014/11/21 22:31:09 jmcneill Exp $");
 #include <dev/i2c/i2cvar.h>
 
 #include <dev/sysmon/sysmonvar.h>
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "x-powers,axp221" },
+	DEVICE_COMPAT_EOL
+};
 
 #define AXP_TEMP_MON_REG	0x56	/* 2 bytes */
 
@@ -63,7 +68,15 @@ CFATTACH_DECL_NEW(axp22x, sizeof(struct axp22x_softc),
 static int
 axp22x_match(device_t parent, cfdata_t match, void *aux)
 {
-	return 1;
+	struct i2c_attach_args *ia = aux;
+	int match_result;
+
+	if (iic_use_direct_match(ia, match, compat_data, &match_result))
+		return match_result;
+
+	/* This device is direct-config only. */
+
+	return 0;
 }
 
 static void

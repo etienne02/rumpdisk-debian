@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -48,8 +48,7 @@
 #include "acnamesp.h"
 #include "acparser.h"
 #include "acapps.h"
-
-#include <stdio.h>
+#include "acconvert.h"
 
 
 #define _COMPONENT          ACPI_TOOLS
@@ -124,24 +123,36 @@ AdInitialize (
     Status = AcpiOsInitialize ();
     if (ACPI_FAILURE (Status))
     {
+        fprintf (stderr, "Could not initialize ACPICA subsystem: %s\n",
+            AcpiFormatException (Status));
+
         return (Status);
     }
 
     Status = AcpiUtInitGlobals ();
     if (ACPI_FAILURE (Status))
     {
+        fprintf (stderr, "Could not initialize ACPICA globals: %s\n",
+            AcpiFormatException (Status));
+
         return (Status);
     }
 
     Status = AcpiUtMutexInitialize ();
     if (ACPI_FAILURE (Status))
     {
+        fprintf (stderr, "Could not initialize ACPICA mutex objects: %s\n",
+            AcpiFormatException (Status));
+
         return (Status);
     }
 
     Status = AcpiNsRootInitialize ();
     if (ACPI_FAILURE (Status))
     {
+        fprintf (stderr, "Could not initialize ACPICA namespace: %s\n",
+            AcpiFormatException (Status));
+
         return (Status);
     }
 
@@ -151,7 +162,7 @@ AdInitialize (
     AcpiGbl_RootTableList.CurrentTableCount = 0;
     AcpiGbl_RootTableList.Tables = LocalTables;
 
-    return (Status);
+    return (AE_OK);
 }
 
 
@@ -261,8 +272,6 @@ AdAmlDisassemble (
             Status = AE_ERROR;
             goto Cleanup;
         }
-
-        AcpiOsRedirectOutput (File);
     }
 
     *OutFilename = DisasmFilename;
@@ -289,6 +298,8 @@ Cleanup:
     {
         ACPI_FREE (Table);
     }
+
+    AcDeleteTableList (ListHead);
 
     if (File)
     {
@@ -328,10 +339,30 @@ AdDisassembleOneTable (
     ACPI_OWNER_ID           OwnerId;
 
 
+#ifdef ACPI_ASL_COMPILER
+
+    /*
+     * For ASL-/ASL+ converter: replace the temporary "XXXX"
+     * table signature with the original. This "XXXX" makes
+     * it harder for the AML interpreter to run the badaml
+     * (.xxx) file produced from the converter in case if
+     * it fails to get deleted.
+     */
+    if (AcpiGbl_CaptureComments)
+    {
+        strncpy (Table->Signature, AcpiGbl_TableSig, ACPI_NAMESEG_SIZE);
+    }
+#endif
+
     /* ForceAmlDisassembly means to assume the table contains valid AML */
 
     if (!AcpiGbl_ForceAmlDisassembly && !AcpiUtIsAmlTable (Table))
     {
+        if (File)
+        {
+            AcpiOsRedirectOutput (File);
+        }
+
         AdDisassemblerHeader (Filename, ACPI_IS_DATA_TABLE);
 
         /* This is a "Data Table" (non-AML table) */
@@ -354,6 +385,10 @@ AdDisassembleOneTable (
         return (AE_OK);
     }
 
+    /* Initialize the converter output file */
+
+    ASL_CV_INIT_FILETREE(Table, File);
+
     /*
      * This is an AML table (DSDT or SSDT).
      * Always parse the tables, only option is what to display
@@ -364,6 +399,13 @@ AdDisassembleOneTable (
         AcpiOsPrintf ("Could not parse ACPI tables, %s\n",
             AcpiFormatException (Status));
         return (Status);
+    }
+
+    /* Redirect output for code generation and debugging output */
+
+    if (File)
+    {
+        AcpiOsRedirectOutput (File);
     }
 
     /* Debug output, namespace and parse tree */
@@ -404,7 +446,7 @@ AdDisassembleOneTable (
      * the entire tree with the new information (namely, the
      * number of arguments per method)
      */
-    if (AcpiDmGetExternalMethodCount ())
+    if (AcpiDmGetUnresolvedExternalMethodCount ())
     {
         Status = AdReparseOneTable (Table, File, OwnerId);
         if (ACPI_FAILURE (Status))
@@ -420,7 +462,7 @@ AdDisassembleOneTable (
      * 1) Convert fixed-offset references to resource descriptors
      *    to symbolic references (Note: modifies namespace)
      */
-    AcpiDmConvertResourceIndexes (AcpiGbl_ParseOpRoot, AcpiGbl_RootNode);
+    AcpiDmConvertParseObjects (AcpiGbl_ParseOpRoot, AcpiGbl_RootNode);
 
     /* Optional displays */
 
@@ -441,11 +483,11 @@ AdDisassembleOneTable (
                 DisasmFilename, CmGetFileSize (File));
         }
 
-        if (Gbl_MapfileFlag)
+        if (AslGbl_MapfileFlag)
         {
             fprintf (stderr, "%14s %s - %u bytes\n",
-                Gbl_Files[ASL_FILE_MAP_OUTPUT].ShortDescription,
-                Gbl_Files[ASL_FILE_MAP_OUTPUT].Filename,
+                AslGbl_FileDescs[ASL_FILE_MAP_OUTPUT].ShortDescription,
+                AslGbl_Files[ASL_FILE_MAP_OUTPUT].Filename,
                 FlGetFileSize (ASL_FILE_MAP_OUTPUT));
         }
     }
@@ -477,12 +519,13 @@ AdReparseOneTable (
     ACPI_OWNER_ID           OwnerId)
 {
     ACPI_STATUS             Status;
+    ACPI_COMMENT_ADDR_NODE  *AddrListHead;
 
 
     fprintf (stderr,
         "\nFound %u external control methods, "
         "reparsing with new information\n",
-        AcpiDmGetExternalMethodCount ());
+        AcpiDmGetUnresolvedExternalMethodCount ());
 
     /* Reparse, rebuild namespace */
 
@@ -508,7 +551,16 @@ AdReparseOneTable (
 
     /* New namespace, add the external definitions first */
 
-    AcpiDmAddExternalsToNamespace ();
+    AcpiDmAddExternalListToNamespace ();
+
+    /* For -ca option: clear the list of comment addresses. */
+
+    while (AcpiGbl_CommentAddrListHead)
+    {
+        AddrListHead= AcpiGbl_CommentAddrListHead;
+        AcpiGbl_CommentAddrListHead = AcpiGbl_CommentAddrListHead->Next;
+        AcpiOsFree(AddrListHead);
+    }
 
     /* Parse the table again. No need to reload it, however */
 
@@ -601,10 +653,10 @@ AdDoExternalFileList (
             {
                 ExternalFileList = ExternalFileList->Next;
                 GlobalStatus = AE_TYPE;
-                Status = AE_OK;
                 continue;
             }
 
+            AcDeleteTableList (ExternalListHead);
             return (Status);
         }
 
@@ -618,6 +670,7 @@ AdDoExternalFileList (
             {
                 AcpiOsPrintf ("Could not parse external ACPI tables, %s\n",
                     AcpiFormatException (Status));
+                AcDeleteTableList (ExternalListHead);
                 return (Status);
             }
 
@@ -636,6 +689,8 @@ AdDoExternalFileList (
 
         ExternalFileList = ExternalFileList->Next;
     }
+
+    AcDeleteTableList (ExternalListHead);
 
     if (ACPI_FAILURE (GlobalStatus))
     {

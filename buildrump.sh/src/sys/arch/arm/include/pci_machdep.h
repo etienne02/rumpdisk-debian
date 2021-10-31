@@ -1,4 +1,4 @@
-/*	$NetBSD: pci_machdep.h,v 1.10 2014/03/29 19:28:26 christos Exp $	*/
+/*	$NetBSD: pci_machdep.h,v 1.18 2020/02/13 00:02:21 jmcneill Exp $	*/
 
 /*
  * Modified for arm32 by Mark Brinicombe
@@ -37,12 +37,42 @@
  * Machine-specific definitions for PCI autoconfiguration.
  */
 
+#ifdef __aarch64__
+#define _PCI_HAVE_DMA64
+#endif
+
+#define __HAVE_PCI_GET_SEGMENT
+
+#include <sys/errno.h>
+
 /*
  * Types provided to machine-independent PCI code
  */
 typedef struct	arm32_pci_chipset	*pci_chipset_tag_t;
 typedef u_long	pcitag_t;
-typedef u_long	pci_intr_handle_t;
+typedef uint64_t pci_intr_handle_t;
+
+/*
+ * pci_intr_handle_t fields
+ */
+#define	ARM_PCI_INTR_MSI_VEC	0x000007ff00000000ULL
+#define	ARM_PCI_INTR_MPSAFE	0x0000000080000000ULL
+#define	ARM_PCI_INTR_MSIX	0x0000000040000000ULL
+#define	ARM_PCI_INTR_MSI	0x0000000020000000ULL
+#define	ARM_PCI_INTR_FRAME	0x0000000000ff0000ULL
+#define	ARM_PCI_INTR_IRQ	0x000000000000ffffULL
+
+#ifdef __HAVE_PCI_MSI_MSIX
+/*
+ * PCI MSI/MSI-X support
+ */
+typedef enum {
+	PCI_INTR_TYPE_INTX = 0,
+	PCI_INTR_TYPE_MSI,
+	PCI_INTR_TYPE_MSIX,
+	PCI_INTR_TYPE_SIZE,
+} pci_intr_type_t;
+#endif /* __HAVE_PCI_MSI_MSIX */
 
 /*
  * Forward declarations.
@@ -61,6 +91,9 @@ struct arm32_pci_chipset {
 	pcitag_t	(*pc_make_tag)(void *, int, int, int);
 	void		(*pc_decompose_tag)(void *, pcitag_t, int *,
 			    int *, int *);
+	u_int		(*pc_get_segment)(void *);
+	uint32_t	(*pc_get_devid)(void *, uint32_t);
+	uint32_t	(*pc_get_frameid)(void *, uint32_t);
 	pcireg_t	(*pc_conf_read)(void *, pcitag_t, int);
 	void		(*pc_conf_write)(void *, pcitag_t, int, pcireg_t);
 
@@ -70,14 +103,36 @@ struct arm32_pci_chipset {
 	const char	*(*pc_intr_string)(void *, pci_intr_handle_t,
 			    char *, size_t);
 	const struct evcnt *(*pc_intr_evcnt)(void *, pci_intr_handle_t);
+	int		(*pc_intr_setattr)(void *, pci_intr_handle_t *,
+			    int, uint64_t);
 	void		*(*pc_intr_establish)(void *, pci_intr_handle_t,
-			    int, int (*)(void *), void *);
+			    int, int (*)(void *), void *, const char *);
 	void		(*pc_intr_disestablish)(void *, void *);
 
 #ifdef __HAVE_PCI_CONF_HOOK
 	int		(*pc_conf_hook)(void *, int, int, int, pcireg_t);
 #endif
 	void		(*pc_conf_interrupt)(void *, int, int, int, int, int *);
+
+#ifdef __HAVE_PCI_MSI_MSIX
+	void		*pc_msi_v;
+	pci_intr_type_t	(*pc_intr_type)(void *, pci_intr_handle_t);
+	int		(*pc_intr_alloc)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, int *, pci_intr_type_t);
+	void		(*pc_intr_release)(void *, pci_intr_handle_t *, int);
+	int		(*pc_intx_alloc)(const struct pci_attach_args *,
+			    pci_intr_handle_t **);
+	int		(*pc_msi_alloc)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, int *);
+	int		(*pc_msi_alloc_exact)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, int);
+	int		(*pc_msix_alloc)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, int *);
+	int		(*pc_msix_alloc_exact)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, int);
+	int		(*pc_msix_alloc_map)(const struct pci_attach_args *,
+			    pci_intr_handle_t **, u_int *, int);
+#endif
 
 	uint32_t	pc_cfg_cmd;
 };
@@ -93,6 +148,12 @@ struct arm32_pci_chipset {
     (*(c)->pc_make_tag)((c)->pc_conf_v, (b), (d), (f))
 #define	pci_decompose_tag(c, t, bp, dp, fp)				\
     (*(c)->pc_decompose_tag)((c)->pc_conf_v, (t), (bp), (dp), (fp))
+#define pci_get_segment(c)						\
+    ((c)->pc_get_segment ? (*(c)->pc_get_segment)((c)->pc_conf_v) : 0)
+#define pci_get_devid(c, d)						\
+    ((c)->pc_get_devid ? (*(c)->pc_get_devid)((c)->pc_conf_v, (d)) : (d))
+#define pci_get_frameid(c, d)						\
+    ((c)->pc_get_frameid ? (*(c)->pc_get_frameid)((c)->pc_conf_v, (d)) : 0)
 #define	pci_conf_read(c, t, r)						\
     (*(c)->pc_conf_read)((c)->pc_conf_v, (t), (r))
 #define	pci_conf_write(c, t, r, v)					\
@@ -104,7 +165,7 @@ struct arm32_pci_chipset {
 #define	pci_intr_evcnt(c, ih)						\
     (*(c)->pc_intr_evcnt)((c)->pc_intr_v, (ih))
 #define	pci_intr_establish(c, ih, l, h, a)				\
-    (*(c)->pc_intr_establish)((c)->pc_intr_v, (ih), (l), (h), (a))
+    (*(c)->pc_intr_establish)((c)->pc_intr_v, (ih), (l), (h), (a), NULL)
 #define	pci_intr_disestablish(c, iv)					\
     (*(c)->pc_intr_disestablish)((c)->pc_intr_v, (iv))
 #ifdef __HAVE_PCI_CONF_HOOK
@@ -113,5 +174,39 @@ struct arm32_pci_chipset {
 #endif
 #define	pci_conf_interrupt(c, b, d, i, s, p)				\
     (*(c)->pc_conf_interrupt)((c)->pc_conf_v, (b), (d), (i), (s), (p))
+
+static inline int
+pci_intr_setattr(pci_chipset_tag_t pc, pci_intr_handle_t *ihp,
+    int attr, uint64_t data)
+{
+	if (!pc->pc_intr_setattr)
+		return ENODEV;
+	return pc->pc_intr_setattr(pc, ihp, attr, data);
+}
+
+static inline void *
+pci_intr_establish_xname(pci_chipset_tag_t pc, pci_intr_handle_t ih,
+    int level, int (*func)(void *), void *arg, const char *xname)
+{
+	return pc->pc_intr_establish(pc->pc_intr_v, ih, level, func, arg, xname);
+}
+
+#ifdef __HAVE_PCI_MSI_MSIX
+pci_intr_type_t	pci_intr_type(pci_chipset_tag_t, pci_intr_handle_t);
+int	pci_intr_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
+	    int *, pci_intr_type_t);
+void	pci_intr_release(pci_chipset_tag_t, pci_intr_handle_t *, int);
+int	pci_intx_alloc(const struct pci_attach_args *, pci_intr_handle_t **);
+int	pci_msi_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
+	    int *);
+int	pci_msi_alloc_exact(const struct pci_attach_args *,
+	    pci_intr_handle_t **, int);
+int	pci_msix_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
+	    int *);
+int	pci_msix_alloc_exact(const struct pci_attach_args *,
+	    pci_intr_handle_t **, int);
+int	pci_msix_alloc_map(const struct pci_attach_args *, pci_intr_handle_t **,
+	    u_int *, int);
+#endif	/* __HAVE_PCI_MSI_MSIX */
 
 #endif	/* _ARM_PCI_MACHDEP_H_ */

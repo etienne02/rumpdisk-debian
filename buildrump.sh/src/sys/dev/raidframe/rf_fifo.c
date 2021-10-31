@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_fifo.c,v 1.15 2006/11/16 01:33:23 christos Exp $	*/
+/*	$NetBSD: rf_fifo.c,v 1.17 2021/07/23 20:18:24 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -36,7 +36,7 @@
  ***************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_fifo.c,v 1.15 2006/11/16 01:33:23 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_fifo.c,v 1.17 2021/07/23 20:18:24 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -58,8 +58,7 @@ rf_FifoCreate(RF_SectorCount_t sectPerDisk, RF_AllocListElem_t *clList,
 {
 	RF_FifoHeader_t *q;
 
-	RF_MallocAndAdd(q, sizeof(RF_FifoHeader_t),
-				(RF_FifoHeader_t *), clList);
+	q = RF_MallocAndAdd(sizeof(*q), clList);
 	q->hq_count = q->lq_count = 0;
 	return ((void *) q);
 }
@@ -148,23 +147,6 @@ rf_FifoDequeue(void *q_in)
 	return (nd);
 }
 
-/* Return ptr to item at head of queue.  Used to examine request
- * info without actually dequeueing the request.
- */
-RF_DiskQueueData_t *
-rf_FifoPeek(void *q_in)
-{
-	RF_DiskQueueData_t *headElement = NULL;
-	RF_FifoHeader_t *q = (RF_FifoHeader_t *) q_in;
-
-	RF_ASSERT(q);
-	if (q->hq_head)
-		headElement = q->hq_head;
-	else
-		if (q->lq_head)
-			headElement = q->lq_head;
-	return (headElement);
-}
 /* We sometimes need to promote a low priority access to a regular priority access.
  * Currently, this is only used when the user wants to write a stripe which is currently
  * under reconstruction.

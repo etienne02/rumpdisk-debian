@@ -1,4 +1,4 @@
-/* $NetBSD: wsconsio.h,v 1.115 2016/06/10 21:26:43 macallan Exp $ */
+/* $NetBSD: wsconsio.h,v 1.125 2021/04/24 00:15:37 macallan Exp $ */
 
 /*
  * Copyright (c) 1996, 1997 Christopher G. Demetriou.  All rights reserved.
@@ -46,6 +46,7 @@
 
 #include <sys/types.h>
 #include <sys/ioccom.h>
+#include <sys/time.h>
 #include <dev/wscons/wsksymvar.h>
 
 
@@ -86,7 +87,7 @@ struct wscons_event {
 #define	WSKBD_TYPE_LK201	1	/* lk-201 */
 #define	WSKBD_TYPE_LK401	2	/* lk-401 */
 #define	WSKBD_TYPE_PC_XT	3	/* PC-ish, XT scancode */
-#define	WSKBD_TYPE_PC_AT	4	/* PC-ish, AT scancode */
+#define	WSKBD_TYPE_PC_AT	4	/* PC-ish, AT scancode, not used by modern kernels */
 #define	WSKBD_TYPE_USB		5	/* USB, XT scancode */
 #define	WSKBD_TYPE_NEXT		6	/* NeXT keyboard */
 #define	WSKBD_TYPE_HPC_KBD	7	/* HPC bultin keyboard */
@@ -108,6 +109,7 @@ struct wscons_event {
 #define	WSKBD_TYPE_LUNA		23	/* OMRON SX-9100 LUNA */
 #define	WSKBD_TYPE_RFB		24	/* Usermode vnc remote keyboard */
 #define	WSKBD_TYPE_EPOC		25	/* Psion EPOC machine keyboard */
+#define	WSKBD_TYPE_HYPERV	26	/* Hyper-V synthetic keyboard */
 
 /* Manipulate the keyboard bell. */
 struct wskbd_bell_data {
@@ -338,7 +340,9 @@ struct wsmouse_repeat {
 #define	WSDISPLAY_TYPE_MGX	61	/* SSB 4096V-MGX */
 #define	WSDISPLAY_TYPE_MESON	62	/* Amlogic Meson ARM SoC */
 #define	WSDISPLAY_TYPE_TEGRA	63	/* NVIDIA Tegra ARM SoC */
-#define	WSDISPLAY_TYPE_PLATINUM	64	/* Apple onboard video 'platinum' */
+#define	WSDISPLAY_TYPE_PLATINUM	64	/* onboard fb in PowerMac 7200 */
+#define	WSDISPLAY_TYPE_PLFB	65	/* ARM PrimeCell PL11x */
+#define	WSDISPLAY_TYPE_SSDFB	66	/* ssdfb(4) */
 
 /* Basic display information.  Not applicable to all display types. */
 struct wsdisplay_fbinfo {
@@ -542,6 +546,7 @@ struct wsmux_device {
 #define	WSMUX_MOUSE	1
 #define	WSMUX_KBD	2
 #define	WSMUX_MUX	3
+#define	WSMUX_BELL	4
 	int idx;
 };
 #define	WSMUXIO_ADD_DEVICE	_IOW('W', 97, struct wsmux_device)
@@ -654,7 +659,8 @@ struct wsdisplayio_fbinfo {
 };
 
 /* fbi_flags */
-#define WSFB_VRAM_IS_RAM	1	/* hint for wsfb - don't shadow */
+#define WSFB_VRAM_IS_RAM	0x0001	/* hint for wsfb - don't shadow */
+#define WSFB_VRAM_IS_SPLIT	0x0002	/* workaround for wildcat... */
 
 #define WSDISPLAYIO_GET_FBINFO	_IOWR('W', 104, struct wsdisplayio_fbinfo)
 
@@ -677,5 +683,25 @@ struct wsdisplayio_blit {
 
 #define WSDISPLAYIO_DOBLIT   	_IOWR('W', 105, struct wsdisplayio_blit)
 #define WSDISPLAYIO_WAITBLIT 	_IOWR('W', 106, struct wsdisplayio_blit)
+
+struct wsdisplayio_fontdesc {
+		char fd_name[64];
+		uint16_t fd_height;
+		uint16_t fd_width;
+};
+
+struct wsdisplayio_fontinfo {
+	uint32_t fi_buffersize;
+	uint32_t fi_numentries;
+	struct wsdisplayio_fontdesc *fi_fonts;
+};
+
+/*
+ * fill buffer pointed at by fi_fonts with wsdisplayio_fontdesc until either
+ * full or all fonts are listed
+ * just return the number of entries needed if fi_fonts is NULL
+ */
+
+#define WSDISPLAYIO_LISTFONTS	_IOWR('W', 107, struct wsdisplayio_fontinfo)
 
 #endif /* _DEV_WSCONS_WSCONSIO_H_ */

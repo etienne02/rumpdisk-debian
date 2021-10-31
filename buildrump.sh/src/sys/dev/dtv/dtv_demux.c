@@ -1,4 +1,4 @@
-/* $NetBSD: dtv_demux.c,v 1.6 2014/08/09 13:34:10 jmcneill Exp $ */
+/* $NetBSD: dtv_demux.c,v 1.11 2020/05/30 13:15:10 jdolecek Exp $ */
 
 /*-
  * Copyright (c) 2011 Jared D. McNeill <jmcneill@invisible.ca>
@@ -52,7 +52,7 @@
  */ 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dtv_demux.c,v 1.6 2014/08/09 13:34:10 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dtv_demux.c,v 1.11 2020/05/30 13:15:10 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -75,6 +75,7 @@ static int	dtv_demux_poll(struct file *, int);
 static int	dtv_demux_close(struct file *);
 
 static const struct fileops dtv_demux_fileops = {
+	.fo_name = "dtv_demux",
 	.fo_read = dtv_demux_read,
 	.fo_write = fbadop_write,
 	.fo_ioctl = dtv_demux_ioctl,
@@ -278,7 +279,7 @@ dtv_demux_set_pidfilter(struct dtv_demux *demux, uint16_t pid, bool onoff)
 	 * PID.
 	 */
 	if (pid == 0x2000) {
-		memset(sc->sc_ts.ts_pidfilter, onoff,
+		memset(sc->sc_ts.ts_pidfilter, onoff ? 0xff : 0,
 		    sizeof(sc->sc_ts.ts_pidfilter));
 	} else {
 		sc->sc_ts.ts_pidfilter[pid] = onoff;
@@ -299,8 +300,6 @@ dtv_demux_open(struct dtv_softc *sc, int flags, int mode, lwp_t *l)
 
 	/* Allocate private storage */
 	demux = kmem_zalloc(sizeof(*demux), KM_SLEEP);
-	if (demux == NULL)
-		return ENOMEM;
 	demux->dd_sc = sc;
 	/* Default operation mode is unconfigured */
 	demux->dd_mode = DTV_DEMUX_MODE_NONE;
@@ -493,7 +492,7 @@ dtv_demux_read(struct file *fp, off_t *offp, struct uio *uio,
     kauth_cred_t cred, int flags)
 {
 	struct dtv_demux *demux = fp->f_data;
-	struct dtv_ts_section sec;
+	struct dtv_ts_section *sec;
 	int error;
 
 	if (demux == NULL)
@@ -503,22 +502,25 @@ dtv_demux_read(struct file *fp, off_t *offp, struct uio *uio,
 	if (demux->dd_mode != DTV_DEMUX_MODE_SECTION)
 		return EIO;
 
+	sec = kmem_alloc(sizeof(*sec), KM_SLEEP);
+
 	/* Wait for a complete PSI section */
 	mutex_enter(&demux->dd_lock);
 	while (demux->dd_secfilt.nsections == 0) {
 		if (flags & IO_NDELAY) {
 			mutex_exit(&demux->dd_lock);
 			/* No data available */
-			return EWOULDBLOCK;
+			error = EWOULDBLOCK;
+			goto out;
 		}
 		error = cv_wait_sig(&demux->dd_section_cv, &demux->dd_lock);
 		if (error) {
 			mutex_exit(&demux->dd_lock);
-			return error;
+			goto out;
 		}
 	}
 	/* Copy the completed PSI section */
-	sec = demux->dd_secfilt.section[demux->dd_secfilt.rp];
+	*sec = demux->dd_secfilt.section[demux->dd_secfilt.rp];
 	/* Update read pointer */
 	demux->dd_secfilt.rp++;
 	if (demux->dd_secfilt.rp >= __arraycount(demux->dd_secfilt.section))
@@ -541,7 +543,12 @@ dtv_demux_read(struct file *fp, off_t *offp, struct uio *uio,
 	 * it should not be an issue as PSI sections have a max size of 4KB
 	 * (and callers will generally provide a big enough buffer).
 	 */
-	return uiomove(sec.sec_buf, sec.sec_length, uio);
+	error = uiomove(sec->sec_buf, sec->sec_length, uio);
+
+out:
+	kmem_free(sec, sizeof(*sec));
+	return error;
+	
 }
 
 /*
@@ -669,7 +676,7 @@ dtv_demux_process(struct dtv_demux *demux, const uint8_t *tspkt,
 		sec->sec_bytesused = sec->sec_length = 0;
 
 	/* Copy data into section buffer */
-	avail = min(sec->sec_length - sec->sec_bytesused, brem);
+	avail = uimin(sec->sec_length - sec->sec_bytesused, brem);
 	if (avail < 0)
 		goto done;
 	memcpy(&sec->sec_buf[sec->sec_bytesused], p, avail);

@@ -1,5 +1,5 @@
 /*	$OpenBSD: if_mskvar.h,v 1.3 2006/12/28 16:34:42 kettenis Exp $	*/
-/*	$NetBSD: if_mskvar.h,v 1.12 2015/04/13 16:33:25 riastradh Exp $	*/
+/*	$NetBSD: if_mskvar.h,v 1.25 2020/04/29 20:03:52 jakllsch Exp $	*/
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -89,9 +89,8 @@ struct sk_jpool_entry {
 };
 
 struct sk_chain {
-	void			*sk_le;
 	struct mbuf		*sk_mbuf;
-	struct sk_chain		*sk_next;
+	bus_dmamap_t		sk_dmamap;
 };
 
 /*
@@ -103,26 +102,23 @@ struct sk_chain {
  */
 #define SK_NTXSEG      30
 
-struct sk_txmap_entry {
-	bus_dmamap_t			dmamap;
-	SIMPLEQ_ENTRY(sk_txmap_entry)	link;
-};
-
 struct msk_chain_data {
 	struct sk_chain		sk_tx_chain[MSK_TX_RING_CNT];
 	struct sk_chain		sk_rx_chain[MSK_RX_RING_CNT];
-	struct sk_txmap_entry	*sk_tx_map[MSK_TX_RING_CNT];
-	bus_dmamap_t		sk_rx_map[MSK_RX_RING_CNT];
 	bus_dmamap_t		sk_rx_jumbo_map;
-	int			sk_tx_prod;
-	int			sk_tx_cons;
-	int			sk_tx_cnt;
-	int			sk_rx_prod;
-	int			sk_rx_cons;
-	int			sk_rx_cnt;
+	unsigned		sk_tx_prod;
+	unsigned		sk_tx_cons;
+	unsigned		sk_tx_cnt;
+	u_int32_t		sk_tx_hiaddr;
+	unsigned		sk_rx_prod;
+	unsigned		sk_rx_cons;
+	unsigned		sk_rx_cnt;
+	u_int32_t		sk_rx_hiaddr;
 	/* Stick the jumbo mem management stuff here too. */
 	void *			sk_jslots[MSK_JSLOTS];
 	void			*sk_jumbo_buf;
+	bus_dma_segment_t	sk_jumbo_seg;
+	int			sk_jumbo_nseg;
 };
 
 struct msk_ring_data {
@@ -187,13 +183,15 @@ struct sk_softc {
 	device_t		sk_dev;
 	bus_space_handle_t	sk_bhandle;	/* bus space handle */
 	bus_space_tag_t		sk_btag;	/* bus space tag */
+	bus_size_t		sk_bsize;	/* bus space size */
 	void			*sk_intrhand;	/* irq handler handle */
+	pci_intr_handle_t	*sk_pihp;
+	pci_chipset_tag_t	sk_pc;
+	u_int8_t		sk_fibertype;
 	u_int8_t		sk_type;
 	u_int8_t		sk_rev;
-	u_int32_t		sk_workaround;
 	u_int8_t		sk_macs;	/* # of MACs */
 	const char		*sk_name;
-	u_int32_t		sk_rboff;	/* RAMbuffer offset */
 	u_int32_t		sk_ramsize;	/* amount of RAM on NIC */
 	u_int32_t		sk_intrmask;
 	struct sysctllog	*sk_clog;
@@ -203,9 +201,12 @@ struct sk_softc {
 	struct sk_if_softc	*sk_if[2];
 	struct msk_status_desc	*sk_status_ring;
 	bus_dmamap_t		sk_status_map;
+	bus_dma_segment_t	sk_status_seg;
+	int			sk_status_nseg;
 	int			sk_status_idx;
 	int			sk_status_own_idx;
-	krndsource_t     rnd_source;
+	u_int8_t		rnd_attached;
+	krndsource_t		rnd_source;
 };
 
 /* Softc for each logical interface */
@@ -219,19 +220,21 @@ struct sk_if_softc {
 	u_int32_t		sk_rx_ramend;
 	u_int32_t		sk_tx_ramstart;
 	u_int32_t		sk_tx_ramend;
-	int			sk_cnt;
+	int			sk_pktlen;	/* XXX set but unused for now */
 	int			sk_link;
 	struct callout		sk_tick_ch;
+	struct callout		sk_tick_rx;
 	struct msk_chain_data	sk_cdata;
 	struct msk_ring_data	*sk_rdata;
 	bus_dmamap_t		sk_ring_map;
+	bus_dma_segment_t	sk_ring_seg;
+	int			sk_ring_nseg;
 	int			sk_status_idx;
 	struct sk_softc		*sk_softc;	/* parent controller */
-	int			sk_if_flags;
+	u_short			sk_if_flags;
 	kmutex_t		sk_jpool_mtx;
 	LIST_HEAD(__sk_jfreehead, sk_jpool_entry)	sk_jfree_listhead;
 	LIST_HEAD(__sk_jinusehead, sk_jpool_entry)	sk_jinuse_listhead;
-	SIMPLEQ_HEAD(__sk_txmaphead, sk_txmap_entry)	sk_txmap_head;
 };
 
 struct skc_attach_args {

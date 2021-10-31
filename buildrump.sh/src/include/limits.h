@@ -1,4 +1,4 @@
-/*	$NetBSD: limits.h,v 1.39 2016/07/21 16:01:58 njoly Exp $	*/
+/*	$NetBSD: limits.h,v 1.42 2019/09/15 23:52:59 christos Exp $	*/
 
 /*
  * Copyright (c) 1988, 1993
@@ -94,6 +94,8 @@
 
 #define	_POSIX_TIMER_MAX	32
 #define	_POSIX_SEM_NSEMS_MAX	256
+#define	_POSIX_SIGQUEUE_MAX	32
+#define	_POSIX_REALTIME_SIGNALS	200112L
 #define	_POSIX_DELAYTIMER_MAX	32
 #define	_POSIX_TTY_NAME_MAX	9
 #define	_POSIX_TZNAME_MAX	6
@@ -141,15 +143,6 @@
 #endif /* _POSIX_C_SOURCE || _XOPEN_SOURCE || _NETBSD_SOURCE */
 
 #define MB_LEN_MAX		32	/* Allow ISO/IEC 2022 */
-
-/*
- * X/Open Extended API set 2 (a.k.a. C063)
- * This hides unimplemented functions from GNU configure until
- * we are done implementing them.
- */
-#if !defined(_INCOMPLETE_XOPEN_C063)
-#define __stub_fexecve
-#endif
 
 #include <machine/limits.h>
 

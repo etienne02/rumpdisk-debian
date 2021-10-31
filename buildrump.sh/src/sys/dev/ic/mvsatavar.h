@@ -1,4 +1,4 @@
-/*	$NetBSD: mvsatavar.h,v 1.2 2010/07/13 12:53:42 kiyohara Exp $	*/
+/*	$NetBSD: mvsatavar.h,v 1.5 2018/10/22 20:13:47 jdolecek Exp $	*/
 /*
  * Copyright (c) 2008 KIYOHARA Takashi
  * All rights reserved.
@@ -57,20 +57,21 @@ struct _fix_phy_param {
 	void (*_fix_phy)(struct mvsata_port *);
 };
 
+enum mvsata_edmamode {
+	nodma,
+	dma,
+	queued,
+	ncq,
+};
+
 struct mvsata_port {
 	struct ata_channel port_ata_channel;
 
 	int port;
 	struct mvsata_hc *port_hc;
 
-	enum {
-		nodma,
-		dma,
-		queued,
-		ncq,
-	} port_edmamode;
-
-	int port_quetagidx;		/* Host Queue Tag valiable */
+	enum mvsata_edmamode port_edmamode_negotiated;
+	enum mvsata_edmamode port_edmamode_curr;
 
 	int port_prev_erqqop;		/* previous Req Queue Out-Pointer */
 	bus_dma_tag_t port_dmat;
@@ -81,7 +82,6 @@ struct mvsata_port {
 	struct eprd *port_eprd;		/* EDMA Phy Region Description Table */
 	bus_dmamap_t port_eprd_dmamap;
 	struct {
-		struct ata_xfer *xfer;		/* queued xfer */
 		bus_dmamap_t data_dmamap;	/* DMA data buffer */
 		bus_size_t eprd_offset;		/* offset of ePRD buffer */
 		struct eprd *eprd;		/* ePRD buffer */
@@ -92,7 +92,6 @@ struct mvsata_port {
 	bus_space_handle_t port_sata_scontrol;	/* SATA Interface control reg */
 	bus_space_handle_t port_sata_serror;	/* SATA Interface error reg */
 	bus_space_handle_t port_sata_sstatus;	/* SATA Interface status reg */
-	struct ata_queue port_ata_queue;
 
 	struct _fix_phy_param _fix_phy_param;
 };
@@ -132,12 +131,12 @@ struct mvsata_softc {
 	int sc_flags;
 #define MVSATA_FLAGS_PCIE	(1 << 0)
 
-	void (*sc_edma_setup_crqb)(struct mvsata_port *, int, int,
-				   struct ata_bio *);
+	void (*sc_edma_setup_crqb)(struct mvsata_port *, int,
+				   struct ata_xfer *);
 	void (*sc_enable_intr)(struct mvsata_port *, int);
 };
 
-int mvsata_attach(struct mvsata_softc *, struct mvsata_product *,
+int mvsata_attach(struct mvsata_softc *, const struct mvsata_product *,
 		  int (*mvsata_sreset)(struct mvsata_softc *),
 		  int (*mvsata_misc_reset)(struct mvsata_softc *), int);
 int mvsata_intr(struct mvsata_hc *);

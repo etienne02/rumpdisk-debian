@@ -1,4 +1,4 @@
-/*	$NetBSD: sig_machdep.c,v 1.49 2015/03/24 08:38:29 matt Exp $	*/
+/*	$NetBSD: sig_machdep.c,v 1.52 2021/02/01 19:31:34 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -44,7 +44,7 @@
 
 #include <sys/param.h>
 
-__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.49 2015/03/24 08:38:29 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.52 2021/02/01 19:31:34 skrll Exp $");
 
 #include <sys/mount.h>		/* XXX only needed by syscallargs.h */
 #include <sys/cpu.h>
@@ -58,9 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.49 2015/03/24 08:38:29 matt Exp $"
 #include <arm/locore.h>
 
 #include <machine/pcb.h>
-#ifndef acorn26
 #include <arm/cpufunc.h>
-#endif
 
 void *
 getframe(struct lwp *l, int sig, int *onstack)
@@ -107,13 +105,13 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	fp = (struct sigframe_siginfo *)STACK_ALIGN(fp, STACK_ALIGNBYTES);
 
 	/* populate the siginfo frame */
+	memset(&frame, 0, sizeof(frame));
 	frame.sf_si._info = ksi->ksi_info;
 	frame.sf_uc.uc_flags = _UC_SIGMASK;
 	frame.sf_uc.uc_sigmask = *mask;
 	frame.sf_uc.uc_link = l->l_ctxlink;
 	frame.sf_uc.uc_flags |= (l->l_sigstk.ss_flags & SS_ONSTACK)
 	    ? _UC_SETSTACK : _UC_CLRSTACK;
-	memset(&frame.sf_uc.uc_stack, 0, sizeof(frame.sf_uc.uc_stack));
 	sendsig_reset(l, sig);
 
 	mutex_exit(p->p_lock);
@@ -184,8 +182,7 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 	gr[_REG_PC]   = tf->tf_pc;
 	gr[_REG_CPSR] = tf->tf_spsr;
 
-	KASSERTMSG(VALID_R15_PSR(gr[_REG_PC], gr[_REG_CPSR]), "%#x %#x",
-	    gr[_REG_PC], gr[_REG_CPSR]);
+	KASSERTMSG(VALID_PSR(gr[_REG_CPSR]), "%#x", gr[_REG_CPSR]);
 
 	if ((ras_pc = (__greg_t)ras_lookup(l->l_proc,
 	    (void *) gr[_REG_PC])) != -1)
@@ -200,10 +197,8 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 	mcp->_mc_tlsbase = (uintptr_t)l->l_private;
 	*flags |= _UC_TLSBASE;
 
-#ifdef __PROG32
 	const struct pcb * const pcb = lwp_getpcb(l);
 	mcp->_mc_user_tpid = pcb->pcb_user_pid_rw;
-#endif
 }
 
 int
@@ -212,7 +207,7 @@ cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
 	const __greg_t * const gr = mcp->__gregs;
 
 	/* Make sure the processor mode has not been tampered with. */
-	if (!VALID_R15_PSR(gr[_REG_PC], gr[_REG_CPSR]))
+	if (!VALID_PSR(gr[_REG_CPSR]))
 		return EINVAL;
 	return 0;
 }
@@ -273,10 +268,8 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		l->l_sigstk.ss_flags &= ~SS_ONSTACK;
 	mutex_exit(p->p_lock);
 
-#ifdef __PROG32
 	struct pcb * const pcb = lwp_getpcb(l);
 	pcb->pcb_user_pid_rw = mcp->_mc_user_tpid;
-#endif
 
 	return (0);
 }

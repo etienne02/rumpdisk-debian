@@ -1,4 +1,4 @@
-/*	$NetBSD: acpi_ec.c,v 1.74 2014/12/08 16:16:45 msaitoh Exp $	*/
+/*	$NetBSD: acpi_ec.c,v 1.85 2021/01/29 15:49:55 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007 Joerg Sonnenberger <joerg@NetBSD.org>.
@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_ec.c,v 1.74 2014/12/08 16:16:45 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_ec.c,v 1.85 2021/01/29 15:49:55 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -101,9 +101,9 @@ ACPI_MODULE_NAME            ("acpi_ec")
 #define	EC_STATUS_SCI		0x20
 #define	EC_STATUS_SMI		0x40
 
-static const char *ec_hid[] = {
-	"PNP0C09",
-	NULL,
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "PNP0C09" },
+	DEVICE_COMPAT_EOL
 };
 
 enum ec_state_t {
@@ -246,10 +246,7 @@ acpiec_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct acpi_attach_args *aa = aux;
 
-	if (aa->aa_node->ad_type != ACPI_TYPE_DEVICE)
-		return 0;
-
-	return acpi_match_hid(aa->aa_node->ad_devinfo, ec_hid);
+	return acpi_compatible_match(aa, compat_data);
 }
 
 static void
@@ -267,8 +264,11 @@ acpiec_attach(device_t parent, device_t self, void *aux)
 		aprint_normal(": using %s\n", device_xname(ec_singleton));
 		goto fail0;
 	}
-	aprint_naive("\n");
-	aprint_normal("\n");
+
+	if (!acpi_device_present(aa->aa_node->ad_handle)) {
+		aprint_normal(": not present\n");
+		goto fail0;
+	}
 
 	if (!acpiec_parse_gpe_package(self, aa->aa_node->ad_handle,
 				      &gpe_handle, &gpebit))
@@ -406,6 +406,7 @@ post_data_map:
 static bool
 acpiec_suspend(device_t dv, const pmf_qual_t *qual)
 {
+
 	acpiec_cold = true;
 
 	return true;
@@ -414,6 +415,7 @@ acpiec_suspend(device_t dv, const pmf_qual_t *qual)
 static bool
 acpiec_resume(device_t dv, const pmf_qual_t *qual)
 {
+
 	acpiec_cold = false;
 
 	return true;
@@ -456,9 +458,10 @@ acpiec_parse_gpe_package(device_t self, ACPI_HANDLE ec_handle,
 		ACPI_FREE(p);
 		return false;
 	}
-	
+
 	if (p->Package.Count != 2) {
-		aprint_error_dev(self, "_GPE package does not contain 2 elements\n");
+		aprint_error_dev(self,
+		    "_GPE package does not contain 2 elements\n");
 		ACPI_FREE(p);
 		return false;
 	}
@@ -513,6 +516,7 @@ static ACPI_STATUS
 acpiec_space_setup(ACPI_HANDLE region, uint32_t func, void *arg,
     void **region_arg)
 {
+
 	if (func == ACPI_REGION_DEACTIVATE)
 		*region_arg = NULL;
 	else
@@ -530,9 +534,11 @@ acpiec_lock(device_t dv)
 	mutex_enter(&sc->sc_access_mtx);
 
 	if (sc->sc_need_global_lock) {
-		rv = AcpiAcquireGlobalLock(EC_LOCK_TIMEOUT, &sc->sc_global_lock);
+		rv = AcpiAcquireGlobalLock(EC_LOCK_TIMEOUT,
+		    &sc->sc_global_lock);
 		if (rv != AE_OK) {
-			aprint_error_dev(dv, "failed to acquire global lock: %s\n",
+			aprint_error_dev(dv,
+			    "failed to acquire global lock: %s\n",
 			    AcpiFormatException(rv));
 			return;
 		}
@@ -548,7 +554,8 @@ acpiec_unlock(device_t dv)
 	if (sc->sc_need_global_lock) {
 		rv = AcpiReleaseGlobalLock(sc->sc_global_lock);
 		if (rv != AE_OK) {
-			aprint_error_dev(dv, "failed to release global lock: %s\n",
+			aprint_error_dev(dv,
+			    "failed to release global lock: %s\n",
 			    AcpiFormatException(rv));
 		}
 	}
@@ -589,7 +596,8 @@ acpiec_read(device_t dv, uint8_t addr, uint8_t *val)
 	} else if (cv_timedwait(&sc->sc_cv, &sc->sc_mtx, EC_CMD_TIMEOUT * hz)) {
 		mutex_exit(&sc->sc_mtx);
 		acpiec_unlock(dv);
-		aprint_error_dev(dv, "command takes over %d sec...\n", EC_CMD_TIMEOUT);
+		aprint_error_dev(dv,
+		    "command takes over %d sec...\n", EC_CMD_TIMEOUT);
 		return AE_ERROR;
 	}
 
@@ -636,7 +644,8 @@ acpiec_write(device_t dv, uint8_t addr, uint8_t val)
 	} else if (cv_timedwait(&sc->sc_cv, &sc->sc_mtx, EC_CMD_TIMEOUT * hz)) {
 		mutex_exit(&sc->sc_mtx);
 		acpiec_unlock(dv);
-		aprint_error_dev(dv, "command takes over %d sec...\n", EC_CMD_TIMEOUT);
+		aprint_error_dev(dv,
+		    "command takes over %d sec...\n", EC_CMD_TIMEOUT);
 		return AE_ERROR;
 	}
 
@@ -652,32 +661,30 @@ acpiec_space_handler(uint32_t func, ACPI_PHYSICAL_ADDRESS paddr,
 {
 	device_t dv;
 	ACPI_STATUS rv;
-	uint8_t addr, reg;
+	uint8_t addr, *buf;
 	unsigned int i;
 
-	if (paddr > 0xff || width % 8 != 0 || value == NULL || arg == NULL ||
-	    paddr + width / 8 > 0x100)
+	if (paddr > 0xff || width % 8 != 0 ||
+	    value == NULL || arg == NULL || paddr + width / 8 > 0x100)
 		return AE_BAD_PARAMETER;
 
 	addr = paddr;
 	dv = arg;
+	buf = (uint8_t *)value;
 
 	rv = AE_OK;
 
 	switch (func) {
 	case ACPI_READ:
-		*value = 0;
-		for (i = 0; i < width; i += 8, ++addr) {
-			rv = acpiec_read(dv, addr, &reg);
+		for (i = 0; i < width; i += 8, ++addr, ++buf) {
+			rv = acpiec_read(dv, addr, buf);
 			if (rv != AE_OK)
 				break;
-			*value |= (ACPI_INTEGER)reg << i;
 		}
 		break;
 	case ACPI_WRITE:
-		for (i = 0; i < width; i += 8, ++addr) {
-			reg = (*value >>i) & 0xff;
-			rv = acpiec_write(dv, addr, reg);
+		for (i = 0; i < width; i += 8, ++addr, ++buf) {
+			rv = acpiec_write(dv, addr, *buf);
 			if (rv != AE_OK)
 				break;
 		}
@@ -869,7 +876,8 @@ acpiec_bus_read(device_t dv, u_int addr, ACPI_INTEGER *val, int width)
 ACPI_STATUS
 acpiec_bus_write(device_t dv, u_int addr, ACPI_INTEGER val, int width)
 {
-	return acpiec_space_handler(ACPI_WRITE, addr, width * 8, &val, dv, NULL);
+	return acpiec_space_handler(ACPI_WRITE, addr, width * 8, &val, dv,
+	    NULL);
 }
 
 ACPI_HANDLE

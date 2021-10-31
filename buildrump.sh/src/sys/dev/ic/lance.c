@@ -1,4 +1,4 @@
-/*	$NetBSD: lance.c,v 1.50 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: lance.c,v 1.60 2020/01/29 06:17:07 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lance.c,v 1.50 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lance.c,v 1.60 2020/01/29 06:17:07 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -82,10 +82,7 @@ __KERNEL_RCSID(0, "$NetBSD: lance.c,v 1.50 2016/06/10 13:27:13 ozaki-r Exp $");
 #include <net/if_dl.h>
 #include <net/if_ether.h>
 #include <net/if_media.h>
-
-
 #include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <dev/ic/lancereg.h>
 #include <dev/ic/lancevar.h>
@@ -109,7 +106,7 @@ hide bool lance_shutdown(device_t, int);
 int lance_mediachange(struct ifnet *);
 void lance_mediastatus(struct ifnet *, struct ifmediareq *);
 
-static inline u_int16_t ether_cmp(void *, void *);
+static inline uint16_t ether_cmp(void *, void *);
 
 void lance_stop(struct ifnet *, int);
 int lance_ioctl(struct ifnet *, u_long, void *);
@@ -147,7 +144,7 @@ ether_cmp(void *one, void *two)
 	diff |= *a++ - *b++;
 #else
 	/*
-	 * Most modern CPUs do better with a single expresion.
+	 * Most modern CPUs do better with a single expression.
 	 * Note that short-cut evaluation is NOT helpful here,
 	 * because it just makes the code longer, not faster!
 	 */
@@ -178,14 +175,14 @@ lance_config(struct lance_softc *sc)
 	ifp->if_watchdog = lance_watchdog;
 	ifp->if_init = lance_init;
 	ifp->if_stop = lance_stop;
-	ifp->if_flags =
-	    IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS | IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 #ifdef LANCE_REVC_BUG
 	ifp->if_flags &= ~IFF_MULTICAST;
 #endif
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Initialize ifmedia structures. */
+	sc->sc_ethercom.ec_ifmedia = &sc->sc_media;
 	ifmedia_init(&sc->sc_media, 0, lance_mediachange, lance_mediastatus);
 	if (sc->sc_supmedia != NULL) {
 		for (i = 0; i < sc->sc_nsupmedia; i++)
@@ -193,8 +190,8 @@ lance_config(struct lance_softc *sc)
 			   0, NULL);
 		ifmedia_set(&sc->sc_media, sc->sc_defaultmedia);
 	} else {
-		ifmedia_add(&sc->sc_media, IFM_ETHER|IFM_MANUAL, 0, NULL);
-		ifmedia_set(&sc->sc_media, IFM_ETHER|IFM_MANUAL);
+		ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_MANUAL, 0, NULL);
+		ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_MANUAL);
 	}
 
 	switch (sc->sc_memsize) {
@@ -343,13 +340,13 @@ lance_put(struct lance_softc *sc, int boff, struct mbuf *m)
 	for (; m; m = n) {
 		len = m->m_len;
 		if (len == 0) {
-			MFREE(m, n);
+			n = m_free(m);
 			continue;
 		}
 		(*sc->sc_copytobuf)(sc, mtod(m, void *), boff, len);
 		boff += len;
 		tlen += len;
-		MFREE(m, n);
+		n = m_free(m);
 	}
 	if (tlen < LEMINSIZE) {
 		(*sc->sc_zerobuf)(sc, boff, LEMINSIZE - tlen);
@@ -394,7 +391,7 @@ lance_get(struct lance_softc *sc, int boff, int totlen)
 			m->m_data = newdata;
 		}
 
-		m->m_len = len = min(totlen, len);
+		m->m_len = len = uimin(totlen, len);
 		(*sc->sc_copyfrombuf)(sc, mtod(m, void *), boff, len);
 		boff += len;
 
@@ -433,18 +430,16 @@ lance_read(struct lance_softc *sc, int boff, int len)
 		printf("%s: invalid packet size %d; dropping\n",
 		    device_xname(sc->sc_dev), len);
 #endif
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
 	/* Pull packet off interface. */
 	m = lance_get(sc, boff, len);
 	if (m == 0) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
-
-	ifp->if_ipackets++;
 
 	eh = mtod(m, struct ether_header *);
 
@@ -472,12 +467,6 @@ lance_read(struct lance_softc *sc, int boff, int len)
 		return;
 	}
 
-	/*
-	 * Check if there's a BPF listener on this interface.
-	 * If so, hand off the raw packet to BPF.
-	 */
-	bpf_mtap(ifp, m);
-
 	/* Pass the packet up. */
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
@@ -490,7 +479,7 @@ lance_watchdog(struct ifnet *ifp)
 	struct lance_softc *sc = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	++ifp->if_oerrors;
+	if_statinc(ifp, if_oerrors);
 
 	lance_reset(sc);
 }
@@ -528,16 +517,11 @@ int
 lance_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
 	struct lance_softc *sc = ifp->if_softc;
-	struct ifreq *ifr = (struct ifreq *)data;
 	int s, error = 0;
 
 	s = splnet();
 
 	switch (cmd) {
-	case SIOCGIFMEDIA:
-	case SIOCSIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr, &sc->sc_media, cmd);
-		break;
 	default:
 		if ((error = ether_ioctl(ifp, cmd, data)) != ENETRESET)
 			break;
@@ -574,9 +558,9 @@ lance_shutdown(device_t self, int howto)
  * Set up the logical address filter.
  */
 void
-lance_setladrf(struct ethercom *ac, uint16_t *af)
+lance_setladrf(struct ethercom *ec, uint16_t *af)
 {
-	struct ifnet *ifp = &ac->ec_if;
+	struct ifnet *ifp = &ec->ec_if;
 	struct ether_multi *enm;
 	uint32_t crc;
 	struct ether_multistep step;
@@ -593,7 +577,9 @@ lance_setladrf(struct ethercom *ac, uint16_t *af)
 		goto allmulti;
 
 	af[0] = af[1] = af[2] = af[3] = 0x0000;
-	ETHER_FIRST_MULTI(step, ac, enm);
+
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (ETHER_CMP(enm->enm_addrlo, enm->enm_addrhi)) {
 			/*
@@ -604,6 +590,7 @@ lance_setladrf(struct ethercom *ac, uint16_t *af)
 			 * ranges is for IP multicast routing, for which the
 			 * range is big enough to require all bits set.)
 			 */
+			ETHER_UNLOCK(ec);
 			goto allmulti;
 		}
 
@@ -617,6 +604,7 @@ lance_setladrf(struct ethercom *ac, uint16_t *af)
 
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 	ifp->if_flags &= ~IFF_ALLMULTI;
 	return;
 
@@ -775,14 +763,14 @@ lance_copytobuf_gap16(struct lance_softc *sc, void *fromv, int boff, int len)
 
 	bptr = buf + ((boff << 1) & ~0x1f);
 	boff &= 0xf;
-	xfer = min(len, 16 - boff);
+	xfer = uimin(len, 16 - boff);
 	while (len > 0) {
 		memcpy(bptr + boff, from, xfer);
 		from += xfer;
 		bptr += 32;
 		boff = 0;
 		len -= xfer;
-		xfer = min(len, 16);
+		xfer = uimin(len, 16);
 	}
 }
 
@@ -796,14 +784,14 @@ lance_copyfrombuf_gap16(struct lance_softc *sc, void *tov, int boff, int len)
 
 	bptr = buf + ((boff << 1) & ~0x1f);
 	boff &= 0xf;
-	xfer = min(len, 16 - boff);
+	xfer = uimin(len, 16 - boff);
 	while (len > 0) {
 		memcpy(to, bptr + boff, xfer);
 		to += xfer;
 		bptr += 32;
 		boff = 0;
 		len -= xfer;
-		xfer = min(len, 16);
+		xfer = uimin(len, 16);
 	}
 }
 
@@ -816,13 +804,13 @@ lance_zerobuf_gap16(struct lance_softc *sc, int boff, int len)
 
 	bptr = buf + ((boff << 1) & ~0x1f);
 	boff &= 0xf;
-	xfer = min(len, 16 - boff);
+	xfer = uimin(len, 16 - boff);
 	while (len > 0) {
 		memset(bptr + boff, 0, xfer);
 		bptr += 32;
 		boff = 0;
 		len -= xfer;
-		xfer = min(len, 16);
+		xfer = uimin(len, 16);
 	}
 }
 #endif /* Example only */

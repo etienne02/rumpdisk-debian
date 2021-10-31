@@ -1,4 +1,4 @@
-/*	$NetBSD: joy_ofisa.c,v 1.15 2011/11/23 23:07:33 jmcneill Exp $	*/
+/*	$NetBSD: joy_ofisa.c,v 1.20 2021/01/27 03:10:21 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1998, 2008 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: joy_ofisa.c,v 1.15 2011/11/23 23:07:33 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: joy_ofisa.c,v 1.20 2021/01/27 03:10:21 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,19 +58,17 @@ static void	joy_ofisa_attach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(joy_ofisa, sizeof(struct joy_ofisa_softc),
     joy_ofisa_match, joy_ofisa_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "pnpPNP,b02f" },	/* generic joystick */
+	DEVICE_COMPAT_EOL
+};
+
 static int
 joy_ofisa_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct ofisa_attach_args *aa = aux;
-	static const char *const compatible_strings[] = {
-		"pnpPNP,b02f",			/* generic joystick */
-		NULL,
-	};
-	int rv = 0;
 
-	if (of_compatible(aa->oba.oba_phandle, compatible_strings) != -1)
-		rv = 1;
-	return rv;
+	return of_compatible_match(aa->oba.oba_phandle, compat_data);
 }
 
 static void
@@ -80,7 +78,6 @@ joy_ofisa_attach(device_t parent, device_t self, void *aux)
 	struct joy_softc *sc = &osc->sc_joy;
 	struct ofisa_attach_args *aa = aux;
 	struct ofisa_reg_desc reg;
-	char *model = NULL;
 	int n;
 
 	/*
@@ -115,15 +112,7 @@ joy_ofisa_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	n = OF_getproplen(aa->oba.oba_phandle, "model");
-	if (n > 0) {
-		model = alloca(n);
-		if (OF_getprop(aa->oba.oba_phandle, "model", model, n) != n)
-			model = NULL;	/* safe; alloca */
-	}
-	if (model != NULL)
-		aprint_normal(": %s", model);
-	aprint_normal("\n");
+	ofisa_print_model(NULL, aa->oba.oba_phandle);
 
 	mutex_init(&osc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 	sc->sc_lock = &osc->sc_lock;

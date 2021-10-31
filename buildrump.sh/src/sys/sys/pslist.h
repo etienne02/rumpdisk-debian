@@ -1,4 +1,4 @@
-/*	$NetBSD: pslist.h,v 1.3 2016/07/07 06:56:25 ozaki-r Exp $	*/
+/*	$NetBSD: pslist.h,v 1.7 2019/12/01 15:28:19 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2016 The NetBSD Foundation, Inc.
@@ -61,21 +61,21 @@ struct pslist_entry {
  * excluding writers and readers.
  */
 
-static inline void
+static __inline void
 pslist_init(struct pslist_head *head)
 {
 
-	head->plh_first = NULL;
+	head->plh_first = NULL;	/* not yet published, so no atomic */
 }
 
-static inline void
+static __inline void
 pslist_destroy(struct pslist_head *head __diagused)
 {
 
 	_PSLIST_ASSERT(head->plh_first == NULL);
 }
 
-static inline void
+static __inline void
 pslist_entry_init(struct pslist_entry *entry)
 {
 
@@ -83,7 +83,7 @@ pslist_entry_init(struct pslist_entry *entry)
 	entry->ple_prevp = NULL;
 }
 
-static inline void
+static __inline void
 pslist_entry_destroy(struct pslist_entry *entry)
 {
 
@@ -94,7 +94,7 @@ pslist_entry_destroy(struct pslist_entry *entry)
 	 * would think they were simply at the end of the list.
 	 * Instead, cause readers to crash.
 	 */
-	entry->ple_next = _PSLIST_POISON;
+	atomic_store_relaxed(&entry->ple_next, _PSLIST_POISON);
 }
 
 /*
@@ -109,7 +109,7 @@ pslist_entry_destroy(struct pslist_entry *entry)
  * memory barriers is inconsequential.
  */
 
-static inline void
+static __inline void
 pslist_writer_insert_head(struct pslist_head *head, struct pslist_entry *new)
 {
 
@@ -119,14 +119,13 @@ pslist_writer_insert_head(struct pslist_head *head, struct pslist_entry *new)
 	_PSLIST_ASSERT(new->ple_prevp == NULL);
 
 	new->ple_prevp = &head->plh_first;
-	new->ple_next = head->plh_first;
+	new->ple_next = head->plh_first; /* not yet published, so no atomic */
 	if (head->plh_first != NULL)
 		head->plh_first->ple_prevp = &new->ple_next;
-	membar_producer();
-	head->plh_first = new;
+	atomic_store_release(&head->plh_first, new);
 }
 
-static inline void
+static __inline void
 pslist_writer_insert_before(struct pslist_entry *entry,
     struct pslist_entry *new)
 {
@@ -138,13 +137,18 @@ pslist_writer_insert_before(struct pslist_entry *entry,
 	_PSLIST_ASSERT(new->ple_prevp == NULL);
 
 	new->ple_prevp = entry->ple_prevp;
-	new->ple_next = entry;
-	membar_producer();
-	*entry->ple_prevp = new;
+	new->ple_next = entry;	/* not yet published, so no atomic */
+
+	/*
+	 * Pairs with atomic_load_consume in pslist_reader_first or
+	 * pslist_reader_next.
+	 */
+	atomic_store_release(entry->ple_prevp, new);
+
 	entry->ple_prevp = &new->ple_next;
 }
 
-static inline void
+static __inline void
 pslist_writer_insert_after(struct pslist_entry *entry,
     struct pslist_entry *new)
 {
@@ -156,14 +160,15 @@ pslist_writer_insert_after(struct pslist_entry *entry,
 	_PSLIST_ASSERT(new->ple_prevp == NULL);
 
 	new->ple_prevp = &entry->ple_next;
-	new->ple_next = entry->ple_next;
+	new->ple_next = entry->ple_next; /* not yet published, so no atomic */
 	if (new->ple_next != NULL)
 		new->ple_next->ple_prevp = &new->ple_next;
-	membar_producer();
-	entry->ple_next = new;
+
+	/* Pairs with atomic_load_consume in pslist_reader_next.  */
+	atomic_store_release(&entry->ple_next, new);
 }
 
-static inline void
+static __inline void
 pslist_writer_remove(struct pslist_entry *entry)
 {
 
@@ -173,18 +178,33 @@ pslist_writer_remove(struct pslist_entry *entry)
 
 	if (entry->ple_next != NULL)
 		entry->ple_next->ple_prevp = entry->ple_prevp;
-	*entry->ple_prevp = entry->ple_next;
+
+	/*
+	 * No need for atomic_store_release because there's no
+	 * initialization that this must happen after -- the store
+	 * transitions from a good state with the entry to a good state
+	 * without the entry, both of which are valid for readers to
+	 * witness.
+	 */
+	atomic_store_relaxed(entry->ple_prevp, entry->ple_next);
 	entry->ple_prevp = NULL;
+
+	/*
+	 * Leave entry->ple_next intact so that any extant readers can
+	 * continue iterating through the list.  The caller must then
+	 * wait for readers to drain, e.g. with pserialize_perform,
+	 * before destroying and reusing the entry.
+	 */
 }
 
-static inline struct pslist_entry *
+static __inline struct pslist_entry *
 pslist_writer_first(const struct pslist_head *head)
 {
 
 	return head->plh_first;
 }
 
-static inline struct pslist_entry *
+static __inline struct pslist_entry *
 pslist_writer_next(const struct pslist_entry *entry)
 {
 
@@ -192,7 +212,7 @@ pslist_writer_next(const struct pslist_entry *entry)
 	return entry->ple_next;
 }
 
-static inline void *
+static __inline void *
 _pslist_writer_first_container(const struct pslist_head *head,
     const ptrdiff_t offset)
 {
@@ -201,7 +221,7 @@ _pslist_writer_first_container(const struct pslist_head *head,
 	return (first == NULL ? NULL : (char *)first - offset);
 }
 
-static inline void *
+static __inline void *
 _pslist_writer_next_container(const struct pslist_entry *entry,
     const ptrdiff_t offset)
 {
@@ -214,57 +234,53 @@ _pslist_writer_next_container(const struct pslist_entry *entry,
 /*
  * Reader operations.  Caller must block pserialize_perform or
  * equivalent and be bound to a CPU.  Only plh_first/ple_next may be
- * read, and after that, a membar_datadep_consumer must precede
- * dereferencing the resulting pointer.
+ * read, and only with consuming memory order so that data-dependent
+ * loads happen afterward.
  */
 
-static inline struct pslist_entry *
+static __inline struct pslist_entry *
 pslist_reader_first(const struct pslist_head *head)
 {
-	struct pslist_entry *first = head->plh_first;
-
-	if (first != NULL)
-		membar_datadep_consumer();
-
-	return first;
+	/*
+	 * Pairs with atomic_store_release in pslist_writer_insert_head
+	 * or pslist_writer_insert_before.
+	 */
+	return atomic_load_consume(&head->plh_first);
 }
 
-static inline struct pslist_entry *
+static __inline struct pslist_entry *
 pslist_reader_next(const struct pslist_entry *entry)
 {
-	struct pslist_entry *next = entry->ple_next;
+	/*
+	 * Pairs with atomic_store_release in
+	 * pslist_writer_insert_before or pslist_writer_insert_after.
+	 */
+	struct pslist_entry *next = atomic_load_consume(&entry->ple_next);
 
 	_PSLIST_ASSERT(next != _PSLIST_POISON);
-	if (next != NULL)
-		membar_datadep_consumer();
 
 	return next;
 }
 
-static inline void *
+static __inline void *
 _pslist_reader_first_container(const struct pslist_head *head,
     const ptrdiff_t offset)
 {
-	struct pslist_entry *first = head->plh_first;
+	struct pslist_entry *first = pslist_reader_first(head);
 
 	if (first == NULL)
 		return NULL;
-	membar_datadep_consumer();
-
 	return (char *)first - offset;
 }
 
-static inline void *
+static __inline void *
 _pslist_reader_next_container(const struct pslist_entry *entry,
     const ptrdiff_t offset)
 {
-	struct pslist_entry *next = entry->ple_next;
+	struct pslist_entry *next = pslist_reader_next(entry);
 
-	_PSLIST_ASSERT(next != _PSLIST_POISON);
 	if (next == NULL)
 		return NULL;
-	membar_datadep_consumer();
-
 	return (char *)next - offset;
 }
 
@@ -272,7 +288,7 @@ _pslist_reader_next_container(const struct pslist_entry *entry,
  * Type-safe macros for convenience.
  */
 
-#ifdef __COVERITY__
+#if defined(__COVERITY__) || defined(__LGTM_BOT__)
 #define	_PSLIST_VALIDATE_PTRS(P, Q)		0
 #define	_PSLIST_VALIDATE_CONTAINER(P, T, F)	0
 #else

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpuswitch.S,v 1.90 2015/04/08 12:07:40 matt Exp $	*/
+/*	$NetBSD: cpuswitch.S,v 1.105 2021/05/30 06:53:15 dholland Exp $	*/
 
 /*
  * Copyright 2003 Wasabi Systems, Inc.
@@ -78,18 +78,22 @@
  */
 
 #include "opt_armfpe.h"
-#include "opt_arm32_pmap.h"
-#include "opt_multiprocessor.h"
 #include "opt_cpuoptions.h"
+#include "opt_kasan.h"
 #include "opt_lockdebug.h"
+#include "opt_multiprocessor.h"
 
 #include "assym.h"
 #include <arm/asm.h>
 #include <arm/locore.h>
 
-	RCSID("$NetBSD: cpuswitch.S,v 1.90 2015/04/08 12:07:40 matt Exp $")
+	RCSID("$NetBSD: cpuswitch.S,v 1.105 2021/05/30 06:53:15 dholland Exp $")
 
 /* LINTSTUB: include <sys/param.h> */
+
+#ifdef FPU_VFP
+	.fpu vfpv2
+#endif
 
 #undef IRQdisable
 #undef IRQenable
@@ -124,7 +128,7 @@
  * Switch to the specified next LWP
  * Arguments:
  *
- *	r0	'struct lwp *' of the current LWP (or NULL if exiting)
+ *	r0	'struct lwp *' of the current LWP
  *	r1	'struct lwp *' of the LWP to switch to
  *	r2	returning
  */
@@ -132,7 +136,7 @@ ENTRY(cpu_switchto)
 	mov	ip, sp
 	push	{r4-r7, ip, lr}
 
-	/* move lwps into caller saved registers */
+	/* move lwps into callee saved registers */
 	mov	r6, r1
 	mov	r4, r0
 
@@ -141,20 +145,6 @@ ENTRY(cpu_switchto)
 #else
 	ldr	r5, [r6, #L_CPU]		/* get cpu from new lwp */
 #endif
-
-	/* rem: r4 = old lwp */
-	/* rem: r5 = curcpu() */
-	/* rem: r6 = new lwp */
-	/* rem: interrupts are enabled */
-
-	/*
-	 * If the old lwp on entry to cpu_switchto was zero then the
-	 * process that called it was exiting. This means that we do
-	 * not need to save the current context. Instead we can jump
-	 * straight to restoring the context for the new process.
-	 */
-	teq	r4, #0
-	beq	.Ldo_switch
 
 	/* rem: r4 = old lwp */
 	/* rem: r5 = curcpu() */
@@ -188,14 +178,8 @@ ENTRY(cpu_switchto)
 	 * them for the new process.
 	 */
 
-	/* rem: r4 = old lwp */
-	/* rem: r5 = curcpu() */
-	/* rem: r6 = new lwp */
-	/* rem: interrupts are enabled */
-
 	/* Restore saved context */
 
-.Ldo_switch:
 	/* rem: r4 = old lwp */
 	/* rem: r5 = curcpu() */
 	/* rem: r6 = new lwp */
@@ -207,6 +191,11 @@ ENTRY(cpu_switchto)
 
 	/* We have a new curlwp now so make a note of it */
 	str	r6, [r5, #(CI_CURLWP)]
+
+#ifdef _ARM_ARCH_7
+	dmb					/* see comments in kern_mutex.c */
+#endif
+
 	/* Get the new pcb */
 	ldr	r7, [r6, #(L_PCB)]
 
@@ -250,10 +239,9 @@ ENTRY(cpu_switchto)
 	vmsrne	fpexc, r0
 #endif
 
-	/* 
+	/*
 	 * Check for restartable atomic sequences (RAS).
 	 */
-
 	ldr	r0, [r6, #(L_PROC)]	/* fetch the proc for ras_lookup */
 	ldr	r2, [r0, #(P_RASLIST)]
 	cmp	r2, #0			/* p->p_nras == 0? */
@@ -336,7 +324,8 @@ ENTRY_NP(lwp_trampoline)
 	GET_CPSR(r0)
 	CPSID_I(r0, r0)			/* Kill irq's */
 
-	GET_CURCPU(r4)			/* for DO_AST */
+	/* for DO_AST */
+	GET_CURX(r4, r5)		/* r4 = curcpu, r5 = curlwp */
 	DO_AST_AND_RESTORE_ALIGNMENT_FAULTS
 	PULLFRAME
 
@@ -354,25 +343,25 @@ AST_ALIGNMENT_FAULT_LOCALS
 ENTRY_NP(softint_switch)
 	push	{r4, r6, r7, lr}
 
-	ldr	r7, [r0, #L_CPU]		/* get curcpu */
+	ldr	r7, [r0, #L_CPU]	/* get curcpu */
 #if defined(TPIDRPRW_IS_CURLWP)
-	mrc	p15, 0, r4, c13, c0, 4		/* get old lwp */
+	mrc	p15, 0, r4, c13, c0, 4	/* get old lwp */
 #else
-	ldr	r4, [r7, #(CI_CURLWP)]		/* get old lwp */
+	ldr	r4, [r7, #(CI_CURLWP)]	/* get old lwp */
 #endif
-	mrs	r6, cpsr			/* we need to save this */
+	mrs	r6, cpsr		/* we need to save this */
 
 	/*
 	 * If the soft lwp blocks, it needs to return to softint_tramp
 	 */
-	mov	r2, sp				/* think ip */
-	adr	r3, softint_tramp		/* think lr */
+	mov	r2, sp			/* think ip */
+	adr	r3, softint_tramp	/* think lr */
 	push	{r2-r3}
 	push	{r4-r7}
 
-	mov	r5, r0				/* save new lwp */
+	mov	r5, r0			/* save new lwp */
 
-	ldr	r2, [r4, #(L_PCB)]		/* get old lwp's pcb */
+	ldr	r2, [r4, #(L_PCB)]	/* get old lwp's pcb */
 
 	/* Save all the registers into the old lwp's pcb */
 #if defined(__XSCALE__) || defined(_ARM_ARCH_6)
@@ -386,7 +375,7 @@ ENTRY_NP(softint_switch)
 
 #ifdef _ARM_ARCH_6
 	/*
-	 * Save user read/write thread/process id register in cause it was
+	 * Save user read/write thread/process id register in case it was
 	 * set in userland.
 	 */
 	mrc	p15, 0, r0, c13, c0, 2
@@ -401,9 +390,17 @@ ENTRY_NP(softint_switch)
 	 * We're switching to a bound LWP so its l_cpu is already correct.
 	 */
 #if defined(TPIDRPRW_IS_CURLWP)
-	mcr	p15, 0, r5, c13, c0, 4		/* save new lwp */
+	mcr	p15, 0, r5, c13, c0, 4	/* save new lwp */
 #endif
-	str	r5, [r7, #(CI_CURLWP)]		/* save new lwp */
+	str	r5, [r7, #(CI_CURLWP)]	/* save new lwp */
+#ifdef _ARM_ARCH_7
+	dmb				/* see comments in kern_mutex.c */
+#endif
+
+#ifdef KASAN
+	mov	r0, r5
+	bl	_C_LABEL(kasan_softint)
+#endif
 
 	/*
 	 * Normally, we'd get {r8-r13} but since this is a softint lwp
@@ -429,9 +426,9 @@ ENTRY_NP(softint_switch)
 
 	IRQdisable
 #if defined(TPIDRPRW_IS_CURLWP)
-	mcr	p15, 0, r4, c13, c0, 4		/* restore pinned lwp */
+	mcr	p15, 0, r4, c13, c0, 4	/* restore pinned lwp */
 #endif
-	str	r4, [r7, #(CI_CURLWP)]		/* restore pinned lwp */
+	str	r4, [r7, #(CI_CURLWP)]	/* restore pinned lwp */
 	ldr	sp, [r2, #(PCB_KSP)]	/* now running on the old stack. */
 
 	/* At this point we can allow IRQ's again. */
@@ -452,12 +449,9 @@ END(softint_switch)
  * r7 = curcpu()
  */
 ENTRY_NP(softint_tramp)
-	ldr	r3, [r7, #(CI_MTX_COUNT)]	/* readust after mi_switch */
+	ldr	r3, [r7, #(CI_MTX_COUNT)]	/* readjust after mi_switch */
 	add	r3, r3, #1
 	str	r3, [r7, #(CI_MTX_COUNT)]
-
-	mov	r3, #0				/* tell softint_dispatch */
-	str	r3, [r0, #(L_CTXSWTCH)]		/*    the soft lwp blocked */
 
 	msr	cpsr_c, r6			/* restore interrupts */
 	pop	{r4, r6, r7, pc}		/* pop stack and return */

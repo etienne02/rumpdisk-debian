@@ -1,6 +1,6 @@
-/*      Id: tag.c,v 1.12 2016/07/08 20:42:15 schwarze Exp     */
+/*	Id: tag.c,v 1.21 2018/11/22 11:30:23 schwarze Exp  */
 /*
- * Copyright (c) 2015 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2015, 2016, 2018 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,6 +19,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#if HAVE_ERR
+#include <err.h>
+#endif
+#include <limits.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -32,7 +36,9 @@
 #include "tag.h"
 
 struct tag_entry {
-	size_t	 line;
+	size_t	*lines;
+	size_t	 maxlines;
+	size_t	 nlines;
 	int	 prio;
 	char	 s[];
 };
@@ -124,27 +130,83 @@ fail:
 
 /*
  * Set the line number where a term is defined,
- * unless it is already defined at a higher priority.
+ * unless it is already defined at a lower priority.
  */
 void
 tag_put(const char *s, int prio, size_t line)
 {
 	struct tag_entry	*entry;
+	const char		*se;
 	size_t			 len;
 	unsigned int		 slot;
 
-	if (tag_files.tfd <= 0 || strchr(s, ' ') != NULL)
+	if (tag_files.tfd <= 0)
 		return;
-	slot = ohash_qlookup(&tag_data, s);
+
+	if (s[0] == '\\' && (s[1] == '&' || s[1] == 'e'))
+		s += 2;
+
+	/*
+	 * Skip whitespace and whatever follows it,
+	 * and if there is any, downgrade the priority.
+	 */
+
+	len = strcspn(s, " \t");
+	if (len == 0)
+		return;
+
+	se = s + len;
+	if (*se != '\0')
+		prio = INT_MAX;
+
+	slot = ohash_qlookupi(&tag_data, s, &se);
 	entry = ohash_find(&tag_data, slot);
+
 	if (entry == NULL) {
-		len = strlen(s) + 1;
-		entry = mandoc_malloc(sizeof(*entry) + len);
+
+		/* Build a new entry. */
+
+		entry = mandoc_malloc(sizeof(*entry) + len + 1);
 		memcpy(entry->s, s, len);
+		entry->s[len] = '\0';
+		entry->lines = NULL;
+		entry->maxlines = entry->nlines = 0;
 		ohash_insert(&tag_data, slot, entry);
-	} else if (entry->prio <= prio)
-		return;
-	entry->line = line;
+
+	} else {
+
+		/*
+		 * Lower priority numbers take precedence,
+		 * but 0 is special.
+		 * A tag with priority 0 is only used
+		 * if the tag occurs exactly once.
+		 */
+
+		if (prio == 0) {
+			if (entry->prio == 0)
+				entry->prio = -1;
+			return;
+		}
+
+		/* A better entry is already present, ignore the new one. */
+
+		if (entry->prio > 0 && entry->prio < prio)
+			return;
+
+		/* The existing entry is worse, clear it. */
+
+		if (entry->prio < 1 || entry->prio > prio)
+			entry->nlines = 0;
+	}
+
+	/* Remember the new line. */
+
+	if (entry->maxlines == entry->nlines) {
+		entry->maxlines += 4;
+		entry->lines = mandoc_reallocarray(entry->lines,
+		    entry->maxlines, sizeof(*entry->lines));
+	}
+	entry->lines[entry->nlines++] = line;
 	entry->prio = prio;
 }
 
@@ -157,22 +219,33 @@ tag_write(void)
 {
 	FILE			*stream;
 	struct tag_entry	*entry;
+	size_t			 i;
 	unsigned int		 slot;
 
 	if (tag_files.tfd <= 0)
 		return;
+	if (tag_files.tagname != NULL && ohash_find(&tag_data,
+            ohash_qlookup(&tag_data, tag_files.tagname)) == NULL) {
+		warnx("%s: no such tag", tag_files.tagname);
+		tag_files.tagname = NULL;
+	}
 	stream = fdopen(tag_files.tfd, "w");
 	entry = ohash_first(&tag_data, &slot);
 	while (entry != NULL) {
-		if (stream != NULL)
-			fprintf(stream, "%s %s %zu\n",
-			    entry->s, tag_files.ofn, entry->line);
+		if (stream != NULL && entry->prio >= 0)
+			for (i = 0; i < entry->nlines; i++)
+				fprintf(stream, "%s %s %zu\n",
+				    entry->s, tag_files.ofn, entry->lines[i]);
+		free(entry->lines);
 		free(entry);
 		entry = ohash_next(&tag_data, &slot);
 	}
 	ohash_delete(&tag_data);
 	if (stream != NULL)
 		fclose(stream);
+	else
+		close(tag_files.tfd);
+	tag_files.tfd = -1;
 }
 
 void
@@ -181,11 +254,11 @@ tag_unlink(void)
 	pid_t	 tc_pgid;
 
 	if (tag_files.tcpgid != -1) {
-		tc_pgid = tcgetpgrp(STDIN_FILENO);
+		tc_pgid = tcgetpgrp(tag_files.ofd);
 		if (tc_pgid == tag_files.pager_pid ||
 		    tc_pgid == getpgid(0) ||
 		    getpgid(tc_pgid) == -1)
-			(void)tcsetpgrp(STDIN_FILENO, tag_files.tcpgid);
+			(void)tcsetpgrp(tag_files.ofd, tag_files.tcpgid);
 	}
 	if (*tag_files.ofn != '\0')
 		unlink(tag_files.ofn);

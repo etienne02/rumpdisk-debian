@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,7 +42,6 @@
  */
 
 #include "aslcompiler.h"
-#include "dtcompiler.h"
 
 #define _COMPONENT          DT_COMPILER
         ACPI_MODULE_NAME    ("dtfield")
@@ -120,7 +119,7 @@ DtCompileOneField (
             break;
         }
 
-        /* Fall through. */
+        ACPI_FALLTHROUGH;
 
     case DT_FIELD_TYPE_BUFFER:
 
@@ -173,8 +172,10 @@ DtCompileString (
 
     if (Length > ByteLength)
     {
-        snprintf (MsgBuffer, sizeof(MsgBuffer), "Maximum %u characters", ByteLength);
-        DtError (ASL_ERROR, ASL_MSG_STRING_LENGTH, Field, MsgBuffer);
+        snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer),
+            "Maximum %u characters, found %u characters [%s]",
+            ByteLength, Length, Field->Value);
+        DtError (ASL_ERROR, ASL_MSG_STRING_LENGTH, Field, AslGbl_MsgBuffer);
         Length = ByteLength;
     }
 
@@ -253,8 +254,8 @@ DtCompileUuid (
     Status = AuValidateUuid (InString);
     if (ACPI_FAILURE (Status))
     {
-        snprintf (MsgBuffer, sizeof(MsgBuffer), "%s", Field->Value);
-        DtNameError (ASL_ERROR, ASL_MSG_INVALID_UUID, Field, MsgBuffer);
+        snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "%s", Field->Value);
+        DtNameError (ASL_ERROR, ASL_MSG_INVALID_UUID, Field, AslGbl_MsgBuffer);
     }
     else
     {
@@ -325,14 +326,14 @@ DtCompileInteger (
         {
             if (Value != 1)
             {
-                DtError (ASL_WARNING, ASL_MSG_RESERVED_VALUE, Field,
+                DtError (ASL_WARNING, ASL_MSG_RESERVED_FIELD, Field,
                     "Must be one, setting to one");
                 Value = 1;
             }
         }
         else if (Value != 0)
         {
-            DtError (ASL_WARNING, ASL_MSG_RESERVED_VALUE, Field,
+            DtError (ASL_WARNING, ASL_MSG_RESERVED_FIELD, Field,
                 "Must be zero, setting to zero");
             Value = 0;
         }
@@ -355,9 +356,9 @@ DtCompileInteger (
 
     if (Value > MaxValue)
     {
-        snprintf (MsgBuffer, sizeof(MsgBuffer), "%8.8X%8.8X - max %u bytes",
+        snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "%8.8X%8.8X - max %u bytes",
             ACPI_FORMAT_UINT64 (Value), ByteLength);
-        DtError (ASL_ERROR, ASL_MSG_INTEGER_SIZE, Field, MsgBuffer);
+        DtError (ASL_ERROR, ASL_MSG_INTEGER_SIZE, Field, AslGbl_MsgBuffer);
     }
 
     memcpy (Buffer, &Value, ByteLength);
@@ -370,10 +371,10 @@ DtCompileInteger (
  * FUNCTION:    DtNormalizeBuffer
  *
  * PARAMETERS:  Buffer              - Input buffer
- *              Count               - Output the count of hex number in
+ *              Count               - Output the count of hex numbers in
  *                                    the Buffer
  *
- * RETURN:      The normalized buffer, freed by caller
+ * RETURN:      The normalized buffer, must be freed by caller
  *
  * DESCRIPTION: [1A,2B,3C,4D] or 1A, 2B, 3C, 4D will be normalized
  *              to 1A 2B 3C 4D
@@ -457,36 +458,46 @@ DtCompileBuffer (
     DT_FIELD                *Field,
     UINT32                  ByteLength)
 {
+    char                    *Substring;
     ACPI_STATUS             Status;
-    char                    Hex[3];
-    UINT64                  Value;
-    UINT32                  i;
     UINT32                  Count;
+    UINT32                  i;
 
 
     /* Allow several different types of value separators */
 
     StringValue = DtNormalizeBuffer (StringValue, &Count);
-
-    Hex[2] = 0;
-    for (i = 0; i < Count; i++)
+    Substring = StringValue;
+    if (Count != ByteLength)
     {
-        /* Each element of StringValue is three chars */
+        sprintf(AslGbl_MsgBuffer,
+            "Found %u values, must match expected count: %u",
+            Count, ByteLength);
+        DtError (ASL_ERROR, ASL_MSG_BUFFER_LIST, Field, AslGbl_MsgBuffer);
+        goto Exit;
+    }
 
-        Hex[0] = StringValue[(3 * i)];
-        Hex[1] = StringValue[(3 * i) + 1];
+    /* Each element of StringValue is now three chars (2 hex + 1 space) */
 
-        /* Convert one hex byte */
+    for (i = 0; i < Count; i++, Substring += 3)
+    {
+        /* Check for byte value too long */
 
-        Value = 0;
-        Status = DtStrtoul64 (Hex, &Value);
-        if (ACPI_FAILURE (Status))
+        if (*(&Substring[2]) &&
+           (*(&Substring[2]) != ' '))
         {
-            DtError (ASL_ERROR, ASL_MSG_BUFFER_ELEMENT, Field, MsgBuffer);
+            DtError (ASL_ERROR, ASL_MSG_BUFFER_ELEMENT, Field, Substring);
             goto Exit;
         }
 
-        Buffer[i] = (UINT8) Value;
+        /* Convert two ASCII characters to one hex byte */
+
+        Status = AcpiUtAsciiToHexByte (Substring, &Buffer[i]);
+        if (ACPI_FAILURE (Status))
+        {
+            DtError (ASL_ERROR, ASL_MSG_BUFFER_ELEMENT, Field, Substring);
+            goto Exit;
+        }
     }
 
 Exit:
@@ -499,13 +510,13 @@ Exit:
  *
  * FUNCTION:    DtCompileFlag
  *
- * PARAMETERS:  Buffer              - Output buffer
- *              Field               - Field to be compiled
- *              Info                - Flag info
+ * PARAMETERS:  Buffer                      - Output buffer
+ *              Field                       - Field to be compiled
+ *              Info                        - Flag info
  *
- * RETURN:
+ * RETURN:      None
  *
- * DESCRIPTION: Compile a flag
+ * DESCRIPTION: Compile a flag field. Handles flags up to 64 bits.
  *
  *****************************************************************************/
 
@@ -518,14 +529,9 @@ DtCompileFlag (
     UINT64                  Value = 0;
     UINT32                  BitLength = 1;
     UINT8                   BitPosition = 0;
-    ACPI_STATUS             Status;
 
 
-    Status = DtStrtoul64 (Field->Value, &Value);
-    if (ACPI_FAILURE (Status))
-    {
-        DtError (ASL_ERROR, ASL_MSG_INVALID_HEX_INTEGER, Field, NULL);
-    }
+    Value = AcpiUtImplicitStrtoul64 (Field->Value);
 
     switch (Info->Opcode)
     {
@@ -568,6 +574,36 @@ DtCompileFlag (
         BitLength = 2;
         break;
 
+    case ACPI_DMT_FLAGS4_0:
+
+        BitPosition = 0;
+        BitLength = 4;
+        break;
+
+    case ACPI_DMT_FLAGS4_4:
+
+        BitPosition = 4;
+        BitLength = 4;
+        break;
+
+    case ACPI_DMT_FLAGS4_8:
+
+        BitPosition = 8;
+        BitLength = 4;
+        break;
+
+    case ACPI_DMT_FLAGS4_12:
+
+        BitPosition = 12;
+        BitLength = 4;
+        break;
+
+    case ACPI_DMT_FLAGS16_16:
+
+        BitPosition = 16;
+        BitLength = 16;
+        break;
+
     default:
 
         DtFatal (ASL_MSG_COMPILER_INTERNAL, Field, "Invalid flag opcode");
@@ -578,10 +614,129 @@ DtCompileFlag (
 
     if (Value >= ((UINT64) 1 << BitLength))
     {
-        snprintf (MsgBuffer, sizeof(MsgBuffer), "Maximum %u bit", BitLength);
-        DtError (ASL_ERROR, ASL_MSG_FLAG_VALUE, Field, MsgBuffer);
+        snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "Maximum %u bit", BitLength);
+        DtError (ASL_ERROR, ASL_MSG_FLAG_VALUE, Field, AslGbl_MsgBuffer);
         Value = 0;
     }
 
     *Buffer |= (UINT8) (Value << BitPosition);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCreateField
+ *
+ * PARAMETERS: Name
+ *             Value
+ *             Line
+ *             Offset
+ *             Column
+ *             NameColumn
+ *
+ * RETURN:     None
+ *
+ * DESCRIPTION: Create a field
+ *
+ *****************************************************************************/
+
+void
+DtCreateField (
+    DT_TABLE_UNIT           *FieldKey,
+    DT_TABLE_UNIT           *FieldValue,
+    UINT32                  Offset)
+{
+    DT_FIELD                *Field = UtFieldCacheCalloc ();
+
+
+    Field->StringLength = 0;
+    if (FieldKey->Value)
+    {
+        Field->Name =
+            strcpy (UtLocalCacheCalloc (strlen (FieldKey->Value) + 1), FieldKey->Value);
+    }
+
+    if (FieldValue->Value)
+    {
+        Field->StringLength = strlen (FieldValue->Value);
+        Field->Value =
+            strcpy (UtLocalCacheCalloc (Field->StringLength + 1), FieldValue->Value);
+    }
+
+    Field->Line = FieldValue->Line;
+    Field->ByteOffset = Offset;
+    Field->NameColumn = FieldKey->Column;
+    Field->Column = FieldValue->Column;
+    DtLinkField (Field);
+
+    DtDumpFieldList (AslGbl_FieldList);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCreateTableUnit
+ *
+ * PARAMETERS: Data
+ *             Line
+ *             Column
+ *
+ * RETURN:     a table unit
+ *
+ * DESCRIPTION: Create a table unit
+ *
+ *****************************************************************************/
+
+DT_TABLE_UNIT *
+DtCreateTableUnit (
+    char                    *Data,
+    UINT32                  Line,
+    UINT32                  Column)
+{
+    DT_TABLE_UNIT           *Unit = (DT_TABLE_UNIT *) UtFieldCacheCalloc ();
+
+
+    Unit->Value = Data;
+    Unit->Line = Line;
+    Unit->Column = Column;
+    return (Unit);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtLinkField
+ *
+ * PARAMETERS:  Field               - New field object to link
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Link one field name and value to the list
+ *
+ *****************************************************************************/
+
+void
+DtLinkField (
+    DT_FIELD                *Field)
+{
+    DT_FIELD                *Prev;
+    DT_FIELD                *Next;
+
+
+    Prev = Next = AslGbl_FieldList;
+
+    while (Next)
+    {
+        Prev = Next;
+        Next = Next->Next;
+    }
+
+    if (Prev)
+    {
+        Prev->Next = Field;
+    }
+    else
+    {
+        AslGbl_FieldList = Field;
+    }
 }

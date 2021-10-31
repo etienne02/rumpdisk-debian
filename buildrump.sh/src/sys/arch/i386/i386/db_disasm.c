@@ -1,4 +1,4 @@
-/*	$NetBSD: db_disasm.c,v 1.47 2015/05/13 02:37:41 msaitoh Exp $	*/
+/*	$NetBSD: db_disasm.c,v 1.49 2021/05/23 11:56:28 riastradh Exp $	*/
 
 /* 
  * Mach Operating System
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.47 2015/05/13 02:37:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.49 2021/05/23 11:56:28 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -1131,26 +1131,6 @@ db_disasm(db_addr_t loc, bool altfmt)
 	int	imm2;
 	int	len;
 	struct i_addr	address;
-
-#ifdef _KERNEL
-	pt_entry_t *pte, *pde;
-
-	/*
-	 * Don't try to disassemble the location if the mapping is invalid.
-	 * If we do, we'll fault, and end up debugging the debugger!
-	 * in the case of largepages, "pte" is really the pde and "pde" is
-	 * really the entry for the pdp itself.
-	 */
-	if ((vaddr_t)loc >= VM_MIN_KERNEL_ADDRESS)
-		pte = kvtopte((vaddr_t)loc);
-	else
-		pte = vtopte((vaddr_t)loc);
-	pde = vtopte((vaddr_t)pte);
-	if ((*pde & PG_V) == 0 || (*pte & PG_V) == 0) {
-		db_printf("invalid address\n");
-		return (loc);
-	}
-#endif
 
 	get_value_inc(inst, loc, 1, false);
 	short_addr = false;

@@ -28,13 +28,13 @@
  */
 #include <machine/asm.h>
 
-RCSID("$NetBSD: strcpy_naive.S,v 1.4 2013/08/20 21:37:39 matt Exp $")
+RCSID("$NetBSD: strcpy_naive.S,v 1.8 2017/01/14 04:54:42 christos Exp $")
 
 #ifdef _LIBC
 #ifdef STRLCPY
 WEAK_ALIAS(strlcpy, _strlcpy)           
+#define strlcpy _strlcpy
 #endif
-#include "namespace.h"
 #endif
 
 /*

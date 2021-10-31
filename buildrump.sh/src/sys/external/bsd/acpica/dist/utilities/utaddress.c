@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -82,7 +82,6 @@ AcpiUtAddAddressRange (
     ACPI_NAMESPACE_NODE     *RegionNode)
 {
     ACPI_ADDRESS_RANGE      *RangeInfo;
-    ACPI_STATUS             Status;
 
 
     ACPI_FUNCTION_TRACE (UtAddAddressRange);
@@ -106,13 +105,6 @@ AcpiUtAddAddressRange (
     RangeInfo->EndAddress = (Address + Length - 1);
     RangeInfo->RegionNode = RegionNode;
 
-    Status = AcpiUtAcquireMutex (ACPI_MTX_NAMESPACE);
-    if (ACPI_FAILURE (Status))
-    {
-        ACPI_FREE (RangeInfo);
-        return_ACPI_STATUS (Status);
-    }
-
     RangeInfo->Next = AcpiGbl_AddressRangeList[SpaceId];
     AcpiGbl_AddressRangeList[SpaceId] = RangeInfo;
 
@@ -122,7 +114,6 @@ AcpiUtAddAddressRange (
         ACPI_FORMAT_UINT64 (Address),
         ACPI_FORMAT_UINT64 (RangeInfo->EndAddress)));
 
-    (void) AcpiUtReleaseMutex (ACPI_MTX_NAMESPACE);
     return_ACPI_STATUS (AE_OK);
 }
 

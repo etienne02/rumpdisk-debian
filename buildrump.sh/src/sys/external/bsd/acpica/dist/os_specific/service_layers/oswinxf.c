@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -65,7 +65,7 @@
 
 
 UINT64                      TimerFrequency;
-char                        TableName[ACPI_NAME_SIZE + 1];
+char                        TableName[ACPI_NAMESEG_SIZE + 1];
 
 #define ACPI_OS_DEBUG_TIMEOUT   30000 /* 30 seconds */
 
@@ -99,9 +99,6 @@ typedef struct acpi_os_semaphore_info
 ACPI_OS_SEMAPHORE_INFO          AcpiGbl_Semaphores[ACPI_OS_MAX_SEMAPHORES];
 
 #endif /* ACPI_SINGLE_THREADED */
-
-BOOLEAN                         AcpiGbl_DebugTimeout = FALSE;
-
 
 /******************************************************************************
  *
@@ -292,6 +289,33 @@ AcpiOsPhysicalTableOverride (
 
 /******************************************************************************
  *
+ * FUNCTION:    AcpiOsEnterSleep
+ *
+ * PARAMETERS:  SleepState          - Which sleep state to enter
+ *              RegaValue           - Register A value
+ *              RegbValue           - Register B value
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: A hook before writing sleep registers to enter the sleep
+ *              state. Return AE_CTRL_SKIP to skip further sleep register
+ *              writes.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+AcpiOsEnterSleep (
+    UINT8                   SleepState,
+    UINT32                  RegaValue,
+    UINT32                  RegbValue)
+{
+
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
  * FUNCTION:    AcpiOsGetTimer
  *
  * PARAMETERS:  None
@@ -326,7 +350,7 @@ AcpiOsGetTimer (
     {
         /* Convert milliseconds to 100 nanosecond ticks */
 
-        return ((UINT64) GetTickCount() * ACPI_100NSEC_PER_MSEC);
+        return (GetTickCount64() * ACPI_100NSEC_PER_MSEC);
     }
 }
 

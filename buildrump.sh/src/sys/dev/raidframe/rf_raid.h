@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_raid.h,v 1.45 2014/10/18 08:33:28 snj Exp $	*/
+/*	$NetBSD: rf_raid.h,v 1.51 2021/08/07 16:19:15 thorpej Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -187,6 +187,7 @@ struct RF_Raid_s {
 	RF_HeadSepLimit_t headSepLimit;
 	int     numFloatingReconBufs;
 	int     reconInProgress;
+	int     forceRecon;
 	rf_declare_cond2(waitForReconCond);	/* goes with raidPtr->mutex */
 	RF_RaidReconDesc_t *reconDesc;	/* reconstruction descriptor */
 	RF_ReconCtrl_t *reconControl;	/* reconstruction control structure
@@ -201,7 +202,7 @@ struct RF_Raid_s {
 	RF_IoCount_t accs_in_flight;
 	int     access_suspend_release;
 	int     waiting_for_quiescence;
-	RF_CallbackDesc_t *quiesce_wait_list;
+	RF_CallbackFuncDesc_t *quiesce_wait_list;
 
 	/*
          * Statistics
@@ -214,6 +215,7 @@ struct RF_Raid_s {
 	int     copyback_in_progress;
 	int     adding_hot_spare;
 
+	rf_declare_cond2(parity_rewrite_cv);
 	rf_declare_cond2(adding_hot_spare_cv);
 
 	/*
@@ -303,5 +305,36 @@ struct RF_Raid_s {
 
 #endif				/* RF_INCLUDE_PARITYLOGGING > 0 */
 	struct rf_paritymap *parity_map;
+	struct RF_Pools_s pools;
+	struct RF_PoolNames_s poolNames;
 };
+
+struct raid_softc {
+	struct dk_softc sc_dksc;
+	int	sc_unit;
+	int     sc_flags;	/* flags */
+	int     sc_cflags;	/* configuration flags */
+	kmutex_t sc_mutex;	/* interlock mutex */
+	kcondvar_t sc_cv;	/* and the condvar */
+	uint64_t sc_size;	/* size of the raid device */
+	char    sc_xname[20];	/* XXX external name */
+	RF_Raid_t sc_r;
+	LIST_ENTRY(raid_softc) sc_link;
+};
+/* sc_flags */
+#define RAIDF_INITED		0x01	/* unit has been initialized */
+#define RAIDF_SHUTDOWN		0x02	/* unit is being shutdown */
+#define RAIDF_DETACH  		0x04	/* detach after final close */
+#define RAIDF_WANTED		0x08	/* someone waiting to obtain a lock */
+#define RAIDF_LOCKED		0x10	/* unit is locked */
+#define RAIDF_UNIT_CHANGED	0x20	/* unit is being changed */
+
+
+int rf_fail_disk(RF_Raid_t *, struct rf_recon_req *);
+
+int rf_inited(const struct raid_softc *);
+int rf_get_unit(const struct raid_softc *);
+RF_Raid_t *rf_get_raid(struct raid_softc *);
+int rf_construct(struct raid_softc *, RF_Config_t *);
+
 #endif				/* !_RF__RF_RAID_H_ */

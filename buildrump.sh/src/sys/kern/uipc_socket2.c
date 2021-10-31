@@ -1,4 +1,4 @@
-/*	$NetBSD: uipc_socket2.c,v 1.123 2016/05/23 13:54:34 tls Exp $	*/
+/*	$NetBSD: uipc_socket2.c,v 1.139 2021/03/04 01:35:31 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -58,9 +58,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_socket2.c,v 1.123 2016/05/23 13:54:34 tls Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipc_socket2.c,v 1.139 2021/03/04 01:35:31 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
+#include "opt_ddb.h"
+#include "opt_inet.h"
 #include "opt_mbuftrace.h"
 #include "opt_sb_max.h"
 #endif
@@ -80,6 +82,10 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_socket2.c,v 1.123 2016/05/23 13:54:34 tls Exp $
 #include <sys/kauth.h>
 #include <sys/pool.h>
 #include <sys/uidinfo.h>
+
+#ifdef DDB
+#include <sys/filedesc.h>
+#endif
 
 /*
  * Primitive routines for operating on sockets and socket buffers.
@@ -312,6 +318,7 @@ sonewconn(struct socket *head, bool soready)
 	so->so_send = head->so_send;
 	so->so_receive = head->so_receive;
 	so->so_uidinfo = head->so_uidinfo;
+	so->so_egid = head->so_egid;
 	so->so_cpid = head->so_cpid;
 
 	/*
@@ -495,6 +502,22 @@ socantrcvmore(struct socket *so)
 }
 
 /*
+ * soroverflow(): indicates that data was attempted to be sent
+ * but the receiving buffer overflowed.
+ */
+void
+soroverflow(struct socket *so)
+{
+	KASSERT(solocked(so));
+
+	so->so_rcv.sb_overflowed++;
+	if (so->so_options & SO_RERROR)  {
+		so->so_rerror = ENOBUFS;
+		sorwakeup(so);
+	}
+}
+
+/*
  * Wait for data to arrive at/drain from a socket buffer.
  */
 int
@@ -670,9 +693,10 @@ sbreserve(struct sockbuf *sb, u_long cc, struct socket *so)
 	uidinfo = so->so_uidinfo;
 	if (!chgsbsize(uidinfo, &sb->sb_hiwat, cc, maxcc))
 		return 0;
-	sb->sb_mbmax = min(cc * 2, sb_max);
+	sb->sb_mbmax = uimin(cc * 2, sb_max);
 	if (sb->sb_lowat > sb->sb_hiwat)
 		sb->sb_lowat = sb->sb_hiwat;
+
 	return (1);
 }
 
@@ -711,7 +735,7 @@ sbrelease(struct sockbuf *sb, struct socket *so)
  *
  * Reliable protocols may use the socket send buffer to hold data
  * awaiting acknowledgement.  Data is normally copied from a socket
- * send buffer in a protocol with m_copy for output to a peer,
+ * send buffer in a protocol with m_copym for output to a peer,
  * and then removing the data from the socket buffer with sbdrop()
  * or sbdroprecord() when the data is acknowledged by the peer.
  */
@@ -1167,7 +1191,7 @@ bad:
 			sbfree(sb, np);
 
 		n0 = n->m_nextpkt;	/* iterate at next prepended address */
-		MFREE(n, np);		/* free prepended address (not data) */
+		np = m_free(n);		/* free prepended address (not data) */
 	}
 	return error;
 }
@@ -1297,7 +1321,7 @@ sbflush(struct sockbuf *sb)
 void
 sbdrop(struct sockbuf *sb, int len)
 {
-	struct mbuf	*m, *mn, *next;
+	struct mbuf	*m, *next;
 
 	KASSERT(solocked(sb->sb_so));
 
@@ -1319,13 +1343,11 @@ sbdrop(struct sockbuf *sb, int len)
 		}
 		len -= m->m_len;
 		sbfree(sb, m);
-		MFREE(m, mn);
-		m = mn;
+		m = m_free(m);
 	}
 	while (m && m->m_len == 0) {
 		sbfree(sb, m);
-		MFREE(m, mn);
-		m = mn;
+		m = m_free(m);
 	}
 	if (m) {
 		sb->sb_mb = m;
@@ -1361,7 +1383,7 @@ sbdroprecord(struct sockbuf *sb)
 		sb->sb_mb = m->m_nextpkt;
 		do {
 			sbfree(sb, m);
-			MFREE(m, mn);
+			mn = m_free(m);
 		} while ((m = mn) != NULL);
 	}
 	SB_EMPTY_FIXUP(sb);
@@ -1401,6 +1423,10 @@ sbcreatecontrol1(void **p, int size, int type, int level, int flags)
 	cp->cmsg_len = CMSG_LEN(size);
 	cp->cmsg_level = level;
 	cp->cmsg_type = type;
+
+	memset(cp + 1, 0, CMSG_LEN(0) - sizeof(*cp));
+	memset((uint8_t *)*p + size, 0, CMSG_ALIGN(size) - size);
+
 	return m;
 }
 
@@ -1429,16 +1455,16 @@ solockretry(struct socket *so, kmutex_t *lock)
 }
 
 bool
-solocked(struct socket *so)
+solocked(const struct socket *so)
 {
 
 	return mutex_owned(so->so_lock);
 }
 
 bool
-solocked2(struct socket *so1, struct socket *so2)
+solocked2(const struct socket *so1, const struct socket *so2)
 {
-	kmutex_t *lock;
+	const kmutex_t *lock;
 
 	lock = so1->so_lock;
 	if (lock != so2->so_lock)
@@ -1529,3 +1555,192 @@ sowait(struct socket *so, bool catch_p, int timo)
 		solockretry(so, lock);
 	return error;
 }
+
+#ifdef DDB
+
+/*
+ * Currently, sofindproc() is used only from DDB. It could be used from others
+ * by using db_mutex_enter()
+ */
+
+static inline int
+db_mutex_enter(kmutex_t *mtx)
+{
+	extern int db_active;
+	int rv;
+
+	if (!db_active) {
+		mutex_enter(mtx);
+		rv = 1;
+	} else
+		rv = mutex_tryenter(mtx);
+
+	return rv;
+}
+
+int
+sofindproc(struct socket *so, int all, void (*pr)(const char *, ...))
+{
+	proc_t *p;
+	filedesc_t *fdp;
+	fdtab_t *dt;
+	fdfile_t *ff;
+	file_t *fp = NULL;
+	int found = 0;
+	int i, t;
+
+	if (so == NULL)
+		return 0;
+
+	t = db_mutex_enter(&proc_lock);
+	if (!t) {
+		pr("could not acquire proc_lock mutex\n");
+		return 0;
+	}
+	PROCLIST_FOREACH(p, &allproc) {
+		if (p->p_stat == SIDL)
+			continue;
+		fdp = p->p_fd;
+		t = db_mutex_enter(&fdp->fd_lock);
+		if (!t) {
+			pr("could not acquire fd_lock mutex\n");
+			continue;
+		}
+		dt = atomic_load_consume(&fdp->fd_dt);
+		for (i = 0; i < dt->dt_nfiles; i++) {
+			ff = dt->dt_ff[i];
+			if (ff == NULL)
+				continue;
+
+			fp = atomic_load_consume(&ff->ff_file);
+			if (fp == NULL)
+				continue;
+
+			t = db_mutex_enter(&fp->f_lock);
+			if (!t) {
+				pr("could not acquire f_lock mutex\n");
+				continue;
+			}
+			if ((struct socket *)fp->f_data != so) {
+				mutex_exit(&fp->f_lock);
+				continue;
+			}
+			found++;
+			if (pr)
+				pr("socket %p: owner %s(pid=%d)\n",
+				    so, p->p_comm, p->p_pid);
+			mutex_exit(&fp->f_lock);
+			if (all == 0)
+				break;
+		}
+		mutex_exit(&fdp->fd_lock);
+		if (all == 0 && found != 0)
+			break;
+	}
+	mutex_exit(&proc_lock);
+
+	return found;
+}
+
+void
+socket_print(const char *modif, void (*pr)(const char *, ...))
+{
+	file_t *fp;
+	struct socket *so;
+	struct sockbuf *sb_snd, *sb_rcv;
+	struct mbuf *m_rec, *m;
+	bool opt_v = false;
+	bool opt_m = false;
+	bool opt_a = false;
+	bool opt_p = false;
+	int nrecs, nmbufs;
+	char ch;
+	const char *family;
+
+	while ( (ch = *(modif++)) != '\0') {
+		switch (ch) {
+		case 'v':
+			opt_v = true;
+			break;
+		case 'm':
+			opt_m = true;
+			break;
+		case 'a':
+			opt_a = true;
+			break;
+		case 'p':
+			opt_p = true;
+			break;
+		}
+	}
+	if (opt_v == false && pr)
+		(pr)("Ignore empty sockets. use /v to print all.\n");
+	if (opt_p == true && pr)
+		(pr)("Don't search owner process.\n");
+
+	LIST_FOREACH(fp, &filehead, f_list) {
+		if (fp->f_type != DTYPE_SOCKET)
+			continue;
+		so = (struct socket *)fp->f_data;
+		if (so == NULL)
+			continue;
+
+		if (so->so_proto->pr_domain->dom_family == AF_INET)
+			family = "INET";
+#ifdef INET6
+		else if (so->so_proto->pr_domain->dom_family == AF_INET6)
+			family = "INET6";
+#endif
+		else if (so->so_proto->pr_domain->dom_family == pseudo_AF_KEY)
+			family = "KEY";
+		else if (so->so_proto->pr_domain->dom_family == AF_ROUTE)
+			family = "ROUTE";
+		else
+			continue;
+
+		sb_snd = &so->so_snd;
+		sb_rcv = &so->so_rcv;
+
+		if (opt_v != true &&
+		    sb_snd->sb_cc == 0 && sb_rcv->sb_cc == 0)
+			continue;
+
+		pr("---SOCKET %p: type %s\n", so, family);
+		if (opt_p != true)
+			sofindproc(so, opt_a == true ? 1 : 0, pr);
+		pr("Send Buffer Bytes: %d [bytes]\n", sb_snd->sb_cc);
+		pr("Send Buffer mbufs:\n");
+		m_rec = m = sb_snd->sb_mb;
+		nrecs = 0;
+		nmbufs = 0;
+		while (m_rec) {
+			nrecs++;
+			if (opt_m == true)
+				pr(" mbuf chain %p\n", m_rec);
+			while (m) {
+				nmbufs++;
+				m = m->m_next;
+			}
+			m_rec = m = m_rec->m_nextpkt;
+		}
+		pr(" Total %d records, %d mbufs.\n", nrecs, nmbufs);
+
+		pr("Recv Buffer Usage: %d [bytes]\n", sb_rcv->sb_cc);
+		pr("Recv Buffer mbufs:\n");
+		m_rec = m = sb_rcv->sb_mb;
+		nrecs = 0;
+		nmbufs = 0;
+		while (m_rec) {
+			nrecs++;
+			if (opt_m == true)
+				pr(" mbuf chain %p\n", m_rec);
+			while (m) {
+				nmbufs++;
+				m = m->m_next;
+			}
+			m_rec = m = m_rec->m_nextpkt;
+		}
+		pr(" Total %d records, %d mbufs.\n", nrecs, nmbufs);
+	}
+}
+#endif /* DDB */

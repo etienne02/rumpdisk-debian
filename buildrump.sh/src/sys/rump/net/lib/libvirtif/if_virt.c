@@ -1,4 +1,4 @@
-/*	$NetBSD: if_virt.c,v 1.53 2016/06/16 02:38:40 ozaki-r Exp $	*/
+/*	$NetBSD: if_virt.c,v 1.59 2021/06/16 00:21:20 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2008, 2013 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_virt.c,v 1.53 2016/06/16 02:38:40 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_virt.c,v 1.59 2021/06/16 00:21:20 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -132,11 +132,18 @@ virtif_clone(struct if_clone *ifc, int num)
 	 */
 #define LINKSTRNUMLEN 16
 	sc->sc_linkstr = kmem_alloc(LINKSTRNUMLEN, KM_SLEEP);
+	if (sc->sc_linkstr == NULL) {
+		error = ENOMEM;
+		goto fail;
+	}
 	snprintf(sc->sc_linkstr, LINKSTRNUMLEN, "%d", sc->sc_num);
-#undef LINKSTRNUMLEN
 	error = virtif_create(ifp);
 	if (error) {
+fail:
 		if_detach(ifp);
+		if (sc->sc_linkstr != NULL)
+			kmem_free(sc->sc_linkstr, LINKSTRNUMLEN);
+#undef LINKSTRNUMLEN
 		kmem_free(sc, sizeof(*sc));
 		ifp->if_softc = NULL;
 	}
@@ -306,12 +313,12 @@ virtif_start(struct ifnet *ifp)
 		}
 		if (i == LB_SH && m)
 			panic("lazy bum");
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		VIFHYPER_SEND(sc->sc_viu, io, i);
 
 		m_freem(m0);
-		ifp->if_opackets++;
+		if_statinc(ifp, if_opackets);
 	}
 
 	ifp->if_flags &= ~IFF_OACTIVE;
@@ -375,12 +382,10 @@ VIF_DELIVERPKT(struct virtif_sc *sc, struct iovec *iov, size_t iovlen)
 
 	if (passup) {
 		int bound;
-		ifp->if_ipackets++;
 		m_set_rcvif(m, ifp);
 		KERNEL_LOCK(1, NULL);
 		/* Prevent LWP migrations between CPUs for psref(9) */
 		bound = curlwp_bind();
-		bpf_mtap(ifp, m);
 		if_input(ifp, m);
 		curlwp_bindx(bound);
 		KERNEL_UNLOCK_LAST(NULL);

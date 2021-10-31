@@ -1,4 +1,4 @@
-/* $NetBSD: clk_backend.h,v 1.1 2015/12/05 13:31:07 jmcneill Exp $ */
+/* $NetBSD: clk_backend.h,v 1.4 2018/04/28 15:20:33 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2015 Jared D. McNeill <jmcneill@invisible.ca>
@@ -29,9 +29,19 @@
 #ifndef _DEV_CLK_CLK_BACKEND_H
 #define _DEV_CLK_CLK_BACKEND_H
 
+#include <sys/sysctl.h>
+
 #include <dev/clk/clk.h>
 
+struct clk_domain {
+	const char *name;
+	const struct sysctlnode *node;
+	const struct clk_funcs *funcs;
+	void *priv;
+};
+
 struct clk {
+	struct clk_domain *domain;
         const char *name;
         u_int flags;
 #define CLK_SET_RATE_PARENT     0x01
@@ -43,12 +53,13 @@ struct clk_funcs {
 
 	u_int (*get_rate)(void *, struct clk *);
 	int (*set_rate)(void *, struct clk *, u_int);
+	u_int (*round_rate)(void *, struct clk *, u_int);
 	int (*enable)(void *, struct clk *);
 	int (*disable)(void *, struct clk *);
 	int (*set_parent)(void *, struct clk *, struct clk *);
 	struct clk *(*get_parent)(void *, struct clk *);
 };
 
-int	clk_backend_register(const char *, const struct clk_funcs *, void *);
+int	clk_attach(struct clk *);
 
 #endif /* _DEV_CLK_CLK_BACKEND_H */

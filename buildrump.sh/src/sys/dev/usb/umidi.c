@@ -1,4 +1,4 @@
-/*	$NetBSD: umidi.c,v 1.71 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: umidi.c,v 1.84 2021/08/08 20:50:12 andvar Exp $	*/
 
 /*
  * Copyright (c) 2001, 2012, 2014 The NetBSD Foundation, Inc.
@@ -32,7 +32,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: umidi.c,v 1.71 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: umidi.c,v 1.84 2021/08/08 20:50:12 andvar Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -53,7 +57,6 @@ __KERNEL_RCSID(0, "$NetBSD: umidi.c,v 1.71 2016/07/07 06:55:42 msaitoh Exp $");
 #include <dev/usb/usbdi.h>
 #include <dev/usb/usbdi_util.h>
 
-#include <dev/auconv.h>
 #include <dev/usb/usbdevs.h>
 #include <dev/usb/umidi_quirks.h>
 #include <dev/midi_if.h>
@@ -305,16 +308,16 @@ struct midi_hw_if_ext umidi_hw_if_mm = {
 	.compress = 1,
 };
 
-int umidi_match(device_t, cfdata_t, void *);
-void umidi_attach(device_t, device_t, void *);
-void umidi_childdet(device_t, device_t);
-int umidi_detach(device_t, int);
-int umidi_activate(device_t, enum devact);
-extern struct cfdriver umidi_cd;
+static int umidi_match(device_t, cfdata_t, void *);
+static void umidi_attach(device_t, device_t, void *);
+static void umidi_childdet(device_t, device_t);
+static int umidi_detach(device_t, int);
+static int umidi_activate(device_t, enum devact);
+
 CFATTACH_DECL2_NEW(umidi, sizeof(struct umidi_softc), umidi_match,
     umidi_attach, umidi_detach, umidi_activate, NULL, umidi_childdet);
 
-int
+static int
 umidi_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usbif_attach_arg *uiaa = aux;
@@ -332,7 +335,7 @@ umidi_match(device_t parent, cfdata_t match, void *aux)
 	return UMATCH_NONE;
 }
 
-void
+static void
 umidi_attach(device_t parent, device_t self, void *aux)
 {
 	usbd_status     err;
@@ -411,11 +414,10 @@ out_free_endpoints:
 out:
 	aprint_error_dev(self, "disabled.\n");
 	sc->sc_dying = 1;
-	KERNEL_UNLOCK_ONE(curlwp);
 	return;
 }
 
-void
+static void
 umidi_childdet(device_t self, device_t child)
 {
 	int i;
@@ -431,7 +433,7 @@ umidi_childdet(device_t self, device_t child)
 	sc->sc_mididevs[i].mdev = NULL;
 }
 
-int
+static int
 umidi_activate(device_t self, enum devact act)
 {
 	struct umidi_softc *sc = device_private(self);
@@ -448,7 +450,7 @@ umidi_activate(device_t self, enum devact act)
 	}
 }
 
-int
+static int
 umidi_detach(device_t self, int flags)
 {
 	struct umidi_softc *sc = device_private(self);
@@ -458,7 +460,8 @@ umidi_detach(device_t self, int flags)
 	mutex_enter(&sc->sc_lock);
 	sc->sc_dying = 1;
 	if (--sc->sc_refcnt >= 0)
-		usb_detach_wait(sc->sc_dev, &sc->sc_detach_cv, &sc->sc_lock);
+		if (cv_timedwait(&sc->sc_detach_cv, &sc->sc_lock, hz * 60))
+			aprint_error_dev(self, ": didn't detach\n");
 	mutex_exit(&sc->sc_lock);
 
 	detach_all_mididevs(sc, flags);
@@ -545,7 +548,7 @@ umidi_close(void *addr)
 		close_in_jack(mididev->in_jack);
 
 	if (--sc->sc_refcnt < 0)
-		usb_detach_broadcast(sc->sc_dev, &sc->sc_detach_cv);
+		cv_broadcast(&sc->sc_detach_cv);
 
 	mididev->opened = 0;
 	mididev->closing = 0;
@@ -687,7 +690,7 @@ alloc_pipe(struct umidi_endpoint *ep)
 	if (err)
 		goto quit;
 	int error = usbd_create_xfer(ep->pipe, ep->buffer_size,
-	    USBD_SHORT_XFER_OK, 0, &ep->xfer);
+	    0, 0, &ep->xfer);
 	if (error) {
 		usbd_close_pipe(ep->pipe);
 		return USBD_NOMEM;
@@ -753,10 +756,14 @@ free_all_endpoints(struct umidi_softc *sc)
 {
 	int i;
 
+	if (sc->sc_endpoints == NULL) {
+		/* nothing to free */
+		return;
+	}
+
 	for (i=0; i<sc->sc_in_num_endpoints+sc->sc_out_num_endpoints; i++)
 		free_pipe(&sc->sc_endpoints[i]);
-	if (sc->sc_endpoints != NULL)
-		kmem_free(sc->sc_endpoints, sc->sc_endpoints_len);
+	kmem_free(sc->sc_endpoints, sc->sc_endpoints_len);
 	sc->sc_endpoints = sc->sc_out_ep = sc->sc_in_ep = NULL;
 }
 
@@ -777,9 +784,6 @@ alloc_all_endpoints_fixed_ep(struct umidi_softc *sc)
 	sc->sc_in_num_endpoints = fp->num_in_ep;
 	sc->sc_endpoints_len = UMIDI_ENDPOINT_SIZE(sc);
 	sc->sc_endpoints = kmem_zalloc(sc->sc_endpoints_len, KM_SLEEP);
-	if (!sc->sc_endpoints)
-		return USBD_NOMEM;
-
 	sc->sc_out_ep = sc->sc_out_num_endpoints ? sc->sc_endpoints : NULL;
 	sc->sc_in_ep =
 	    sc->sc_in_num_endpoints ?
@@ -931,8 +935,6 @@ alloc_all_endpoints_yamaha(struct umidi_softc *sc)
 	}
 	sc->sc_endpoints_len = UMIDI_ENDPOINT_SIZE(sc);
 	sc->sc_endpoints = kmem_zalloc(sc->sc_endpoints_len, KM_SLEEP);
-	if (!sc->sc_endpoints)
-		return USBD_NOMEM;
 	if (sc->sc_out_num_endpoints) {
 		sc->sc_out_ep = sc->sc_endpoints;
 		sc->sc_out_ep->sc = sc;
@@ -967,11 +969,10 @@ alloc_all_endpoints_genuine(struct umidi_softc *sc)
 
 	interface_desc = usbd_get_interface_descriptor(sc->sc_iface);
 	num_ep = interface_desc->bNumEndpoints;
+	if (num_ep == 0)
+		return USBD_INVAL;
 	sc->sc_endpoints_len = sizeof(struct umidi_endpoint) * num_ep;
 	sc->sc_endpoints = p = kmem_zalloc(sc->sc_endpoints_len, KM_SLEEP);
-	if (!p)
-		return USBD_NOMEM;
-
 	sc->sc_out_num_jacks = sc->sc_in_num_jacks = 0;
 	sc->sc_out_num_endpoints = sc->sc_in_num_endpoints = 0;
 	epaddr = -1;
@@ -1083,9 +1084,10 @@ alloc_all_jacks(struct umidi_softc *sc)
 		cn_spec = NULL;
 
 	/* allocate/initialize structures */
-	sc->sc_jacks =
-	    kmem_zalloc(sizeof(*sc->sc_out_jacks)*(sc->sc_in_num_jacks
-		    + sc->sc_out_num_jacks), KM_SLEEP);
+	if (sc->sc_in_num_jacks == 0 && sc->sc_out_num_jacks == 0)
+		return USBD_INVAL;
+	sc->sc_jacks = kmem_zalloc(sizeof(*sc->sc_out_jacks) *
+	    (sc->sc_in_num_jacks + sc->sc_out_num_jacks), KM_SLEEP);
 	if (!sc->sc_jacks)
 		return USBD_NOMEM;
 	sc->sc_out_jacks =
@@ -1156,8 +1158,8 @@ free_all_jacks(struct umidi_softc *sc)
 
 	mutex_enter(&sc->sc_lock);
 	jacks = sc->sc_jacks;
-	len = sizeof(*sc->sc_out_jacks)
-	    * (sc->sc_in_num_jacks + sc->sc_out_num_jacks);
+	len = sizeof(*sc->sc_out_jacks) *
+	    (sc->sc_in_num_jacks + sc->sc_out_num_jacks);
 	sc->sc_jacks = sc->sc_in_jacks = sc->sc_out_jacks = NULL;
 	mutex_exit(&sc->sc_lock);
 
@@ -1232,7 +1234,7 @@ assign_all_jacks_automatically(struct umidi_softc *sc)
 
 	err =
 	    alloc_all_mididevs(sc,
-			       max(sc->sc_out_num_jacks, sc->sc_in_num_jacks));
+			       uimax(sc->sc_out_num_jacks, sc->sc_in_num_jacks));
 	if (err!=USBD_NORMAL_COMPLETION)
 		return err;
 
@@ -1386,7 +1388,7 @@ close_in_jack(struct umidi_jack *jack)
 			 * We have to drop the (interrupt) lock so that
 			 * the USB thread lock can be safely taken by
 			 * the abort operation.  This is safe as this
-			 * either closing or dying will be set proerly.
+			 * either closing or dying will be set properly.
 			 */
 			mutex_exit(&sc->sc_lock);
 			usbd_abort_pipe(jack->endpoint->pipe);
@@ -1452,9 +1454,6 @@ alloc_all_mididevs(struct umidi_softc *sc, int nmidi)
 {
 	sc->sc_num_mididevs = nmidi;
 	sc->sc_mididevs = kmem_zalloc(sizeof(*sc->sc_mididevs)*nmidi, KM_SLEEP);
-	if (!sc->sc_mididevs)
-		return USBD_NOMEM;
-
 	return USBD_NORMAL_COMPLETION;
 }
 
@@ -1526,7 +1525,7 @@ deactivate_all_mididevs(struct umidi_softc *sc)
  *  Otherwise:
  *  - support a DISPLAY_BASE_CN quirk (add the value to each internal cable
  *    number for display)
- *  - support an array quirk explictly giving a char * for each jack.
+ *  - support an array quirk explicitly giving a char * for each jack.
  * For now, you get 0-based cable numbers. If there are multiple endpoints and
  * the CNs are not globally unique, each is shown with its associated endpoint
  * address in hex also. That should not be necessary when using iJack values
@@ -1793,7 +1792,7 @@ out_jack_output(struct umidi_jack *out_jack, u_char *src, int len, int cin)
 	}
 
 	if (--sc->sc_refcnt < 0)
-		usb_detach_broadcast(sc->sc_dev, &sc->sc_detach_cv);
+		cv_broadcast(&sc->sc_detach_cv);
 
 	return 0;
 }

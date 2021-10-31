@@ -1,4 +1,4 @@
-/*	$NetBSD: genfbvar.h,v 1.24 2014/07/24 21:35:13 riastradh Exp $ */
+/*	$NetBSD: genfbvar.h,v 1.26 2021/01/27 22:42:53 macallan Exp $ */
 
 /*-
  * Copyright (c) 2007 Michael Lorenz
@@ -52,6 +52,10 @@
 #ifdef SPLASHSCREEN
 #define GENFB_DISABLE_TEXT
 #include <dev/splash/splash.h>
+#endif
+
+#if GENFB_GLYPHCACHE > 0
+#include <dev/wscons/wsdisplay_glyphcachevar.h>
 #endif
 
 struct genfb_softc;
@@ -111,9 +115,8 @@ struct genfb_softc {
 	struct genfb_mode_callback *sc_modecb;
 	int sc_backlight_level, sc_backlight_on;
 	void *sc_fbaddr;	/* kva */
-#ifdef GENFB_SHADOWFB
 	void *sc_shadowfb;
-#endif
+	bool sc_enable_shadowfb;
 	bus_addr_t sc_fboffset;	/* bus address */
 	int sc_width, sc_height, sc_stride, sc_depth;
 	size_t sc_fbsize;
@@ -126,6 +129,41 @@ struct genfb_softc {
 	struct splash_info sc_splash;
 #endif
 	struct wsdisplay_accessops sc_accessops;
+#if GENFB_GLYPHCACHE > 0
+	/*
+	 * The generic glyphcache code makes a bunch of assumptions that are
+	 * true for most graphics hardware with a directly supported blitter.
+	 * For example it assume that
+	 * - VRAM access from the host is expensive
+	 * - copying data around in VRAM is cheap and can happen in parallel
+	 *   to the host CPU
+	 * -> therefore we draw glyphs normally if we have to, so the ( assumed
+	 *    to be hardware assisted ) driver supplied putchar() method doesn't
+	 *    need to be glyphcache aware, then copy them away for later use
+	 * for genfb things are a bit different. On most hardware:
+	 * - VRAM access from the host is still expensive
+	 * - copying data around in VRAM is also expensive since we don't have
+	 *   a blitter and VRAM is mapped uncached
+	 * - VRAM reads are usually slower than writes ( write combining and
+	 *   such help writes but not reads, and VRAM might be behind an
+	 *   asymmetric bus like AGP ) and must be avoided, both are much
+	 *   slower than main memory
+	 * -> therefore we cache glyphs in main memory, no reason to map it
+	 *    uncached, we draw into the cache first and then copy the glyph
+	 *    into video memory to avoid framebuffer reads and to allow more
+	 *    efficient write accesses than putchar() would offer
+	 * Because of this we can't use the generic code but we can recycle a
+	 * few data structures.
+	 */
+	uint8_t *sc_cache;
+	struct rasops_info sc_cache_ri;
+	void (*sc_putchar)(void *, int, int, u_int, long);
+	int sc_cache_cells;
+	int sc_nbuckets;	/* buckets allocated */
+	gc_bucket *sc_buckets;	/* we allocate as many as we can get into ram */
+	int sc_attrmap[256];	/* mapping a colour attribute to a bucket */
+#endif
+
 };
 
 void	genfb_cnattach(void);

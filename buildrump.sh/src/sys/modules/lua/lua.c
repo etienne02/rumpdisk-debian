@@ -1,8 +1,8 @@
-/*	$NetBSD: lua.c,v 1.18 2016/07/14 04:00:46 msaitoh Exp $ */
+/*	$NetBSD: lua.c,v 1.27 2021/08/08 22:26:32 rin Exp $ */
 
 /*
+ * Copyright (c) 2011 - 2017 by Marc Balmer <mbalmer@NetBSD.org>.
  * Copyright (c) 2014 by Lourival Vieira Neto <lneto@NetBSD.org>.
- * Copyright (c) 2011 - 2014 by Marc Balmer <mbalmer@NetBSD.org>.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -74,8 +74,10 @@ static bool	lua_bytecode_on = false;
 static int	lua_verbose;
 static int	lua_max_instr;
 
-static LIST_HEAD(, lua_state)	lua_states;
-static LIST_HEAD(, lua_module)	lua_modules;
+static LIST_HEAD(, lua_state)	lua_states =
+    LIST_HEAD_INITIALIZER(lua_states);
+static LIST_HEAD(, lua_module)	lua_modules =
+    LIST_HEAD_INITIALIZER(lua_modules);
 
 static int lua_match(device_t, cfdata_t, void *);
 static void lua_attach(device_t, device_t, void *);
@@ -141,7 +143,8 @@ lua_attach(device_t parent, device_t self, void *aux)
 	mutex_init(&sc->sc_state_lock, MUTEX_DEFAULT, IPL_VM);
 	cv_init(&sc->sc_state_cv, "luastate");
 
-	pmf_device_register(self, NULL, NULL);
+	if (!pmf_device_register(self, NULL, NULL))
+		aprint_error_dev(self, "couldn't establish power handler\n");
 
 	/* Sysctl to provide some control over behaviour */
         sysctl_createv(&sc->sc_log, 0, NULL, &node,
@@ -283,10 +286,11 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	struct lua_state *s;
 	struct lua_module *m;
 	kauth_cred_t cred;
-	struct nameidata nd;
+	struct vnode *vp;
 	struct pathbuf *pb;
 	struct vattr va;
 	struct lua_loadstate ls;
+	struct lua_state_info *states;
 	int error, n;
 	klua_State *K;
 
@@ -306,14 +310,25 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 			LIST_FOREACH(s, &lua_states, lua_next) {
 				if (n > info->num_states)
 					break;
-				copyoutstr(s->lua_name, info->states[n].name,
-				    MAX_LUA_NAME, NULL);
-				copyoutstr(s->lua_desc, info->states[n].desc,
-				    MAX_LUA_DESC, NULL);
-				info->states[n].user = s->K->ks_user;
 				n++;
 			}
 			info->num_states = n;
+			states = kmem_alloc(sizeof(*states) * n, KM_SLEEP);
+			if (copyin(info->states, states, sizeof(*states) * n)
+			    == 0) {
+				n = 0;
+				LIST_FOREACH(s, &lua_states, lua_next) {
+					if (n > info->num_states)
+						break;
+					strcpy(states[n].name, s->lua_name);
+					strcpy(states[n].desc, s->lua_desc);
+					states[n].user = s->K->ks_user;
+					n++;
+				}
+				copyout(states, info->states,
+				    sizeof(*states) * n);
+				kmem_free(states, sizeof(*states) * n);
+			}
 		}
 		break;
 	case LUACREATE:
@@ -334,10 +349,12 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 			}
 
 		K = kluaL_newstate(create->name, create->desc, IPL_NONE);
-		K->ks_user = true;
 
 		if (K == NULL)
 			return ENOMEM;
+
+		K->ks_user = true;
+
 		if (lua_verbose)
 			device_printf(sc->sc_dev, "state %s created\n",
 			    create->name);
@@ -399,9 +416,9 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 				pb = pathbuf_create(load->path);
 				if (pb == NULL)
 					return ENOMEM;
-				NDINIT(&nd, LOOKUP, FOLLOW | NOCHROOT, pb);
+				error = vn_open(NULL, pb, NOCHROOT, FREAD, 0,
+				    &vp, NULL, NULL);
 				pathbuf_destroy(pb);
-				error = vn_open(&nd, FREAD, 0);
 				if (error) {
 					if (lua_verbose)
 						device_printf(sc->sc_dev,
@@ -409,11 +426,11 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 						    error);
 					return error;
 				}
-				error = VOP_GETATTR(nd.ni_vp, &va,
+				error = VOP_GETATTR(vp, &va,
 				    kauth_cred_get());
 				if (error) {
-					VOP_UNLOCK(nd.ni_vp);
-					vn_close(nd.ni_vp, FREAD,
+					VOP_UNLOCK(vp);
+					vn_close(vp, FREAD,
 					    kauth_cred_get());
 					if (lua_verbose)
 						device_printf(sc->sc_dev,
@@ -422,19 +439,19 @@ luaioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 					return error;
 				}
 				if (va.va_type != VREG) {
-					VOP_UNLOCK(nd.ni_vp);
-					vn_close(nd.ni_vp, FREAD,
+					VOP_UNLOCK(vp);
+					vn_close(vp, FREAD,
 					    kauth_cred_get());
 					return EINVAL;
 				}
-				ls.vp = nd.ni_vp;
+				ls.vp = vp;
 				ls.off = 0L;
 				ls.size = va.va_size;
-				VOP_UNLOCK(nd.ni_vp);
+				VOP_UNLOCK(vp);
 				klua_lock(s->K);
 				error = lua_load(s->K->L, lua_reader, &ls,
 				    strrchr(load->path, '/') + 1, "bt");
-				vn_close(nd.ni_vp, FREAD, cred);
+				vn_close(vp, FREAD, cred);
 				switch (error) {
 				case 0:	/* no error */
 					break;
@@ -517,6 +534,10 @@ lua_require(lua_State *L)
 					    md->mod_name);
 				luaL_requiref(L, md->mod_name, md->open, 0);
 
+				LIST_FOREACH(m, &s->lua_modules, mod_next)
+					if (m == md)
+						return 1;
+
 				md->refcount++;
 				LIST_INSERT_HEAD(&s->lua_modules, md, mod_next);
 				return 1;
@@ -528,14 +549,18 @@ lua_require(lua_State *L)
 
 typedef struct {
 	size_t size;
-} __packed alloc_header_t;
+} alloc_header_t;
 
 static void *
 lua_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
 {
 	void *nptr = NULL;
 
-	const size_t hdr_size = sizeof(alloc_header_t);
+	/*
+	 * Make sure that buffers allocated by lua_alloc() are aligned to
+	 * 8-byte boundaries as done by kmem_alloc(9).
+	 */
+	const size_t hdr_size = roundup(sizeof(alloc_header_t), 8);
 	alloc_header_t *hdr = (alloc_header_t *) ((char *) ptr - hdr_size);
 
 	if (nsize == 0) { /* freeing */
@@ -700,7 +725,7 @@ kluaL_newstate(const char *name, const char *desc, int ipl)
 void
 klua_close(klua_State *K)
 {
-	struct lua_state *s;
+	struct lua_state *s, *ns;
 	struct lua_softc *sc;
 	struct lua_module *m;
 	int error = 0;
@@ -724,7 +749,7 @@ klua_close(klua_State *K)
 	if (error)
 		return;		/* Nothing we can do... */
 
-	LIST_FOREACH(s, &lua_states, lua_next)
+	LIST_FOREACH_SAFE(s, &lua_states, lua_next, ns)
 		if (s->K == K) {
 			LIST_REMOVE(s, lua_next);
 			LIST_FOREACH(m, &s->lua_modules, mod_next)

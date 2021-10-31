@@ -1,7 +1,7 @@
-/*	Id: mdoc.c,v 1.256 2015/10/30 19:04:16 schwarze Exp  */
+/*	Id: mdoc.c,v 1.274 2018/12/31 07:46:07 schwarze Exp  */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2010, 2012-2015 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010, 2012-2018 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -35,41 +35,6 @@
 #include "roff_int.h"
 #include "libmdoc.h"
 
-const	char *const __mdoc_macronames[MDOC_MAX + 1] = {
-	"text",
-	"Ap",		"Dd",		"Dt",		"Os",
-	"Sh",		"Ss",		"Pp",		"D1",
-	"Dl",		"Bd",		"Ed",		"Bl",
-	"El",		"It",		"Ad",		"An",
-	"Ar",		"Cd",		"Cm",		"Dv",
-	"Er",		"Ev",		"Ex",		"Fa",
-	"Fd",		"Fl",		"Fn",		"Ft",
-	"Ic",		"In",		"Li",		"Nd",
-	"Nm",		"Op",		"Ot",		"Pa",
-	"Rv",		"St",		"Va",		"Vt",
-	"Xr",		"%A",		"%B",		"%D",
-	"%I",		"%J",		"%N",		"%O",
-	"%P",		"%R",		"%T",		"%V",
-	"Ac",		"Ao",		"Aq",		"At",
-	"Bc",		"Bf",		"Bo",		"Bq",
-	"Bsx",		"Bx",		"Db",		"Dc",
-	"Do",		"Dq",		"Ec",		"Ef",
-	"Em",		"Eo",		"Fx",		"Ms",
-	"No",		"Ns",		"Nx",		"Ox",
-	"Pc",		"Pf",		"Po",		"Pq",
-	"Qc",		"Ql",		"Qo",		"Qq",
-	"Re",		"Rs",		"Sc",		"So",
-	"Sq",		"Sm",		"Sx",		"Sy",
-	"Tn",		"Ux",		"Xc",		"Xo",
-	"Fo",		"Fc",		"Oo",		"Oc",
-	"Bk",		"Ek",		"Bt",		"Hf",
-	"Fr",		"Ud",		"Lb",		"Lp",
-	"Lk",		"Mt",		"Brq",		"Bro",
-	"Brc",		"%C",		"Es",		"En",
-	"Dx",		"%Q",		"br",		"sp",
-	"%U",		"Ta",		"ll",
-};
-
 const	char *const __mdoc_argnames[MDOC_ARG_MAX] = {
 	"split",		"nosplit",		"ragged",
 	"unfilled",		"literal",		"file",
@@ -80,9 +45,7 @@ const	char *const __mdoc_argnames[MDOC_ARG_MAX] = {
 	"width",		"compact",		"std",
 	"filled",		"words",		"emphasis",
 	"symbolic",		"nested",		"centered"
-	};
-
-const	char * const *mdoc_macronames = __mdoc_macronames + 1;
+};
 const	char * const *mdoc_argnames = __mdoc_argnames;
 
 static	int		  mdoc_ptext(struct roff_man *, int, char *, int);
@@ -117,15 +80,7 @@ mdoc_parseln(struct roff_man *mdoc, int ln, char *buf, int offs)
 }
 
 void
-mdoc_macro(MACRO_PROT_ARGS)
-{
-	assert(tok > TOKEN_NONE && tok < MDOC_MAX);
-
-	(*mdoc_macros[tok].fp)(mdoc, tok, line, ppos, pos, buf);
-}
-
-void
-mdoc_tail_alloc(struct roff_man *mdoc, int line, int pos, int tok)
+mdoc_tail_alloc(struct roff_man *mdoc, int line, int pos, enum roff_tok tok)
 {
 	struct roff_node *p;
 
@@ -135,17 +90,17 @@ mdoc_tail_alloc(struct roff_man *mdoc, int line, int pos, int tok)
 }
 
 struct roff_node *
-mdoc_endbody_alloc(struct roff_man *mdoc, int line, int pos, int tok,
-		struct roff_node *body, enum mdoc_endbody end)
+mdoc_endbody_alloc(struct roff_man *mdoc, int line, int pos,
+    enum roff_tok tok, struct roff_node *body)
 {
 	struct roff_node *p;
 
-	body->flags |= MDOC_ENDED;
-	body->parent->flags |= MDOC_ENDED;
+	body->flags |= NODE_ENDED;
+	body->parent->flags |= NODE_ENDED;
 	p = roff_node_alloc(mdoc, line, pos, ROFFT_BODY, tok);
 	p->body = body;
 	p->norm = body->norm;
-	p->end = end;
+	p->end = ENDBODY_SPACE;
 	roff_node_append(mdoc, p);
 	mdoc->next = ROFF_NEXT_SIBLING;
 	return p;
@@ -153,7 +108,7 @@ mdoc_endbody_alloc(struct roff_man *mdoc, int line, int pos, int tok,
 
 struct roff_node *
 mdoc_block_alloc(struct roff_man *mdoc, int line, int pos,
-	int tok, struct mdoc_arg *args)
+    enum roff_tok tok, struct mdoc_arg *args)
 {
 	struct roff_node *p;
 
@@ -180,7 +135,7 @@ mdoc_block_alloc(struct roff_man *mdoc, int line, int pos,
 
 void
 mdoc_elem_alloc(struct roff_man *mdoc, int line, int pos,
-	int tok, struct mdoc_arg *args)
+     enum roff_tok tok, struct mdoc_arg *args)
 {
 	struct roff_node *p;
 
@@ -200,15 +155,6 @@ mdoc_elem_alloc(struct roff_man *mdoc, int line, int pos,
 	mdoc->next = ROFF_NEXT_CHILD;
 }
 
-void
-mdoc_node_relink(struct roff_man *mdoc, struct roff_node *p)
-{
-
-	roff_node_unlink(mdoc, p);
-	p->prev = p->next = NULL;
-	roff_node_append(mdoc, p);
-}
-
 /*
  * Parse free-form text, that is, a line that does not begin with the
  * control character.
@@ -217,33 +163,25 @@ static int
 mdoc_ptext(struct roff_man *mdoc, int line, char *buf, int offs)
 {
 	struct roff_node *n;
+	const char	 *cp, *sp;
 	char		 *c, *ws, *end;
 
-	assert(mdoc->last);
 	n = mdoc->last;
 
 	/*
-	 * Divert directly to list processing if we're encountering a
-	 * columnar ROFFT_BLOCK with or without a prior ROFFT_BLOCK entry
-	 * (a ROFFT_BODY means it's already open, in which case we should
-	 * process within its context in the normal way).
+	 * If a column list contains plain text, assume an implicit item
+	 * macro.  This can happen one or more times at the beginning
+	 * of such a list, intermixed with non-It mdoc macros and with
+	 * nodes generated on the roff level, for example by tbl.
 	 */
 
-	if (n->tok == MDOC_Bl && n->type == ROFFT_BODY &&
-	    n->end == ENDBODY_NOT && n->norm->Bl.type == LIST_column) {
-		/* `Bl' is open without any children. */
+	if ((n->tok == MDOC_Bl && n->type == ROFFT_BODY &&
+	     n->end == ENDBODY_NOT && n->norm->Bl.type == LIST_column) ||
+	    (n->parent != NULL && n->parent->tok == MDOC_Bl &&
+	     n->parent->norm->Bl.type == LIST_column)) {
 		mdoc->flags |= MDOC_FREECOL;
-		mdoc_macro(mdoc, MDOC_It, line, offs, &offs, buf);
-		return 1;
-	}
-
-	if (n->tok == MDOC_It && n->type == ROFFT_BLOCK &&
-	    NULL != n->parent &&
-	    MDOC_Bl == n->parent->tok &&
-	    LIST_column == n->parent->norm->Bl.type) {
-		/* `Bl' has block-level `It' children. */
-		mdoc->flags |= MDOC_FREECOL;
-		mdoc_macro(mdoc, MDOC_It, line, offs, &offs, buf);
+		(*mdoc_macro(MDOC_It)->fp)(mdoc, MDOC_It,
+		    line, offs, &offs, buf);
 		return 1;
 	}
 
@@ -272,7 +210,7 @@ mdoc_ptext(struct roff_man *mdoc, int line, char *buf, int offs)
 			 * Strip trailing tabs in literal context only;
 			 * outside, they affect the next line.
 			 */
-			if (MDOC_LITERAL & mdoc->flags)
+			if (mdoc->flags & ROFF_NOFILL)
 				continue;
 			break;
 		case '\\':
@@ -289,27 +227,40 @@ mdoc_ptext(struct roff_man *mdoc, int line, char *buf, int offs)
 	*end = '\0';
 
 	if (ws)
-		mandoc_msg(MANDOCERR_SPACE_EOL, mdoc->parse,
-		    line, (int)(ws-buf), NULL);
+		mandoc_msg(MANDOCERR_SPACE_EOL, line, (int)(ws - buf), NULL);
 
-	if (buf[offs] == '\0' && ! (mdoc->flags & MDOC_LITERAL)) {
-		mandoc_msg(MANDOCERR_FI_BLANK, mdoc->parse,
-		    line, (int)(c - buf), NULL);
+	/*
+	 * Blank lines are allowed in no-fill mode
+	 * and cancel preceding \c,
+	 * but add a single vertical space elsewhere.
+	 */
 
-		/*
-		 * Insert a `sp' in the case of a blank line.  Technically,
-		 * blank lines aren't allowed, but enough manuals assume this
-		 * behaviour that we want to work around it.
-		 */
-		roff_elem_alloc(mdoc, line, offs, MDOC_sp);
-		mdoc->last->flags |= MDOC_VALID | MDOC_ENDED;
+	if (buf[offs] == '\0' && (mdoc->flags & ROFF_NOFILL) == 0) {
+		switch (mdoc->last->type) {
+		case ROFFT_TEXT:
+			sp = mdoc->last->string;
+			cp = end = strchr(sp, '\0') - 2;
+			if (cp < sp || cp[0] != '\\' || cp[1] != 'c')
+				break;
+			while (cp > sp && cp[-1] == '\\')
+				cp--;
+			if ((end - cp) % 2)
+				break;
+			*end = '\0';
+			return 1;
+		default:
+			break;
+		}
+		mandoc_msg(MANDOCERR_FI_BLANK, line, (int)(c - buf), NULL);
+		roff_elem_alloc(mdoc, line, offs, ROFF_sp);
+		mdoc->last->flags |= NODE_VALID | NODE_ENDED;
 		mdoc->next = ROFF_NEXT_SIBLING;
 		return 1;
 	}
 
 	roff_word_alloc(mdoc, line, offs, buf+offs);
 
-	if (mdoc->flags & MDOC_LITERAL)
+	if (mdoc->flags & ROFF_NOFILL)
 		return 1;
 
 	/*
@@ -321,7 +272,28 @@ mdoc_ptext(struct roff_man *mdoc, int line, char *buf, int offs)
 	assert(buf < end);
 
 	if (mandoc_eos(buf+offs, (size_t)(end-buf-offs)))
-		mdoc->last->flags |= MDOC_EOS;
+		mdoc->last->flags |= NODE_EOS;
+
+	for (c = buf + offs; c != NULL; c = strchr(c + 1, '.')) {
+		if (c - buf < offs + 2)
+			continue;
+		if (end - c < 3)
+			break;
+		if (c[1] != ' ' ||
+		    isalnum((unsigned char)c[-2]) == 0 ||
+		    isalnum((unsigned char)c[-1]) == 0 ||
+		    (c[-2] == 'n' && c[-1] == 'c') ||
+		    (c[-2] == 'v' && c[-1] == 's'))
+			continue;
+		c += 2;
+		if (*c == ' ')
+			c++;
+		if (*c == ' ')
+			c++;
+		if (isupper((unsigned char)(*c)))
+			mandoc_msg(MANDOCERR_EOS, line, (int)(c - buf), NULL);
+	}
+
 	return 1;
 }
 
@@ -334,28 +306,20 @@ mdoc_pmacro(struct roff_man *mdoc, int ln, char *buf, int offs)
 {
 	struct roff_node *n;
 	const char	 *cp;
-	int		  tok;
-	int		  i, sv;
-	char		  mac[5];
+	size_t		  sz;
+	enum roff_tok	  tok;
+	int		  sv;
+
+	/* Determine the line macro. */
 
 	sv = offs;
-
-	/*
-	 * Copy the first word into a nil-terminated buffer.
-	 * Stop when a space, tab, escape, or eoln is encountered.
-	 */
-
-	i = 0;
-	while (i < 4 && strchr(" \t\\", buf[offs]) == NULL)
-		mac[i++] = buf[offs++];
-
-	mac[i] = '\0';
-
-	tok = (i > 1 && i < 4) ? mdoc_hash_find(mac) : TOKEN_NONE;
-
+	tok = TOKEN_NONE;
+	for (sz = 0; sz < 4 && strchr(" \t\\", buf[offs]) == NULL; sz++)
+		offs++;
+	if (sz == 2 || sz == 3)
+		tok = roffhash_find(mdoc->mdocmac, buf + sv, sz);
 	if (tok == TOKEN_NONE) {
-		mandoc_msg(MANDOCERR_MACRO, mdoc->parse,
-		    ln, sv, buf + sv - 1);
+		mandoc_msg(MANDOCERR_MACRO, ln, sv, "%s", buf + sv - 1);
 		return 1;
 	}
 
@@ -376,7 +340,7 @@ mdoc_pmacro(struct roff_man *mdoc, int ln, char *buf, int offs)
 
 	/* Jump to the next non-whitespace word. */
 
-	while (buf[offs] && ' ' == buf[offs])
+	while (buf[offs] == ' ')
 		offs++;
 
 	/*
@@ -385,52 +349,38 @@ mdoc_pmacro(struct roff_man *mdoc, int ln, char *buf, int offs)
 	 */
 
 	if ('\0' == buf[offs] && ' ' == buf[offs - 1])
-		mandoc_msg(MANDOCERR_SPACE_EOL, mdoc->parse,
-		    ln, offs - 1, NULL);
+		mandoc_msg(MANDOCERR_SPACE_EOL, ln, offs - 1, NULL);
 
 	/*
 	 * If an initial macro or a list invocation, divert directly
 	 * into macro processing.
 	 */
 
-	if (NULL == mdoc->last || MDOC_It == tok || MDOC_El == tok) {
-		mdoc_macro(mdoc, tok, ln, sv, &offs, buf);
-		return 1;
-	}
-
 	n = mdoc->last;
-	assert(mdoc->last);
-
-	/*
-	 * If the first macro of a `Bl -column', open an `It' block
-	 * context around the parsed macro.
-	 */
-
-	if (n->tok == MDOC_Bl && n->type == ROFFT_BODY &&
-	    n->end == ENDBODY_NOT && n->norm->Bl.type == LIST_column) {
-		mdoc->flags |= MDOC_FREECOL;
-		mdoc_macro(mdoc, MDOC_It, ln, sv, &sv, buf);
+	if (n == NULL || tok == MDOC_It || tok == MDOC_El) {
+		(*mdoc_macro(tok)->fp)(mdoc, tok, ln, sv, &offs, buf);
 		return 1;
 	}
 
 	/*
-	 * If we're following a block-level `It' within a `Bl -column'
-	 * context (perhaps opened in the above block or in ptext()),
-	 * then open an `It' block context around the parsed macro.
+	 * If a column list contains a non-It macro, assume an implicit
+	 * item macro.  This can happen one or more times at the
+	 * beginning of such a list, intermixed with text lines and
+	 * with nodes generated on the roff level, for example by tbl.
 	 */
 
-	if (n->tok == MDOC_It && n->type == ROFFT_BLOCK &&
-	    NULL != n->parent &&
-	    MDOC_Bl == n->parent->tok &&
-	    LIST_column == n->parent->norm->Bl.type) {
+	if ((n->tok == MDOC_Bl && n->type == ROFFT_BODY &&
+	     n->end == ENDBODY_NOT && n->norm->Bl.type == LIST_column) ||
+	    (n->parent != NULL && n->parent->tok == MDOC_Bl &&
+	     n->parent->norm->Bl.type == LIST_column)) {
 		mdoc->flags |= MDOC_FREECOL;
-		mdoc_macro(mdoc, MDOC_It, ln, sv, &sv, buf);
+		(*mdoc_macro(MDOC_It)->fp)(mdoc, MDOC_It, ln, sv, &sv, buf);
 		return 1;
 	}
 
 	/* Normal processing of a macro. */
 
-	mdoc_macro(mdoc, tok, ln, sv, &offs, buf);
+	(*mdoc_macro(tok)->fp)(mdoc, tok, ln, sv, &offs, buf);
 
 	/* In quick mode (for mandocdb), abort after the NAME section. */
 
@@ -477,13 +427,4 @@ mdoc_isdelim(const char *p)
 		return DELIM_MIDDLE;
 
 	return DELIM_NONE;
-}
-
-void
-mdoc_validate(struct roff_man *mdoc)
-{
-
-	mdoc->last = mdoc->first;
-	mdoc_node_validate(mdoc);
-	mdoc_state_reset(mdoc);
 }

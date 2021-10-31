@@ -1,4 +1,4 @@
-/*	$NetBSD: gemvar.h,v 1.25 2015/04/13 16:33:24 riastradh Exp $ */
+/*	$NetBSD: gemvar.h,v 1.28 2021/01/30 07:53:01 jdc Exp $ */
 
 /*
  *
@@ -163,7 +163,7 @@ struct gem_softc {
 	int		sc_chiprev;	/* hardware revision */
 
 	u_int		sc_flags;	/* */
-	short		sc_if_flags;	/* copy of ifp->if_flags */
+	u_short		sc_if_flags;	/* copy of ifp->if_flags */
 #define	GEM_GIGABIT		0x0001	/* has a gigabit PHY */
 #define GEM_LINK		0x0002	/* link is up */
 #define	GEM_PCI			0x0004	/* XXX PCI busses are little-endian */
@@ -219,6 +219,7 @@ struct gem_softc {
 #ifdef GEM_COUNTERS
 	struct evcnt sc_ev_txint;
 	struct evcnt sc_ev_rxint;
+	struct evcnt sc_ev_rxoverflow;
 	struct evcnt sc_ev_rxnobuf;
 	struct evcnt sc_ev_rxfull;
 	struct evcnt sc_ev_rxhist[9];
@@ -245,8 +246,6 @@ struct gem_softc {
 
 #define	GEM_CDTXADDR(sc, x)	((sc)->sc_cddma + GEM_CDTXOFF((x)))
 #define	GEM_CDRXADDR(sc, x)	((sc)->sc_cddma + GEM_CDRXOFF((x)))
-
-#define	GEM_CDADDR(sc)	((sc)->sc_cddma + GEM_CDOFF)
 
 #define	GEM_CDTXSYNC(sc, x, n, ops)					\
 do {									\

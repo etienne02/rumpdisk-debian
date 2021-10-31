@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -54,7 +54,7 @@ typedef UINT32                          ACPI_MUTEX_HANDLE;
 
 /* Total number of aml opcodes defined */
 
-#define AML_NUM_OPCODES                 0x82
+#define AML_NUM_OPCODES                 0x83
 
 
 /* Forward declarations */
@@ -90,6 +90,7 @@ union acpi_parse_object;
 
 #define ACPI_MAX_MUTEX                  5
 #define ACPI_NUM_MUTEX                  (ACPI_MAX_MUTEX+1)
+
 
 /* Lock structure for reader/writer interfaces */
 
@@ -186,12 +187,12 @@ typedef struct acpi_namespace_node
     union acpi_operand_object       *Object;        /* Interpreter object */
     UINT8                           DescriptorType; /* Differentiate object descriptor types */
     UINT8                           Type;           /* ACPI Type associated with this name */
-    UINT8                           Flags;          /* Miscellaneous flags */
-    ACPI_OWNER_ID                   OwnerId;        /* Node creator */
+    UINT16                          Flags;          /* Miscellaneous flags */
     ACPI_NAME_UNION                 Name;           /* ACPI Name, always 4 chars per ACPI spec */
     struct acpi_namespace_node      *Parent;        /* Parent node */
     struct acpi_namespace_node      *Child;         /* First child */
     struct acpi_namespace_node      *Peer;          /* First peer */
+    ACPI_OWNER_ID                   OwnerId;        /* Node creator */
 
     /*
      * The following fields are used by the ASL compiler and disassembler only
@@ -218,6 +219,7 @@ typedef struct acpi_namespace_node
 #define ANOBJ_SUBTREE_HAS_INI           0x10    /* Used to optimize device initialization */
 #define ANOBJ_EVALUATED                 0x20    /* Set on first evaluation of node */
 #define ANOBJ_ALLOCATED_BUFFER          0x40    /* Method AML buffer is dynamic (InstallMethod) */
+#define ANOBJ_NODE_EARLY_INIT           0x80    /* AcpiExec only: Node was create via init file (-fi) */
 
 #define ANOBJ_IS_EXTERNAL               0x08    /* iASL only: This object created via External() */
 #define ANOBJ_METHOD_NO_RETVAL          0x10    /* iASL only: Method has no return value */
@@ -370,7 +372,7 @@ ACPI_STATUS (*ACPI_INTERNAL_METHOD) (
  */
 typedef struct acpi_name_info
 {
-    char                        Name[ACPI_NAME_SIZE];
+    char                        Name[ACPI_NAMESEG_SIZE];
     UINT16                      ArgumentList;
     UINT8                       ExpectedBtypes;
 
@@ -458,7 +460,7 @@ typedef ACPI_STATUS (*ACPI_OBJECT_CONVERTER) (
 
 typedef struct acpi_simple_repair_info
 {
-    char                        Name[ACPI_NAME_SIZE];
+    char                        Name[ACPI_NAMESEG_SIZE];
     UINT32                      UnexpectedBtypes;
     UINT32                      PackageIndex;
     ACPI_OBJECT_CONVERTER       ObjectConverter;
@@ -487,9 +489,9 @@ typedef struct acpi_simple_repair_info
 
 typedef struct acpi_reg_walk_info
 {
-    ACPI_ADR_SPACE_TYPE     SpaceId;
     UINT32                  Function;
     UINT32                  RegRunCount;
+    ACPI_ADR_SPACE_TYPE     SpaceId;
 
 } ACPI_REG_WALK_INFO;
 
@@ -549,11 +551,12 @@ typedef union acpi_gpe_dispatch_info
  */
 typedef struct acpi_gpe_event_info
 {
-    union acpi_gpe_dispatch_info    Dispatch;       /* Either Method, Handler, or NotifyList */
-    struct acpi_gpe_register_info   *RegisterInfo;  /* Backpointer to register info */
-    UINT8                           Flags;          /* Misc info about this GPE */
-    UINT8                           GpeNumber;      /* This GPE */
-    UINT8                           RuntimeCount;   /* References to a run GPE */
+    union acpi_gpe_dispatch_info    Dispatch;           /* Either Method, Handler, or NotifyList */
+    struct acpi_gpe_register_info   *RegisterInfo;      /* Backpointer to register info */
+    UINT8                           Flags;              /* Misc info about this GPE */
+    UINT8                           GpeNumber;          /* This GPE */
+    UINT8                           RuntimeCount;       /* References to a run GPE */
+    BOOLEAN                         DisableForDispatch; /* Masked during dispatching */
 
 } ACPI_GPE_EVENT_INFO;
 
@@ -566,6 +569,7 @@ typedef struct acpi_gpe_register_info
     UINT16                          BaseGpeNumber;  /* Base GPE number for this register */
     UINT8                           EnableForWake;  /* GPEs to keep enabled when sleeping */
     UINT8                           EnableForRun;   /* GPEs to keep enabled when running */
+    UINT8                           MaskForRun;     /* GPEs to keep masked when running */
     UINT8                           EnableMask;     /* Current mask of enabled GPEs */
 
 } ACPI_GPE_REGISTER_INFO;
@@ -701,7 +705,7 @@ typedef struct acpi_update_state
 typedef struct acpi_pkg_state
 {
     ACPI_STATE_COMMON
-    UINT16                          Index;
+    UINT32                          Index;
     union acpi_operand_object       *SourceObject;
     union acpi_operand_object       *DestObject;
     struct acpi_walk_state          *WalkState;
@@ -722,7 +726,7 @@ typedef struct acpi_control_state
     union acpi_parse_object         *PredicateOp;
     UINT8                           *AmlPredicateStart;     /* Start of if/while predicate */
     UINT8                           *PackageEnd;            /* End of if/while block */
-    UINT32                          LoopCount;              /* While() loop counter */
+    UINT64                          LoopTimeout;            /* While() loop timeout */
 
 } ACPI_CONTROL_STATE;
 
@@ -903,24 +907,58 @@ typedef union acpi_parse_value
 #define ACPI_DISASM_ONLY_MEMBERS(a)
 #endif
 
+#if defined(ACPI_ASL_COMPILER)
+#define ACPI_CONVERTER_ONLY_MEMBERS(a)  a;
+#else
+#define ACPI_CONVERTER_ONLY_MEMBERS(a)
+#endif
+
 #define ACPI_PARSE_COMMON \
-    union acpi_parse_object         *Parent;        /* Parent op */\
-    UINT8                           DescriptorType; /* To differentiate various internal objs */\
-    UINT8                           Flags;          /* Type of Op */\
-    UINT16                          AmlOpcode;      /* AML opcode */\
-    UINT8                           *Aml;           /* Address of declaration in AML */\
-    union acpi_parse_object         *Next;          /* Next op */\
-    ACPI_NAMESPACE_NODE             *Node;          /* For use by interpreter */\
-    ACPI_PARSE_VALUE                Value;          /* Value or args associated with the opcode */\
-    UINT8                           ArgListLength;  /* Number of elements in the arg list */\
-    ACPI_DISASM_ONLY_MEMBERS (\
-    UINT8                           DisasmFlags;    /* Used during AML disassembly */\
-    UINT8                           DisasmOpcode;   /* Subtype used for disassembly */\
-    const char                      *OperatorSymbol;/* Used for C-style operator name strings */\
-    char                            AmlOpName[16])  /* Op name (debug only) */
+    union acpi_parse_object         *Parent;            /* Parent op */\
+    UINT8                           DescriptorType;     /* To differentiate various internal objs */\
+    UINT8                           Flags;              /* Type of Op */\
+    UINT16                          AmlOpcode;          /* AML opcode */\
+    UINT8                           *Aml;               /* Address of declaration in AML */\
+    union acpi_parse_object         *Next;              /* Next op */\
+    ACPI_NAMESPACE_NODE             *Node;              /* For use by interpreter */\
+    ACPI_PARSE_VALUE                Value;              /* Value or args associated with the opcode */\
+    UINT8                           ArgListLength;      /* Number of elements in the arg list */\
+     ACPI_DISASM_ONLY_MEMBERS (\
+    UINT16                          DisasmFlags;        /* Used during AML disassembly */\
+    UINT8                           DisasmOpcode;       /* Subtype used for disassembly */\
+    const char                      *OperatorSymbol;    /* Used for C-style operator name strings */\
+    char                            AmlOpName[16])      /* Op name (debug only) */\
+     ACPI_CONVERTER_ONLY_MEMBERS (\
+    char                            *InlineComment;     /* Inline comment */\
+    char                            *EndNodeComment;    /* End of node comment */\
+    char                            *NameComment;       /* Comment associated with the first parameter of the name node */\
+    char                            *CloseBraceComment; /* Comments that come after } on the same as } */\
+    ACPI_COMMENT_NODE               *CommentList;       /* comments that appears before this node */\
+    ACPI_COMMENT_NODE               *EndBlkComment;     /* comments that at the end of a block but before ) or } */\
+    char                            *CvFilename;        /* Filename associated with this node. Used for ASL/ASL+ converter */\
+    char                            *CvParentFilename)  /* Parent filename associated with this node. Used for ASL/ASL+ converter */
 
 
-/* Flags for DisasmFlags field  above */
+/* categories of comments */
+
+typedef enum
+{
+    STANDARD_COMMENT = 1,
+    INLINE_COMMENT,
+    ENDNODE_COMMENT,
+    OPENBRACE_COMMENT,
+    CLOSE_BRACE_COMMENT,
+    STD_DEFBLK_COMMENT,
+    END_DEFBLK_COMMENT,
+    FILENAME_COMMENT,
+    PARENTFILENAME_COMMENT,
+    ENDBLK_COMMENT,
+    INCLUDE_COMMENT
+
+} ASL_COMMENT_TYPES;
+
+
+/* Internal opcodes for DisasmOpcode field above */
 
 #define ACPI_DASM_BUFFER                0x00        /* Buffer is a simple data buffer */
 #define ACPI_DASM_RESOURCE              0x01        /* Buffer is a Resource Descriptor */
@@ -933,7 +971,47 @@ typedef union acpi_parse_value
 #define ACPI_DASM_LNOT_PREFIX           0x08        /* Start of a LNotEqual (etc.) pair of opcodes */
 #define ACPI_DASM_LNOT_SUFFIX           0x09        /* End  of a LNotEqual (etc.) pair of opcodes */
 #define ACPI_DASM_HID_STRING            0x0A        /* String is a _HID or _CID */
-#define ACPI_DASM_IGNORE                0x0B        /* Not used at this time */
+#define ACPI_DASM_IGNORE_SINGLE         0x0B        /* Ignore the opcode but not it's children */
+#define ACPI_DASM_SWITCH                0x0C        /* While is a Switch */
+#define ACPI_DASM_SWITCH_PREDICATE      0x0D        /* Object is a predicate for a Switch or Case block */
+#define ACPI_DASM_CASE                  0x0E        /* If/Else is a Case in a Switch/Case block */
+#define ACPI_DASM_DEFAULT               0x0F        /* Else is a Default in a Switch/Case block */
+
+
+/*
+ * List struct used in the -ca option
+ */
+typedef struct acpi_comment_node
+{
+  char                      *Comment;
+  struct acpi_comment_node  *Next;
+
+} ACPI_COMMENT_NODE;
+
+
+typedef struct acpi_comment_addr_node
+{
+  UINT8                                    *Addr;
+  struct acpi_comment_addr_node            *Next;
+} ACPI_COMMENT_ADDR_NODE;
+
+/*
+ * File node - used for "Include" operator file stack and
+ * dependency tree for the -ca option
+ */
+typedef struct acpi_file_node
+{
+    void                    *File;
+    char                    *Filename;
+    char                    *FileStart;  /* Points to AML and indicates when the AML for this particular file starts. */
+    char                    *FileEnd;    /* Points to AML and indicates when the AML for this particular file ends. */
+    struct acpi_file_node   *Next;
+    struct acpi_file_node   *Parent;
+    BOOLEAN                 IncludeWritten;
+    ACPI_COMMENT_NODE       *IncludeComment;
+
+} ACPI_FILE_NODE;
+
 
 /*
  * Generic operation (for example:  If, While, Store)
@@ -951,7 +1029,7 @@ typedef struct acpi_parse_obj_common
 typedef struct acpi_parse_obj_named
 {
     ACPI_PARSE_COMMON
-    UINT8                           *Path;
+    char                            *Path;
     UINT8                           *Data;          /* AML body or bytelist data */
     UINT32                          Length;         /* AML length */
     UINT32                          Name;           /* 4-byte name or zero if no name */
@@ -961,7 +1039,7 @@ typedef struct acpi_parse_obj_named
 
 /* This version is used by the iASL compiler only */
 
-#define ACPI_MAX_PARSEOP_NAME   20
+#define ACPI_MAX_PARSEOP_NAME       20
 
 typedef struct acpi_parse_obj_asl
 {
@@ -969,6 +1047,8 @@ typedef struct acpi_parse_obj_asl
     union acpi_parse_object         *Child;
     union acpi_parse_object         *ParentMethod;
     char                            *Filename;
+    BOOLEAN                         FileChanged;
+    char                            *ParentFilename;
     char                            *ExternalName;
     char                            *Namepath;
     char                            NameSeg[4];
@@ -1000,6 +1080,16 @@ typedef union acpi_parse_object
     ACPI_PARSE_OBJ_ASL              Asl;
 
 } ACPI_PARSE_OBJECT;
+
+typedef struct asl_comment_state
+{
+    UINT8                           CommentType;
+    UINT32                          SpacesBefore;
+    ACPI_PARSE_OBJECT               *LatestParseOp;
+    ACPI_PARSE_OBJECT               *ParsingParenBraceNode;
+    BOOLEAN                         CaptureComments;
+
+} ASL_COMMENT_STATE;
 
 
 /*
@@ -1034,14 +1124,15 @@ typedef struct acpi_parse_state
 
 /* Parse object DisasmFlags */
 
-#define ACPI_PARSEOP_IGNORE                 0x01
-#define ACPI_PARSEOP_PARAMETER_LIST         0x02
-#define ACPI_PARSEOP_EMPTY_TERMLIST         0x04
-#define ACPI_PARSEOP_PREDEFINED_CHECKED     0x08
-#define ACPI_PARSEOP_CLOSING_PAREN          0x10
-#define ACPI_PARSEOP_COMPOUND_ASSIGNMENT    0x20
-#define ACPI_PARSEOP_ASSIGNMENT             0x40
-#define ACPI_PARSEOP_ELSEIF                 0x80
+#define ACPI_PARSEOP_IGNORE                 0x0001
+#define ACPI_PARSEOP_PARAMETER_LIST         0x0002
+#define ACPI_PARSEOP_EMPTY_TERMLIST         0x0004
+#define ACPI_PARSEOP_PREDEFINED_CHECKED     0x0008
+#define ACPI_PARSEOP_CLOSING_PAREN          0x0010
+#define ACPI_PARSEOP_COMPOUND_ASSIGNMENT    0x0020
+#define ACPI_PARSEOP_ASSIGNMENT             0x0040
+#define ACPI_PARSEOP_ELSEIF                 0x0080
+#define ACPI_PARSEOP_LEGACY_ASL_ONLY        0x0100
 
 
 /*****************************************************************************
@@ -1169,7 +1260,7 @@ typedef struct acpi_bit_register_info
 
 typedef struct acpi_interface_info
 {
-    char                        *Name;
+    const char                  *Name;
     struct acpi_interface_info  *Next;
     UINT8                       Flags;
     UINT8                       Value;
@@ -1247,8 +1338,13 @@ typedef struct acpi_port_info
 #define ACPI_RESOURCE_NAME_ADDRESS64            0x8A
 #define ACPI_RESOURCE_NAME_EXTENDED_ADDRESS64   0x8B
 #define ACPI_RESOURCE_NAME_GPIO                 0x8C
+#define ACPI_RESOURCE_NAME_PIN_FUNCTION         0x8D
 #define ACPI_RESOURCE_NAME_SERIAL_BUS           0x8E
-#define ACPI_RESOURCE_NAME_LARGE_MAX            0x8E
+#define ACPI_RESOURCE_NAME_PIN_CONFIG           0x8F
+#define ACPI_RESOURCE_NAME_PIN_GROUP            0x90
+#define ACPI_RESOURCE_NAME_PIN_GROUP_FUNCTION   0x91
+#define ACPI_RESOURCE_NAME_PIN_GROUP_CONFIG     0x92
+#define ACPI_RESOURCE_NAME_LARGE_MAX            0x92
 
 
 /*****************************************************************************
@@ -1285,6 +1381,7 @@ typedef struct acpi_external_list
 #define ACPI_EXT_INTERNAL_PATH_ALLOCATED    0x04    /* Deallocate internal path on completion */
 #define ACPI_EXT_EXTERNAL_EMITTED           0x08    /* External() statement has been emitted */
 #define ACPI_EXT_ORIGIN_FROM_OPCODE         0x10    /* External came from a External() opcode */
+#define ACPI_EXT_CONFLICTING_DECLARATION    0x20    /* External has a conflicting declaration within AML */
 
 
 typedef struct acpi_external_file
@@ -1294,6 +1391,13 @@ typedef struct acpi_external_file
 
 } ACPI_EXTERNAL_FILE;
 
+
+typedef struct acpi_parse_object_list
+{
+    ACPI_PARSE_OBJECT               *Op;
+    struct acpi_parse_object_list   *Next;
+
+} ACPI_PARSE_OBJECT_LIST;
 
 /*****************************************************************************
  *
@@ -1320,16 +1424,17 @@ typedef struct acpi_db_method_info
     ACPI_OBJECT_TYPE                *Types;
 
     /*
-     * Arguments to be passed to method for the command
-     * Threads -
-     *   the Number of threads, ID of current thread and
-     *   Index of current thread inside all them created.
+     * Arguments to be passed to method for the commands Threads and
+     * Background. Note, ACPI specifies a maximum of 7 arguments (0 - 6).
+     *
+     * For the Threads command, the Number of threads, ID of current
+     * thread and Index of current thread inside all them created.
      */
     char                            InitArgs;
 #ifdef ACPI_DEBUGGER
-    ACPI_OBJECT_TYPE                ArgTypes[4];
+    ACPI_OBJECT_TYPE                ArgTypes[ACPI_METHOD_NUM_ARGS];
 #endif
-    char                            *Arguments[4];
+    char                            *Arguments[ACPI_METHOD_NUM_ARGS];
     char                            NumThreadsStr[11];
     char                            IdOfThreadStr[11];
     char                            IndexOfThreadStr[11];

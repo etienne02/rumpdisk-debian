@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_device.c,v 1.64 2014/12/14 23:48:58 chs Exp $	*/
+/*	$NetBSD: uvm_device.c,v 1.72 2021/03/13 15:29:55 skrll Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_device.c,v 1.64 2014/12/14 23:48:58 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_device.c,v 1.72 2021/03/13 15:29:55 skrll Exp $");
 
 #include "opt_uvmhist.h"
 
@@ -54,7 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_device.c,v 1.64 2014/12/14 23:48:58 chs Exp $");
 
 LIST_HEAD(udv_list_struct, uvm_device);
 static struct udv_list_struct udv_list;
-static kmutex_t udv_lock;
+static kmutex_t udv_lock __cacheline_aligned;
 
 /*
  * functions
@@ -114,9 +114,8 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 	const struct cdevsw *cdev;
 	dev_type_mmap((*mapfn));
 
-	UVMHIST_FUNC("udv_attach"); UVMHIST_CALLED(maphist);
-
-	UVMHIST_LOG(maphist, "(device=0x%x)", device,0,0,0);
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(maphist, "(device=%#jx)", device,0,0,0);
 
 	/*
 	 * before we do anything, ensure this device supports mmap
@@ -127,7 +126,7 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 		return (NULL);
 	}
 	mapfn = cdev->d_mmap;
-	if (mapfn == NULL || mapfn == nommap || mapfn == nullmmap) {
+	if (mapfn == NULL || mapfn == nommap) {
 		return(NULL);
 	}
 
@@ -196,9 +195,9 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 			 * bump reference count, unhold, return.
 			 */
 
-			mutex_enter(lcv->u_obj.vmobjlock);
+			rw_enter(lcv->u_obj.vmobjlock, RW_WRITER);
 			lcv->u_obj.uo_refs++;
-			mutex_exit(lcv->u_obj.vmobjlock);
+			rw_exit(lcv->u_obj.vmobjlock);
 
 			mutex_enter(&udv_lock);
 			if (lcv->u_flags & UVM_DEVICE_WANTED)
@@ -269,13 +268,13 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 static void
 udv_reference(struct uvm_object *uobj)
 {
-	UVMHIST_FUNC("udv_reference"); UVMHIST_CALLED(maphist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
-	mutex_enter(uobj->vmobjlock);
+	rw_enter(uobj->vmobjlock, RW_WRITER);
 	uobj->uo_refs++;
-	UVMHIST_LOG(maphist, "<- done (uobj=0x%x, ref = %d)",
-		    uobj, uobj->uo_refs,0,0);
-	mutex_exit(uobj->vmobjlock);
+	UVMHIST_LOG(maphist, "<- done (uobj=%#jx, ref = %jd)",
+	    (uintptr_t)uobj, uobj->uo_refs,0,0);
+	rw_exit(uobj->vmobjlock);
 }
 
 /*
@@ -290,18 +289,18 @@ static void
 udv_detach(struct uvm_object *uobj)
 {
 	struct uvm_device *udv = (struct uvm_device *)uobj;
-	UVMHIST_FUNC("udv_detach"); UVMHIST_CALLED(maphist);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
 	/*
 	 * loop until done
 	 */
 again:
-	mutex_enter(uobj->vmobjlock);
+	rw_enter(uobj->vmobjlock, RW_WRITER);
 	if (uobj->uo_refs > 1) {
 		uobj->uo_refs--;
-		mutex_exit(uobj->vmobjlock);
-		UVMHIST_LOG(maphist," <- done, uobj=0x%x, ref=%d",
-			  uobj,uobj->uo_refs,0,0);
+		rw_exit(uobj->vmobjlock);
+		UVMHIST_LOG(maphist," <- done, uobj=%#jx, ref=%jd",
+		    (uintptr_t)uobj,uobj->uo_refs,0,0);
 		return;
 	}
 
@@ -312,7 +311,7 @@ again:
 	mutex_enter(&udv_lock);
 	if (udv->u_flags & UVM_DEVICE_HOLD) {
 		udv->u_flags |= UVM_DEVICE_WANTED;
-		mutex_exit(uobj->vmobjlock);
+		rw_exit(uobj->vmobjlock);
 		UVM_UNLOCK_AND_WAIT(udv, &udv_lock, false, "udv_detach",0);
 		goto again;
 	}
@@ -325,11 +324,12 @@ again:
 	if (udv->u_flags & UVM_DEVICE_WANTED)
 		wakeup(udv);
 	mutex_exit(&udv_lock);
-	mutex_exit(uobj->vmobjlock);
+	rw_exit(uobj->vmobjlock);
 
 	uvm_obj_destroy(uobj, true);
 	kmem_free(udv, sizeof(*udv));
-	UVMHIST_LOG(maphist," <- done, freed uobj=0x%x", uobj,0,0,0);
+	UVMHIST_LOG(maphist," <- done, freed uobj=%#jx", (uintptr_t)uobj,
+	    0, 0, 0);
 }
 
 /*
@@ -363,8 +363,8 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 	int lcv, retval;
 	dev_t device;
 	vm_prot_t mapprot;
-	UVMHIST_FUNC("udv_fault"); UVMHIST_CALLED(maphist);
-	UVMHIST_LOG(maphist,"  flags=%d", flags,0,0,0);
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
+	UVMHIST_LOG(maphist,"  flags=%#jx", flags,0,0,0);
 
 	/*
 	 * we do not allow device mappings to be mapped copy-on-write
@@ -372,8 +372,8 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 	 */
 
 	if (UVM_ET_ISCOPYONWRITE(entry)) {
-		UVMHIST_LOG(maphist, "<- failed -- COW entry (etype=0x%x)",
-		entry->etype, 0,0,0);
+		UVMHIST_LOG(maphist, "<- failed -- COW entry (etype=%#jx)",
+		    entry->etype, 0,0,0);
 		uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, uobj);
 		return(EIO);
 	}
@@ -423,8 +423,8 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 		mmapflags = pmap_mmap_flags(mdpgno);
 		mapprot = ufi->entry->protection;
 		UVMHIST_LOG(maphist,
-		    "  MAPPING: device: pm=0x%x, va=0x%x, pa=0x%lx, at=%d",
-		    ufi->orig_map->pmap, curr_va, paddr, mapprot);
+		    "  MAPPING: device: pm=%#jx, va=%#jx, pa=%#jx, at=%jd",
+		    (uintptr_t)ufi->orig_map->pmap, curr_va, paddr, mapprot);
 		if (pmap_enter(ufi->orig_map->pmap, curr_va, paddr, mapprot,
 		    PMAP_CANFAIL | mapprot | mmapflags) != 0) {
 			/*
@@ -440,8 +440,7 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 			pmap_update(ufi->orig_map->pmap);	/* sync what we have so far */
 			uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap,
 			    uobj);
-			uvm_wait("udv_fault");
-			return (ERESTART);
+			return ENOMEM;
 		}
 	}
 

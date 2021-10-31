@@ -1,4 +1,4 @@
-/*	$NetBSD: magma.c,v 1.59 2014/07/25 08:10:38 dholland Exp $	*/
+/*	$NetBSD: magma.c,v 1.64 2021/08/07 16:19:15 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 Iain Hibbert
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: magma.c,v 1.59 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: magma.c,v 1.64 2021/08/07 16:19:15 thorpej Exp $");
 
 #if 0
 #define MAGMA_DEBUG
@@ -475,8 +475,8 @@ magma_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* configure the children */
-	(void)config_found(self, mtty_match, NULL);
-	(void)config_found(self, mbpp_match, NULL);
+	(void)config_found(self, mtty_match, NULL, CFARGS_NONE);
+	(void)config_found(self, mbpp_match, NULL, CFARGS_NONE);
 
 	/*
 	 * Establish the interrupt handlers.
@@ -872,9 +872,7 @@ mtty_attach(device_t parent, device_t self, void *args)
 
 		mp->mp_tty = tp;
 
-		mp->mp_rbuf = malloc(MTTY_RBUF_SIZE, M_DEVBUF, M_NOWAIT);
-		if (mp->mp_rbuf == NULL) break;
-
+		mp->mp_rbuf = malloc(MTTY_RBUF_SIZE, M_DEVBUF, M_WAITOK);
 		mp->mp_rend = mp->mp_rbuf + MTTY_RBUF_SIZE;
 
 		chan = (chan + 1) % CD1400_NO_OF_CHANNELS;
@@ -1564,7 +1562,7 @@ mbpp_rw(dev_t dev, struct uio *uio, int flag)
 	if( uio->uio_resid == 0 )
 		return(0);
 
-	buflen = min(uio->uio_resid, mp->mp_burst);
+	buflen = uimin(uio->uio_resid, mp->mp_burst);
 	buffer = malloc(buflen, M_DEVBUF, M_WAITOK);
 	if( buffer == NULL )
 		return(ENOMEM);
@@ -1582,7 +1580,7 @@ mbpp_rw(dev_t dev, struct uio *uio, int flag)
 
 	len = cnt = 0;
 	while( uio->uio_resid > 0 ) {
-		len = min(buflen, uio->uio_resid);
+		len = uimin(buflen, uio->uio_resid);
 		ptr = buffer;
 
 		if( uio->uio_rw == UIO_WRITE ) {
@@ -1745,7 +1743,10 @@ mbpp_recv(struct mbpp_port *mp, void *ptr, int len)
 		cd1400_write_reg(cd, CD1400_CAR, 0);
 
 		/* input strobe at 100kbaud (10microseconds) */
-		cd1400_compute_baud(100000, cd->cd_clock, &rcor, &rbpr);
+		if (cd1400_compute_baud(100000, cd->cd_clock, &rcor, &rbpr)) {
+			splx(s);
+			return 0;
+		}
 		cd1400_write_reg(cd, CD1400_RCOR, rcor);
 		cd1400_write_reg(cd, CD1400_RBPR, rbpr);
 

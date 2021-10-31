@@ -1,10 +1,10 @@
-#	$NetBSD: files.i2c,v 1.72 2016/07/03 11:40:58 kiyohara Exp $
+#	$NetBSD: files.i2c,v 1.116 2021/07/27 20:23:41 macallan Exp $
 
 obsolete defflag	opt_i2cbus.h		I2C_SCAN
 define	i2cbus { }
 define	i2cexec
 
-device	iic { [addr = -1], [size = -1] } : i2c_bitbang
+device	iic { [addr = -1] } : i2c_bitbang
 attach	iic at i2cbus
 file	dev/i2c/i2c.c				iic
 file	dev/i2c/i2c_exec.c			iic | i2cbus | i2cexec
@@ -14,6 +14,10 @@ defparam opt_i2c.h				I2C_MAX_ADDR
 # Common module for bit-bang'ing an I2C bus
 define	i2c_bitbang
 file	dev/i2c/i2c_bitbang.c			i2c_bitbang
+
+# Common module for i2c mux support
+define	i2cmux
+file	dev/i2c/i2cmux.c			i2cmux
 
 # Auvitek AU8522 decoder
 define	au8522: i2cexec
@@ -55,7 +59,6 @@ define	motoi2c
 file	dev/i2c/motoi2c.c			motoi2c
 define	mvi2c
 file	dev/i2c/gttwsi_core.c			mvi2c
-defflag opt_gttwsi.h				GTTWSI_ALLWINNER
 
 #
 # I2C client devices
@@ -70,8 +73,6 @@ file	dev/i2c/m41t00.c			m41trtc
 device	strtc
 attach	strtc at iic
 file	dev/i2c/m41st84.c			strtc
-defflag	opt_strtc.h				STRTC_NO_USERRAM
-						STRTC_NO_WATCHDOG
 
 # MAX6900 Real Time Clock
 device	maxrtc
@@ -123,6 +124,7 @@ file	dev/i2c/lm87.c				lmenv
 device	dsrtc: sysmon_envsys
 attach	dsrtc at iic
 file	dev/i2c/ds1307.c			dsrtc
+defflag opt_dsrtc.h				DSRTC_YEAR_START_2K
 
 # Xicor X1226 Real Time Clock
 device	xrtc
@@ -130,7 +132,6 @@ attach	xrtc at iic
 file	dev/i2c/x1226.c				xrtc
 
 # Analog Devices dBCool family of thermal monitors / fan controllers
-define dbcool {}
 device dbcool: sysmon_envsys
 attach dbcool at iic
 file dev/i2c/dbcool.c			dbcool
@@ -196,14 +197,11 @@ device	ibmhawk: sysmon_envsys
 attach	ibmhawk at iic
 file	dev/i2c/ibmhawk.c		ibmhawk
 
-# TI TPS65950 OMAP Power Management and System Companion Device
-device	tps65950pm: sysmon_wdog
-attach	tps65950pm at iic
-file	dev/i2c/tps65950.c		tps65950pm
-
 # TI TPS65217
-device	tps65217pmic: sysmon_envsys
+device	tps65217pmic { }: sysmon_envsys
+device	tps65217reg: tps65217pmic
 attach	tps65217pmic at iic
+attach	tps65217reg at tps65217pmic
 file	dev/i2c/tps65217pmic.c 		tps65217pmic	needs-flag
 
 # Microchip MCP980x
@@ -222,8 +220,10 @@ attach  mpl115a at iic
 file    dev/i2c/mpl115a.c		mpl115a
 
 # AXP20x Power Management Unit
-device	axp20x: sysmon_envsys
+device	axp20x { }: sysmon_envsys
+device	axp20xreg: axp20x
 attach	axp20x at iic
+attach	axp20xreg at axp20x
 file	dev/i2c/axp20x.c			axp20x		needs-flag
 
 # AXP22x Power Management Unit
@@ -231,10 +231,12 @@ device	axp22x: sysmon_envsys
 attach	axp22x at iic
 file	dev/i2c/axp22x.c			axp22x
 
-# AXP806 Power Management Unit
-device	axp806pm
-attach	axp806pm at iic
-file	dev/i2c/axp806.c			axp806pm	needs-flag
+# X-Powers AXP Power Management IC
+device	axppmic { }: sysmon_envsys, sysmon_taskq
+device	axpreg: axppmic
+attach	axppmic at iic
+attach	axpreg at axppmic
+file	dev/i2c/axppmic.c			axppmic
 
 # AXP809 Power Management Unit
 device	axp809pm
@@ -257,6 +259,148 @@ attach	titemp at iic
 file	dev/i2c/titemp.c			titemp
 
 # AMS AS3722 Power Management IC
-device	as3722pmic: sysmon_wdog
+device	as3722pmic { }: sysmon_wdog
+device	as3722reg: as3722pmic
 attach	as3722pmic at iic
+attach	as3722reg at as3722pmic
 file	dev/i2c/as3722.c			as3722pmic	needs-flag
+
+# Texas Instruments TCA8418 Keypad Scan IC
+device	tcakp: wskbddev, linux_keymap
+attach	tcakp at iic
+file	dev/i2c/tcakp.c				tcakp
+
+# MAXIM MAX77620 Power Management IC
+device	max77620pmic
+attach	max77620pmic at iic
+file	dev/i2c/max77620.c			max77620pmic
+
+# Texas Instruments TCA9539 I/O Expander
+device	tcagpio
+attach	tcagpio at iic
+file	dev/i2c/tcagpio.c			tcagpio
+
+# Silicon Lab SI7013/SI7020/SI7021 Temperature and Humidity sensor
+device si70xxtemp
+attach si70xxtemp at iic
+file dev/i2c/si70xx.c				si70xxtemp
+
+# Aosong AM2315 Temperature and Humidity sensor
+device am2315temp
+attach am2315temp at iic
+file dev/i2c/am2315.c				am2315temp
+
+# Silergy SY8106A regulator
+device	sy8106a
+attach	sy8106a at iic
+file	dev/i2c/sy8106a.c			sy8106a
+
+# Maxim DS1631 High-Precision Digital Thermometer and Thermostat
+device	dstemp: sysmon_envsys
+attach	dstemp at iic
+file	dev/i2c/dstemp.c			dstemp
+
+# EM3027 Real Time Clock and Temperature Sensor
+device	em3027rtc: sysmon_envsys
+attach	em3027rtc at iic
+file	dev/i2c/em3027.c			em3027rtc
+
+# Analog Devices AD7417 thermometer and ADC
+device	adadc: sysmon_envsys
+attach	adadc at iic
+file	dev/i2c/adadc.c				adadc
+
+# Apple Sudden Motion Sensor
+device	asms: sysmon_envsys
+attach	asms at iic
+file	dev/i2c/asms.c				asms
+
+# HID over i2c
+# HID "bus"
+define  ihidbus {[ reportid = -1 ]}
+
+# HID root device for multiple report IDs
+device  ihidev: hid, ihidbus
+attach  ihidev at iic
+file    dev/i2c/ihidev.c			ihidev
+
+#HID mice
+device	ims: hid, hidms, wsmousedev
+attach	ims at ihidbus
+file	dev/i2c/ims.c				ims
+
+#HID multitouch
+device	imt: hid, hidmt, wsmousedev
+attach	imt at ihidbus
+file	dev/i2c/imt.c				imt
+
+# Taos TSL256x ambient light sensor
+device	tsllux: sysmon_envsys
+attach	tsllux at iic
+file	dev/i2c/tsllux.c			tsllux
+
+# Philips/NXP TEA5767 
+device tea5767radio : radiodev
+attach tea5767radio at iic
+file dev/i2c/tea5767.c				tea5767radio
+
+# Fairchild FAN53555 / Silergy SY82x regulator
+device	fan53555reg
+attach	fan53555reg at iic
+file	dev/i2c/fan53555.c			fan53555reg
+
+# Rockchip Power Management IC
+device	rkpmic { }
+device	rkreg: rkpmic
+attach	rkpmic at iic
+attach	rkreg at rkpmic
+file	dev/i2c/rkpmic.c			rkpmic
+
+# SSD1306 or SH1106 OLED/PLED display
+attach	ssdfb at iic with ssdfb_iic
+file	dev/i2c/ssdfb_i2c.c			ssdfb_iic
+
+# Analogix ANX6345 eDP transmitter
+device	anxedp: edid, videomode, drmkms, drmkms_i2c
+attach	anxedp at iic
+file	dev/i2c/anxedp.c			anxedp
+
+# NXP PCA954x / PCA984x I2C switch / mux controllers
+device	pcaiicmux: i2cbus, i2cmux
+attach	pcaiicmux at iic
+file	dev/i2c/pcai2cmux.c			pcaiicmux
+
+# NXP PCA9685 16-channel, 12-bit PWM Fm+ LED controller
+device	pcapwm: pwm
+attach	pcapwm at iic
+file	dev/i2c/pca9685.c			pcapwm
+
+# TI TWL4030 Power Management IC
+device	twl
+attach	twl at iic
+file	dev/i2c/twl4030.c			twl
+
+# NXP TDA19988 HDMI encoder
+device	tdahdmi: edid, videomode, drmkms, drmkms_i2c
+attach	tdahdmi at iic
+file	dev/i2c/tda19988.c			tdahdmi
+
+# Everest Semi ES8316 Low Power Audio CODEC
+device	es8316ac
+attach	es8316ac at iic
+file	dev/i2c/es8316ac.c			es8316ac
+
+# CellWise CW2015 Fuel Gauge IC
+device	cwfg: sysmon_envsys
+attach	cwfg at iic
+file	dev/i2c/cwfg.c				cwfg
+
+# Philips PCA955x GPIO
+device	pcagpio: leds
+attach	pcagpio at iic
+file	dev/i2c/pcagpio.c			pcagpio
+
+# Philips PCF8574 IO expander
+device	pcf8574io: leds, sysmon_envsys
+attach	pcf8574io at iic
+file	dev/i2c/pcf8574.c			pcf8574io

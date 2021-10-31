@@ -1,4 +1,4 @@
-/* $NetBSD: tcvar.h,v 1.26 2011/06/04 01:57:34 tsutsui Exp $ */
+/* $NetBSD: tcvar.h,v 1.28 2021/05/07 16:55:58 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
@@ -68,7 +68,8 @@ struct tc_softc {
 
 	int	sc_speed;
 	int	sc_nslots;
-	struct tc_slotdesc *sc_slots;
+	const struct tc_slotdesc *sc_slots;
+	uint32_t sc_slots_used;
 
 	const struct evcnt *(*sc_intr_evcnt)(device_t, void *);
 	void	(*sc_intr_establish)(device_t, void *,
@@ -87,7 +88,7 @@ struct tcbus_attach_args {
 	/* Bus information */
 	u_int		tba_speed;		/* see TC_SPEED_* below */
 	u_int		tba_nslots;
-	struct tc_slotdesc *tba_slots;
+	const struct tc_slotdesc *tba_slots;
 	u_int		tba_nbuiltins;
 	const struct tc_builtin *tba_builtins;
 
@@ -122,7 +123,6 @@ struct tc_attach_args {
 struct tc_slotdesc {
 	tc_addr_t	tcs_addr;
 	void		*tcs_cookie;
-	int		tcs_used;
 };
 
 /*
@@ -139,7 +139,7 @@ struct tc_builtin {
 /*
  * Interrupt establishment functions.
  */
-int	tc_checkslot(tc_addr_t, char *);
+int	tc_checkslot(tc_addr_t, char *, struct tc_rommap **);
 void	tcattach(device_t, device_t, void *);
 const struct evcnt *tc_intr_evcnt(device_t, void *);
 void	tc_intr_establish(device_t, void *, int, int (*)(void *),

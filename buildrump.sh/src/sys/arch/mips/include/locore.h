@@ -1,4 +1,4 @@
-/* $NetBSD: locore.h,v 1.100 2016/07/11 16:15:35 matt Exp $ */
+/* $NetBSD: locore.h,v 1.119 2021/05/27 15:00:02 simonb Exp $ */
 
 /*
  * This file should not be included by MI code!!!
@@ -26,11 +26,13 @@
  */
 
 #ifndef _MIPS_LOCORE_H
-#define _MIPS_LOCORE_H
+#define	_MIPS_LOCORE_H
 
-#if !defined(_LKM) && defined(_KERNEL_OPT)
+#if !defined(_MODULE) && defined(_KERNEL_OPT)
 #include "opt_cputype.h"
 #endif
+
+#ifndef __ASSEMBLER__
 
 #include <sys/cpu.h>
 
@@ -39,17 +41,18 @@
 #include <mips/reg.h>
 
 #ifndef __BSD_PTENTRY_T__
-#define __BSD_PTENTRY_T__
+#define	__BSD_PTENTRY_T__
 typedef uint32_t pt_entry_t;
-#define PRIxPTE		PRIx32
+#define	PRIxPTE		PRIx32
 #endif
 
 #include <uvm/pmap/tlb.h>
+#endif /* !__ASSEMBLER__ */
 
 #ifdef _KERNEL
 
-#if defined(_MODULAR) || defined(_LKM) || defined(_STANDALONE)
-/* Assume all CPU architectures are valid for LKM's and standlone progs */
+#if defined(_MODULE) || defined(_STANDALONE)
+/* Assume all CPU architectures are valid for modules and standlone progs */
 #if !defined(__mips_n32) && !defined(__mips_n64)
 #define	MIPS1		1
 #endif
@@ -61,7 +64,7 @@ typedef uint32_t pt_entry_t;
 #endif
 #define	MIPS64		1
 #define	MIPS64R2	1
-#endif /* _MODULAR || _LKM || _STANDALONE */
+#endif /* _MODULE || _STANDALONE */
 
 #if (MIPS1 + MIPS3 + MIPS4 + MIPS32 + MIPS32R2 + MIPS64 + MIPS64R2) == 0
 #error at least one of MIPS1, MIPS3, MIPS4, MIPS32, MIPS32R2, MIPS64, or MIPS64R2 must be specified
@@ -74,21 +77,25 @@ typedef uint32_t pt_entry_t;
 
 #define	MIPS3_PLUS	1
 #if !defined(MIPS32) && !defined(MIPS32R2)
-#define MIPS3_64BIT	1
+#define	MIPS3_64BIT	1
 #endif
 #if !defined(MIPS3) && !defined(MIPS4)
-#define MIPSNN		1
+#define	MIPSNN		1
 #endif
 #if defined(MIPS32R2) || defined(MIPS64R2)
-#define MIPSNNR2	1
+#define	MIPSNNR2	1
 #endif
 #else
 #undef MIPS3_PLUS
 #endif
 
-#if !defined(MIPS3_PLUS) && (ENABLE_MIPS_8KB_PAGE + ENABLE_MIPS_16KB_PAGE) > 0
-#error MIPS1 does not support non-4KB page sizes.
+#if defined(MIPS1) && (ENABLE_MIPS_8KB_PAGE + ENABLE_MIPS_16KB_PAGE) > 0
+#error MIPS1 only supports a 4kB page size.
 #endif
+
+/* XXX some .S files look for MIPS3_PLUS */
+#ifndef __ASSEMBLER__
+#ifdef _KERNEL
 
 /* XXX simonb
  * Should the following be in a cpu_info type structure?
@@ -122,6 +129,8 @@ struct mips_options {
 #endif
 };
 
+#endif /* !__ASSEMBLER__ */
+
 /*
  * Macros to find the CPU architecture we're on at run-time,
  * or if possible, at compile-time.
@@ -138,22 +147,23 @@ struct mips_options {
 #define	CPU_ARCH_MIPS32R2	(1 << 7)
 #define	CPU_ARCH_MIPS64R2	(1 << 8)
 
-#define	CPU_MIPS_R4K_MMU		0x0001
-#define	CPU_MIPS_NO_LLSC		0x0002
-#define	CPU_MIPS_CAUSE_IV		0x0004
-#define	CPU_MIPS_HAVE_SPECIAL_CCA	0x0008	/* Defaults to '3' if not set. */
-#define	CPU_MIPS_CACHED_CCA_MASK	0x0070
+#define	CPU_MIPS_R4K_MMU		0x00001
+#define	CPU_MIPS_NO_LLSC		0x00002
+#define	CPU_MIPS_CAUSE_IV		0x00004
+#define	CPU_MIPS_HAVE_SPECIAL_CCA	0x00008	/* Defaults to '3' if not set. */
+#define	CPU_MIPS_CACHED_CCA_MASK	0x00070
 #define	CPU_MIPS_CACHED_CCA_SHIFT	 4
-#define	CPU_MIPS_DOUBLE_COUNT		0x0080	/* 1 cp0 count == 2 clock cycles */
-#define	CPU_MIPS_USE_WAIT		0x0100	/* Use "wait"-based cpu_idle() */
-#define	CPU_MIPS_NO_WAIT		0x0200	/* Inverse of previous, for mips32/64 */
-#define	CPU_MIPS_D_CACHE_COHERENT	0x0400	/* D-cache is fully coherent */
-#define	CPU_MIPS_I_D_CACHE_COHERENT	0x0800	/* I-cache funcs don't need to flush the D-cache */
-#define	CPU_MIPS_NO_LLADDR		0x1000
-#define	CPU_MIPS_HAVE_MxCR		0x2000	/* have mfcr, mtcr insns */
-#define	CPU_MIPS_LOONGSON2		0x4000
-#define	MIPS_NOT_SUPP			0x8000
+#define	CPU_MIPS_DOUBLE_COUNT		0x00080	/* 1 cp0 count == 2 clock cycles */
+#define	CPU_MIPS_USE_WAIT		0x00100	/* Use "wait"-based cpu_idle() */
+#define	CPU_MIPS_NO_WAIT		0x00200	/* Inverse of previous, for mips32/64 */
+#define	CPU_MIPS_D_CACHE_COHERENT	0x00400	/* D-cache is fully coherent */
+#define	CPU_MIPS_I_D_CACHE_COHERENT	0x00800	/* I-cache funcs don't need to flush the D-cache */
+#define	CPU_MIPS_NO_LLADDR		0x01000
+#define	CPU_MIPS_HAVE_MxCR		0x02000	/* have mfcr, mtcr insns */
+#define	CPU_MIPS_LOONGSON2		0x04000
+#define	MIPS_NOT_SUPP			0x08000
 #define	CPU_MIPS_HAVE_DSP		0x10000
+#define	CPU_MIPS_HAVE_USERLOCAL		0x20000
 
 #endif	/* !_LOCORE */
 
@@ -173,8 +183,9 @@ struct mips_options {
 # define MIPS_HAS_CLOCK		0
 # define MIPS_HAS_LLSC		0
 # define MIPS_HAS_LLADDR	0
-# define MIPS_HAS_DSP		0
 # define MIPS_HAS_LMMI		0
+# define MIPS_HAS_DSP		0
+# define MIPS_HAS_USERLOCAL	0
 
 #elif defined(MIPS3) || defined(MIPS4)
 
@@ -198,12 +209,14 @@ struct mips_options {
 #  define MIPS_HAS_LLSC		(mips_options.mips_has_llsc)
 # endif	/* _LOCORE */
 # define MIPS_HAS_LLADDR	((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-# define MIPS_HAS_DSP		0
 # if defined(MIPS3_LOONGSON2)
 #  define MIPS_HAS_LMMI		((mips_options.mips_cpu_flags & CPU_MIPS_LOONGSON2) != 0)
 # else
 #  define MIPS_HAS_LMMI		0
 # endif
+# define MIPS_HAS_DSP		0
+# define MIPS_HAS_USERLOCAL	0
+
 #elif defined(MIPS32)
 
 # define CPUISMIPS3		1
@@ -218,8 +231,9 @@ struct mips_options {
 # define MIPS_HAS_CLOCK		1
 # define MIPS_HAS_LLSC		1
 # define MIPS_HAS_LLADDR	((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-# define MIPS_HAS_DSP		0
 # define MIPS_HAS_LMMI		0
+# define MIPS_HAS_DSP		0
+# define MIPS_HAS_USERLOCAL	0
 
 #elif defined(MIPS32R2)
 
@@ -235,8 +249,9 @@ struct mips_options {
 # define MIPS_HAS_CLOCK		1
 # define MIPS_HAS_LLSC		1
 # define MIPS_HAS_LLADDR	((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-# define MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
 # define MIPS_HAS_LMMI		0
+# define MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
+# define MIPS_HAS_USERLOCAL	(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_USERLOCAL)
 
 #elif defined(MIPS64)
 
@@ -252,8 +267,9 @@ struct mips_options {
 # define MIPS_HAS_CLOCK		1
 # define MIPS_HAS_LLSC		1
 # define MIPS_HAS_LLADDR	((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-# define MIPS_HAS_DSP		0
 # define MIPS_HAS_LMMI		0
+# define MIPS_HAS_DSP		0
+# define MIPS_HAS_USERLOCAL	0
 
 #elif defined(MIPS64R2)
 
@@ -269,8 +285,9 @@ struct mips_options {
 # define MIPS_HAS_CLOCK		1
 # define MIPS_HAS_LLSC		1
 # define MIPS_HAS_LLADDR	((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-# define MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
 # define MIPS_HAS_LMMI		0
+# define MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
+# define MIPS_HAS_USERLOCAL	(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_USERLOCAL)
 
 #endif
 
@@ -282,13 +299,14 @@ struct mips_options {
 #else
 #define	MIPS_HAS_R4K_MMU	1
 #if !defined(MIPS3_4100)
-#define MIPS_HAS_LLSC		1
+#define	MIPS_HAS_LLSC		1
 #else
-#define MIPS_HAS_LLSC		(mips_options.mips_has_llsc)
+#define	MIPS_HAS_LLSC		(mips_options.mips_has_llsc)
 #endif
 #endif
 #define	MIPS_HAS_LLADDR		((mips_options.mips_cpu_flags & CPU_MIPS_NO_LLADDR) == 0)
-#define MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
+#define	MIPS_HAS_DSP		(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_DSP)
+#define MIPS_HAS_USERLOCAL	(mips_options.mips_cpu_flags & CPU_MIPS_HAVE_USERLOCAL)
 
 /* This test is ... rather bogus */
 #define	CPUISMIPS3	((mips_options.mips_cpu_arch & \
@@ -301,13 +319,18 @@ struct mips_options {
 #define	CPUISMIPS32R2	((mips_options.mips_cpu_arch & CPU_ARCH_MIPS32R2) != 0)
 #define	CPUISMIPS64	((mips_options.mips_cpu_arch & CPU_ARCH_MIPS64) != 0)
 #define	CPUISMIPS64R2	((mips_options.mips_cpu_arch & CPU_ARCH_MIPS64R2) != 0)
-#define	CPUISMIPSNN	((mips_options.mips_cpu_arch & (CPU_ARCH_MIPS32 | CPU_ARCH_MIPS32R2 | CPU_ARCH_MIPS64 | CPU_ARCH_MIPS64R2)) != 0)
+#define	CPUISMIPSNN	((mips_options.mips_cpu_arch & \
+	(CPU_ARCH_MIPS32 | CPU_ARCH_MIPS32R2 | CPU_ARCH_MIPS64 | CPU_ARCH_MIPS64R2)) != 0)
+#define	CPUISMIPSNNR2	((mips_options.mips_cpu_arch & \
+	(CPU_ARCH_MIPS32R2 | CPU_ARCH_MIPS64R2)) != 0)
 #define	CPUIS64BITS	((mips_options.mips_cpu_arch & \
 	(CPU_ARCH_MIPS3 | CPU_ARCH_MIPS4 | CPU_ARCH_MIPS64 | CPU_ARCH_MIPS64R2)) != 0)
 
 #define	MIPS_HAS_CLOCK	(mips_options.mips_cpu_arch >= CPU_ARCH_MIPS3)
 
 #endif /* run-time test */
+
+#ifndef __ASSEMBLER__
 
 struct tlbmask;
 struct trapframe;
@@ -324,8 +347,6 @@ void	mips_emul_inst(uint32_t, uint32_t, vaddr_t, struct trapframe *);
 void	mips_emul_fp(uint32_t, struct trapframe *, uint32_t);
 void	mips_emul_branchdelayslot(uint32_t, struct trapframe *, uint32_t);
 
-void	mips_emul_lwc0(uint32_t, struct trapframe *, uint32_t);
-void	mips_emul_swc0(uint32_t, struct trapframe *, uint32_t);
 void	mips_emul_special(uint32_t, struct trapframe *, uint32_t);
 void	mips_emul_special3(uint32_t, struct trapframe *, uint32_t);
 
@@ -380,7 +401,7 @@ struct mips_jump_fixup_info {
 	uint32_t jfi_stub;
 	uint32_t jfi_real;
 };
- 
+
 void	fixup_splcalls(void);				/* splstubs.c */
 bool	mips_fixup_exceptions(mips_fixup_callback_t, void *);
 bool	mips_fixup_zero_relative(int32_t, uint32_t [2], void *);
@@ -424,6 +445,8 @@ void	mipsNN_cp0_watchhi_write(u_int, uint32_t);
 
 int32_t mipsNN_cp0_ebase_read(void);
 void	mipsNN_cp0_ebase_write(int32_t);
+
+uint32_t mipsNN_cp0_rdhwr_cpunum(void);
 
 #ifdef MIPSNNR2
 void	mipsNN_cp0_hwrena_write(uint32_t);
@@ -514,7 +537,7 @@ static inline void
 mips_sb(register_t addr, uint8_t val)
 {
 #if defined(__mips_n32)
-	__asm volatile("sb\t%1, 0(%0)" :: "d"(addr), "r"(val));
+	__asm volatile("sb\t%1, 0(%0)" :: "d"(addr), "r"(val) : "memory");
 #else
 	*(volatile uint8_t *)addr = val;
 #endif
@@ -524,7 +547,7 @@ static inline void
 mips_sh(register_t addr, uint16_t val)
 {
 #if defined(__mips_n32)
-	__asm volatile("sh\t%1, 0(%0)" :: "d"(addr), "r"(val));
+	__asm volatile("sh\t%1, 0(%0)" :: "d"(addr), "r"(val) : "memory");
 #else
 	*(volatile uint16_t *)addr = val;
 #endif
@@ -534,7 +557,7 @@ static inline void
 mips_sw(register_t addr, uint32_t val)
 {
 #if defined(__mips_n32)
-	__asm volatile("sw\t%1, 0(%0)" :: "d"(addr), "r"(val));
+	__asm volatile("sw\t%1, 0(%0)" :: "d"(addr), "r"(val) : "memory");
 #else
 	*(volatile uint32_t *)addr = val;
 #endif
@@ -545,7 +568,7 @@ static inline void
 mips3_sd(register_t addr, uint64_t val)
 {
 #if defined(__mips_n32)
-	__asm volatile("sd\t%1, 0(%0)" :: "d"(addr), "r"(val));
+	__asm volatile("sd\t%1, 0(%0)" :: "d"(addr), "r"(val) : "memory");
 #else
 	*(volatile uint64_t *)addr = val;
 #endif
@@ -575,8 +598,10 @@ typedef struct  {
 typedef struct {
 	u_int	(*lav_atomic_cas_uint)(volatile u_int *, u_int, u_int);
 	u_long	(*lav_atomic_cas_ulong)(volatile u_long *, u_long, u_long);
-	int	(*lav_ucas_uint)(volatile u_int *, u_int, u_int, u_int *);
-	int	(*lav_ucas_ulong)(volatile u_long *, u_long, u_long, u_long *);
+	int	(*lav_ucas_32)(volatile uint32_t *, uint32_t, uint32_t,
+			       uint32_t *);
+	int	(*lav_ucas_64)(volatile uint64_t *, uint64_t, uint64_t,
+			       uint64_t *);
 	void	(*lav_mutex_enter)(kmutex_t *);
 	void	(*lav_mutex_exit)(kmutex_t *);
 	void	(*lav_mutex_spin_enter)(kmutex_t *);
@@ -634,101 +659,28 @@ extern kcpuset_t *cpus_halted;
 #endif
 
 /* copy.S */
+uint32_t mips_ufetch32(const void *);
+int	mips_ustore32_isync(void *, uint32_t);
+
 int32_t kfetch_32(volatile uint32_t *, uint32_t);
-int8_t	ufetch_int8(void *);
-int16_t	ufetch_int16(void *);
-int32_t ufetch_int32(void *);
-uint8_t	ufetch_uint8(void *);
-uint16_t ufetch_uint16(void *);
-uint32_t ufetch_uint32(void *);
-int8_t	ufetch_int8_intrsafe(void *);
-int16_t	ufetch_int16_intrsafe(void *);
-int32_t ufetch_int32_intrsafe(void *);
-uint8_t	ufetch_uint8_intrsafe(void *);
-uint16_t ufetch_uint16_intrsafe(void *);
-uint32_t ufetch_uint32_intrsafe(void *);
-#ifdef _LP64
-int64_t ufetch_int64(void *);
-uint64_t ufetch_uint64(void *);
-int64_t ufetch_int64_intrsafe(void *);
-uint64_t ufetch_uint64_intrsafe(void *);
-#endif
-char	ufetch_char(void *);
-short	ufetch_short(void *);
-int	ufetch_int(void *);
-long	ufetch_long(void *);
-char	ufetch_char_intrsafe(void *);
-short	ufetch_short_intrsafe(void *);
-int	ufetch_int_intrsafe(void *);
-long	ufetch_long_intrsafe(void *);
-
-u_char	ufetch_uchar(void *);
-u_short	ufetch_ushort(void *);
-u_int	ufetch_uint(void *);
-u_long	ufetch_ulong(void *);
-u_char	ufetch_uchar_intrsafe(void *);
-u_short	ufetch_ushort_intrsafe(void *);
-u_int	ufetch_uint_intrsafe(void *);
-u_long	ufetch_ulong_intrsafe(void *);
-void 	*ufetch_ptr(void *);
-
-int	ustore_int8(void *, int8_t);
-int	ustore_int16(void *, int16_t);
-int	ustore_int32(void *, int32_t);
-int	ustore_uint8(void *, uint8_t);
-int	ustore_uint16(void *, uint16_t);
-int	ustore_uint32(void *, uint32_t);
-int	ustore_int8_intrsafe(void *, int8_t);
-int	ustore_int16_intrsafe(void *, int16_t);
-int	ustore_int32_intrsafe(void *, int32_t);
-int	ustore_uint8_intrsafe(void *, uint8_t);
-int	ustore_uint16_intrsafe(void *, uint16_t);
-int	ustore_uint32_intrsafe(void *, uint32_t);
-#ifdef _LP64
-int	ustore_int64(void *, int64_t);
-int	ustore_uint64(void *, uint64_t);
-int	ustore_int64_intrsafe(void *, int64_t);
-int	ustore_uint64_intrsafe(void *, uint64_t);
-#endif
-int	ustore_char(void *, char);
-int	ustore_char_intrsafe(void *, char);
-int	ustore_short(void *, short);
-int	ustore_short_intrsafe(void *, short);
-int	ustore_int(void *, int);
-int	ustore_int_intrsafe(void *, int);
-int	ustore_long(void *, long);
-int	ustore_long_intrsafe(void *, long);
-int	ustore_uchar(void *, u_char);
-int	ustore_uchar_intrsafe(void *, u_char);
-int	ustore_ushort(void *, u_short);
-int	ustore_ushort_intrsafe(void *, u_short);
-int	ustore_uint(void *, u_int);
-int	ustore_uint_intrsafe(void *, u_int);
-int	ustore_ulong(void *, u_long);
-int	ustore_ulong_intrsafe(void *, u_long);
-int 	ustore_ptr(void *, void *);
-int	ustore_ptr_intrsafe(void *, void *);
-
-int	ustore_uint32_isync(void *, uint32_t);
 
 /* trap.c */
 void	netintr(void);
-int	kdbpeek(vaddr_t);
 
 /* mips_dsp.c */
 void	dsp_init(void);
-void	dsp_discard(void);
+void	dsp_discard(lwp_t *);
 void	dsp_load(void);
-void	dsp_save(void);
-bool	dsp_used_p(void);
+void	dsp_save(lwp_t *);
+bool	dsp_used_p(const lwp_t *);
 extern const pcu_ops_t mips_dsp_ops;
 
 /* mips_fpu.c */
 void	fpu_init(void);
-void	fpu_discard(void);
+void	fpu_discard(lwp_t *);
 void	fpu_load(void);
-void	fpu_save(void);
-bool	fpu_used_p(void);
+void	fpu_save(lwp_t *);
+bool	fpu_used_p(const lwp_t *);
 extern const pcu_ops_t mips_fpu_ops;
 
 /* mips_machdep.c */
@@ -772,35 +724,34 @@ void	mips_page_physload(vaddr_t, vaddr_t,
 /*
  * CPU identification, from PRID register.
  */
-#define MIPS_PRID_REV(x)	(((x) >>  0) & 0x00ff)
-#define MIPS_PRID_IMPL(x)	(((x) >>  8) & 0x00ff)
+#define	MIPS_PRID_REV(x)	(((x) >>  0) & 0x00ff)
+#define	MIPS_PRID_IMPL(x)	(((x) >>  8) & 0x00ff)
 
 /* pre-MIPS32/64 */
-#define MIPS_PRID_RSVD(x)	(((x) >> 16) & 0xffff)
-#define MIPS_PRID_REV_MIN(x)	((MIPS_PRID_REV(x) >> 0) & 0x0f)
-#define MIPS_PRID_REV_MAJ(x)	((MIPS_PRID_REV(x) >> 4) & 0x0f)
+#define	MIPS_PRID_RSVD(x)	(((x) >> 16) & 0xffff)
+#define	MIPS_PRID_REV_MIN(x)	((MIPS_PRID_REV(x) >> 0) & 0x0f)
+#define	MIPS_PRID_REV_MAJ(x)	((MIPS_PRID_REV(x) >> 4) & 0x0f)
 
 /* MIPS32/64 */
-#define MIPS_PRID_CID(x)	(((x) >> 16) & 0x00ff)	/* Company ID */
-#define     MIPS_PRID_CID_PREHISTORIC	0x00	/* Not MIPS32/64 */
-#define     MIPS_PRID_CID_MTI		0x01	/* MIPS Technologies, Inc. */
-#define     MIPS_PRID_CID_BROADCOM	0x02	/* Broadcom */
-#define     MIPS_PRID_CID_ALCHEMY	0x03	/* Alchemy Semiconductor */
-#define     MIPS_PRID_CID_SIBYTE	0x04	/* SiByte */
-#define     MIPS_PRID_CID_SANDCRAFT	0x05	/* SandCraft */
-#define     MIPS_PRID_CID_PHILIPS	0x06	/* Philips */
-#define     MIPS_PRID_CID_TOSHIBA	0x07	/* Toshiba */
-#define     MIPS_PRID_CID_MICROSOFT	0x07	/* Microsoft also, sigh */
-#define     MIPS_PRID_CID_LSI		0x08	/* LSI */
+#define	MIPS_PRID_CID(x)	(((x) >> 16) & 0x00ff)	/* Company ID */
+#define	    MIPS_PRID_CID_PREHISTORIC	0x00	/* Not MIPS32/64 */
+#define	    MIPS_PRID_CID_MTI		0x01	/* MIPS Technologies, Inc. */
+#define	    MIPS_PRID_CID_BROADCOM	0x02	/* Broadcom */
+#define	    MIPS_PRID_CID_ALCHEMY	0x03	/* Alchemy Semiconductor */
+#define	    MIPS_PRID_CID_SIBYTE	0x04	/* SiByte */
+#define	    MIPS_PRID_CID_SANDCRAFT	0x05	/* SandCraft */
+#define	    MIPS_PRID_CID_PHILIPS	0x06	/* Philips */
+#define	    MIPS_PRID_CID_TOSHIBA	0x07	/* Toshiba */
+#define	    MIPS_PRID_CID_MICROSOFT	0x07	/* Microsoft also, sigh */
+#define	    MIPS_PRID_CID_LSI		0x08	/* LSI */
 				/*	0x09	unannounced */
 				/*	0x0a	unannounced */
-#define     MIPS_PRID_CID_LEXRA		0x0b	/* Lexra */
-#define     MIPS_PRID_CID_RMI		0x0c	/* RMI / NetLogic */
-#define     MIPS_PRID_CID_CAVIUM	0x0d	/* Cavium */
-#define     MIPS_PRID_CID_INGENIC	0xe1
-#define MIPS_PRID_COPTS(x)	(((x) >> 24) & 0x00ff)	/* Company Options */
+#define	    MIPS_PRID_CID_LEXRA		0x0b	/* Lexra */
+#define	    MIPS_PRID_CID_RMI		0x0c	/* RMI / NetLogic */
+#define	    MIPS_PRID_CID_CAVIUM	0x0d	/* Cavium */
+#define	    MIPS_PRID_CID_INGENIC	0xe1
+#define	MIPS_PRID_COPTS(x)	(((x) >> 24) & 0x00ff)	/* Company Options */
 
-#ifdef _KERNEL
 /*
  * Global variables used to communicate CPU type, and parameters
  * such as cache size, from locore to higher-level code (e.g., pmap).
@@ -817,43 +768,43 @@ void mips_machdep_cache_config(void);
  */
 
 #if 0
-#define TF_AST		0		/* really zero */
-#define TF_V0		_R_V0
-#define TF_V1		_R_V1
-#define TF_A0		_R_A0
-#define TF_A1		_R_A1
-#define TF_A2		_R_A2
-#define TF_A3		_R_A3
-#define TF_T0		_R_T0
-#define TF_T1		_R_T1
-#define TF_T2		_R_T2
-#define TF_T3		_R_T3
+#define	TF_AST		0		/* really zero */
+#define	TF_V0		_R_V0
+#define	TF_V1		_R_V1
+#define	TF_A0		_R_A0
+#define	TF_A1		_R_A1
+#define	TF_A2		_R_A2
+#define	TF_A3		_R_A3
+#define	TF_T0		_R_T0
+#define	TF_T1		_R_T1
+#define	TF_T2		_R_T2
+#define	TF_T3		_R_T3
 
 #if defined(__mips_n32) || defined(__mips_n64)
-#define TF_A4		_R_A4
-#define TF_A5		_R_A5
-#define TF_A6		_R_A6
-#define TF_A7		_R_A7
+#define	TF_A4		_R_A4
+#define	TF_A5		_R_A5
+#define	TF_A6		_R_A6
+#define	TF_A7		_R_A7
 #else
-#define TF_T4		_R_T4
-#define TF_T5		_R_T5
-#define TF_T6		_R_T6
-#define TF_T7		_R_T7
+#define	TF_T4		_R_T4
+#define	TF_T5		_R_T5
+#define	TF_T6		_R_T6
+#define	TF_T7		_R_T7
 #endif /* __mips_n32 || __mips_n64 */
 
-#define TF_TA0		_R_TA0
-#define TF_TA1		_R_TA1
-#define TF_TA2		_R_TA2
-#define TF_TA3		_R_TA3
+#define	TF_TA0		_R_TA0
+#define	TF_TA1		_R_TA1
+#define	TF_TA2		_R_TA2
+#define	TF_TA3		_R_TA3
 
-#define TF_T8		_R_T8
-#define TF_T9		_R_T9
+#define	TF_T8		_R_T8
+#define	TF_T9		_R_T9
 
-#define TF_RA		_R_RA
-#define TF_SR		_R_SR
-#define TF_MULLO	_R_MULLO
-#define TF_MULHI	_R_MULLO
-#define TF_EPC		_R_PC		/* may be changed by trap() call */
+#define	TF_RA		_R_RA
+#define	TF_SR		_R_SR
+#define	TF_MULLO	_R_MULLO
+#define	TF_MULHI	_R_MULHI
+#define	TF_EPC		_R_PC		/* may be changed by trap() call */
 
 #define	TF_NREGS	(sizeof(struct reg) / sizeof(mips_reg_t))
 #endif
@@ -910,22 +861,20 @@ struct pridtab {
 /*
  * bitfield defines for cpu_cp0flags
  */
-#define  MIPS_CP0FL_USE		__BIT(0)	/* use these flags */
-#define  MIPS_CP0FL_ECC		__BIT(1)
-#define  MIPS_CP0FL_CACHE_ERR	__BIT(2)
-#define  MIPS_CP0FL_EIRR	__BIT(3)
-#define  MIPS_CP0FL_EIMR	__BIT(4)
-#define  MIPS_CP0FL_EBASE	__BIT(5)
-#define  MIPS_CP0FL_CONFIG	__BIT(6)
-#define  MIPS_CP0FL_CONFIG1	__BIT(7)
-#define  MIPS_CP0FL_CONFIG2	__BIT(8)
-#define  MIPS_CP0FL_CONFIG3	__BIT(9)
-#define  MIPS_CP0FL_CONFIG4	__BIT(10)
-#define  MIPS_CP0FL_CONFIG5	__BIT(11)
-#define  MIPS_CP0FL_CONFIG6	__BIT(12)
-#define  MIPS_CP0FL_CONFIG7	__BIT(13)
-#define  MIPS_CP0FL_USERLOCAL	__BIT(14)
-#define  MIPS_CP0FL_HWRENA	__BIT(15)
+#define	 MIPS_CP0FL_USE		__BIT(0)	/* use these flags */
+#define	 MIPS_CP0FL_ECC		__BIT(1)
+#define	 MIPS_CP0FL_CACHE_ERR	__BIT(2)
+#define	 MIPS_CP0FL_EIRR	__BIT(3)
+#define	 MIPS_CP0FL_EIMR	__BIT(4)
+#define	 MIPS_CP0FL_EBASE	__BIT(5)  /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG	__BIT(6)  /* XXX defined - doesn't need to be hard coded */
+#define	 MIPS_CP0FL_CONFIG1	__BIT(7)  /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG2	__BIT(8)  /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG3	__BIT(9)  /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG4	__BIT(10) /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG5	__BIT(11) /* XXX probeable - shouldn't be hard coded */
+#define	 MIPS_CP0FL_CONFIG6	__BIT(12)
+#define	 MIPS_CP0FL_CONFIG7	__BIT(13)
 
 /*
  * cpu_cidflags defines, by company
@@ -933,13 +882,13 @@ struct pridtab {
 /*
  * RMI company-specific cpu_cidflags
  */
-#define MIPS_CIDFL_RMI_TYPE		__BITS(2,0)
+#define	MIPS_CIDFL_RMI_TYPE		__BITS(2,0)
 # define  CIDFL_RMI_TYPE_XLR		0
 # define  CIDFL_RMI_TYPE_XLS		1
 # define  CIDFL_RMI_TYPE_XLP		2
-#define MIPS_CIDFL_RMI_THREADS_MASK	__BITS(6,3)
+#define	MIPS_CIDFL_RMI_THREADS_MASK	__BITS(6,3)
 # define MIPS_CIDFL_RMI_THREADS_SHIFT	3
-#define MIPS_CIDFL_RMI_CORES_MASK	__BITS(10,7)
+#define	MIPS_CIDFL_RMI_CORES_MASK	__BITS(10,7)
 # define MIPS_CIDFL_RMI_CORES_SHIFT	7
 # define LOG2_1	0
 # define LOG2_2	1
@@ -954,7 +903,7 @@ struct pridtab {
 # define MIPS_CIDFL_RMI_NCORES(cidfl)					\
 		(1 << (((cidfl) & MIPS_CIDFL_RMI_CORES_MASK)		\
 			>> MIPS_CIDFL_RMI_CORES_SHIFT))
-#define MIPS_CIDFL_RMI_L2SZ_MASK	__BITS(14,11)
+#define	MIPS_CIDFL_RMI_L2SZ_MASK	__BITS(14,11)
 # define MIPS_CIDFL_RMI_L2SZ_SHIFT	11
 # define RMI_L2SZ_256KB	 0
 # define RMI_L2SZ_512KB  1
@@ -966,7 +915,7 @@ struct pridtab {
 # define MIPS_CIDFL_RMI_L2SZ(cidfl)					\
 		((256*1024) << (((cidfl) & MIPS_CIDFL_RMI_L2SZ_MASK)	\
 			>> MIPS_CIDFL_RMI_L2SZ_SHIFT))
-
 #endif	/* _KERNEL */
+#endif /* !__ASSEMBLER__ */
 
 #endif	/* _MIPS_LOCORE_H */

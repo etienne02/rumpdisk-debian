@@ -1,7 +1,7 @@
-/*	$NetBSD: scope6.c,v 1.14 2016/06/15 06:01:21 ozaki-r Exp $	*/
+/*	$NetBSD: scope6.c,v 1.23 2020/06/16 17:12:18 maxv Exp $	*/
 /*	$KAME$	*/
 
-/*-
+/*
  * Copyright (C) 2000 WIDE Project.
  * All rights reserved.
  *
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scope6.c,v 1.14 2016/06/15 06:01:21 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scope6.c,v 1.23 2020/06/16 17:12:18 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/malloc.h>
@@ -56,7 +56,8 @@ int ip6_use_defzone = 0;
 
 static struct scope6_id sid_default;
 #define SID(ifp) \
-	(((struct in6_ifextra *)(ifp)->if_afdata[AF_INET6])->scope6_id)
+    ((ifp)->if_afdata[AF_INET6] == NULL ? NULL : \
+	((struct in6_ifextra *)(ifp)->if_afdata[AF_INET6])->scope6_id)
 
 void
 scope6_init(void)
@@ -70,8 +71,7 @@ scope6_ifattach(struct ifnet *ifp)
 {
 	struct scope6_id *sid;
 
-	sid = (struct scope6_id *)malloc(sizeof(*sid), M_IFADDR, M_WAITOK);
-	memset(sid, 0, sizeof(*sid));
+	sid = malloc(sizeof(*sid), M_IFADDR, M_WAITOK | M_ZERO);
 
 	/*
 	 * XXX: IPV6_ADDR_SCOPE_xxx macros are not standard.
@@ -95,80 +95,6 @@ scope6_ifdetach(struct scope6_id *sid)
 	free(sid, M_IFADDR);
 }
 
-int
-scope6_set(struct ifnet *ifp, const struct scope6_id *idlist)
-{
-	int i;
-	int error = 0;
-	struct scope6_id *sid = NULL;
-
-	sid = SID(ifp);
-
-	if (!sid)	/* paranoid? */
-		return (EINVAL);
-
-	/*
-	 * XXX: We need more consistency checks of the relationship among
-	 * scopes (e.g. an organization should be larger than a site).
-	 */
-
-	/*
-	 * TODO(XXX): after setting, we should reflect the changes to
-	 * interface addresses, routing table entries, PCB entries...
-	 */
-
-	for (i = 0; i < 16; i++) {
-		if (idlist->s6id_list[i] &&
-		    idlist->s6id_list[i] != sid->s6id_list[i]) {
-			int s;
-			/*
-			 * An interface zone ID must be the corresponding
-			 * interface index by definition.
-			 */
-			if (i == IPV6_ADDR_SCOPE_INTFACELOCAL &&
-			    idlist->s6id_list[i] != ifp->if_index)
-				return (EINVAL);
-
-			s = pserialize_read_enter();
-			if (i == IPV6_ADDR_SCOPE_LINKLOCAL &&
-			    !if_byindex(idlist->s6id_list[i])) {
-				/*
-				 * XXX: theoretically, there should be no
-				 * relationship between link IDs and interface
-				 * IDs, but we check the consistency for
-				 * safety in later use.
-				 */
-				pserialize_read_exit(s);
-				return (EINVAL);
-			}
-			pserialize_read_exit(s);
-
-			/*
-			 * XXX: we must need lots of work in this case,
-			 * but we simply set the new value in this initial
-			 * implementation.
-			 */
-			sid->s6id_list[i] = idlist->s6id_list[i];
-		}
-	}
-
-	return (error);
-}
-
-int
-scope6_get(const struct ifnet *ifp, struct scope6_id *idlist)
-{
-	/* We only need to lock the interface's afdata for SID() to work. */
-	const struct scope6_id *sid = SID(ifp);
-
-	if (sid == NULL)	/* paranoid? */
-		return EINVAL;
-
-	*idlist = *sid;
-
-	return 0;
-}
-
 /*
  * Get a scope of the address. Interface-local, link-local, site-local
  * or global.
@@ -190,7 +116,6 @@ in6_addrscope(const struct in6_addr *addr)
 			return IPV6_ADDR_SCOPE_GLOBAL; /* just in case */
 		}
 	}
-
 
 	if (addr->s6_addr[0] == 0xff) {
 		scope = addr->s6_addr[1] & 0x0f;
@@ -227,37 +152,6 @@ in6_addrscope(const struct in6_addr *addr)
 	return IPV6_ADDR_SCOPE_GLOBAL;
 }
 
-/* note that ifp argument might be NULL */
-void
-scope6_setdefault(struct ifnet *ifp)
-{
-
-	/*
-	 * Currently, this function just sets the default "interfaces"
-	 * and "links" according to the given interface.
-	 * We might eventually have to separate the notion of "link" from
-	 * "interface" and provide a user interface to set the default.
-	 */
-	if (ifp) {
-		sid_default.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] =
-			ifp->if_index;
-		sid_default.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] =
-			ifp->if_index;
-	} else {
-		sid_default.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = 0;
-		sid_default.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = 0;
-	}
-}
-
-int
-scope6_get_default(struct scope6_id *idlist)
-{
-
-	*idlist = sid_default;
-
-	return (0);
-}
-
 uint32_t
 scope6_addr2default(const struct in6_addr *addr)
 {
@@ -268,7 +162,7 @@ scope6_addr2default(const struct in6_addr *addr)
 	 * link-local, but there's no ambiguity in the syntax.
 	 */
 	if (IN6_IS_ADDR_LOOPBACK(addr))
-		return (0);
+		return 0;
 
 	/*
 	 * XXX: 32-bit read is atomic on all our platforms, is it OK
@@ -276,7 +170,7 @@ scope6_addr2default(const struct in6_addr *addr)
 	 */
 	id = sid_default.s6id_list[in6_addrscope(addr)];
 
-	return (id);
+	return id;
 }
 
 /*
@@ -310,7 +204,7 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 		ifp = if_byindex(zoneid);
 		if (ifp == NULL) {
 			pserialize_read_exit(s);
-			return (ENXIO);
+			return ENXIO;
 		}
 		pserialize_read_exit(s);
 
@@ -344,11 +238,12 @@ int
 sa6_recoverscope(struct sockaddr_in6 *sin6)
 {
 	uint32_t zoneid;
+	char ip6buf[INET6_ADDRSTRLEN];
 
 	if (sin6->sin6_scope_id != 0) {
 		log(LOG_NOTICE,
-		    "sa6_recoverscope: assumption failure (non 0 ID): %s%%%d\n",
-		    ip6_sprintf(&sin6->sin6_addr), sin6->sin6_scope_id);
+		    "%s: assumption failure (non 0 ID): %s%%%d\n", __func__,
+		    IN6_PRINT(ip6buf, &sin6->sin6_addr), sin6->sin6_scope_id);
 		/* XXX: proceed anyway... */
 	}
 	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr) ||
@@ -361,7 +256,7 @@ sa6_recoverscope(struct sockaddr_in6 *sin6)
 			int s = pserialize_read_enter();
 			if (!if_byindex(zoneid)) {
 				pserialize_read_exit(s);
-				return (ENXIO);
+				return ENXIO;
 			}
 			pserialize_read_exit(s);
 			sin6->sin6_addr.s6_addr16[1] = 0;
@@ -384,7 +279,7 @@ in6_setzoneid(struct in6_addr *in6, uint32_t zoneid)
 /*
  * Determine the appropriate scope zone ID for in6 and ifp.  If ret_id is
  * non NULL, it is set to the zone ID.  If the zone ID needs to be embedded
- * in the in6_addr structure, in6 will be modified. 
+ * in the in6_addr structure, in6 will be modified.
  */
 int
 in6_setscope(struct in6_addr *in6, const struct ifnet *ifp, uint32_t *ret_id)
@@ -393,19 +288,27 @@ in6_setscope(struct in6_addr *in6, const struct ifnet *ifp, uint32_t *ret_id)
 	uint32_t zoneid = 0;
 	const struct scope6_id *sid = SID(ifp);
 
-	KASSERT(sid != NULL);
+	if (sid == NULL) {
+		log(LOG_NOTICE, "%s: no scope id for %s\n", __func__,
+		    if_name(ifp));
+		return EINVAL;
+	}
 
 	/*
 	 * special case: the loopback address can only belong to a loopback
 	 * interface.
 	 */
 	if (IN6_IS_ADDR_LOOPBACK(in6)) {
-		if (!(ifp->if_flags & IFF_LOOPBACK))
-			return (EINVAL);
-		else {
+		if (!(ifp->if_flags & IFF_LOOPBACK)) {
+			char ip6buf[INET6_ADDRSTRLEN];
+			log(LOG_NOTICE, "%s: can't set scope for not loopback "
+			    "interface %s and loopback address %s\n",
+			    __func__, if_name(ifp), IN6_PRINT(ip6buf, in6));
+			return EINVAL;
+		} else {
 			if (ret_id != NULL)
 				*ret_id = 0; /* there's no ambiguity */
-			return (0);
+			return 0;
 		}
 	}
 
@@ -443,15 +346,22 @@ const char *
 in6_getscopename(const struct in6_addr *addr)
 {
 	switch (in6_addrscope(addr)) {
-	case IPV6_ADDR_SCOPE_INTFACELOCAL:	return "interface";
+	case IPV6_ADDR_SCOPE_INTFACELOCAL:
+		return "interface";
 #if IPV6_ADDR_SCOPE_INTFACELOCAL != IPV6_ADDR_SCOPE_NODELOCAL
-	case IPV6_ADDR_SCOPE_NODELOCAL:		return "node";
+	case IPV6_ADDR_SCOPE_NODELOCAL:
+		return "node";
 #endif
-	case IPV6_ADDR_SCOPE_LINKLOCAL:		return "link";
-	case IPV6_ADDR_SCOPE_SITELOCAL:		return "site";
-	case IPV6_ADDR_SCOPE_ORGLOCAL:		return "organization";
-	case IPV6_ADDR_SCOPE_GLOBAL:		return "global";
-	default:				return "unknown";
+	case IPV6_ADDR_SCOPE_LINKLOCAL:
+		return "link";
+	case IPV6_ADDR_SCOPE_SITELOCAL:
+		return "site";
+	case IPV6_ADDR_SCOPE_ORGLOCAL:
+		return "organization";
+	case IPV6_ADDR_SCOPE_GLOBAL:
+		return "global";
+	default:
+		return "unknown";
 	}
 }
 
@@ -470,5 +380,5 @@ in6_clearscope(struct in6_addr *in6)
 		in6->s6_addr16[1] = 0;
 	}
 
-	return (modified);
+	return modified;
 }

@@ -1,4 +1,4 @@
-/* $NetBSD: dtv_scatter.c,v 1.2 2014/08/09 13:34:10 jmcneill Exp $ */
+/* $NetBSD: dtv_scatter.c,v 1.6 2019/12/27 09:41:50 msaitoh Exp $ */
 
 /*
  * Copyright (c) 2008 Patrick Mahoney <pat@polycrystal.org>
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dtv_scatter.c,v 1.2 2014/08/09 13:34:10 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dtv_scatter.c,v 1.6 2019/12/27 09:41:50 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/ioctl.h>
@@ -91,22 +91,17 @@ dtv_scatter_buf_set_size(struct dtv_scatter_buf *sb, size_t sz)
 	if (npages > 0) {
 		sb->sb_page_ary =
 		    kmem_alloc(sizeof(uint8_t *) * npages, KM_SLEEP);
-		if (sb->sb_page_ary == NULL) {
-			sb->sb_npages = oldnpages;
-			sb->sb_page_ary = old_ary;
-			return ENOMEM;
-		}
 	} else {
 		sb->sb_page_ary = NULL;
 	}
 
-	minpages = min(npages, oldnpages);
+	minpages = uimin(npages, oldnpages);
 	/* copy any pages that will be reused */
 	for (i = 0; i < minpages; ++i)
 		sb->sb_page_ary[i] = old_ary[i];
 	/* allocate any new pages */
 	for (; i < npages; ++i) {
-		sb->sb_page_ary[i] = pool_cache_get(sb->sb_pool, 0);
+		sb->sb_page_ary[i] = pool_cache_get(sb->sb_pool, PR_WAITOK);
 		/* TODO: does pool_cache_get return NULL on
 		 * ENOMEM?  If so, we need to release or note
 		 * the pages with did allocate
@@ -166,7 +161,7 @@ dtv_scatter_io_init(struct dtv_scatter_buf *sb,
 }
 
 /* Store the pointer and size of the next contiguous segment.  Returns
- * true if the segment is valid, or false if all has been transfered.
+ * true if the segment is valid, or false if all has been transferred.
  * Does not check for overflow. */
 bool
 dtv_scatter_io_next(struct dtv_scatter_io *sio, void **p, size_t *sz)
@@ -179,7 +174,7 @@ dtv_scatter_io_next(struct dtv_scatter_io *sio, void **p, size_t *sz)
 	pg = sio->sio_offset >> PAGE_SHIFT;
 	pgo = sio->sio_offset & PAGE_MASK;
 
-	*sz = min(PAGE_SIZE - pgo, sio->sio_resid);
+	*sz = uimin(PAGE_SIZE - pgo, sio->sio_resid);
 	*p = sio->sio_buf->sb_page_ary[pg] + pgo;
 
 	sio->sio_offset += *sz;

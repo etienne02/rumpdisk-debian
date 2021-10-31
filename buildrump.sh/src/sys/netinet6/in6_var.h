@@ -1,4 +1,4 @@
-/*	$NetBSD: in6_var.h,v 1.83 2016/07/08 04:33:30 ozaki-r Exp $	*/
+/*	$NetBSD: in6_var.h,v 1.104 2020/06/16 17:12:18 maxv Exp $	*/
 /*	$KAME: in6_var.h,v 1.81 2002/06/08 11:16:51 itojun Exp $	*/
 
 /*
@@ -90,14 +90,12 @@ struct in6_addrlifetime {
 };
 
 struct lltable;
-struct nd_ifinfo;
+struct nd_kifinfo;
 struct in6_ifextra {
 	struct in6_ifstat *in6_ifstat;
 	struct icmp6_ifstat *icmp6_ifstat;
-	struct nd_ifinfo *nd_ifinfo;
+	struct nd_kifinfo *nd_ifinfo;
 	struct scope6_id *scope6_id;
-	int nprefixes;
-	int ndefrouters;
 	struct lltable *lltable;
 };
 
@@ -113,7 +111,8 @@ struct	in6_ifaddr {
 	u_int32_t ia_plen;		/* prefix length */
 	/* DEPRECATED. Keep it to avoid breaking kvm(3) users */
 	struct	in6_ifaddr *ia_next;	/* next in6 list of IP6 addresses */
-	struct	in6_multihead ia6_multiaddrs;
+	/* DEPRECATED. Keep it to avoid breaking kvm(3) users */
+	struct	in6_multihead _ia6_multiaddrs;
 					/* list of multicast addresses */
 	int	ia6_flags;
 
@@ -123,9 +122,6 @@ struct	in6_ifaddr {
 				 */
 	time_t	ia6_updatetime;
 
-	/* back pointer to the ND prefix (for autoconfigured addresses only) */
-	struct nd_prefix *ia6_ndpr;
-
 	/* multicast addresses joined from the kernel */
 	LIST_HEAD(, in6_multi_mship) ia6_memberships;
 
@@ -133,6 +129,25 @@ struct	in6_ifaddr {
 	struct pslist_entry	ia6_pslist_entry;
 #endif
 };
+
+#ifdef _KERNEL
+static __inline void
+ia6_acquire(struct in6_ifaddr *ia, struct psref *psref)
+{
+
+	KASSERT(ia != NULL);
+	ifa_acquire(&ia->ia_ifa, psref);
+}
+
+static __inline void
+ia6_release(struct in6_ifaddr *ia, struct psref *psref)
+{
+
+	if (ia == NULL)
+		return;
+	ifa_release(&ia->ia_ifa, psref);
+}
+#endif
 
 /* control structure to manage address selection policy */
 struct in6_addrpolicy {
@@ -290,95 +305,6 @@ struct	in6_aliasreq {
 	struct in6_addrlifetime ifra_lifetime;
 };
 
-/* prefix type macro */
-#define IN6_PREFIX_ND	1
-#define IN6_PREFIX_RR	2
-
-/*
- * prefix related flags passed between kernel(NDP related part) and
- * user land command(ifconfig) and daemon(rtadvd).
- * Note: We originally intended to use prf_ra{} only within in6_prflags{}, but
- * it was (probably unintentionally) used in nd6.h as well.  Since C++ does
- * not allow such a reference, prf_ra{} was then moved outside.  In general,
- * however, this structure should not be used directly.
- */
-struct prf_ra {
-	u_int32_t onlink : 1;
-	u_int32_t autonomous : 1;
-	u_int32_t router : 1;
-	u_int32_t reserved : 5;
-};
-
-struct in6_prflags {
-	struct prf_ra prf_ra;
-	u_char prf_reserved1;
-	u_short prf_reserved2;
-	/* want to put this on 4byte offset */
-	struct prf_rr {
-		u_int32_t decrvalid : 1;
-		u_int32_t decrprefd : 1;
-		u_int32_t reserved : 6;
-	} prf_rr;
-	u_char prf_reserved3;
-	u_short prf_reserved4;
-};
-
-struct  in6_prefixreq {
-	char	ipr_name[IFNAMSIZ];
-	u_char	ipr_origin;
-	u_char	ipr_plen;
-	u_int32_t ipr_vltime;
-	u_int32_t ipr_pltime;
-	struct in6_prflags ipr_flags;
-	struct	sockaddr_in6 ipr_prefix;
-};
-
-#define PR_ORIG_RA	0
-#define PR_ORIG_RR	1
-#define PR_ORIG_STATIC	2
-#define PR_ORIG_KERNEL	3
-
-#define ipr_raf_onlink		ipr_flags.prf_ra.onlink
-#define ipr_raf_auto		ipr_flags.prf_ra.autonomous
-
-#define ipr_statef_onlink	ipr_flags.prf_state.onlink
-
-#define ipr_rrf_decrvalid	ipr_flags.prf_rr.decrvalid
-#define ipr_rrf_decrprefd	ipr_flags.prf_rr.decrprefd
-
-struct	in6_rrenumreq {
-	char	irr_name[IFNAMSIZ];
-	u_char	irr_origin;
-	u_char	irr_m_len;	/* match len for matchprefix */
-	u_char	irr_m_minlen;	/* minlen for matching prefix */
-	u_char	irr_m_maxlen;	/* maxlen for matching prefix */
-	u_char	irr_u_uselen;	/* uselen for adding prefix */
-	u_char	irr_u_keeplen;	/* keeplen from matching prefix */
-	struct irr_raflagmask {
-		u_int32_t onlink : 1;
-		u_int32_t autonomous : 1;
-		u_int32_t reserved : 6;
-	} irr_raflagmask;
-	u_int32_t irr_vltime;
-	u_int32_t irr_pltime;
-	struct in6_prflags irr_flags;
-	struct	sockaddr_in6 irr_matchprefix;
-	struct	sockaddr_in6 irr_useprefix;
-};
-
-#define irr_raf_mask_onlink	irr_raflagmask.onlink
-#define irr_raf_mask_auto	irr_raflagmask.autonomous
-#define irr_raf_mask_reserved	irr_raflagmask.reserved
-
-#define irr_raf_onlink		irr_flags.prf_ra.onlink
-#define irr_raf_auto		irr_flags.prf_ra.autonomous
-
-#define irr_statef_onlink	irr_flags.prf_state.onlink
-
-#define irr_rrf			irr_flags.prf_rr
-#define irr_rrf_decrvalid	irr_flags.prf_rr.decrvalid
-#define irr_rrf_decrprefd	irr_flags.prf_rr.decrprefd
-
 /*
  * Given a pointer to an in6_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in6
@@ -423,16 +349,18 @@ struct	in6_rrenumreq {
 
 #define SIOCGIFAFLAG_IN6	_IOWR('i', 73, struct in6_ifreq)
 
-#define SIOCGDRLST_IN6		_IOWR('i', 74, struct in6_drlist)
-#define SIOCGPRLST_IN6		_IOWR('i', 75, struct in6_oprlist)
-#ifdef _KERNEL
-#define OSIOCGIFINFO_IN6	_IOWR('i', 76, struct in6_ondireq)
-#endif
-#define SIOCSNDFLUSH_IN6	_IOWR('i', 77, struct in6_ifreq)
+/*
+ * 74 was SIOCGDRLST_IN6
+ * 75 was SIOCGPRLST_IN6
+ * 76 was OSIOCGIFINFO_IN6
+ * 77 was SIOCSNDFLUSH_IN6
+ */
 #define SIOCGNBRINFO_IN6	_IOWR('i', 78, struct in6_nbrinfo)
-#define SIOCSPFXFLUSH_IN6	_IOWR('i', 79, struct in6_ifreq)
-#define SIOCSRTRFLUSH_IN6	_IOWR('i', 80, struct in6_ifreq)
-/* 81 was old SIOCGIFALIFETIME_IN6 */
+/*
+ * 79 was SIOCSPFXFLUSH_IN6
+ * 80 was SIOCSRTRFLUSH_IN6
+ * 81 was SIOCGIFALIFETIME_IN6
+ */
 #if 0
 /* withdrawn - do not reuse number 82 */
 #define SIOCSIFALIFETIME_IN6	_IOWR('i', 82, struct in6_ifreq)
@@ -440,25 +368,26 @@ struct	in6_rrenumreq {
 #define SIOCGIFSTAT_IN6		_IOWR('i', 83, struct in6_ifreq)
 #define SIOCGIFSTAT_ICMP6	_IOWR('i', 84, struct in6_ifreq)
 
-#define SIOCSDEFIFACE_IN6	_IOWR('i', 85, struct in6_ndifreq)
-#define SIOCGDEFIFACE_IN6	_IOWR('i', 86, struct in6_ndifreq)
-
-#define SIOCSIFINFO_FLAGS	_IOWR('i', 87, struct in6_ndireq) /* XXX */
-
-#define SIOCSIFPREFIX_IN6	_IOW('i', 100, struct in6_prefixreq) /* set */
-#define SIOCGIFPREFIX_IN6	_IOWR('i', 101, struct in6_prefixreq) /* get */
-#define SIOCDIFPREFIX_IN6	_IOW('i', 102, struct in6_prefixreq) /* del */
-#define SIOCAIFPREFIX_IN6	_IOW('i', 103, struct in6_rrenumreq) /* add */
-#define SIOCCIFPREFIX_IN6	_IOW('i', 104, \
-				     struct in6_rrenumreq) /* change */
-#define SIOCSGIFPREFIX_IN6	_IOW('i', 105, \
-				     struct in6_rrenumreq) /* set global */
+/*
+ * 85 was SIOCSDEFIFACE_IN6
+ * 86 was SIOCGDEFIFACE_IN6
+ * 87 was OSIOCSIFINFO_FLAGS
+ * 100 was SIOCSIFPREFIX_IN6
+ * 101 was SIOCGIFPREFIX_IN6
+ * 102 was SIOCDIFPREFIX_IN6
+ * 103 was SIOCAIFPREFIX_IN6
+ * 104 was SIOCCIFPREFIX_IN6
+ * 105 was SIOCSGIFPREFIX_IN6
+ */
 #define SIOCGIFALIFETIME_IN6	_IOWR('i', 106, struct in6_ifreq)
 #define SIOCAIFADDR_IN6		_IOW('i', 107, struct in6_aliasreq)
-#define SIOCGIFINFO_IN6		_IOWR('i', 108, struct in6_ndireq)
-#define SIOCSIFINFO_IN6		_IOWR('i', 109, struct in6_ndireq)
+/* 108 was OSIOCGIFINFO_IN6_90
+ * 109 was OSIOCSIFINFO_IN6_90 */
 #define SIOCSIFPHYADDR_IN6      _IOW('i', 110, struct in6_aliasreq)
-
+/* 110 - 112 are defined in net/if_pppoe.h */
+#define SIOCGIFINFO_IN6		_IOWR('i', 113, struct in6_ndireq)
+#define SIOCSIFINFO_IN6		_IOWR('i', 114, struct in6_ndireq)
+#define SIOCSIFINFO_FLAGS	_IOWR('i', 115, struct in6_ndireq)
 
 /* XXX: Someone decided to switch to 'u' here for unknown reasons! */
 #define SIOCGETSGCNT_IN6	_IOWR('u', 106, \
@@ -479,6 +408,11 @@ struct	in6_rrenumreq {
 #define IN6_IFF_AUTOCONF	0x40	/* autoconfigurable address. */
 #define IN6_IFF_TEMPORARY	0x80	/* temporary (anonymous) address. */
 
+#define IN6_IFFBITS \
+    "\020\1ANYCAST\2TENTATIVE\3DUPLICATED\4DETACHED\5DEPRECATED\6NODAD" \
+    "\7AUTOCONF\10TEMPORARY"
+
+
 /* do not input/output */
 #define IN6_IFF_NOTREADY (IN6_IFF_TENTATIVE|IN6_IFF_DUPLICATED)
 
@@ -489,13 +423,17 @@ struct	in6_rrenumreq {
 
 #ifdef _KERNEL
 
+#include <sys/mutex.h>
+#include <sys/pserialize.h>
+
 #include <net/pktqueue.h>
 
 extern pktqueue_t *ip6_pktq;
 
 MALLOC_DECLARE(M_IP6OPT);
 
-extern struct pslist_head in6_ifaddr_list;
+extern struct pslist_head	in6_ifaddr_list;
+extern kmutex_t			in6_ifaddr_lock;
 
 #define IN6_ADDRLIST_ENTRY_INIT(__ia) \
 	PSLIST_ENTRY_INIT((__ia), ia6_pslist_entry)
@@ -553,15 +491,13 @@ do {								\
 
 extern const struct in6_addr zeroin6_addr;
 extern const u_char inet6ctlerrmap[];
-extern unsigned long in6_maxmtu;
 extern bool in6_present;
-extern callout_t in6_tmpaddrtimer_ch;
 
 /*
  * Macro for finding the internet address structure (in6_ifaddr) corresponding
  * to a given interface (ifnet structure).
  */
-static inline struct in6_ifaddr *
+static __inline struct in6_ifaddr *
 in6_get_ia_from_ifp(struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
@@ -573,6 +509,20 @@ in6_get_ia_from_ifp(struct ifnet *ifp)
 	return (struct in6_ifaddr *)ifa;
 }
 
+static __inline struct in6_ifaddr *
+in6_get_ia_from_ifp_psref(struct ifnet *ifp, struct psref *psref)
+{
+	struct in6_ifaddr *ia;
+	int s;
+
+	s = pserialize_read_enter();
+	ia = in6_get_ia_from_ifp(ifp);
+	if (ia != NULL)
+		ia6_acquire(ia, psref);
+	pserialize_read_exit(s);
+
+	return ia;
+}
 #endif /* _KERNEL */
 
 /*
@@ -588,7 +538,8 @@ struct	in6_multi {
 	LIST_ENTRY(in6_multi) in6m_entry; /* list glue */
 	struct	in6_addr in6m_addr;	/* IP6 multicast address */
 	struct	ifnet *in6m_ifp;	/* back pointer to ifnet */
-	struct	in6_ifaddr *in6m_ia;	/* back pointer to in6_ifaddr */
+	/* DEPRECATED. Keep it to avoid breaking kvm(3) users */
+	struct	in6_ifaddr *_in6m_ia;	/* back pointer to in6_ifaddr */
 	u_int	in6m_refcount;		/* # membership claims by sockets */
 	u_int	in6m_state;		/* state of the membership */
 	int	in6m_timer;		/* delay to send the 1st report */
@@ -603,102 +554,13 @@ struct	in6_multi {
 /* flags to in6_update_ifa */
 #define IN6_IFAUPDATE_DADDELAY	0x1 /* first time to configure an address */
 
-/*
- * Structure used by macros below to remember position when stepping through
- * all of the in6_multi records.
- */
-struct	in6_multistep {
-	struct	in6_ifaddr *i_ia;
-	struct	in6_multi *i_in6m;
-};
-
-/*
- * Macros for looking up the in6_multi record for a given IP6 multicast
- * address on a given interface. If no matching record is found, "in6m"
- * returns NULL.
- */
-
-static inline struct in6_multi *
-in6_lookup_multi(struct in6_addr *addr, struct ifnet *ifp)
-{
-	struct in6_multi *in6m;
-	struct in6_ifaddr *ia;
-
-	if ((ia = in6_get_ia_from_ifp(ifp)) == NULL)
-	  	return NULL;
-	LIST_FOREACH(in6m, &ia->ia6_multiaddrs, in6m_entry) {
-		if (IN6_ARE_ADDR_EQUAL(&in6m->in6m_addr, addr))
-			break;
-	}
-	return in6m;
-}
-
-#define IN6_LOOKUP_MULTI(__addr, __ifp, __in6m)			\
-/* struct in6_addr __addr; */					\
-/* struct ifnet *__ifp; */					\
-/* struct in6_multi *__in6m; */					\
-do {								\
-	(__in6m) = in6_lookup_multi(&(__addr), (__ifp));	\
-} while (/*CONSTCOND*/ 0)
-
-/*
- * Macro to step through all of the in6_multi records, one at a time.
- * The current position is remembered in "step", which the caller must
- * provide.  IN6_FIRST_MULTI(), below, must be called to initialize "step"
- * and get the first record.  Both macros return a NULL "in6m" when there
- * are no remaining records.
- */
-static inline struct in6_multi *
-in6_next_multi(struct in6_multistep *step)
-{
-	struct in6_multi *in6m;
-
-	if ((in6m = step->i_in6m) != NULL) {
-		step->i_in6m = LIST_NEXT(in6m, in6m_entry);
-		return in6m;
-	}
-	while (step->i_ia != NULL) {
-		in6m = LIST_FIRST(&step->i_ia->ia6_multiaddrs);
-		step->i_ia = IN6_ADDRLIST_READER_NEXT(step->i_ia);
-		if (in6m != NULL) {
-			step->i_in6m = LIST_NEXT(in6m, in6m_entry);
-			break;
-		}
-	}
-	return in6m;
-}
-
-static inline struct in6_multi *
-in6_first_multi(struct in6_multistep *step)
-{						
-
-	step->i_ia = IN6_ADDRLIST_READER_FIRST();
-	step->i_in6m = NULL;			
-	return in6_next_multi(step);		
-}
-
-#define IN6_NEXT_MULTI(__step, __in6m)		\
-/* struct in6_multistep __step; */		\
-/* struct in6_multi *__in6m; */			\
-do {						\
-	(__in6m) = in6_next_multi(&(__step));	\
-} while (/*CONSTCOND*/ 0)
-
-#define IN6_FIRST_MULTI(__step, __in6m)		\
-/* struct in6_multistep __step; */		\
-/* struct in6_multi *__in6m */			\
-do {						\
-	(__in6m) = in6_first_multi(&(__step));	\
-} while (/*CONSTCOND*/ 0)
-
-
 #if 0
 /*
  * Macros for looking up the in6_multi_mship record for a given IP6 multicast
  * address on a given interface. If no matching record is found, "imm"
  * returns NULL.
  */
-static inline struct in6_multi_mship *
+static __inline struct in6_multi_mship *
 in6_lookup_mship(struct in6_addr *addr, struct ifnet *ifp,
     struct ip6_moptions *imop)
 {
@@ -726,37 +588,44 @@ do {									\
 
 void	in6_init(void);
 
+void	in6_multi_lock(int);
+void	in6_multi_unlock(void);
+bool	in6_multi_locked(int);
+struct in6_multi *
+	in6_lookup_multi(const struct in6_addr *, const struct ifnet *);
+bool	in6_multi_group(const struct in6_addr *, const struct ifnet *);
+void	in6_purge_multi(struct ifnet *);
 struct	in6_multi *in6_addmulti(struct in6_addr *, struct ifnet *,
 	int *, int);
 void	in6_delmulti(struct in6_multi *);
+void	in6_delmulti_locked(struct in6_multi *);
+void	in6_lookup_and_delete_multi(const struct in6_addr *,
+	    const struct ifnet *);
 struct in6_multi_mship *in6_joingroup(struct ifnet *, struct in6_addr *,
 	int *, int);
 int	in6_leavegroup(struct in6_multi_mship *);
 int	in6_mask2len(struct in6_addr *, u_char *);
 int	in6_control(struct socket *, u_long, void *, struct ifnet *);
-int	in6_update_ifa(struct ifnet *, struct in6_aliasreq *,
-	struct in6_ifaddr *, int);
+int	in6_update_ifa(struct ifnet *, struct in6_aliasreq *, int);
 void	in6_purgeaddr(struct ifaddr *);
 void	in6_purgeif(struct ifnet *);
-void	in6_savemkludge(struct in6_ifaddr *);
-void	in6_setmaxmtu  (void);
-int	in6_if2idlen  (struct ifnet *);
 void	*in6_domifattach(struct ifnet *);
 void	in6_domifdetach(struct ifnet *, void *);
-void	in6_restoremkludge(struct in6_ifaddr *, struct ifnet *);
 void	in6_ifremlocal(struct ifaddr *);
 void	in6_ifaddlocal(struct ifaddr *);
-void	in6_createmkludge(struct ifnet *);
-void	in6_purgemkludge(struct ifnet *);
-struct in6_ifaddr *in6ifa_ifpforlinklocal(const struct ifnet *, int);
-struct in6_ifaddr *in6ifa_ifpwithaddr(const struct ifnet *,
-    const struct in6_addr *);
+struct in6_ifaddr *
+	in6ifa_ifpforlinklocal(const struct ifnet *, int);
+struct in6_ifaddr *
+	in6ifa_ifpforlinklocal_psref(const struct ifnet *, int, struct psref *);
+struct in6_ifaddr *
+	in6ifa_ifpwithaddr(const struct ifnet *, const struct in6_addr *);
+struct in6_ifaddr *
+	in6ifa_ifpwithaddr_psref(const struct ifnet *, const struct in6_addr *,
+	    struct psref *);
 struct in6_ifaddr *in6ifa_ifwithaddr(const struct in6_addr *, uint32_t);
-char	*ip6_sprintf(const struct in6_addr *);
 int	in6_matchlen(struct in6_addr *, struct in6_addr *);
-int	in6_are_prefix_equal(struct in6_addr *, struct in6_addr *, int);
 void	in6_prefixlen2mask(struct in6_addr *, int);
-void	in6_purgeprefix(struct ifnet *);
+void	in6_purge_mcast_references(struct in6_multi *);
 
 int	ip6flow_fastforward(struct mbuf **); /* IPv6 fast forward routine */
 
@@ -765,6 +634,8 @@ int	in6_is_addr_deprecated(struct sockaddr_in6 *);
 struct in6pcb;
 
 #define	LLTABLE6(ifp)	(((struct in6_ifextra *)(ifp)->if_afdata[AF_INET6])->lltable)
+
+void	in6_sysctl_multicast_setup(struct sysctllog **);
 
 #endif /* _KERNEL */
 

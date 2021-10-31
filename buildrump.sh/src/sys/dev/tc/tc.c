@@ -1,4 +1,4 @@
-/*	$NetBSD: tc.c,v 1.53 2016/07/19 18:27:27 christos Exp $	*/
+/*	$NetBSD: tc.c,v 1.59 2021/08/07 16:19:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Carnegie-Mellon University.
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tc.c,v 1.53 2016/07/19 18:27:27 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tc.c,v 1.59 2021/08/07 16:19:16 thorpej Exp $");
 
 #include "opt_tcverbose.h"
 
@@ -73,7 +73,7 @@ tcattach(device_t parent, device_t self, void *aux)
 	struct tcbus_attach_args *tba = aux;
 	struct tc_attach_args ta;
 	const struct tc_builtin *builtin;
-	struct tc_slotdesc *slot;
+	const struct tc_slotdesc *slot;
 	tc_addr_t tcaddr;
 	int i;
 	int locs[TCCF_NLOCS];
@@ -129,15 +129,17 @@ tcattach(device_t parent, device_t self, void *aux)
 		/*
 		 * Mark the slot as used, so we don't check it later.
 		 */
-		sc->sc_slots[builtin->tcb_slot].tcs_used = 1;
+		KASSERT(builtin->tcb_slot >=0 && builtin->tcb_slot <= 31);
+		sc->sc_slots_used |= __BIT(builtin->tcb_slot);
 
 		locs[TCCF_SLOT] = builtin->tcb_slot;
 		locs[TCCF_OFFSET] = builtin->tcb_offset;
 		/*
 		 * Attach the device.
 		 */
-		config_found_sm_loc(self, "tc", locs, &ta,
-				    tcprint, config_stdsubmatch);
+		config_found(self, &ta, tcprint,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
 	}
 
 	/*
@@ -147,7 +149,7 @@ tcattach(device_t parent, device_t self, void *aux)
 		slot = &sc->sc_slots[i];
 
 		/* If already checked above, don't look again now. */
-		if (slot->tcs_used)
+		if (sc->sc_slots_used & __BIT(i))
 			continue;
 
 		/*
@@ -156,7 +158,7 @@ tcattach(device_t parent, device_t self, void *aux)
 		tcaddr = slot->tcs_addr;
 		if (tc_badaddr(tcaddr))
 			continue;
-		if (tc_checkslot(tcaddr, ta.ta_modname) == 0)
+		if (tc_checkslot(tcaddr, ta.ta_modname, NULL) == 0)
 			continue;
 
 		/*
@@ -168,19 +170,21 @@ tcattach(device_t parent, device_t self, void *aux)
 		ta.ta_offset = 0;
 		ta.ta_addr = tcaddr;
 		ta.ta_cookie = slot->tcs_cookie;
+		ta.ta_busspeed = sc->sc_speed;
 
 		/*
 		 * Mark the slot as used.
 		 */
-		slot->tcs_used = 1;
+		sc->sc_slots_used |= __BIT(i);
 
 		locs[TCCF_SLOT] = i;
 		locs[TCCF_OFFSET] = 0;
 		/*
 		 * Attach the device.
 		 */
-		config_found_sm_loc(self, "tc", locs, &ta,
-				    tcprint, config_stdsubmatch);
+		config_found(self, &ta, tcprint,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
 	}
 }
 
@@ -201,14 +205,23 @@ tcprint(void *aux, const char *pnp)
 
 static const tc_offset_t tc_slot_romoffs[] = {
 	TC_SLOT_ROM,
-#ifndef __vax__
 	TC_SLOT_PROTOROM,
-#endif
 };
 
 static int
 tc_check_romp(const struct tc_rommap *romp)
 {
+
+	switch (romp->tcr_width.v) {
+	case 1:
+	case 2:
+	case 4:
+		break;
+
+	default:
+		return 0;
+	}
+
 	if (romp->tcr_stride.v != 4)
 		return 0;
 
@@ -223,7 +236,7 @@ tc_check_romp(const struct tc_rommap *romp)
 }
 
 int
-tc_checkslot(tc_addr_t slotbase, char *namep)
+tc_checkslot(tc_addr_t slotbase, char *namep, struct tc_rommap **rompp)
 {
 	struct tc_rommap *romp;
 	int i, j;
@@ -232,22 +245,16 @@ tc_checkslot(tc_addr_t slotbase, char *namep)
 		romp = (struct tc_rommap *)
 		    (slotbase + tc_slot_romoffs[i]);
 
-		switch (romp->tcr_width.v) {
-		case 1:
-		case 2:
-		case 4:
-			break;
-
-		default:
-			continue;
-		}
-
 		if (!tc_check_romp(romp))
 			continue;
 
-		for (j = 0; j < TC_ROM_LLEN; j++)
-			namep[j] = romp->tcr_modname[j].v;
-		namep[j] = '\0';
+		if (namep != NULL) {
+			for (j = 0; j < TC_ROM_LLEN; j++)
+				namep[j] = romp->tcr_modname[j].v;
+			namep[j] = '\0';
+		}
+		if (rompp != NULL)
+			*rompp = romp;
 		return (1);
 	}
 	return (0);

@@ -1,4 +1,4 @@
-/*	$NetBSD: mptramp.S,v 1.23 2016/07/25 15:29:06 maxv Exp $	*/
+/*	$NetBSD: mptramp.S,v 1.28 2019/11/14 16:23:52 maxv Exp $	*/
 
 /*
  * Copyright (c) 2000, 2016 The NetBSD Foundation, Inc.
@@ -42,11 +42,11 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by the NetBSD 
- *      Foundation, Inc. and its contributors.  
- * 4. Neither the name of The NetBSD Foundation nor the names of its 
- *    contributors may be used to endorse or promote products derived  
- *    from this software without specific prior written permission.   
+ *      This product includes software developed by the NetBSD
+ *      Foundation, Inc. and its contributors.
+ * 4. Neither the name of The NetBSD Foundation nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY AUTHOR AND CONTRIBUTORS ``AS IS'' AND ANY
  * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -74,9 +74,9 @@
  *        by a idle-thread
  */
 
-#include "opt_mpbios.h"		/* for MPDEBUG */
-
 #include "assym.h"
+#include "opt_kcsan.h"
+#include "opt_kmsan.h"
 #include <machine/asm.h>
 #include <machine/specialreg.h>
 #include <machine/segments.h>
@@ -84,38 +84,21 @@
 #include <machine/i82489reg.h>
 #include <machine/gdt.h>
 
-#define _RELOC(x)	((x) - KERNBASE)
-#define RELOC(x)	_RELOC(_C_LABEL(x))
-
 #define _TRMP_LABEL(a)	a = . - _C_LABEL(cpu_spinup_trampoline) + MP_TRAMPOLINE
 
-#ifdef MPDEBUG
 /*
- * Debug code to stop aux. processors in various stages based on the
- * value in cpu_trace.
- *
- * %edi points at cpu_trace;
- * cpu_trace[0] is the "hold point";
- * cpu_trace[1] is the point which the CPU has reached;
- * cpu_trace[2] is the last value stored by HALTT.
+ * A smp_data structure is packed at the end of the trampoline page. The stack
+ * is right below this structure.
  */
-#define HALT(x) \
-1:	movl (%edi),%ebx	;	\
-	cmpl $x,%ebx		;	\
-	jle 1b			;	\
-	movl $x,4(%edi)		;
-#define HALTT(x,y) \
-	movl y,8(%edi)		;	\
-	HALT(x)			;
-#else
-#define HALT(x)
-#define HALTT(x,y)
-#endif /* MPDEBUG */
+#define SMP_DATA	(MP_TRAMPOLINE + PAGE_SIZE - 3 * 4)
+#define SMP_DATA_STACK	(SMP_DATA + 0 * 4)
+#define SMP_DATA_LARGE	(SMP_DATA + 0 * 4)
+#define SMP_DATA_NOX	(SMP_DATA + 1 * 4)
+#define SMP_DATA_PDIR	(SMP_DATA + 2 * 4)
 
 	.global _C_LABEL(cpu_spinup_trampoline)
 	.global _C_LABEL(cpu_spinup_trampoline_end)
 	.global _C_LABEL(cpu_hatch)
-	.global _C_LABEL(mp_pdirpa)
 
 	.text
 	.align 4,0x0
@@ -127,34 +110,33 @@ LABEL(cpu_spinup_trampoline)
 	movw	%ax,%ds
 	movw	%ax,%es
 	movw	%ax,%ss
+
+	/* load flat descriptor table */
 #ifdef __clang__
-	lgdt (mptramp_gdt32_desc)	/* load flat descriptor table */
+	lgdt (mptramp_gdt32_desc)
 #else
-	data32 addr32 lgdt (mptramp_gdt32_desc) /* load flat descriptor table */
+	data32 addr32 lgdt (mptramp_gdt32_desc)
 #endif
-	movl	%cr0, %eax	/* get cr0 */
-	orl	$CR0_PE, %eax	/* enable protected mode */
-	movl	%eax, %cr0	/* doit */
-	ljmpl	$0x8, $mp_startup
+
+	/* enable protected mode */
+	movl	%cr0,%eax
+	orl	$CR0_PE,%eax
+	movl	%eax,%cr0
+	ljmpl	$0x8,$mp_startup
 
 _TRMP_LABEL(mp_startup)
 	.code32
 
-	movl	$0x10, %eax	/* data segment */
-	movw	%ax, %ds
-	movw	%ax, %ss
-	movw	%ax, %es
-	movw	%ax, %fs
-	movw	%ax, %gs
+	movl	$0x10,%eax	/* data segment */
+	movw	%ax,%ds
+	movw	%ax,%ss
+	movw	%ax,%es
+	movw	%ax,%fs
+	movw	%ax,%gs
 
-	/* bootstrap stack end, with scratch space.. */
-	movl	$(MP_TRAMPOLINE+PAGE_SIZE-16),%esp
+	/* bootstrap stack end */
+	movl	$SMP_DATA_STACK,%esp
 
-#ifdef MPDEBUG
-	leal	RELOC(cpu_trace),%edi
-#endif
-
-	HALT(0x1)
 	/* First, reset the PSL. */
 	pushl	$PSL_MBO
 	popfl
@@ -162,11 +144,12 @@ _TRMP_LABEL(mp_startup)
 	/* Enable PAE, SSE, and PSE if available */
 	movl	%cr4,%eax
 	orl	$(CR4_PAE|CR4_OSFXSR|CR4_OSXMMEXCPT),%eax
-	movl	RELOC(pmap_largepages),%ecx
+	movl	$SMP_DATA_LARGE,%ecx
+	movl	(%ecx),%ecx
 	orl	%ecx,%ecx
-	jz	no_PSE
+	jz	.Lno_PSE
 	orl	$CR4_PSE,%eax
-no_PSE:
+.Lno_PSE:
 	movl	%eax,%cr4
 
 	/*
@@ -177,15 +160,17 @@ no_PSE:
 	rdmsr
 	xorl	%eax,%eax
 	orl	$(EFER_LME|EFER_SCE),%eax
-	movl	RELOC(nox_flag),%ebx
+	movl	$SMP_DATA_NOX,%ebx
+	movl	(%ebx),%ebx
 	cmpl	$0,%ebx
-	je 	no_NOX
+	je 	.Lno_NOX
 	orl	$(EFER_NXE),%eax
-no_NOX:
+.Lno_NOX:
 	wrmsr
 
 	/* Load %cr3. */
-	movl	RELOC(mp_pdirpa),%ecx	/* guaranteed < 4G */
+	movl	$SMP_DATA_PDIR,%ecx
+	movl	(%ecx),%ecx		/* guaranteed < 4G */
 	movl	%ecx,%cr3		/* load PTD addr into MMU */
 
 	/* Enable paging and the rest of it. */
@@ -193,8 +178,8 @@ no_NOX:
 	orl	$(CR0_PE|CR0_PG|CR0_NE|CR0_TS|CR0_MP|CR0_WP|CR0_AM),%eax
 	movl	%eax,%cr0
 
-	jmp	mptramp_compat
-mptramp_compat:
+	jmp	.Lmptramp_compat
+.Lmptramp_compat:
 
 	movl	$GSEL(GDATA_SEL, SEL_KPL),%eax	/* switch to new segment */
 	movl	%eax,%ds
@@ -236,11 +221,11 @@ _TRMP_LABEL(mptramp_longmode)
 
 _C_LABEL(cpu_spinup_trampoline_end):	/* end of code copied to MP_TRAMPOLINE */
 
-	/* Don't touch lapic until BP has done init sequence. */
+	/* Wait until BP has done init sequence. */
 1:
 	movq	_C_LABEL(cpu_starting),%rdi
 	pause
-	testq	%rdi, %rdi
+	testq	%rdi,%rdi
 	jz	1b
 
 	movq	CPU_INFO_IDLELWP(%rdi),%rsi
@@ -257,19 +242,22 @@ _C_LABEL(cpu_spinup_trampoline_end):	/* end of code copied to MP_TRAMPOLINE */
 	/* Switch address space. */
 	movq	PCB_CR3(%rsi),%rax
 	movq	%rax,%cr3
+
 	movl	PCB_CR0(%rsi),%eax
 	movq	%rax,%cr0
+
+#if defined(KCSAN) || defined(KMSAN)
+	/*
+	 * The C instrumentation uses GS.base, so initialize it right now. It
+	 * gets re-initialized later, that's fine.
+	 */
+	movl	$MSR_GSBASE,%ecx
+	movq	%rdi,%rax
+	movq	%rdi,%rdx
+	shrq	$32,%rdx
+	wrmsr
+#endif
+
 	call	_C_LABEL(cpu_hatch)
 END(cpu_spinup_trampoline)
 
-	.data
-LABEL(mp_pdirpa)
-	.quad	0
-END(mp_pdirpa)
-#ifdef MPDEBUG
-LABEL(cpu_trace)
-	.quad	0x40
-	.quad	0xff
-	.quad	0xff
-END(cpu_trace)
-#endif

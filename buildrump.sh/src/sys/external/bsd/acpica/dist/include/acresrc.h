@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -83,6 +83,7 @@ typedef enum
     ACPI_RSC_1BITFLAG,
     ACPI_RSC_2BITFLAG,
     ACPI_RSC_3BITFLAG,
+    ACPI_RSC_6BITFLAG,
     ACPI_RSC_ADDRESS,
     ACPI_RSC_BITMASK,
     ACPI_RSC_BITMASK16,
@@ -143,6 +144,7 @@ typedef enum
     ACPI_RSD_1BITFLAG,
     ACPI_RSD_2BITFLAG,
     ACPI_RSD_3BITFLAG,
+    ACPI_RSD_6BITFLAG,
     ACPI_RSD_ADDRESS,
     ACPI_RSD_DWORDLIST,
     ACPI_RSD_LITERAL,
@@ -155,7 +157,9 @@ typedef enum
     ACPI_RSD_UINT16,
     ACPI_RSD_UINT32,
     ACPI_RSD_UINT64,
-    ACPI_RSD_WORDLIST
+    ACPI_RSD_WORDLIST,
+    ACPI_RSD_LABEL,
+    ACPI_RSD_SOURCE_LABEL,
 
 } ACPI_RSDUMP_OPCODES;
 
@@ -384,9 +388,15 @@ extern ACPI_RSCONVERT_INFO      AcpiRsConvertAddress64[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertExtAddress64[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertGpio[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertFixedDma[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertCsi2SerialBus[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertI2cSerialBus[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertSpiSerialBus[];
 extern ACPI_RSCONVERT_INFO      AcpiRsConvertUartSerialBus[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertPinFunction[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertPinConfig[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertPinGroup[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertPinGroupFunction[];
+extern ACPI_RSCONVERT_INFO      AcpiRsConvertPinGroupConfig[];
 
 /* These resources require separate get/set tables */
 
@@ -431,12 +441,18 @@ extern ACPI_RSDUMP_INFO         AcpiRsDumpExtAddress64[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpExtIrq[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpGenericReg[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpGpio[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpPinFunction[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpFixedDma[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpCommonSerialBus[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpCsi2SerialBus[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpI2cSerialBus[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpSpiSerialBus[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpUartSerialBus[];
 extern ACPI_RSDUMP_INFO         AcpiRsDumpGeneralFlags[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpPinConfig[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpPinGroup[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpPinGroupFunction[];
+extern ACPI_RSDUMP_INFO         AcpiRsDumpPinGroupConfig[];
 #endif
 
 #endif  /* __ACRESRC_H__ */

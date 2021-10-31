@@ -44,25 +44,13 @@
 
 #ifdef _KERNEL
 
+#if !defined(_MODULE) && defined(_KERNEL_OPT)
+# include "opt_multiprocessor.h"
+#endif
+
 #include <sys/types.h>
 #include <arm/armreg.h>
 #include <arm/cpuconf.h>
-
-#if defined(CPU_ARM2) || defined(CPU_ARM250) || defined(CPU_ARM3)
-void	arm3_cache_flush	(void);
-#endif	/* CPU_ARM2 || CPU_ARM250 || CPU_ARM3 */
-
-#ifdef CPU_ARM2
-u_int	arm2_id			(void);
-#endif /* CPU_ARM2 */
-
-#ifdef CPU_ARM250
-u_int	arm250_id		(void);
-#endif
-
-#ifdef CPU_ARM3
-u_int	arm3_control		(u_int, u_int);
-#endif	/* CPU_ARM3 */
 
 #if defined(CPU_ARM6) || defined(CPU_ARM7)
 void	arm67_setttb		(u_int, bool);
@@ -309,13 +297,23 @@ void 	armv7_dcache_wbinv_all(void);
 void	armv7_idcache_wbinv_range(vaddr_t, vsize_t);
 void	armv7_idcache_wbinv_all(void);
 
-void	armv7_tlb_flushID(void);
-void	armv7_tlb_flushI(void);
-void	armv7_tlb_flushD(void);
+void	armv7up_tlb_flushID(void);
+void	armv7up_tlb_flushI(void);
+void	armv7up_tlb_flushD(void);
 
-void	armv7_tlb_flushID_SE(vaddr_t);
-void	armv7_tlb_flushI_SE(vaddr_t);
-void	armv7_tlb_flushD_SE(vaddr_t);
+void	armv7up_tlb_flushID_SE(vaddr_t);
+void	armv7up_tlb_flushI_SE(vaddr_t);
+void	armv7up_tlb_flushD_SE(vaddr_t);
+
+#ifdef MULTIPROCESSOR
+void	armv7mp_tlb_flushID(void);
+void	armv7mp_tlb_flushI(void);
+void	armv7mp_tlb_flushD(void);
+
+void	armv7mp_tlb_flushID_SE(vaddr_t);
+void	armv7mp_tlb_flushI_SE(vaddr_t);
+void	armv7mp_tlb_flushD_SE(vaddr_t);
+#endif
 
 void	armv7_cpu_sleep(int);
 void	armv7_drain_writebuf(void);

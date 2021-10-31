@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adm1026.c,v 1.2 2016/01/11 18:23:52 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adm1026.c,v 1.13 2021/06/14 13:52:11 jdc Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,7 +87,6 @@ struct adm1026_softc {
 	device_t sc_dev;
 	i2c_tag_t sc_tag;
 	int sc_address;
-	int sc_iic_flags;
 	bool sc_multi_read;
 
 	uint8_t sc_rev, sc_cfg[2];
@@ -99,76 +98,77 @@ struct adm1026_softc {
 };
 
 static int adm1026_match(device_t, cfdata_t, void *);
-static int adm1026_ident(struct adm1026_softc *sc);
+static int adm1026_ident(i2c_tag_t, i2c_addr_t, int, uint8_t*);
 static void adm1026_attach(device_t, device_t, void *);
 static int adm1026_detach(device_t, int);
-bool adm1026_pmf_suspend(device_t dev, const pmf_qual_t *qual);
-bool adm1026_pmf_resume(device_t dev, const pmf_qual_t *qual);
+bool adm1026_pmf_suspend(device_t, const pmf_qual_t *);
+bool adm1026_pmf_resume(device_t, const pmf_qual_t *);
 
-static void adm1026_setup_fans(struct adm1026_softc *sc, int div2_val);
-static void adm1026_setup_temps(struct adm1026_softc *sc);
-static void adm1026_setup_volts(struct adm1026_softc *sc);
+static int adm1026_setup_fans(struct adm1026_softc *sc, int div2_val);
+static int adm1026_setup_temps(struct adm1026_softc *sc);
+static int adm1026_setup_volts(struct adm1026_softc *sc);
 
 void adm1026_refresh(struct sysmon_envsys *sme, envsys_data_t *edata);
 static void adm1026_read_fan(struct adm1026_softc *sc, envsys_data_t *edata);
 static void adm1026_read_temp(struct adm1026_softc *sc, envsys_data_t *edata);
 static void adm1026_read_volt(struct adm1026_softc *sc, envsys_data_t *edata);
 
-static int adm1026_read_reg(struct adm1026_softc *sc,
-    uint8_t reg, uint8_t *val);
+static int adm1026_read_reg_int(i2c_tag_t, i2c_addr_t,
+    uint8_t reg, bool multi_read, uint8_t *val);
 static int adm1026_write_reg(struct adm1026_softc *sc,
     uint8_t reg, uint8_t val);
+
+static inline int
+adm1026_read_reg(struct adm1026_softc *sc, uint8_t reg, uint8_t *val)
+{
+	return adm1026_read_reg_int(sc->sc_tag, sc->sc_address, reg,
+	    sc->sc_multi_read, val);
+}
 
 CFATTACH_DECL_NEW(adm1026hm, sizeof(struct adm1026_softc),
 	adm1026_match, adm1026_attach, adm1026_detach, NULL);
 
-static const char * adm1026_compats[] = {
-	"i2c-adm1026",
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "i2c-adm1026" },
+	DEVICE_COMPAT_EOL
 };
 
 static int
 adm1026_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
-	struct adm1026_softc sc;	/* For chip ident */
-	sc.sc_tag = ia->ia_tag;
-	sc.sc_address = ia->ia_addr;
-	sc.sc_iic_flags = 0;
+	int match_result;
+	uint8_t rev;
 
-	/* Direct config - match compats */
-	if (ia->ia_name) {
-		if (ia->ia_ncompat > 0) {
-			if (iic_compat_match(ia, adm1026_compats))
-				return 1;
-		}
-	/* Indirect config - check address and chip ID/rev. */
-	} else {
-		if ((ia->ia_addr & ADM1026_ADDRMASK) == ADM1026_ADDR &&
-		    adm1026_ident(&sc))
-			return 1;
-	}
+	if (iic_use_direct_match(ia, cf, compat_data, &match_result))
+		return match_result;
+
+	if (ia->ia_addr == ADM1026_ADDR1
+	    && adm1026_ident(ia->ia_tag, ia->ia_addr, 1, &rev))
+		return I2C_MATCH_ADDRESS_AND_PROBE;
 
 	return 0;
 }
 
 static int
-adm1026_ident(struct adm1026_softc *sc)
+adm1026_ident(i2c_tag_t tag, i2c_addr_t addr, int probe_only, uint8_t *rev)
 {
 	uint8_t val;
 	int err;
 
 	/* Manufacturer ID and revision/stepping */
-	err = adm1026_read_reg(sc, ADM1026_ID, &val);
+	err = adm1026_read_reg_int(tag, addr, ADM1026_ID, false, &val);
 	if (err || val != ADM1026_MANF_ID) {
-		aprint_verbose("adm1026_ident: "
-		    "manufacturer ID invalid or missing\n");
+		if (!probe_only)
+			aprint_verbose("adm1026_ident: "
+			    "manufacturer ID invalid or missing\n");
 		return 0;
 	}
-	err = adm1026_read_reg(sc, ADM1026_REV, &sc->sc_rev);
-	if (err || ADM1026_REVISION(sc->sc_rev) != ADM1026_MANF_REV) {
-		aprint_verbose("adm1026_ident: "
-		    "manufacturer revision invalid or missing\n");
+	err = adm1026_read_reg_int(tag, addr, ADM1026_REV, false, rev);
+	if (err || ADM1026_REVISION(*rev) != ADM1026_MANF_REV) {
+		if (!probe_only)
+			aprint_verbose("adm1026_ident: "
+			    "manufacturer revision invalid or missing\n");
 		return 0;
 	}
 	return 1;
@@ -186,7 +186,6 @@ adm1026_attach(device_t parent, device_t self, void *aux)
 	sc->sc_tag = ia->ia_tag;
 	sc->sc_address = ia->ia_addr;
 	sc->sc_dev = self;
-	sc->sc_iic_flags = I2C_F_POLL;	/* Use polling during autoconf */
 
 	sc->sc_multi_read = false;
 	prop_dictionary_get_bool(props, "multi_read", &sc->sc_multi_read);
@@ -195,7 +194,7 @@ adm1026_attach(device_t parent, device_t self, void *aux)
 	else
 		div2_val = -1;
 
-	(void) adm1026_ident(sc);
+	(void) adm1026_ident(sc->sc_tag, sc->sc_address, 0, &sc->sc_rev);
 	aprint_normal(": ADM1026 hardware monitor: rev. 0x%x, step. 0x%x\n",
 	    ADM1026_REVISION(sc->sc_rev), ADM1026_STEPPING(sc->sc_rev));
 
@@ -222,10 +221,13 @@ adm1026_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_sme = sysmon_envsys_create();
 	sc->sc_nfans = 0;
-	adm1026_setup_fans(sc, div2_val);
 	sc->sc_ntemps = 0;
-	adm1026_setup_temps(sc);
-	adm1026_setup_volts(sc);
+	if (adm1026_setup_fans(sc, div2_val))
+		goto bad;
+	if (adm1026_setup_temps(sc))
+		goto bad;
+	if (adm1026_setup_volts(sc))
+		goto bad;
 	aprint_normal_dev(self, "%d fans, %d temperatures, %d voltages\n",
 	    sc->sc_nfans, sc->sc_ntemps, sc->sc_ntemps == 3 ? 15 : 17);
 	
@@ -235,15 +237,17 @@ adm1026_attach(device_t parent, device_t self, void *aux)
 	if (sysmon_envsys_register(sc->sc_sme)) {
 		aprint_error_dev(self,
 		    "unable to register with sysmon\n");
-		sysmon_envsys_destroy(sc->sc_sme);
-		return;
+		goto bad;
 	}
 
 	if (!pmf_device_register(self, adm1026_pmf_suspend, adm1026_pmf_resume))
 		aprint_error_dev(self, "couldn't establish power handler\n");
 
-	sc->sc_iic_flags = 0;	/* Drop polling flag */
+	return;
 
+bad:
+	sysmon_envsys_destroy(sc->sc_sme);
+	sc->sc_sme = NULL;
 	return;
 }
 
@@ -271,13 +275,13 @@ adm1026_detach(device_t self, int flags)
 
 	pmf_device_deregister(self);
 
-	sysmon_envsys_unregister(sc->sc_sme);
-	sc->sc_sme = NULL;
+	if (sc->sc_sme != NULL)
+		sysmon_envsys_unregister(sc->sc_sme);
 
 	return 0;
 }
 
-static void
+static int
 adm1026_setup_fans(struct adm1026_softc *sc, int div2_val)
 {
 	int i, err = 0;
@@ -286,11 +290,11 @@ adm1026_setup_fans(struct adm1026_softc *sc, int div2_val)
 	/* Read fan-related registers (configuration and divisors) */
 	if ((err = adm1026_read_reg(sc, ADM1026_CONF2, &sc->sc_cfg[1])) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to read conf2\n");
-		return;
+		return 0;
 	}
 	if ((err = adm1026_read_reg(sc, ADM1026_FAN_DIV1, &div1)) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to read fan_div1\n");
-		return;
+		return 0;
 	}
 	sc->sc_fandiv[0] = 1 << ADM1026_FAN0_DIV(div1);
 	sc->sc_fandiv[1] = 1 << ADM1026_FAN1_DIV(div1);
@@ -301,7 +305,7 @@ adm1026_setup_fans(struct adm1026_softc *sc, int div2_val)
 		    adm1026_read_reg(sc, ADM1026_FAN_DIV2, &div2)) != 0) {
 			aprint_error_dev(sc->sc_dev,
 			    "unable to read fan_div2\n");
-			return;
+			return 0;
 		}
 	} else
 		div2 = div2_val;
@@ -319,19 +323,19 @@ adm1026_setup_fans(struct adm1026_softc *sc, int div2_val)
 			snprintf(sc->sc_sensor[ADM1026_FAN_NUM(i)].desc,
 			    sizeof(sc->sc_sensor[ADM1026_FAN_NUM(i)].desc),
 			    "fan %d", ADM1026_FAN_NUM(i));
-			sc->sc_nfans++;
 			if (sysmon_envsys_sensor_attach(
 			    sc->sc_sme, &sc->sc_sensor[ADM1026_FAN_NUM(i)])) {
-				sysmon_envsys_destroy(sc->sc_sme);
 				aprint_error_dev(sc->sc_dev,
 				    "unable to attach fan %d at sysmon\n", i);
-				return;
+				return 1;
 			}
+			sc->sc_nfans++;
 		}
 	}
+	return 0;
 }
 
-static void
+static int
 adm1026_setup_temps(struct adm1026_softc *sc)
 {
 	int i;
@@ -341,7 +345,7 @@ adm1026_setup_temps(struct adm1026_softc *sc)
 	if (adm1026_read_reg(sc, ADM1026_INT_TEMP_OFF, &val)
 	    != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to read int temp. off.\n");
-		return;
+		return 0;
 	}
 	if (val & 0x80)
 		sc->sc_temp_off[0] = 0 - 1000000 * (val & 0x7f);
@@ -349,7 +353,7 @@ adm1026_setup_temps(struct adm1026_softc *sc)
 		sc->sc_temp_off[0] = 1000000 * (val & 0x7f);
 	if (adm1026_read_reg(sc, ADM1026_TDM1_OFF, &val) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to read tdm1 off.\n");
-		return;
+		return 0;
 	}
 	if (val & 0x80)
 		sc->sc_temp_off[1] = 0 - 1000000 * (val & 0x7f);
@@ -357,7 +361,7 @@ adm1026_setup_temps(struct adm1026_softc *sc)
 		sc->sc_temp_off[1] = 1000000 * (val & 0x7f);
 	if (adm1026_read_reg(sc, ADM1026_TDM2_OFF, &val) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to read tdm2 off.\n");
-		return;
+		return 0;
 	}
 	if (val & 0x80)
 		sc->sc_temp_off[2] = 0 - 1000000 * (val & 0x7f);
@@ -376,18 +380,18 @@ adm1026_setup_temps(struct adm1026_softc *sc)
 			continue;
 		sc->sc_sensor[ADM1026_TEMP_NUM(i)].units = ENVSYS_STEMP;
 		sc->sc_sensor[ADM1026_TEMP_NUM(i)].state = ENVSYS_SINVALID;
-		sc->sc_ntemps++;
 		if (sysmon_envsys_sensor_attach(
 		    sc->sc_sme, &sc->sc_sensor[ADM1026_TEMP_NUM(i)])) {
-			sysmon_envsys_destroy(sc->sc_sme);
 			aprint_error_dev(sc->sc_dev,
 			    "unable to attach temp %d at sysmon\n", i);
-			return;
+			return 1;
 		}
+		sc->sc_ntemps++;
 	}
+	return 0;
 }
 
-static void
+static int
 adm1026_setup_volts(struct adm1026_softc *sc)
 {
 	int i;
@@ -404,12 +408,12 @@ adm1026_setup_volts(struct adm1026_softc *sc)
 		sc->sc_sensor[ADM1026_VOLT_NUM(i)].state = ENVSYS_SINVALID;
 		if (sysmon_envsys_sensor_attach(
 		    sc->sc_sme, &sc->sc_sensor[ADM1026_VOLT_NUM(i)])) {
-			sysmon_envsys_destroy(sc->sc_sme);
 			aprint_error_dev(sc->sc_dev,
 			    "unable to attach volts %d at sysmon\n", i);
-			return;
+			return 1;
 		}
 	}
+	return 0;
 }
 
 void
@@ -490,18 +494,19 @@ adm1026_read_volt(struct adm1026_softc *sc, envsys_data_t *edata)
 }
 
 static int
-adm1026_read_reg(struct adm1026_softc *sc, uint8_t reg, uint8_t *val)
+adm1026_read_reg_int(i2c_tag_t tag, i2c_addr_t addr, uint8_t reg,
+    bool multi_read, uint8_t *val)
 {
 #define ADM1026_READ_RETRIES	5
 	int i, j, err = 0;
 	uint8_t creg, cval, tmp[ADM1026_READ_RETRIES + 1];
 
-	if ((err = iic_acquire_bus(sc->sc_tag, sc->sc_iic_flags)) != 0)
+	if ((err = iic_acquire_bus(tag, 0)) != 0)
 		return err;
 	/* Standard ADM1026 */
-	if (sc->sc_multi_read == false) {
-		err = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
-		    sc->sc_address, &reg, 1, val, 1, 0);
+	if (multi_read == false) {
+		err = iic_exec(tag, I2C_OP_READ_WITH_STOP,
+		    addr, &reg, 1, val, 1, 0);
 	/*
 	 * The ADM1026 found in some Sun machines sometimes reads bogus values.
 	 * We'll read at least twice and check that we get (nearly) the same
@@ -513,29 +518,28 @@ adm1026_read_reg(struct adm1026_softc *sc, uint8_t reg, uint8_t *val)
 			creg = ADM1026_CONF2;
 		else
 			creg = ADM1026_CONF1;
-		if ((err = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
-		    sc->sc_address, &reg, 1, &tmp[0], 1, 0)) != 0) {
-			iic_release_bus(sc->sc_tag, sc->sc_iic_flags);
+		if ((err = iic_exec(tag, I2C_OP_READ_WITH_STOP,
+		    addr, &reg, 1, &tmp[0], 1, 0)) != 0) {
+			iic_release_bus(tag, 0);
 			return err;
 		}
 		for (i = 1; i <= ADM1026_READ_RETRIES; i++) {
-			if ((err = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
-			    sc->sc_address, &reg, 1, &tmp[i], 1, 0)) != 0)
+			if ((err = iic_exec(tag, I2C_OP_READ_WITH_STOP,
+			    addr, &reg, 1, &tmp[i], 1, 0)) != 0)
 				break;
 			for (j = 0; j < i; j++)
 				if (abs(tmp[j] - tmp[i]) < 3) {
 					*val = tmp[i];
-					iic_release_bus(sc->sc_tag,
-					    sc->sc_iic_flags);
+					iic_release_bus(tag, 0);
 					return 0;
 				}
-			if ((err = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
-			    sc->sc_address, &creg, 1, &cval, 1, 0)) != 0)
+			if ((err = iic_exec(tag, I2C_OP_READ_WITH_STOP,
+			    addr, &creg, 1, &cval, 1, 0)) != 0)
 				break;
 			err = -1;	/* Return error if we don't match. */
 		}
 	}
-	iic_release_bus(sc->sc_tag, sc->sc_iic_flags);
+	iic_release_bus(tag, 0);
 	return err;
 }
 
@@ -544,10 +548,10 @@ adm1026_write_reg(struct adm1026_softc *sc, uint8_t reg, uint8_t val)
 {
 	int err = 0;
 
-	if ((err = iic_acquire_bus(sc->sc_tag, sc->sc_iic_flags)) != 0)
+	if ((err = iic_acquire_bus(sc->sc_tag, 0)) != 0)
 		return err;
 	err = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP, sc->sc_address,
 	    &reg, 1, &val, 1, 0);
-	iic_release_bus(sc->sc_tag, sc->sc_iic_flags);
+	iic_release_bus(sc->sc_tag, 0);
 	return err;
 }

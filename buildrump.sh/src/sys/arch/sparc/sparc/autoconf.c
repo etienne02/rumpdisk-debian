@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $ */
+/*	$NetBSD: autoconf.c,v 1.269 2021/08/07 16:19:05 thorpej Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.269 2021/08/07 16:19:05 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -76,6 +76,7 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $")
 #include <sys/boot_flag.h>
 #include <sys/ksyms.h>
 #include <sys/userconf.h>
+#include <sys/kgdb.h>
 
 #include <net/if.h>
 #include <net/if_ether.h>
@@ -89,6 +90,7 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $")
 #include <machine/promlib.h>
 #include <machine/autoconf.h>
 #include <machine/bootinfo.h>
+#include <machine/locore.h>
 
 #include <sparc/sparc/memreg.h>
 #include <machine/cpu.h>
@@ -96,6 +98,7 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $")
 #include <sparc/sparc/asm.h>
 #include <sparc/sparc/cpuvar.h>
 #include <sparc/sparc/timerreg.h>
+#include <sparc/dev/cons.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcidevs.h>
@@ -120,11 +123,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.259 2015/10/04 08:15:46 joerg Exp $")
  * the machine.
  */
 
-#ifdef KGDB
-extern	int kgdb_debug_panic;
-#endif
-extern void *bootinfo;
-
 #if !NKSYMS && !defined(DDB) && !defined(MODULAR)
 void bootinfo_relocate(void *);
 #endif
@@ -144,7 +142,7 @@ static	void bootpath_build(void);
 static	void bootpath_fake(struct bootpath *, const char *);
 static	void bootpath_print(struct bootpath *);
 static	struct bootpath	*bootpath_store(int, struct bootpath *);
-int	find_cpus(void);
+static	int find_cpus(void);
 char	machine_model[100];
 
 #ifdef DEBUG
@@ -169,10 +167,39 @@ matchbyname(device_t parent, cfdata_t cf, void *aux)
 }
 
 /*
+ * Set machine_model[] to something useful.  If late is set, then
+ * have now probed the sun4 class and can finish it.  Other systems
+ * are complete with the first call with late=false out of bootstrap.
+ */
+static void
+set_machine_model(bool late)
+{
+	char namebuf[32];
+
+	if (!CPU_ISSUN4) {
+		if (late) {
+			KASSERT(machine_model[0] != '\0');
+		} else {
+			snprintf(machine_model, sizeof machine_model, "%s",
+			    prom_getpropstringA(findroot(), "name", namebuf,
+			    sizeof(namebuf)));
+		}
+		return;
+	}
+	if (late)
+		snprintf(machine_model, sizeof machine_model, "SUN-4/%d series",
+		    cpuinfo.classlvl);
+	else
+		snprintf(machine_model, sizeof machine_model, "SUN-4 series");
+}
+
+/*
  * Get the number of CPUs in the system and the CPUs' SPARC architecture
  * version. We need this information early in the boot process.
+ *
+ * This also sets cpu_arch to 8 on sun4m and sun4d.
  */
-int
+static int
 find_cpus(void)
 {
 	int n;
@@ -187,6 +214,9 @@ find_cpus(void)
 	 * other models, presumably).
 	 */
 	cpu_arch = 7;
+
+	/* Initialise machine_model, early phase. */
+	set_machine_model(false);
 
 	/* On sun4 and sun4c we support only one CPU */
 	if (!CPU_ISSUN4M && !CPU_ISSUN4D)
@@ -268,13 +298,8 @@ static void bootstrapIIep(void);
 void
 bootstrap(void)
 {
-	extern uint8_t u0[];
-	extern struct consdev consdev_prom;
-
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 	struct btinfo_symtab *bi_sym;
-#else
-	extern int end[];
 #endif
 	struct btinfo_boothowto *bi_howto;
 
@@ -292,7 +317,6 @@ bootstrap(void)
 #if defined(SUN4M) || defined(SUN4D)
 	/* Switch to sparc v8 multiply/divide functions on v8 machines */
 	if (cpu_arch == 8) {
-		extern void sparc_v8_muldiv(void);
 		sparc_v8_muldiv();
 	}
 #endif /* SUN4M || SUN4D */
@@ -387,7 +411,6 @@ bootstrap4m(void)
 	int nvaddrs, *vaddrs, vstore[10];
 	u_int pte;
 	int i;
-	extern void setpte4m(u_int, u_int);
 
 	if ((node = prom_opennode("/obio/interrupt")) == 0
 	    && (node = prom_finddevice("/obio/interrupt")) == 0)
@@ -457,8 +480,6 @@ bootstrap4m(void)
 static void
 bootstrapIIep(void)
 {
-	extern struct sparc_bus_space_tag mainbus_space_tag;
-
 	int node;
 	bus_space_handle_t bh;
 	pcireg_t id;
@@ -1089,14 +1110,11 @@ static int	prom_getprop_address1(int, void **);
 static void
 mainbus_attach(device_t parent, device_t dev, void *aux)
 {
-extern struct sparc_bus_dma_tag mainbus_dma_tag;
-extern struct sparc_bus_space_tag mainbus_space_tag;
-
 	struct boot_special {
 		const char *const dev;
 #define BS_EARLY	1	/* attach device early */
 #define	BS_IGNORE	2	/* ignore root device */
-#define	BS_OPTIONAL	4	/* device not alwas present */
+#define	BS_OPTIONAL	4	/* device not always present */
 		unsigned int flags;
 	};
 
@@ -1181,14 +1199,7 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 #define	openboot_special4d	((void *)0)
 #endif
 
-
-	if (CPU_ISSUN4)
-		snprintf(machine_model, sizeof machine_model, "SUN-4/%d series",
-		    cpuinfo.classlvl);
-	else
-		snprintf(machine_model, sizeof machine_model, "%s",
-		    prom_getpropstringA(findroot(), "name", namebuf,
-		    sizeof(namebuf)));
+	set_machine_model(true);
 
 	prom_getidprom();
 	printf(": %s: hostid %lx\n", machine_model, hostid);
@@ -1211,19 +1222,19 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		ma.ma_bustag = &mainbus_space_tag;
 		ma.ma_dmatag = &mainbus_dma_tag;
 		ma.ma_name = "cpu";
-		if (config_found(dev, (void *)&ma, mbprint) == NULL)
+		if (config_found(dev, (void *)&ma, mbprint, CFARGS_NONE) == NULL)
 			panic("cpu missing");
 
 		ma.ma_bustag = &mainbus_space_tag;
 		ma.ma_dmatag = &mainbus_dma_tag;
 		ma.ma_name = "obio";
-		if (config_found(dev, (void *)&ma, mbprint) == NULL)
+		if (config_found(dev, (void *)&ma, mbprint, CFARGS_NONE) == NULL)
 			panic("obio missing");
 
 		ma.ma_bustag = &mainbus_space_tag;
 		ma.ma_dmatag = &mainbus_dma_tag;
 		ma.ma_name = "vme";
-		(void)config_found(dev, (void *)&ma, mbprint);
+		(void)config_found(dev, (void *)&ma, mbprint, CFARGS_NONE);
 		return;
 	}
 #endif
@@ -1274,7 +1285,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 			ma.ma_dmatag = &mainbus_dma_tag;
 			ma.ma_node = node;
 			ma.ma_name = "cpu";
-			config_found(dev, (void *)&ma, mbprint);
+			config_found(dev, (void *)&ma, mbprint,
+			    CFARGS(.devhandle = prom_node_to_devhandle(node)));
 			if (node == bootnode && bootmid != 0) {
 				/* Re-enter loop to find all remaining CPUs */
 				goto rescan;
@@ -1286,7 +1298,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		ma.ma_dmatag = &mainbus_dma_tag;
 		ma.ma_node = findroot();
 		ma.ma_name = "cpu";
-		config_found(dev, (void *)&ma, mbprint);
+		config_found(dev, (void *)&ma, mbprint,
+		    CFARGS(.devhandle = prom_node_to_devhandle(ma.ma_node)));
 	}
 
 	for (ssp = openboot_special; (sp = ssp->dev) != NULL; ssp++) {
@@ -1316,7 +1329,9 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		if (prom_getprop_address1(node, &ma.ma_promvaddr) != 0)
 			continue;
 
-		if (config_found(dev, (void *)&ma, mbprint) == NULL) {
+		if (config_found(dev, (void *)&ma, mbprint,
+				 CFARGS(.devhandle =
+				     prom_node_to_devhandle(node))) == NULL) {
 			if (ssp->flags & BS_OPTIONAL) continue;
 			panic("%s", sp);
 		}
@@ -1375,7 +1390,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 			ma.ma_pri = 0;
 			ma.ma_promvaddr = 0;
 
-			(void) config_found(dev, (void *)&ma, mbprint);
+			config_found(dev, (void *)&ma, mbprint,
+			    CFARGS(.devhandle = prom_node_to_devhandle(node)));
 			continue;
 		}
 #endif /* SUN4M */
@@ -1392,7 +1408,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		if (prom_getprop_address1(node, &ma.ma_promvaddr) != 0)
 			continue;
 
-		(void) config_found(dev, (void *)&ma, mbprint);
+		config_found(dev, (void *)&ma, mbprint,
+		    CFARGS(.devhandle = prom_node_to_devhandle(node)));
 	}
 #endif /* SUN4C || SUN4M || SUN4D */
 }
@@ -1636,7 +1653,7 @@ set_network_props(device_t dev, void *aux)
 
 	prom_getether(ofnode, eaddr);
 	dict = device_properties(dev);
-	blob = prop_data_create_data(eaddr, ETHER_ADDR_LEN);
+	blob = prop_data_create_copy(eaddr, ETHER_ADDR_LEN);
 	prop_dictionary_set(dict, "mac-address", blob);
 	prop_object_release(blob);
 }
@@ -1966,7 +1983,6 @@ bootinfo_relocate(void *newloc)
 	int bi_size;
 	struct btinfo_common *bt;
 	char *cp, *dp;
-	extern char *kernel_top;
 
 	if (bootinfo == NULL) {
 		kernel_top = newloc;
@@ -1989,7 +2005,7 @@ bootinfo_relocate(void *newloc)
 		(size_t)cp < (size_t)bootinfo + BOOTINFO_SIZE);
 
 	/*
-	 * Check propective gains.
+	 * Check prospective gains.
 	 */
 	if ((int)bootinfo - (int)newloc < bi_size)
 		/* Don't bother */

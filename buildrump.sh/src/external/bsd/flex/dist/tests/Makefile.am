@@ -19,6 +19,8 @@
 # WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
 # PURPOSE.
 
+AM_CFLAGS = $(WARNINGFLAGS)
+
 TESTS = $(check_PROGRAMS) options.cn
 
 # The script testwrapper.sh will run most tests as is. A couple tests
@@ -29,31 +31,32 @@ TESTS = $(check_PROGRAMS) options.cn
 
 TEST_EXTENSIONS = .reject .table .direct .cn .i3 .pthread .one .opt .ser .ver
 
-LOG_COMPILER = $(srcdir)/testwrapper.sh
+LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
 AM_LOG_FLAGS = -d $(srcdir) -r
 
-REJECT_LOG_COMPILER = $(srcdir)/testwrapper.sh
-AM_REJECT_LOG_FLAGS = -d $(srcdir) -i reject.txt -r
+REJECT_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
+AM_REJECT_LOG_FLAGS = -d $(srcdir) -i $(srcdir)/reject.txt -r
 
-TABLE_LOG_COMPILER = $(srcdir)/testwrapper.sh
+TABLE_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
 AM_TABLE_LOG_FLAGS = -d $(builddir) -i $(srcdir)/reject.txt -t
 
-DIRECT_LOG_COMPILER=$(srcdir)/testwrapper.sh
-AM_DIRECT_LOG_FLAGS = -d $(srcdir)
+DIRECT_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper-direct.sh
+AM_DIRECT_LOG_FLAGS = -b $(abs_builddir) -s $(srcdir)
 
-CN_LOG_COMPILER=$(srcdir)/options.cn
-AM_CN_LOG_FLAGS=$(FLEX)
+CN_LOG_COMPILER = $(SHELL) $(srcdir)/options.cn
+AM_CN_LOG_FLAGS = $(FLEX)
 
-I3_LOG_COMPILER=$(srcdir)/testwrapper.sh
-AM_I3_LOG_FLAGS=-i $(srcdir)/cxx_yywrap.txt -i $(srcdir)/cxx_yywrap.txt -i $(srcdir)/cxx_yywrap.txt
+I3_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
+AM_I3_LOG_FLAGS = -i $(srcdir)/cxx_yywrap.txt -i $(srcdir)/cxx_yywrap.txt -i $(srcdir)/cxx_yywrap.txt
 
-PTHREAD_LOG_COMPILER=$(srcdir)/testwrapper.sh
-AM_PTHREAD_LOG_FLAGS=-i $(srcdir)/pthread_1.txt -i $(srcdir)/pthread_2.txt -i $(srcdir)/pthread_3.txt -i $(srcdir)/pthread_4.txt -i $(srcdir)/pthread_5.txt
+PTHREAD_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
+AM_PTHREAD_LOG_FLAGS = -i $(srcdir)/pthread_1.txt -i $(srcdir)/pthread_2.txt -i $(srcdir)/pthread_3.txt -i $(srcdir)/pthread_4.txt -i $(srcdir)/pthread_5.txt
 
-ONE_LOG_COMPILER = $(srcdir)/testwrapper.sh
+ONE_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
 AM_ONE_LOG_FLAGS = -1 -d $(srcdir)
 
 AM_YFLAGS = -d -p test
+AM_CPPFLAGS = -I$(top_builddir)/src -I$(top_srcdir)/src
 
 check_PROGRAMS = $(simple_tests) $(reject_tests) $(TABLE_TESTS) $(DIRECT_TESTS) $(I3_TESTS) $(PTHREAD_TESTS) $(ONE_TESTS) $(TABLEOPTS_TESTS)
 
@@ -71,6 +74,7 @@ simple_tests = \
 	ccl \
 	cxx_basic \
 	cxx_multiple_scanners \
+	cxx_restart \
 	debug_nr \
 	debug_r \
 	extended \
@@ -80,12 +84,11 @@ simple_tests = \
 	mem_r \
 	multiple_scanners_nr \
 	multiple_scanners_r \
-	noansi_nr \
-	noansi_r \
 	posix \
 	posixly_correct \
 	prefix_nr \
 	prefix_r \
+	quote_in_comment \
 	quotes \
 	string_nr \
 	string_r \
@@ -110,35 +113,46 @@ DIRECT_TESTS = \
 I3_TESTS = \
 	cxx_yywrap.i3
 
-if want_pthread
 PTHREAD_TESTS = \
 	pthread.pthread
-endif
 
 ONE_TESTS = \
 	lineno_nr.one \
 	lineno_r.one \
 	lineno_trailing.one
 
+quote_in_comment_SOURCES = quote_in_comment.l
 alloc_extra_SOURCES = alloc_extra.l
 array_nr_SOURCES = array_nr.l
 array_r_SOURCES = array_r.l
 basic_nr_SOURCES = basic_nr.l
 basic_r_SOURCES = basic_r.l
+if HAVE_BISON
 bison_nr_SOURCES = bison_nr_scanner.l bison_nr_parser.y bison_nr_main.c
+nodist_bison_nr_SOURCES = bison_nr_parser.h bison_nr_scanner.h
 bison_yylloc_SOURCES = bison_yylloc_scanner.l bison_yylloc_parser.y bison_yylloc_main.c
+nodist_bison_yylloc_SOURCES = bison_yylloc_parser.h bison_yylloc_scanner.h
 bison_yylval_SOURCES = bison_yylval_scanner.l bison_yylval_parser.y bison_yylval_main.c
+nodist_bison_yylval_SOURCES = bison_yylval_parser.h bison_yylval_scanner.h
+else
+bison_nr_SOURCES = no_bison_stub.c
+bison_yylloc_SOURCES = no_bison_stub.c
+bison_yylval_SOURCES = no_bison_stub.c
+endif
 c_cxx_nr_SOURCES = c_cxx_nr.lll
 c_cxx_r_SOURCES = c_cxx_r.lll
 ccl_SOURCES = ccl.l
 cxx_basic_SOURCES = cxx_basic.ll
+cxx_restart_SOURCES = cxx_restart.ll
 cxx_multiple_scanners_SOURCES = cxx_multiple_scanners_main.cc cxx_multiple_scanners_1.ll cxx_multiple_scanners_2.ll
 cxx_yywrap_i3_SOURCES = cxx_yywrap.ll
 debug_nr_SOURCES = debug_nr.l
 debug_r_SOURCES = debug_r.l
 extended_SOURCES = extended.l
 header_nr_SOURCES = header_nr_scanner.l header_nr_main.c
+nodist_header_nr_SOURCES = header_nr_scanner.h
 header_r_SOURCES = header_r_scanner.l header_r_main.c
+nodist_header_r_SOURCES = header_r_scanner.h
 include_by_buffer_direct_SOURCES = include_by_buffer.direct.l
 include_by_push_direct_SOURCES = include_by_push.direct.l
 include_by_reentrant_direct_SOURCES = include_by_reentrant.direct.l
@@ -148,9 +162,9 @@ lineno_trailing_one_SOURCES = lineno_trailing.l
 mem_nr_SOURCES = mem_nr.l
 mem_r_SOURCES = mem_r.l
 multiple_scanners_nr_SOURCES = multiple_scanners_nr_main.c multiple_scanners_nr_1.l multiple_scanners_nr_2.l
+nodist_multiple_scanners_nr_SOURCES = multiple_scanners_nr_1.h multiple_scanners_nr_2.h
 multiple_scanners_r_SOURCES = multiple_scanners_r_main.c multiple_scanners_r_1.l multiple_scanners_r_2.l
-noansi_nr_SOURCES = noansi_nr.l
-noansi_r_SOURCES = noansi_r.l
+nodist_multiple_scanners_r_SOURCES = multiple_scanners_nr_1.h multiple_scanners_nr_2.h
 posix_SOURCES = posix.l
 posixly_correct_SOURCES = posixly_correct.l
 prefix_nr_SOURCES = prefix_nr.l
@@ -166,22 +180,8 @@ rescan_r_direct_SOURCES = rescan_r.direct.l
 string_nr_SOURCES = string_nr.l
 string_r_SOURCES = string_r.l
 top_SOURCES = top.l top_main.c
+nodist_top_SOURCES = top.h
 yyextra_SOURCES = yyextra.l
-
-BUILT_SOURCES = \
-	bison_nr_parser.h \
-	bison_nr_scanner.h \
-	bison_yylloc_parser.h \
-	bison_yylloc_scanner.h \
-	bison_yylval_parser.h \
-	bison_yylval_scanner.h \
-	header_nr_scanner.h \
-	header_r_scanner.h \
-	multiple_scanners_nr_1.h \
-	multiple_scanners_nr_2.h \
-	multiple_scanners_r_1.h \
-	multiple_scanners_r_2.h \
-	top.h
 
 # Normally, automake would distribute files built by flex. Since the
 # point of the test suite is to test the files that flex builds, and
@@ -193,6 +193,7 @@ BUILT_SOURCES = \
 # it.
 
 CLEANFILES = \
+	alloc_extra.c \
 	array_nr.c \
 	array_r.c \
 	basic_nr.c \
@@ -215,6 +216,7 @@ CLEANFILES = \
 	cxx_basic.cc \
 	cxx_multiple_scanners_1.cc \
 	cxx_multiple_scanners_2.cc \
+	cxx_restart.cc \
 	cxx_yywrap.cc \
 	debug_nr.c \
 	debug_r.c \
@@ -239,13 +241,12 @@ CLEANFILES = \
 	multiple_scanners_r_1.h \
 	multiple_scanners_r_2.c \
 	multiple_scanners_r_2.h \
-	noansi_nr.c \
-	noansi_r.c \
 	posix.c \
 	posixly_correct.c \
 	prefix_nr.c \
 	prefix_r.c \
 	pthread.c \
+	quote_in_comment.c \
 	quotes.c \
 	reject_nr.reject.c \
 	reject_r.reject.c \
@@ -260,7 +261,6 @@ CLEANFILES = \
 	top.c \
 	top.h  \
 	yyextra.c \
-alloc_extra.c \
 	$(tableopts_c) \
 	$(tableopts_tables)
 
@@ -284,6 +284,7 @@ EXTRA_DIST = \
 	ccl.txt \
 	cxx_basic.txt \
 	cxx_multiple_scanners.txt \
+	cxx_restart.txt \
 	cxx_yywrap.txt \
 	debug_nr.txt \
 	debug_r.txt \
@@ -304,8 +305,6 @@ EXTRA_DIST = \
 	lineno_trailing.one.txt \
 	mem_nr.txt \
 	mem_r.txt \
-	noansi_nr.txt \
-	noansi_r.txt \
 	prefix_nr.txt \
 	prefix_r.txt \
 	pthread_1.txt \
@@ -316,6 +315,7 @@ EXTRA_DIST = \
 	reject.txt \
 	rescan_nr.direct.txt \
 	rescan_r.direct.txt \
+	quote_in_comment.txt \
 	quotes.txt \
 	top.txt \
 	yyextra.txt \
@@ -326,90 +326,115 @@ dist_noinst_SCRIPTS = \
 
 dist_check_SCRIPTS = \
 	options.cn \
+	testwrapper-direct.sh \
 	testwrapper.sh
 
-pthread_pthread_LDADD = -lpthread
+pthread_pthread_LDADD = @LIBPTHREAD@
 
 # specify how to process .l files in order to test the flex built by make all
 
 FLEX = $(top_builddir)/src/flex
 
 .l.c: $(FLEX)
-	$(FLEX) -o $@ $<
+	$(AM_V_LEX)$(FLEX) -o $@ $<
 
 .ll.cc: $(FLEX)
-	$(FLEX) -+ -o $@ $<
+	$(AM_V_LEX)$(FLEX) -+ -o $@ $<
 
-bison_nr_main.($OBJEXT): bison_nr_parser.h bison_nr_scanner.h
+bison_nr_main.$(OBJEXT): bison_nr_parser.h bison_nr_scanner.h
+bison_nr_scanner.$(OBJEXT): bison_nr_parser.h
+
 bison_nr_scanner.h: bison_nr_scanner.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 bison_yylloc_main.$(OBJEXT): bison_yylloc_parser.h bison_yylloc_scanner.h
+bison_yylloc_scanner.$(OBJEXT): bison_yylloc_parser.h
+
 bison_yylloc_scanner.h: bison_yylloc_scanner.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 bison_yylval_main.$(OBJEXT): bison_yylval_parser.h bison_yylval_scanner.h
+bison_yylval_scanner.$(OBJEXT): bison_yylval_parser.h
+
 bison_yylval_scanner.h: bison_yylval_scanner.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 # automake does not support compiling flex scanners output in C as C++
 # so we explicitly sayhow, using the .lll suffix for the lex input file
 
 .lll.cc: $(FLEX)
-	$(FLEX) -o $@ $<
+	$(AM_V_LEX)$(FLEX) -o $@ $<
 
 header_nr_main.$(OBJEXT): header_nr_scanner.h
+
 header_nr_scanner.h: header_nr_scanner.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 header_r_main.$(OBJEXT): header_r_scanner.h
+
 header_r_scanner.h: header_r_scanner.c
-
-include_by_buffer.direct$(EXE): include_by_buffer.direct.txt include_by_buffer.direct_2.txt include_by_buffer.direct_3.txt
-
-include_by_push.direct$(EXE): include_by_push.direct.txt include_by_push.direct_2.txt include_by_push.direct_3.txt
-
-include_by_reentrant.direct$(EXE): include_by_reentrant.direct.txt include_by_reentrant.direct_2.txt include_by_reentrant.direct_3.txt
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 multiple_scanners_nr_main.$(OBJEXT): multiple_scanners_nr_1.h multiple_scanners_nr_2.h
+
 multiple_scanners_nr_1.h: multiple_scanners_nr_1.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
+
 multiple_scanners_nr_2.h: multiple_scanners_nr_2.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 multiple_scanners_r_main.$(OBJEXT): multiple_scanners_r_1.h multiple_scanners_r_2.h
+
 multiple_scanners_r_1.h: multiple_scanners_r_1.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
+
 multiple_scanners_r_2.h: multiple_scanners_r_2.c
+	@if test ! -f $@; then rm -f $<; else :; fi
+	@if test ! -f $@; then $(MAKE) $(AM_MAKEFLAGS) $<; else :; fi
 
 posixly_correct.c: posixly_correct.l $(FLEX)
-	POSIXLY_CORRECT=1 $(FLEX) -o $@ $<
+	$(AM_V_LEX)POSIXLY_CORRECT=1 $(FLEX) -o $@ $<
 
 reject_nr.reject.c: reject.l4 $(FLEX)
-	$(FLEX) -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -o $@ $<
 
 reject_nr.reject$(EXEEXT): reject_nr.reject.$(OBJEXT)
-	$(LINK) $^
+	$(AM_V_CCLD)$(LINK) $^
 
 reject_r.reject.c: reject.l4 $(FLEX)
-	$(FLEX) --reentrant -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape --reentrant -o $@ $<
 
 reject_r.reject.$(OBJEXT): reject_r.reject.c
-	$(COMPILE) -DTEST_IS_REENTRANT -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_IS_REENTRANT -c -o $@ $<
 
 reject_r.reject$(EXEEXT): reject_r.reject.$(OBJEXT)
-	$(LINK) $^
+	$(AM_V_CCLD)$(LINK) $^
 
 reject_ver.table.c: reject.l4 $(FLEX)
-	$(FLEX) -o $@ --tables-verify --tables-file=$(basename $@).tables $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -o $@ --tables-verify --tables-file=$(basename $@).tables $<
 
 reject_ver.table.$(OBJEXT): reject_ver.table.c
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
 
 reject_ver.table$(EXEEXT): reject_ver.table.$(OBJEXT)
-	$(LINK) $^
+	$(AM_V_CCLD)$(LINK) $^
 
 reject_ser.table.c: reject.l4 $(FLEX)
-	$(FLEX) -o $@ --tables-file=$(basename $@).tables $<
+	$(AM_V_LEX)$(FLEX) -o $@ --unsafe-no-m4-sect3-escape --tables-file=$(basename $@).tables $<
 
 reject_ser.table.$(OBJEXT): reject_ser.table.c
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
 
 reject_ser.table$(EXEEXT): reject_ser.table.$(OBJEXT)
-	$(LINK) $^
+	$(AM_V_CCLD)$(LINK) $^
 
 top_main.$(OBJEXT): top.h
 top.h: top.c
@@ -421,7 +446,7 @@ top.h: top.c
 # it can be / is generated by a shell script, tableopts.sh.
 
 tableopts.am: tableopts.sh
-	$(srcdir)/tableopts.sh > $(srcdir)/tableopts.am
+	$(SHELL) $(srcdir)/tableopts.sh > $(srcdir)/tableopts.am
 
 include $(srcdir)/tableopts.am
 
@@ -433,50 +458,50 @@ tableopts_tests  := $(tableopts_opttests) $(tableopts_vertests) $(tableopts_sert
 
 tableopts_c := $(addsuffix .c,$(tableopts_tests))
 
-OPT_LOG_COMPILER = $(srcdir)/testwrapper.sh
-AM_OPT_LOG_FLAGS = -d $(srcdir) -i tableopts.txt -r
+OPT_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
+AM_OPT_LOG_FLAGS = -d $(srcdir) -i $(srcdir)/tableopts.txt -r
 
 tableopts_opt_nr%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) $* -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) $* -o $@ $<
 
 tableopts_opt_nr%.$(OBJEXT): tableopts_opt_nr%.c 
-	$(COMPILE) -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -c -o $@ $<
 
 tableopts_opt_r%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) --reentrant $*  -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) --reentrant $*  -o $@ $<
 
 tableopts_opt_r%.$(OBJEXT):  tableopts_opt_r%.c 
-	$(COMPILE) -DTEST_IS_REENTRANT -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_IS_REENTRANT -c -o $@ $<
 
-SER_LOG_COMPILER = $(srcdir)/testwrapper.sh
+SER_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
 AM_SER_LOG_FLAGS = -d $(builddir) -i $(srcdir)/tableopts.txt -r -t
 
 tableopts_ser_nr%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) --tables-file="tableopts_ser_nr$*.ser.tables"  $* -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) --tables-file="tableopts_ser_nr$*.ser.tables"  $* -o $@ $<
 
 tableopts_ser_nr%.$(OBJEXT): tableopts_ser_nr%.c 
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
 
 tableopts_ser_r%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) -R --tables-file="tableopts_ser_r$*.ser.tables" $*  -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) -R --tables-file="tableopts_ser_r$*.ser.tables" $*  -o $@ $<
 
 tableopts_ser_r%.$(OBJEXT):  tableopts_ser_r%.c
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -DTEST_IS_REENTRANT -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -DTEST_IS_REENTRANT -c -o $@ $<
 
-VER_LOG_COMPILER = $(srcdir)/testwrapper.sh
+VER_LOG_COMPILER = $(SHELL) $(srcdir)/testwrapper.sh
 AM_VER_LOG_FLAGS = -d $(builddir) -i $(srcdir)/tableopts.txt -r -t
 
 tableopts_ver_nr%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) --tables-file="tableopts_ver_nr$*.ver.tables" --tables-verify $* -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) --tables-file="tableopts_ver_nr$*.ver.tables" --tables-verify $* -o $@ $<
 
 tableopts_ver_nr%.$(OBJEXT): tableopts_ver_nr%.c 
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -c -o $@ $<
 
 tableopts_ver_nr%.ver$(EXEEXT): tableopts_ver_nr%.$(OBJEXT)
-	$(LINK) -o $@ $^
+	$(AM_V_CCLD)$(LINK) -o $@ $^
 
 tableopts_ver_r%.c: tableopts.l4 $(FLEX)
-	$(FLEX) -P $(subst -,_,$(basename $(*F))) -R --tables-file="tableopts_ver_r$*.ver.tables" --tables-verify $*  -o $@ $<
+	$(AM_V_LEX)$(FLEX) --unsafe-no-m4-sect3-escape -P $(subst -,_,$(basename $(*F))) -R --tables-file="tableopts_ver_r$*.ver.tables" --tables-verify $*  -o $@ $<
 
 tableopts_ver_r%.$(OBJEXT):  tableopts_ver_r%.c  
-	$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -DTEST_IS_REENTRANT -c -o $@ $<
+	$(AM_V_CC)$(COMPILE) -DTEST_HAS_TABLES_EXTERNAL -DTEST_IS_REENTRANT -c -o $@ $<

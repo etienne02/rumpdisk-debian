@@ -1,4 +1,4 @@
-/* $NetBSD: pmap_page.S,v 1.1 2014/08/10 05:47:37 matt Exp $ */
+/* $NetBSD: pmap_page.S,v 1.6 2021/02/11 08:35:12 ryo Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,20 +29,28 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_gprof.h"
 #include <aarch64/asm.h>
 
 #include "assym.h"
 
-RCSID("$NetBSD: pmap_page.S,v 1.1 2014/08/10 05:47:37 matt Exp $");
+RCSID("$NetBSD: pmap_page.S,v 1.6 2021/02/11 08:35:12 ryo Exp $");
 
 /* LINTSTUB: void pmap_zero_page(paddr_t pa); */
 ENTRY(pmap_zero_page)
-	movk	x0, #0xffff, lsl #48	/* convert to direct mapped */
-        add	x4, x0, #(PAGE_SIZE >> 12), lsl #12
+	/* convert to direct mapped */
+#if ((AARCH64_DIRECTMAP_MASK & 0x0000ffffffffffff) == 0)
+	movk	x0, #(AARCH64_DIRECTMAP_START >> 48), lsl #48
+#else
+	mov	x1, #AARCH64_DIRECTMAP_START
+	orr	x0, x0, x1
+#endif
+
+	add	x4, x0, #PAGE_SIZE
 	mrs	x2, dczid_el0
 	tbnz	x2, #4, 2f
 
-	mov	x3, #16
+	mov	x3, #4
 	lsl	x3, x3, x2
 
 1:	dc	zva, x0
@@ -61,11 +69,19 @@ ENTRY(pmap_zero_page)
 	ret
 END(pmap_zero_page)
 
-/* LINTSTUB: void pmap_zero_page(paddr_t src_pa, paddr_t dst_pa); */
+/* LINTSTUB: void pmap_copy_page(paddr_t src_pa, paddr_t dst_pa); */
 ENTRY(pmap_copy_page)
-	movk	x0, #0xffff, lsl #48	/* convert to direct mapped */
-	movk	x1, #0xffff, lsl #48	/* convert to direct mapped */
-        add	x10, x0, #(PAGE_SIZE >> 12), lsl #12
+	/* convert to direct mapped */
+#if ((AARCH64_DIRECTMAP_MASK & 0x0000ffffffffffff) == 0)
+	movk	x0, #(AARCH64_DIRECTMAP_START >> 48), lsl #48
+	movk	x1, #(AARCH64_DIRECTMAP_START >> 48), lsl #48
+#else
+	mov	x2, #AARCH64_DIRECTMAP_START
+	orr	x0, x0, x2
+	orr	x1, x1, x2
+#endif
+
+	add	x10, x0, #PAGE_SIZE
 
 1:	ldnp	x2, x3, [x0, #0]
 	ldnp	x4, x5, [x0, #16]

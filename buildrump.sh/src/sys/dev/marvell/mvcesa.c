@@ -1,4 +1,4 @@
-/*	$NetBSD: mvcesa.c,v 1.1 2012/07/27 03:00:01 kiyohara Exp $	*/
+/*	$NetBSD: mvcesa.c,v 1.3 2020/06/14 23:29:23 riastradh Exp $	*/
 /*
  * Copyright (c) 2008 KIYOHARA Takashi
  * All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mvcesa.c,v 1.1 2012/07/27 03:00:01 kiyohara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mvcesa.c,v 1.3 2020/06/14 23:29:23 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -56,7 +56,6 @@ struct mvcesa_session {
 	int ses_used;
 
 	int ses_klen;
-	uint32_t ses_iv[4];
 	uint32_t ses_key[8];
 
 	uint32_t ses_hminner[5];	/* HMAC inner state */
@@ -236,9 +235,6 @@ mvcesa_newsession(void *arg, u_int32_t *sidp, struct cryptoini *cri)
 				return EINVAL;
 			enc = 1;
 
-			cprng_fast(ses->ses_iv,
-			    c->cri_alg == CRYPTO_AES_CBC ? 16 : 8);
-
 			/* Go ahead and compute key in CESA's byte order */
 			ses->ses_klen = c->cri_klen;
 			memcpy(ses->ses_key, c->cri_key, c->cri_klen / 8);
@@ -406,8 +402,10 @@ mvcesa_process(void *arg, struct cryptop *crp, int hint)
 				dir = MVCESA_DESE_C_DIRECTION_ENC;
 				if (crd->crd_flags & CRD_F_IV_EXPLICIT)
 					iv = (uint32_t *)crd->crd_iv;
-				else
-					iv = ses->ses_iv;
+				else {
+					cprng_fast(ivbuf, sizeof(ivbuf));
+					iv = ivbuf;
+				}
 				if (!(crd->crd_flags & CRD_F_IV_PRESENT)) {
 					if (m != NULL)
 						m_copyback(m, crd->crd_inject,
@@ -544,7 +542,7 @@ mvcesa_authentication(struct mvcesa_softc *sc, struct mvcesa_session *ses,
 		data = 0;
 		if (buf != NULL)
 			for (i = 0; i < 512 / 8 && off + i < len; i += s) {
-				s = min(sizeof(data), len - off - i);
+				s = uimin(sizeof(data), len - off - i);
 				memcpy(&data, buf + skip + off + i, s);
 				if (s == sizeof(data))
 					bus_space_write_4(sc->sc_iot,
@@ -553,7 +551,7 @@ mvcesa_authentication(struct mvcesa_softc *sc, struct mvcesa_session *ses,
 			}
 		else if (m != NULL)
 			for (i = 0; i < 512 / 8 && off + i < len; i += s) {
-				s = min(sizeof(data), len - off - i);
+				s = uimin(sizeof(data), len - off - i);
 				m_copydata(m, skip + off + i, s, &data);
 				if (s == sizeof(data))
 					bus_space_write_4(sc->sc_iot,
@@ -562,7 +560,7 @@ mvcesa_authentication(struct mvcesa_softc *sc, struct mvcesa_session *ses,
 			}
 		else if (uio != NULL)
 			for (i = 0; i < 512 / 8 && off + i < len; i += s) {
-				s = min(sizeof(data), len - off - i);
+				s = uimin(sizeof(data), len - off - i);
 				cuio_copydata(uio, skip + off + i, s, &data);
 				if (s == sizeof(data))
 					bus_space_write_4(sc->sc_iot,
@@ -674,7 +672,7 @@ mvcesa_des_encdec(struct mvcesa_softc *sc, struct mvcesa_session *ses,
 
 	i = o = 0;
 	while (i < len) {
-		s = min(sizeof(iblk), len - i);
+		s = uimin(sizeof(iblk), len - i);
 		iblk = 0;
 
 		if (buf != NULL)
@@ -759,9 +757,6 @@ mvcesa_des_encdec(struct mvcesa_softc *sc, struct mvcesa_session *ses,
 				break;
 		}
 	}
-
-	if (dir == MVCESA_DESE_C_DIRECTION_ENC)
-		memcpy(ses->ses_iv, iv, sizeof(ses->ses_iv));
 
 	return 0;
 }

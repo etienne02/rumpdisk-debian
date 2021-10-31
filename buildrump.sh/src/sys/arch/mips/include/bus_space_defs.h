@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_space_defs.h,v 1.2 2016/07/11 16:15:35 matt Exp $	*/
+/*	$NetBSD: bus_space_defs.h,v 1.4 2020/07/26 08:08:41 simonb Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 2000, 2001 The NetBSD Foundation, Inc.
@@ -95,10 +95,10 @@
 	(void) 0;							\
 })
 
-#define BUS_SPACE_ALIGNED_POINTER(p, t) __BUS_SPACE_ALIGNED_ADDRESS(p, t)
+#define	BUS_SPACE_ALIGNED_POINTER(p, t) __BUS_SPACE_ALIGNED_ADDRESS(p, t)
 #else
 #define	__BUS_SPACE_ADDRESS_SANITY(p, t, d)	(void) 0
-#define BUS_SPACE_ALIGNED_POINTER(p, t) ALIGNED_POINTER(p, t)
+#define	BUS_SPACE_ALIGNED_POINTER(p, t) ALIGNED_POINTER(p, t)
 #endif /* BUS_SPACE_DEBUG */
 #endif /* _KERNEL */
 
@@ -184,7 +184,7 @@ struct mips_bus_space {
 			    uint32_t *, bus_size_t);
 	void		(*bs_rm_8)(void *, bus_space_handle_t, bus_size_t,
 			    uint64_t *, bus_size_t);
-					
+
 	/* read region */
 	void		(*bs_rr_1)(void *, bus_space_handle_t, bus_size_t,
 			    uint8_t *, bus_size_t);
@@ -194,7 +194,7 @@ struct mips_bus_space {
 			    uint32_t *, bus_size_t);
 	void		(*bs_rr_8)(void *, bus_space_handle_t, bus_size_t,
 			    uint64_t *, bus_size_t);
-					
+
 	/* write (single) */
 	void		(*bs_w_1)(void *, bus_space_handle_t, bus_size_t,
 			    uint8_t);
@@ -214,7 +214,7 @@ struct mips_bus_space {
 			    const uint32_t *, bus_size_t);
 	void		(*bs_wm_8)(void *, bus_space_handle_t, bus_size_t,
 			    const uint64_t *, bus_size_t);
-					
+
 	/* write region */
 	void		(*bs_wr_1)(void *, bus_space_handle_t, bus_size_t,
 			    const uint8_t *, bus_size_t);
@@ -240,7 +240,7 @@ struct mips_bus_space {
 			    uint32_t *, bus_size_t);
 	void		(*bs_rms_8)(void *, bus_space_handle_t, bus_size_t,
 			    uint64_t *, bus_size_t);
-					
+
 	/* read region stream */
 	void		(*bs_rrs_1)(void *, bus_space_handle_t, bus_size_t,
 			    uint8_t *, bus_size_t);
@@ -250,7 +250,7 @@ struct mips_bus_space {
 			    uint32_t *, bus_size_t);
 	void		(*bs_rrs_8)(void *, bus_space_handle_t, bus_size_t,
 			    uint64_t *, bus_size_t);
-					
+
 	/* write (single) stream */
 	void		(*bs_ws_1)(void *, bus_space_handle_t, bus_size_t,
 			    uint8_t);
@@ -270,7 +270,7 @@ struct mips_bus_space {
 			    const uint32_t *, bus_size_t);
 	void		(*bs_wms_8)(void *, bus_space_handle_t, bus_size_t,
 			    const uint64_t *, bus_size_t);
-					
+
 	/* write region stream */
 	void		(*bs_wrs_1)(void *, bus_space_handle_t, bus_size_t,
 			    const uint8_t *, bus_size_t);
@@ -332,15 +332,6 @@ struct mips_bus_space_translation {
 
 #define	BUS_SPACE_BARRIER_READ	0x01
 #define	BUS_SPACE_BARRIER_WRITE	0x02
-
-/*
- * New style.
- */
-#define	BUS_SPACE_BARRIER_SYNC		0x03
-#define	BUS_SPACE_BARRIER_READ_BEFORE_READ	BUS_SPACE_BARRIER_READ
-#define	BUS_SPACE_BARRIER_READ_BEFORE_WRITE	BUS_SPACE_BARRIER_READ
-#define	BUS_SPACE_BARRIER_WRITE_BEFORE_READ	BUS_SPACE_BARRIER_WRITE
-#define	BUS_SPACE_BARRIER_WRITE_BEFORE_WRITE	BUS_SPACE_BARRIER_WRITE
 
 #endif /* _KERNEL */
 

@@ -12,6 +12,7 @@
 #ifndef __REGISTERS_HPP__
 #define __REGISTERS_HPP__
 
+#include <sys/endian.h>
 #include <cassert>
 #include <cstdint>
 
@@ -243,16 +244,14 @@ enum {
   DWARF_AARCH64_X0 = 0,
   DWARF_AARCH64_X30 = 30,
   DWARF_AARCH64_SP = 31,
-  DWARF_AARCH64_ELR_MODE = 33,
   DWARF_AARCH64_V0 = 64,
   DWARF_AARCH64_V31 = 95,
 
   REGNO_AARCH64_X0 = 0,
   REGNO_AARCH64_X30 = 30,
   REGNO_AARCH64_SP = 31,
-  REGNO_AARCH64_ELR_MODE = 32,
-  REGNO_AARCH64_V0 = 33,
-  REGNO_AARCH64_V31 = 64,
+  REGNO_AARCH64_V0 = 32,
+  REGNO_AARCH64_V31 = 63,
 };
 
 class Registers_aarch64 {
@@ -271,8 +270,6 @@ public:
       return REGNO_AARCH64_X0 + (num - DWARF_AARCH64_X0);
     if (num == DWARF_AARCH64_SP)
       return REGNO_AARCH64_SP;
-    if (num == DWARF_AARCH64_ELR_MODE)
-      return REGNO_AARCH64_ELR_MODE;
     if (num >= DWARF_AARCH64_V0 && num <= DWARF_AARCH64_V31)
       return REGNO_AARCH64_V0 + (num - DWARF_AARCH64_V0);
     return LAST_REGISTER + 1;
@@ -306,25 +303,22 @@ public:
 
   void copyFloatVectorRegister(int num, uint64_t addr_) {
     const void *addr = reinterpret_cast<const void *>(addr_);
-    memcpy(vecreg + (num - REGNO_AARCH64_V0), addr, sizeof(vecreg[0]));
+    memcpy(vecreg + (num - REGNO_AARCH64_V0), addr, 16);
   }
 
   __dso_hidden void jumpto() const __dead;
 
 private:
-  struct vecreg_t {
-    uint64_t low, high;
-  };
-  uint64_t reg[REGNO_AARCH64_ELR_MODE + 1];
-  vecreg_t vecreg[32];
+  uint64_t reg[REGNO_AARCH64_SP + 1];
+  uint64_t vecreg[64];
 };
 
 enum {
   DWARF_ARM32_R0 = 0,
   DWARF_ARM32_R15 = 15,
   DWARF_ARM32_SPSR = 128,
-  DWARF_ARM32_OLD_S0 = 64,
-  DWARF_ARM32_OLD_S31 = 91,
+  DWARF_ARM32_S0 = 64,
+  DWARF_ARM32_S31 = 95,
   DWARF_ARM32_D0 = 256,
   DWARF_ARM32_D31 = 287,
   REGNO_ARM32_R0 = 0,
@@ -334,13 +328,20 @@ enum {
   REGNO_ARM32_D0 = 17,
   REGNO_ARM32_D15 = 32,
   REGNO_ARM32_D31 = 48,
+  REGNO_ARM32_S0 = 49,
+  REGNO_ARM32_S31 = 80,
 };
+
+#define	FLAGS_VFPV2_USED		0x1
+#define	FLAGS_VFPV3_USED		0x2
+#define	FLAGS_LEGACY_VFPV2_REGNO	0x4
+#define	FLAGS_EXTENDED_VFPV2_REGNO	0x8
 
 class Registers_arm32 {
 public:
   enum {
-    LAST_REGISTER = REGNO_ARM32_D31,
-    LAST_RESTORE_REG = REGNO_ARM32_D31,
+    LAST_REGISTER = REGNO_ARM32_S31,
+    LAST_RESTORE_REG = REGNO_ARM32_S31,
     RETURN_OFFSET = 0,
     RETURN_MASK = 0,
   };
@@ -354,10 +355,8 @@ public:
       return REGNO_ARM32_SPSR;
     if (num >= DWARF_ARM32_D0 && num <= DWARF_ARM32_D31)
       return REGNO_ARM32_D0 + (num - DWARF_ARM32_D0);
-    if (num >= DWARF_ARM32_OLD_S0 && num <= DWARF_ARM32_OLD_S31) {
-      assert(num % 2 == 0);
-      return REGNO_ARM32_D0 + (num - DWARF_ARM32_OLD_S0) / 2;
-    }
+    if (num >= DWARF_ARM32_S0 && num <= DWARF_ARM32_S31)
+      return REGNO_ARM32_S0 + (num - DWARF_ARM32_S0);
     return LAST_REGISTER + 1;
   }
 
@@ -384,27 +383,60 @@ public:
   void setSP(uint64_t value) { reg[REGNO_ARM32_SP] = value; }
 
   bool validFloatVectorRegister(int num) const {
-    return (num >= REGNO_ARM32_D0 && num <= REGNO_ARM32_D31);
+    return (num >= REGNO_ARM32_D0 && num <= REGNO_ARM32_S31);
   }
 
   void copyFloatVectorRegister(int num, uint64_t addr_) {
-    if (num <= REGNO_ARM32_D15) {
-      if ((flags & 1) == 0) {
-        lazyVFP1();
-        flags |= 1;
-      }
-    } else {
-      if ((flags & 2) == 0) {
-        lazyVFP3();
-        flags |= 2;
-      }
-    }
+    assert(validFloatVectorRegister(num));
     const void *addr = reinterpret_cast<const void *>(addr_);
-    memcpy(fpreg + (num - REGNO_ARM32_D0), addr, sizeof(fpreg[0]));
+    if (num >= REGNO_ARM32_S0 && num <= REGNO_ARM32_S31) {
+      /*
+       * XXX
+       * There are two numbering schemes for VFPv2 registers: s0-s31
+       * (used by GCC) and d0-d15 (used by LLVM). We won't support both
+       * schemes simultaneously in a same frame.
+       */
+      assert((flags & FLAGS_EXTENDED_VFPV2_REGNO) == 0);
+      flags |= FLAGS_LEGACY_VFPV2_REGNO;
+      if ((flags & FLAGS_VFPV2_USED) == 0) {
+        lazyVFPv2();
+        flags |= FLAGS_VFPV2_USED;
+      }
+      /*
+       * Emulate single precision register as half of the
+       * corresponding double register.
+       */
+      int dnum = (num - REGNO_ARM32_S0) / 2;
+      int part = (num - REGNO_ARM32_S0) % 2;
+#if _BYTE_ORDER == _BIG_ENDIAN
+      part = 1 - part;
+#endif
+      memcpy((uint8_t *)(fpreg + dnum) + part * sizeof(fpreg[0]) / 2,
+        addr, sizeof(fpreg[0]) / 2);
+    } else {
+      if (num <= REGNO_ARM32_D15) {
+	/*
+	 * XXX
+	 * See XXX comment above.
+	 */
+        assert((flags & FLAGS_LEGACY_VFPV2_REGNO) == 0);
+        flags |= FLAGS_EXTENDED_VFPV2_REGNO;
+        if ((flags & FLAGS_VFPV2_USED) == 0) {
+          lazyVFPv2();
+          flags |= FLAGS_VFPV2_USED;
+        }
+      } else {
+        if ((flags & FLAGS_VFPV3_USED) == 0) {
+          lazyVFPv3();
+          flags |= FLAGS_VFPV3_USED;
+        }
+      }
+      memcpy(fpreg + (num - REGNO_ARM32_D0), addr, sizeof(fpreg[0]));
+    }
   }
 
-  __dso_hidden void lazyVFP1();
-  __dso_hidden void lazyVFP3();
+  __dso_hidden void lazyVFPv2();
+  __dso_hidden void lazyVFPv3();
   __dso_hidden void jumpto() const __dead;
 
 private:
@@ -412,6 +444,11 @@ private:
   uint32_t flags;
   uint64_t fpreg[32];
 };
+
+#undef	FLAGS_VFPV2_USED
+#undef	FLAGS_VFPV3_USED
+#undef	FLAGS_LEGACY_VFPV2_REGNO
+#undef	FLAGS_EXTENDED_VFPV2_REGNO
 
 enum {
   DWARF_VAX_R0 = 0,

@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_readahead.c,v 1.8 2011/06/12 03:36:04 rmind Exp $	*/
+/*	$NetBSD: uvm_readahead.c,v 1.13 2020/05/19 21:45:35 ad Exp $	*/
 
 /*-
  * Copyright (c)2003, 2005, 2009 YAMAMOTO Takashi,
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_readahead.c,v 1.8 2011/06/12 03:36:04 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_readahead.c,v 1.13 2020/05/19 21:45:35 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/pool.h>
@@ -73,7 +73,7 @@ struct uvm_ractx {
 #endif
 
 #define	RA_WINSIZE_INIT	MAXPHYS			/* initial window size */
-#define	RA_WINSIZE_MAX	(MAXPHYS * 8)		/* max window size */
+#define	RA_WINSIZE_MAX	(MAXPHYS * 16)		/* max window size */
 #define	RA_WINSIZE_SEQENTIAL	RA_WINSIZE_MAX	/* fixed window size used for
 						   SEQUENTIAL hint */
 #define	RA_MINSIZE	(MAXPHYS * 2)		/* min size to start i/o */
@@ -125,6 +125,23 @@ ra_startio(struct uvm_object *uobj, off_t off, size_t sz)
 
 	DPRINTF(("%s: uobj=%p, off=%" PRIu64 ", endoff=%" PRIu64 "\n",
 	    __func__, uobj, off, endoff));
+
+	KASSERT(rw_write_held(uobj->vmobjlock));
+
+	/*
+	 * Don't issue read-ahead if the last page of the range is already cached.
+	 * The assumption is that since the access is sequential, the intermediate
+	 * pages would have similar LRU stats, and hence likely to be still in cache
+	 * too. This speeds up I/O using cache, since it avoids lookups and temporary
+	 * allocations done by full pgo_get.
+	 */
+	struct vm_page *pg = uvm_pagelookup(uobj, trunc_page(endoff - 1));
+	if (pg != NULL) {
+		DPRINTF(("%s:  off=%" PRIu64 ", sz=%zu already cached\n",
+		    __func__, off, sz));
+		return endoff;
+	}
+
 	off = trunc_page(off);
 	while (off < endoff) {
 		const size_t chunksize = RA_IOCHUNK;
@@ -145,9 +162,9 @@ ra_startio(struct uvm_object *uobj, off_t off, size_t sz)
 		 * use UVM_ADV_RANDOM to avoid recursion.
 		 */
 
-		mutex_enter(uobj->vmobjlock);
 		error = (*uobj->pgops->pgo_get)(uobj, off, NULL,
-		    &npages, 0, VM_PROT_READ, UVM_ADV_RANDOM, 0);
+		    &npages, 0, VM_PROT_READ, UVM_ADV_RANDOM, PGO_NOTIMESTAMP);
+		rw_enter(uobj->vmobjlock, RW_WRITER);
 		DPRINTF(("%s:  off=%" PRIu64 ", bytelen=%zu -> %d\n",
 		    __func__, off, bytelen, error));
 		if (error != 0 && error != EBUSY) {
@@ -207,7 +224,7 @@ uvm_ra_request(struct uvm_ractx *ra, int advice, struct uvm_object *uobj,
     off_t reqoff, size_t reqsize)
 {
 
-	KASSERT(mutex_owned(uobj->vmobjlock));
+	KASSERT(rw_write_held(uobj->vmobjlock));
 
 	if (ra == NULL || advice == UVM_ADV_RANDOM) {
 		return;
@@ -315,9 +332,7 @@ do_readahead:
 		if (rasize >= RA_MINSIZE) {
 			off_t next;
 
-			mutex_exit(uobj->vmobjlock);
 			next = ra_startio(uobj, raoff, rasize);
-			mutex_enter(uobj->vmobjlock);
 			ra->ra_next = next;
 		}
 	}
@@ -345,6 +360,8 @@ uvm_readahead(struct uvm_object *uobj, off_t off, off_t size)
 	if (size > RA_WINSIZE_MAX) {
 		size = RA_WINSIZE_MAX;
 	}
+	rw_enter(uobj->vmobjlock, RW_WRITER);
 	ra_startio(uobj, off, size);
+	rw_exit(uobj->vmobjlock);
 	return 0;
 }

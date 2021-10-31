@@ -1,4 +1,4 @@
-/*	$NetBSD: vga_raster.c,v 1.44 2015/03/01 07:05:59 mlelstv Exp $	*/
+/*	$NetBSD: vga_raster.c,v 1.50 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 Bang Jun-Young
@@ -56,7 +56,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vga_raster.c,v 1.44 2015/03/01 07:05:59 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vga_raster.c,v 1.50 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "opt_vga.h"
 #include "opt_wsmsgattrs.h" /* for WSDISPLAY_CUSTOM_OUTPUT */
@@ -395,8 +395,9 @@ vga_raster_init(struct vga_config *vc, bus_space_tag_t iot,
 	    &vh->vh_ioh_6845))
 		panic("vga_raster_init: couldn't map 6845 io");
 
-	if (bus_space_map(vh->vh_memt, 0xa0000, 0x20000, 0, &vh->vh_allmemh))
-		panic("vga_raster_init: couldn't map memory");
+	if (bus_space_map(vh->vh_memt, 0xa0000, 0x20000,
+	    BUS_SPACE_MAP_CACHEABLE, &vh->vh_allmemh))
+		panic("vga_init: couldn't map memory");
 
 	if (bus_space_subregion(vh->vh_memt, vh->vh_allmemh, 0, 0x10000,
 	    &vh->vh_memh))
@@ -438,7 +439,7 @@ vga_raster_init_screen(struct vga_config *vc, struct vgascreen *scr,
     const struct wsscreen_descr *type, int existing, long *attrp)
 {
 	int cpos;
-	int res;
+	int res __diagused;
 	struct vga_handle *vh;
 
 	scr->cfg = vc;
@@ -511,10 +512,7 @@ vga_raster_init_screen(struct vga_config *vc, struct vgascreen *scr,
 	else
 #endif
 	res = vga_raster_allocattr(scr, 0, 0, 0, attrp);
-#ifdef DIAGNOSTIC
-	if (res)
-		panic("vga_raster_init_screen: attribute botch");
-#endif
+	KASSERTMSG(res == 0, "attribute botch");
 
 	vc->nscreens++;
 	LIST_INSERT_HEAD(&vc->screens, scr, next);
@@ -550,7 +548,8 @@ vga_common_attach(struct vga_softc *sc, bus_space_tag_t iot,
 	aa.accessops = &vga_raster_accessops;
 	aa.accesscookie = vc;
 
-	config_found(sc->sc_dev, &aa, wsemuldisplaydevprint);
+	config_found(sc->sc_dev, &aa, wsemuldisplaydevprint,
+	    CFARGS(.iattr = "wsemuldisplaydev"));
 }
 
 int
@@ -867,12 +866,7 @@ vga_raster_setup_font(struct vga_config *vc, struct vgascreen *scr)
 	if (wsfont_lock(cookie, &wf))
 		return;
 
-	vf = malloc(sizeof(struct vga_raster_font), M_DEVBUF, M_NOWAIT);
-	if (!vf) {
-		wsfont_unlock(cookie);
-		return;
-	}
-
+	vf = malloc(sizeof(struct vga_raster_font), M_DEVBUF, M_WAITOK);
 	vf->font = wf;
 	scr->encoding = vf->font->encoding;
 	LIST_INSERT_HEAD(&scr->fontset, vf, next);

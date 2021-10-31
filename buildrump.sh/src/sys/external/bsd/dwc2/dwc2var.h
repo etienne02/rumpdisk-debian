@@ -1,4 +1,4 @@
-/*	$NetBSD: dwc2var.h,v 1.5 2016/04/23 10:15:30 skrll Exp $	*/
+/*	$NetBSD: dwc2var.h,v 1.7 2020/02/12 16:01:00 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -39,11 +39,11 @@ struct dwc2_qtd;
 
 struct dwc2_xfer {
 	struct usbd_xfer xfer;			/* Needs to be first */
-	struct usb_task abort_task;
 
 	struct dwc2_hcd_urb *urb;
 
 	TAILQ_ENTRY(dwc2_xfer) xnext;		/* list of complete xfers */
+	usbd_status intr_status;
 };
 
 struct dwc2_pipe {

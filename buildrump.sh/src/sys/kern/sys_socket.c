@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_socket.c,v 1.74 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: sys_socket.c,v 1.79 2020/11/17 03:22:33 chs Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_socket.c,v 1.74 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_socket.c,v 1.79 2020/11/17 03:22:33 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -81,10 +81,11 @@ __KERNEL_RCSID(0, "$NetBSD: sys_socket.c,v 1.74 2016/07/07 06:55:43 msaitoh Exp 
 #include <net/route.h>
 
 const struct fileops socketops = {
+	.fo_name = "socket",
 	.fo_read = soo_read,
 	.fo_write = soo_write,
 	.fo_ioctl = soo_ioctl,
-	.fo_fcntl = soo_fcntl,
+	.fo_fcntl = fnullop_fcntl,
 	.fo_poll = soo_poll,
 	.fo_stat = soo_stat,
 	.fo_close = soo_close,
@@ -140,11 +141,9 @@ soo_ioctl(file_t *fp, u_long cmd, void *data)
 	case FIOASYNC:
 		solock(so);
 		if (*(int *)data) {
-			so->so_state |= SS_ASYNC;
 			so->so_rcv.sb_flags |= SB_ASYNC;
 			so->so_snd.sb_flags |= SB_ASYNC;
 		} else {
-			so->so_state &= ~SS_ASYNC;
 			so->so_rcv.sb_flags &= ~SB_ASYNC;
 			so->so_snd.sb_flags &= ~SB_ASYNC;
 		}
@@ -191,35 +190,35 @@ soo_ioctl(file_t *fp, u_long cmd, void *data)
 		*(int *)data = (so->so_state&SS_RCVATMARK) != 0;
 		break;
 
+	case SIOCPEELOFF:
+		solock(so);
+		error = do_sys_peeloff(so, data);
+		sounlock(so);
+		break;
+
 	default:
 		/*
 		 * Interface/routing/protocol specific ioctls:
 		 * interface and routing ioctls should have a
 		 * different entry since a socket's unnecessary
 		 */
-		KERNEL_LOCK(1, NULL);
 		if (IOCGROUP(cmd) == 'i')
+			/*
+			 * KERNEL_LOCK will be held later if if_ioctl() of the
+			 * interface isn't MP-safe.
+			 */
 			error = ifioctl(so, cmd, data, curlwp);
 		else {
+			KERNEL_LOCK(1, NULL);
 			error = (*so->so_proto->pr_usrreqs->pr_ioctl)(so,
 			    cmd, data, NULL);
+			KERNEL_UNLOCK_ONE(NULL);
 		}
-		KERNEL_UNLOCK_ONE(NULL);
 		break;
 	}
 
 
 	return error;
-}
-
-int
-soo_fcntl(file_t *fp, u_int cmd, void *data)
-{
-
-	if (cmd == F_SETFL)
-		return 0;
-	else
-		return EOPNOTSUPP;
 }
 
 int

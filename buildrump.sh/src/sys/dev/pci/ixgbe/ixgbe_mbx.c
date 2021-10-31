@@ -1,148 +1,62 @@
-/******************************************************************************
+/* $NetBSD: ixgbe_mbx.c,v 1.12 2021/04/30 06:55:32 msaitoh Exp $ */
 
-  Copyright (c) 2001-2012, Intel Corporation 
+/******************************************************************************
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Copyright (c) 2001-2017, Intel Corporation
   All rights reserved.
-  
-  Redistribution and use in source and binary forms, with or without 
+
+  Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
-  
-   1. Redistributions of source code must retain the above copyright notice, 
+
+   1. Redistributions of source code must retain the above copyright notice,
       this list of conditions and the following disclaimer.
-  
-   2. Redistributions in binary form must reproduce the above copyright 
-      notice, this list of conditions and the following disclaimer in the 
+
+   2. Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
       documentation and/or other materials provided with the distribution.
-  
-   3. Neither the name of the Intel Corporation nor the names of its 
-      contributors may be used to endorse or promote products derived from 
+
+   3. Neither the name of the Intel Corporation nor the names of its
+      contributors may be used to endorse or promote products derived from
       this software without specific prior written permission.
-  
+
   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
-  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 
 ******************************************************************************/
-/*$FreeBSD: src/sys/dev/ixgbe/ixgbe_mbx.c,v 1.2 2011/01/19 19:36:27 jfv Exp $*/
-/*$NetBSD: ixgbe_mbx.c,v 1.3 2015/04/02 09:26:55 msaitoh Exp $*/
+/*$FreeBSD: head/sys/dev/ixgbe/ixgbe_mbx.c 326022 2017-11-20 19:36:21Z pfg $*/
+
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: ixgbe_mbx.c,v 1.12 2021/04/30 06:55:32 msaitoh Exp $");
 
 #include "ixgbe_type.h"
 #include "ixgbe_mbx.h"
 
 /**
- *  ixgbe_read_mbx - Reads a message from the mailbox
+ *  ixgbe_clear_mbx - Clear Mailbox Memory
  *  @hw: pointer to the HW structure
- *  @msg: The message buffer
- *  @size: Length of buffer
- *  @mbx_id: id of mailbox to read
+ *  @vf_number: id of mailbox to write
  *
- *  returns SUCCESS if it successfuly read message from buffer
+ *  Set VFMBMEM of given VF to 0x0.
  **/
-s32 ixgbe_read_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
-{
-	struct ixgbe_mbx_info *mbx = &hw->mbx;
-	s32 ret_val = IXGBE_ERR_MBX;
-
-	DEBUGFUNC("ixgbe_read_mbx");
-
-	/* limit read to size of mailbox */
-	if (size > mbx->size)
-		size = mbx->size;
-
-	if (mbx->ops.read)
-		ret_val = mbx->ops.read(hw, msg, size, mbx_id);
-
-	return ret_val;
-}
-
-/**
- *  ixgbe_write_mbx - Write a message to the mailbox
- *  @hw: pointer to the HW structure
- *  @msg: The message buffer
- *  @size: Length of buffer
- *  @mbx_id: id of mailbox to write
- *
- *  returns SUCCESS if it successfully copied message into the buffer
- **/
-s32 ixgbe_write_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
+s32 ixgbe_clear_mbx(struct ixgbe_hw *hw, u16 vf_number)
 {
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 	s32 ret_val = IXGBE_SUCCESS;
 
-	DEBUGFUNC("ixgbe_write_mbx");
+	DEBUGFUNC("ixgbe_clear_mbx");
 
-	if (size > mbx->size)
-		ret_val = IXGBE_ERR_MBX;
-
-	else if (mbx->ops.write)
-		ret_val = mbx->ops.write(hw, msg, size, mbx_id);
-
-	return ret_val;
-}
-
-/**
- *  ixgbe_check_for_msg - checks to see if someone sent us mail
- *  @hw: pointer to the HW structure
- *  @mbx_id: id of mailbox to check
- *
- *  returns SUCCESS if the Status bit was found or else ERR_MBX
- **/
-s32 ixgbe_check_for_msg(struct ixgbe_hw *hw, u16 mbx_id)
-{
-	struct ixgbe_mbx_info *mbx = &hw->mbx;
-	s32 ret_val = IXGBE_ERR_MBX;
-
-	DEBUGFUNC("ixgbe_check_for_msg");
-
-	if (mbx->ops.check_for_msg)
-		ret_val = mbx->ops.check_for_msg(hw, mbx_id);
-
-	return ret_val;
-}
-
-/**
- *  ixgbe_check_for_ack - checks to see if someone sent us ACK
- *  @hw: pointer to the HW structure
- *  @mbx_id: id of mailbox to check
- *
- *  returns SUCCESS if the Status bit was found or else ERR_MBX
- **/
-s32 ixgbe_check_for_ack(struct ixgbe_hw *hw, u16 mbx_id)
-{
-	struct ixgbe_mbx_info *mbx = &hw->mbx;
-	s32 ret_val = IXGBE_ERR_MBX;
-
-	DEBUGFUNC("ixgbe_check_for_ack");
-
-	if (mbx->ops.check_for_ack)
-		ret_val = mbx->ops.check_for_ack(hw, mbx_id);
-
-	return ret_val;
-}
-
-/**
- *  ixgbe_check_for_rst - checks to see if other side has reset
- *  @hw: pointer to the HW structure
- *  @mbx_id: id of mailbox to check
- *
- *  returns SUCCESS if the Status bit was found or else ERR_MBX
- **/
-s32 ixgbe_check_for_rst(struct ixgbe_hw *hw, u16 mbx_id)
-{
-	struct ixgbe_mbx_info *mbx = &hw->mbx;
-	s32 ret_val = IXGBE_ERR_MBX;
-
-	DEBUGFUNC("ixgbe_check_for_rst");
-
-	if (mbx->ops.check_for_rst)
-		ret_val = mbx->ops.check_for_rst(hw, mbx_id);
+	if (mbx->ops.clear)
+		ret_val = mbx->ops.clear(hw, vf_number);
 
 	return ret_val;
 }
@@ -170,6 +84,10 @@ static s32 ixgbe_poll_for_msg(struct ixgbe_hw *hw, u16 mbx_id)
 			break;
 		usec_delay(mbx->usec_delay);
 	}
+
+	if (countdown == 0)
+		ERROR_REPORT2(IXGBE_ERROR_POLLING,
+			   "Polling for VF%d mailbox message timedout", mbx_id);
 
 out:
 	return countdown ? IXGBE_SUCCESS : IXGBE_ERR_MBX;
@@ -199,6 +117,10 @@ static s32 ixgbe_poll_for_ack(struct ixgbe_hw *hw, u16 mbx_id)
 		usec_delay(mbx->usec_delay);
 	}
 
+	if (countdown == 0)
+		ERROR_REPORT2(IXGBE_ERROR_POLLING,
+			     "Polling for VF%d mailbox ack timedout", mbx_id);
+
 out:
 	return countdown ? IXGBE_SUCCESS : IXGBE_ERR_MBX;
 }
@@ -213,7 +135,8 @@ out:
  *  returns SUCCESS if it successfully received a message notification and
  *  copied it into the receive buffer.
  **/
-s32 ixgbe_read_posted_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size, u16 mbx_id)
+static s32 ixgbe_read_posted_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size,
+				 u16 mbx_id)
 {
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 	s32 ret_val = IXGBE_ERR_MBX;
@@ -242,8 +165,8 @@ out:
  *  returns SUCCESS if it successfully copied message into the buffer and
  *  received an ack to that message within delay * timeout period
  **/
-s32 ixgbe_write_posted_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size,
-			   u16 mbx_id)
+static s32 ixgbe_write_posted_mbx(struct ixgbe_hw *hw, u32 *msg, u16 size,
+				  u16 mbx_id)
 {
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 	s32 ret_val = IXGBE_ERR_MBX;
@@ -332,7 +255,7 @@ static s32 ixgbe_check_for_msg_vf(struct ixgbe_hw *hw, u16 mbx_id)
 
 	if (!ixgbe_check_for_bit_vf(hw, IXGBE_VFMAILBOX_PFSTS)) {
 		ret_val = IXGBE_SUCCESS;
-		hw->mbx.stats.reqs++;
+		hw->mbx.stats.reqs.ev_count++;
 	}
 
 	return ret_val;
@@ -354,7 +277,7 @@ static s32 ixgbe_check_for_ack_vf(struct ixgbe_hw *hw, u16 mbx_id)
 
 	if (!ixgbe_check_for_bit_vf(hw, IXGBE_VFMAILBOX_PFACK)) {
 		ret_val = IXGBE_SUCCESS;
-		hw->mbx.stats.acks++;
+		hw->mbx.stats.acks.ev_count++;
 	}
 
 	return ret_val;
@@ -377,7 +300,7 @@ static s32 ixgbe_check_for_rst_vf(struct ixgbe_hw *hw, u16 mbx_id)
 	if (!ixgbe_check_for_bit_vf(hw, (IXGBE_VFMAILBOX_RSTD |
 	    IXGBE_VFMAILBOX_RSTI))) {
 		ret_val = IXGBE_SUCCESS;
-		hw->mbx.stats.rsts++;
+		hw->mbx.stats.rsts.ev_count++;
 	}
 
 	return ret_val;
@@ -438,7 +361,7 @@ static s32 ixgbe_write_mbx_vf(struct ixgbe_hw *hw, u32 *msg, u16 size,
 		IXGBE_WRITE_REG_ARRAY(hw, IXGBE_VFMBMEM, i, msg[i]);
 
 	/* update stats */
-	hw->mbx.stats.msgs_tx++;
+	hw->mbx.stats.msgs_tx.ev_count++;
 
 	/* Drop VFU and interrupt the PF to tell it a message has been sent */
 	IXGBE_WRITE_REG(hw, IXGBE_VFMAILBOX, IXGBE_VFMAILBOX_REQ);
@@ -454,7 +377,7 @@ out_no_write:
  *  @size: Length of buffer
  *  @mbx_id: id of mailbox to read
  *
- *  returns SUCCESS if it successfuly read message from buffer
+ *  returns SUCCESS if it successfully read message from buffer
  **/
 static s32 ixgbe_read_mbx_vf(struct ixgbe_hw *hw, u32 *msg, u16 size,
 			     u16 mbx_id)
@@ -478,7 +401,7 @@ static s32 ixgbe_read_mbx_vf(struct ixgbe_hw *hw, u32 *msg, u16 size,
 	IXGBE_WRITE_REG(hw, IXGBE_VFMAILBOX, IXGBE_VFMAILBOX_ACK);
 
 	/* update stats */
-	hw->mbx.stats.msgs_rx++;
+	hw->mbx.stats.msgs_rx.ev_count++;
 
 out_no_read:
 	return ret_val;
@@ -508,12 +431,13 @@ void ixgbe_init_mbx_params_vf(struct ixgbe_hw *hw)
 	mbx->ops.check_for_msg = ixgbe_check_for_msg_vf;
 	mbx->ops.check_for_ack = ixgbe_check_for_ack_vf;
 	mbx->ops.check_for_rst = ixgbe_check_for_rst_vf;
+	mbx->ops.clear = NULL;
 
-	mbx->stats.msgs_tx = 0;
-	mbx->stats.msgs_rx = 0;
-	mbx->stats.reqs = 0;
-	mbx->stats.acks = 0;
-	mbx->stats.rsts = 0;
+	mbx->stats.msgs_tx.ev_count = 0;
+	mbx->stats.msgs_rx.ev_count = 0;
+	mbx->stats.reqs.ev_count = 0;
+	mbx->stats.acks.ev_count = 0;
+	mbx->stats.rsts.ev_count = 0;
 }
 
 static s32 ixgbe_check_for_bit_pf(struct ixgbe_hw *hw, u32 mask, s32 index)
@@ -547,7 +471,7 @@ static s32 ixgbe_check_for_msg_pf(struct ixgbe_hw *hw, u16 vf_number)
 	if (!ixgbe_check_for_bit_pf(hw, IXGBE_MBVFICR_VFREQ_VF1 << vf_bit,
 				    index)) {
 		ret_val = IXGBE_SUCCESS;
-		hw->mbx.stats.reqs++;
+		hw->mbx.stats.reqs.ev_count++;
 	}
 
 	return ret_val;
@@ -571,7 +495,7 @@ static s32 ixgbe_check_for_ack_pf(struct ixgbe_hw *hw, u16 vf_number)
 	if (!ixgbe_check_for_bit_pf(hw, IXGBE_MBVFICR_VFACK_VF1 << vf_bit,
 				    index)) {
 		ret_val = IXGBE_SUCCESS;
-		hw->mbx.stats.acks++;
+		hw->mbx.stats.acks.ev_count++;
 	}
 
 	return ret_val;
@@ -597,6 +521,9 @@ static s32 ixgbe_check_for_rst_pf(struct ixgbe_hw *hw, u16 vf_number)
 	case ixgbe_mac_82599EB:
 		vflre = IXGBE_READ_REG(hw, IXGBE_VFLRE(reg_offset));
 		break;
+	case ixgbe_mac_X550:
+	case ixgbe_mac_X550EM_x:
+	case ixgbe_mac_X550EM_a:
 	case ixgbe_mac_X540:
 		vflre = IXGBE_READ_REG(hw, IXGBE_VFLREC(reg_offset));
 		break;
@@ -607,7 +534,7 @@ static s32 ixgbe_check_for_rst_pf(struct ixgbe_hw *hw, u16 vf_number)
 	if (vflre & (1 << vf_shift)) {
 		ret_val = IXGBE_SUCCESS;
 		IXGBE_WRITE_REG(hw, IXGBE_VFLREC(reg_offset), (1 << vf_shift));
-		hw->mbx.stats.rsts++;
+		hw->mbx.stats.rsts.ev_count++;
 	}
 
 	return ret_val;
@@ -634,6 +561,10 @@ static s32 ixgbe_obtain_mbx_lock_pf(struct ixgbe_hw *hw, u16 vf_number)
 	p2v_mailbox = IXGBE_READ_REG(hw, IXGBE_PFMAILBOX(vf_number));
 	if (p2v_mailbox & IXGBE_PFMAILBOX_PFU)
 		ret_val = IXGBE_SUCCESS;
+	else
+		ERROR_REPORT2(IXGBE_ERROR_POLLING,
+			   "Failed to obtain mailbox lock for VF%d", vf_number);
+
 
 	return ret_val;
 }
@@ -672,7 +603,7 @@ static s32 ixgbe_write_mbx_pf(struct ixgbe_hw *hw, u32 *msg, u16 size,
 	IXGBE_WRITE_REG(hw, IXGBE_PFMAILBOX(vf_number), IXGBE_PFMAILBOX_STS);
 
 	/* update stats */
-	hw->mbx.stats.msgs_tx++;
+	hw->mbx.stats.msgs_tx.ev_count++;
 
 out_no_write:
 	return ret_val;
@@ -711,10 +642,31 @@ static s32 ixgbe_read_mbx_pf(struct ixgbe_hw *hw, u32 *msg, u16 size,
 	IXGBE_WRITE_REG(hw, IXGBE_PFMAILBOX(vf_number), IXGBE_PFMAILBOX_ACK);
 
 	/* update stats */
-	hw->mbx.stats.msgs_rx++;
+	hw->mbx.stats.msgs_rx.ev_count++;
 
 out_no_read:
 	return ret_val;
+}
+
+/**
+ *  ixgbe_clear_mbx_pf - Clear Mailbox Memory
+ *  @hw: pointer to the HW structure
+ *  @vf_number: the VF index
+ *
+ *  Set VFMBMEM of given VF to 0x0.
+ **/
+static s32 ixgbe_clear_mbx_pf(struct ixgbe_hw *hw, u16 vf_number)
+{
+	u16 mbx_size = hw->mbx.size;
+	u16 i;
+
+	if (vf_number > 63)
+		return IXGBE_ERR_PARAM;
+
+	for (i = 0; i < mbx_size; ++i)
+		IXGBE_WRITE_REG_ARRAY(hw, IXGBE_PFMBMEM(vf_number), i, 0x0);
+
+	return IXGBE_SUCCESS;
 }
 
 /**
@@ -728,6 +680,9 @@ void ixgbe_init_mbx_params_pf(struct ixgbe_hw *hw)
 	struct ixgbe_mbx_info *mbx = &hw->mbx;
 
 	if (hw->mac.type != ixgbe_mac_82599EB &&
+	    hw->mac.type != ixgbe_mac_X550 &&
+	    hw->mac.type != ixgbe_mac_X550EM_x &&
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
 	    hw->mac.type != ixgbe_mac_X540)
 		return;
 
@@ -743,10 +698,11 @@ void ixgbe_init_mbx_params_pf(struct ixgbe_hw *hw)
 	mbx->ops.check_for_msg = ixgbe_check_for_msg_pf;
 	mbx->ops.check_for_ack = ixgbe_check_for_ack_pf;
 	mbx->ops.check_for_rst = ixgbe_check_for_rst_pf;
+	mbx->ops.clear = ixgbe_clear_mbx_pf;
 
-	mbx->stats.msgs_tx = 0;
-	mbx->stats.msgs_rx = 0;
-	mbx->stats.reqs = 0;
-	mbx->stats.acks = 0;
-	mbx->stats.rsts = 0;
+	mbx->stats.msgs_tx.ev_count = 0;
+	mbx->stats.msgs_rx.ev_count = 0;
+	mbx->stats.reqs.ev_count = 0;
+	mbx->stats.acks.ev_count = 0;
+	mbx->stats.rsts.ev_count = 0;
 }

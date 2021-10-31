@@ -1,4 +1,4 @@
-/*	$NetBSD: wd33c93.c,v 1.25 2014/01/22 15:21:08 christos Exp $	*/
+/*	$NetBSD: wd33c93.c,v 1.31 2021/08/21 11:55:25 andvar Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wd33c93.c,v 1.25 2014/01/22 15:21:08 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wd33c93.c,v 1.31 2021/08/21 11:55:25 andvar Exp $");
 
 #include "opt_ddb.h"
 
@@ -207,7 +207,7 @@ wd33c93_attach(struct wd33c93_softc *sc)
 
 	/*
 	 * Add reference to adapter so that we drop the reference after
-	 * config_found() to make sure the adatper is disabled.
+	 * config_found() to make sure the adapter is disabled.
 	 */
 	if (scsipi_adapter_addref(&sc->sc_adapter) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to enable controller\n");
@@ -233,7 +233,7 @@ wd33c93_attach(struct wd33c93_softc *sc)
 	}
 
 	sc->sc_child = config_found(sc->sc_dev, &sc->sc_channel,
-				     scsiprint);
+				     scsiprint, CFARGS_NONE);
 	scsipi_adapter_delref(&sc->sc_adapter);
 }
 
@@ -570,7 +570,7 @@ wd33c93_scsi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req, void
 			panic("wd33c93_scsicmd: busy");
 
 		s = splbio();
-		acb = (struct wd33c93_acb *)pool_get(&wd33c93_pool, PR_NOWAIT);
+		acb = pool_get(&wd33c93_pool, PR_NOWAIT);
 		splx(s);
 
 		if (acb == NULL) {
@@ -1502,7 +1502,7 @@ wd33c93_msgin_phase(struct wd33c93_softc *sc, int reselect)
 		GET_SBIC_csr(sc, csr);
 
 		if (__verify_msg_format(sc->sc_imsg, len))
-			break; /* Complete message recieved */
+			break; /* Complete message received */
 
 		/*
 		 * Clear ACK, and wait for the interrupt
@@ -2140,7 +2140,7 @@ wd33c93_nextstate(struct wd33c93_softc *sc, struct wd33c93_acb	*acb, u_char csr,
 
 	default:
 	abort:
-		/* Something unexpected happend -- deal with it. */
+		/* Something unexpected happened -- deal with it. */
 		printf("next: aborting asr 0x%02x csr 0x%02x\n", asr, csr);
 
 #ifdef DDB

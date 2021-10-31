@@ -1,4 +1,4 @@
-/*	$NetBSD: rumpfs.c,v 1.141 2016/07/07 06:55:44 msaitoh Exp $	*/
+/*	$NetBSD: rumpfs.c,v 1.165 2021/07/18 23:56:14 dholland Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010, 2011 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rumpfs.c,v 1.141 2016/07/07 06:55:44 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rumpfs.c,v 1.165 2021/07/18 23:56:14 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -46,9 +46,9 @@ __KERNEL_RCSID(0, "$NetBSD: rumpfs.c,v 1.141 2016/07/07 06:55:44 msaitoh Exp $")
 #include <sys/stat.h>
 #include <sys/syscallargs.h>
 #include <sys/vnode.h>
+#include <sys/fstrans.h>
 #include <sys/unistd.h>
 
-#include <miscfs/fifofs/fifo.h>
 #include <miscfs/specfs/specdev.h>
 #include <miscfs/genfs/genfs.h>
 #include <miscfs/genfs/genfs_node.h>
@@ -61,6 +61,7 @@ __KERNEL_RCSID(0, "$NetBSD: rumpfs.c,v 1.141 2016/07/07 06:55:44 msaitoh Exp $")
 #include <rump/rumpfs.h>
 #include <rump/rumpuser.h>
 
+static int rump_vop_parsepath(void *);
 static int rump_vop_lookup(void *);
 static int rump_vop_getattr(void *);
 static int rump_vop_setattr(void *);
@@ -87,18 +88,10 @@ static int rump_vop_advlock(void *);
 static int rump_vop_access(void *);
 static int rump_vop_fcntl(void *);
 
-int (**fifo_vnodeop_p)(void *);
-const struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
-	{ &vop_default_desc, vn_default_error },
-	{ &vop_putpages_desc, genfs_null_putpages },
-	{ NULL, NULL }
-};
-const struct vnodeopv_desc fifo_vnodeop_opv_desc =
-	{ &fifo_vnodeop_p, fifo_vnodeop_entries };
-
 int (**rump_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc rump_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, rump_vop_parsepath },
 	{ &vop_lookup_desc, rump_vop_lookup },
 	{ &vop_getattr_desc, rump_vop_getattr },
 	{ &vop_setattr_desc, rump_vop_setattr },
@@ -110,6 +103,7 @@ const struct vnodeopv_entry_desc rump_vnodeop_entries[] = {
 	{ &vop_symlink_desc, rump_vop_symlink },
 	{ &vop_readlink_desc, rump_vop_readlink },
 	{ &vop_access_desc, rump_vop_access },
+	{ &vop_accessx_desc, genfs_accessx },
 	{ &vop_readdir_desc, rump_vop_readdir },
 	{ &vop_read_desc, rump_vop_read },
 	{ &vop_write_desc, rump_vop_write },
@@ -163,6 +157,7 @@ struct rumpfs_dent {
 struct genfs_ops rumpfs_genfsops = {
 	.gop_size = genfs_size,
 	.gop_write = genfs_gop_write,
+	.gop_putrange = genfs_gop_putrange,
 
 	/* optional */
 	.gop_alloc = NULL,
@@ -491,8 +486,12 @@ etfsremove(const char *key)
 			mp = NULL;
 		}
 		mutex_exit(&reclock);
-		if (mp && vcache_get(mp, &rn, sizeof(rn), &vp) == 0)
+		if (mp && vcache_get(mp, &rn, sizeof(rn), &vp) == 0) {
+			rv = vfs_suspend(mp, 0);
+			KASSERT(rv == 0);
 			vgone(vp);
+			vfs_resume(mp);
+		}
 	}
 
 	if (et->et_rn->rn_hostpath != NULL)
@@ -609,6 +608,59 @@ freedir(struct rumpfs_node *rnd, struct componentname *cnp)
 	}
 }
 
+#define	RUMPFS_ACCESS	1
+#define	RUMPFS_MODIFY	2
+#define	RUMPFS_CHANGE	4
+
+static int
+rumpfs_update(int flags, struct vnode *vp, const struct timespec *acc,
+    const struct timespec *mod, const struct timespec *chg)
+{
+	struct rumpfs_node *rn = vp->v_data;
+
+	if (flags == 0)
+		return 0;
+
+	if (vp->v_mount->mnt_flag & MNT_RDONLY)
+		return EROFS;
+
+	if (flags & RUMPFS_ACCESS)
+		rn->rn_va.va_atime = *acc;
+	if (flags & RUMPFS_MODIFY)
+		rn->rn_va.va_mtime = *mod;
+	if (flags & RUMPFS_CHANGE)
+		rn->rn_va.va_ctime = *chg;
+
+	return 0;
+}
+
+/*
+ * parsepath for rump file systems - check for etfs entries.
+ */
+static int
+rump_vop_parsepath(void *v)
+{
+	struct vop_parsepath_args /* {
+		struct vnode *a_dvp;
+		const char *a_name;
+		size_t *a_retval;
+	}; */ *ap = v;
+	struct etfs *et;
+	bool found;
+
+	/* check for etfs */
+	if (ap->a_dvp == rootvnode) {
+		mutex_enter(&etfs_lock);
+		found = etfs_find(ap->a_name, &et, false);
+		mutex_exit(&etfs_lock);
+		if (found) {
+			*ap->a_retval = et->et_keylen;
+			return 0;
+		}
+	}
+	return genfs_parsepath(v);
+}
+
 /*
  * Simple lookup for rump file systems.
  *
@@ -630,7 +682,6 @@ rump_vop_lookup(void *v)
 	struct etfs *et;
 	bool dotdot = (cnp->cn_flags & ISDOTDOT) != 0;
 	int rv = 0;
-	const char *cp;
 
 	*vpp = NULL;
 
@@ -663,19 +714,18 @@ rump_vop_lookup(void *v)
 		mutex_exit(&etfs_lock);
 
 		if (found) {
+			if (et->et_keylen != cnp->cn_namelen) {
+				/*
+				 * This can theoretically happen if an
+				 * etfs entry is added or removed
+				 * while lookups are being done as we
+				 * don't hold etfs_lock across here
+				 * and parsepath. Won't ordinarily be
+				 * the case. No biggie, just retry.
+				 */
+				return ERESTART;
+			}
 			rn = et->et_rn;
-			cnp->cn_consume += et->et_keylen - cnp->cn_namelen;
-			/*
-			 * consume trailing slashes if any and clear
-			 * REQUIREDIR if we consumed the full path.
-			 */
-			cp = &cnp->cn_nameptr[cnp->cn_namelen];
-			cp += cnp->cn_consume;
-			KASSERT(*cp == '\0' || *cp == '/');
-			if (*cp == '\0' && rn->rn_va.va_type != VDIR)
-				cnp->cn_flags &= ~REQUIREDIR;
-			while (*cp++ == '/')
-				cnp->cn_consume++;
 			goto getvnode;
 		}
 	}
@@ -793,13 +843,13 @@ rump_check_possible(struct vnode *vp, struct rumpfs_node *rnode,
 
 static int
 rump_check_permitted(struct vnode *vp, struct rumpfs_node *rnode,
-    mode_t mode, kauth_cred_t cred)
+    accmode_t accmode, kauth_cred_t cred)
 {
 	struct vattr *attr = &rnode->rn_va;
 
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(mode,
-	    vp->v_type, attr->va_mode), vp, NULL, genfs_can_access(vp->v_type,
-	    attr->va_mode, attr->va_uid, attr->va_gid, mode, cred));
+	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
+	    vp->v_type, attr->va_mode), vp, NULL, genfs_can_access(vp, cred,
+	    attr->va_uid, attr->va_gid, attr->va_mode, NULL, accmode));
 }
 
 int
@@ -815,11 +865,11 @@ rump_vop_access(void *v)
 	struct rumpfs_node *rn = vp->v_data;
 	int error;
 
-	error = rump_check_possible(vp, rn, ap->a_mode);
+	error = rump_check_possible(vp, rn, ap->a_accmode);
 	if (error)
 		return error;
 
-	error = rump_check_permitted(vp, rn, ap->a_mode, ap->a_cred);
+	error = rump_check_permitted(vp, rn, ap->a_accmode, ap->a_cred);
 
 	return error;
 }
@@ -853,6 +903,7 @@ rump_vop_setattr(void *v)
 	struct vattr *vap = ap->a_vap;
 	struct rumpfs_node *rn = vp->v_data;
 	struct vattr *attr = &rn->rn_va;
+	struct timespec now;
 	kauth_cred_t cred = ap->a_cred;
 	int error;
 
@@ -867,26 +918,36 @@ rump_vop_setattr(void *v)
 	    CHANGED(va_mtime.tv_nsec, long) ||
 	    CHANGED(va_birthtime.tv_nsec, long)) {
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_TIMES, vp,
-		    NULL, genfs_can_chtimes(vp, vap->va_vaflags, attr->va_uid,
-		    cred));
+		    NULL, genfs_can_chtimes(vp, cred, attr->va_uid,
+		    vap->va_vaflags));
 		if (error)
 			return error;
 	}
 
-	SETIFVAL(va_atime.tv_sec, time_t);
-	SETIFVAL(va_ctime.tv_sec, time_t);
-	SETIFVAL(va_mtime.tv_sec, time_t);
+	int flags = 0;
+	getnanotime(&now);
+	if (vap->va_atime.tv_sec != VNOVAL)
+		if (!(vp->v_mount->mnt_flag & MNT_NOATIME))
+			flags |= RUMPFS_ACCESS;
+	if (vap->va_mtime.tv_sec != VNOVAL) {
+		flags |= RUMPFS_CHANGE | RUMPFS_MODIFY;
+		if (vp->v_mount->mnt_flag & MNT_RELATIME)
+			flags |= RUMPFS_ACCESS;
+	} else if (vap->va_size == 0) {
+		flags |= RUMPFS_MODIFY;
+		vap->va_mtime = now;
+	}
 	SETIFVAL(va_birthtime.tv_sec, time_t);
-	SETIFVAL(va_atime.tv_nsec, long);
-	SETIFVAL(va_ctime.tv_nsec, long);
-	SETIFVAL(va_mtime.tv_nsec, long);
 	SETIFVAL(va_birthtime.tv_nsec, long);
+	flags |= RUMPFS_CHANGE;
+	error = rumpfs_update(flags, vp, &vap->va_atime, &vap->va_mtime, &now);
+	if (error)
+		return error;
 
 	if (CHANGED(va_flags, u_long)) {
 		/* XXX Can we handle system flags here...? */
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_FLAGS, vp,
-		    NULL, genfs_can_chflags(cred, vp->v_type, attr->va_uid,
-		    false));
+		    NULL, genfs_can_chflags(vp, cred, attr->va_uid, false));
 		if (error)
 			return error;
 	}
@@ -902,7 +963,7 @@ rump_vop_setattr(void *v)
 		    (vap->va_gid != (gid_t)VNOVAL) ? vap->va_gid : attr->va_gid;
 		error = kauth_authorize_vnode(cred,
 		    KAUTH_VNODE_CHANGE_OWNERSHIP, vp, NULL,
-		    genfs_can_chown(cred, attr->va_uid, attr->va_gid, uid,
+		    genfs_can_chown(vp, cred, attr->va_uid, attr->va_gid, uid,
 		    gid));
 		if (error)
 			return error;
@@ -913,7 +974,7 @@ rump_vop_setattr(void *v)
 	if (vap->va_mode != (mode_t)VNOVAL) {
 		mode_t mode = vap->va_mode;
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_SECURITY,
-		    vp, NULL, genfs_can_chmod(vp->v_type, cred, attr->va_uid,
+		    vp, NULL, genfs_can_chmod(vp, cred, attr->va_uid,
 		    attr->va_gid, mode));
 		if (error)
 			return error;
@@ -933,7 +994,8 @@ rump_vop_setattr(void *v)
 			return ENOSPC;
 
 		copylen = MIN(rn->rn_dlen, newlen);
-		memcpy(newdata, rn->rn_data, copylen);
+		if (copylen > 0)
+			memcpy(newdata, rn->rn_data, copylen);
 		memset((char *)newdata + copylen, 0, newlen - copylen);
 
 		if ((rn->rn_flags & RUMPNODE_EXTSTORAGE) == 0) {
@@ -983,7 +1045,7 @@ rump_vop_mkdir(void *v)
 static int
 rump_vop_rmdir(void *v)
 {
-        struct vop_rmdir_args /* {
+        struct vop_rmdir_v2_args /* {
                 struct vnode *a_dvp;
                 struct vnode *a_vp;
                 struct componentname *a_cnp;
@@ -1012,18 +1074,17 @@ rump_vop_rmdir(void *v)
 	freedir(rnd, cnp);
 	rn->rn_flags |= RUMPNODE_CANRECLAIM;
 	rn->rn_parent = NULL;
+	rn->rn_va.va_nlink = 0;
 
 out:
-	vput(dvp);
 	vput(vp);
-
 	return rv;
 }
 
 static int
 rump_vop_remove(void *v)
 {
-        struct vop_remove_args /* {
+        struct vop_remove_v2_args /* {
                 struct vnode *a_dvp;
                 struct vnode *a_vp;
                 struct componentname *a_cnp;
@@ -1040,10 +1101,9 @@ rump_vop_remove(void *v)
 
 	freedir(rnd, cnp);
 	rn->rn_flags |= RUMPNODE_CANRECLAIM;
+	rn->rn_va.va_nlink = 0;
 
-	vput(dvp);
 	vput(vp);
-
 	return rv;
 }
 
@@ -1342,6 +1402,7 @@ rump_vop_read(void *v)
 	const int advice = IO_ADV_DECODE(ap->a_ioflag);
 	off_t chunk;
 	int error = 0;
+	struct timespec ts;
 
 	if (vp->v_type == VDIR)
 		return EISDIR;
@@ -1350,13 +1411,16 @@ rump_vop_read(void *v)
 	if (rn->rn_flags & RUMPNODE_ET_PHONE_HOST)
 		return etread(rn, uio);
 
+	getnanotime(&ts);
+	(void)rumpfs_update(RUMPFS_ACCESS, vp, &ts, &ts, &ts);
+
 	/* otherwise, it's off to ubc with us */
 	while (uio->uio_resid > 0) {
 		chunk = MIN(uio->uio_resid, (off_t)rn->rn_dlen-uio->uio_offset);
 		if (chunk == 0)
 			break;
 		error = ubc_uiomove(&vp->v_uobj, uio, chunk, advice,
-		    UBC_READ | UBC_PARTIALOK | UBC_UNMAP_FLAG(vp));
+		    UBC_READ | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 	}
@@ -1412,6 +1476,10 @@ rump_vop_write(void *v)
 	off_t chunk;
 	int error = 0;
 	bool allocd = false;
+	struct timespec ts;
+
+	getnanotime(&ts);
+	(void)rumpfs_update(RUMPFS_MODIFY, vp, &ts, &ts, &ts);
 
 	if (ap->a_ioflag & IO_APPEND)
 		uio->uio_offset = vp->v_size;
@@ -1442,7 +1510,8 @@ rump_vop_write(void *v)
 			return ENOSPC;
 		rn->rn_dlen = newlen;
 		memset(rn->rn_data, 0, newlen);
-		memcpy(rn->rn_data, olddata, oldlen);
+		if (oldlen > 0)
+			memcpy(rn->rn_data, olddata, oldlen);
 		allocd = true;
 		uvm_vnp_setsize(vp, newlen);
 	}
@@ -1453,7 +1522,7 @@ rump_vop_write(void *v)
 		if (chunk == 0)
 			break;
 		error = ubc_uiomove(&vp->v_uobj, uio, chunk, advice,
-		    UBC_WRITE | UBC_PARTIALOK | UBC_UNMAP_FLAG(vp));
+		    UBC_WRITE | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 	}
@@ -1590,7 +1659,7 @@ rump_vop_success(void *v)
 static int
 rump_vop_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		bool *a_recycle;
 	} */ *ap = v;
@@ -1609,20 +1678,20 @@ rump_vop_inactive(void *v)
 	}
 	*ap->a_recycle = (rn->rn_flags & RUMPNODE_CANRECLAIM) ? true : false;
 
-	VOP_UNLOCK(vp);
 	return 0;
 }
 
 static int
 rump_vop_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct rumpfs_node *rn = vp->v_data;
 
-	vcache_remove(vp->v_mount, &rn, sizeof(rn));
+	VOP_UNLOCK(vp);
+
 	mutex_enter(&reclock);
 	rn->rn_vp = NULL;
 	mutex_exit(&reclock);
@@ -1659,6 +1728,7 @@ rump_vop_spec(void *v)
 
 	switch (ap->a_desc->vdesc_offset) {
 	case VOP_ACCESS_DESCOFFSET:
+	case VOP_ACCESSX_DESCOFFSET:
 	case VOP_GETATTR_DESCOFFSET:
 	case VOP_SETATTR_DESCOFFSET:
 	case VOP_LOCK_DESCOFFSET:
@@ -1777,7 +1847,7 @@ struct vfsops rumpfs_vfsops = {
 	.vfs_mountroot =	rumpfs_mountroot,
 	.vfs_snapshot =		(void *)eopnotsupp,
 	.vfs_extattrctl =	(void *)eopnotsupp,
-	.vfs_suspendctl =	(void *)eopnotsupp,
+	.vfs_suspendctl =	genfs_suspendctl,
 	.vfs_renamelock_enter =	genfs_renamelock_enter,
 	.vfs_renamelock_exit =	genfs_renamelock_exit,
 	.vfs_opv_descs =	rump_opv_descs,
@@ -1819,9 +1889,21 @@ rumpfs_mountfs(struct mount *mp)
 int
 rumpfs_mount(struct mount *mp, const char *mntpath, void *arg, size_t *alen)
 {
-	int error;
+	int error, flags;
 
+	if (mp->mnt_flag & MNT_GETARGS) {
+		return 0;
+	}
 	if (mp->mnt_flag & MNT_UPDATE) {
+		if ((mp->mnt_iflag & IMNT_WANTRDONLY)) {
+			/* Changing from read/write to read-only. */
+			flags = WRITECLOSE;
+			if ((mp->mnt_flag & MNT_FORCE))
+				flags |= FORCECLOSE;
+			error = vflush(mp, NULL, flags);
+			if (error)
+				return error;
+		}
 		return 0;
 	}
 
@@ -1842,7 +1924,7 @@ rumpfs_unmount(struct mount *mp, int mntflags)
 	if (panicstr || mntflags & MNT_FORCE)
 		flags |= FORCECLOSE;
 
-	if (rfsmp->rfsmp_rvp->v_usecount > 1 && (flags & FORCECLOSE) == 0)
+	if (vrefcnt(rfsmp->rfsmp_rvp) > 1 && (flags & FORCECLOSE) == 0)
 		return EBUSY;
 
 	if ((error = vflush(mp, rfsmp->rfsmp_rvp, flags)) != 0)
@@ -1855,18 +1937,18 @@ rumpfs_unmount(struct mount *mp, int mntflags)
 }
 
 int
-rumpfs_root(struct mount *mp, struct vnode **vpp)
+rumpfs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct rumpfs_mount *rfsmp = mp->mnt_data;
 
 	vref(rfsmp->rfsmp_rvp);
-	vn_lock(rfsmp->rfsmp_rvp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(rfsmp->rfsmp_rvp, lktype | LK_RETRY);
 	*vpp = rfsmp->rfsmp_rvp;
 	return 0;
 }
 
 int
-rumpfs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+rumpfs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 
 	return EOPNOTSUPP;
@@ -1963,7 +2045,7 @@ rumpfs_mountroot()
 		panic("set_statvfs_info failed for rootfs: %d", error);
 
 	mp->mnt_flag &= ~MNT_RDONLY;
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 
 	return 0;
 }

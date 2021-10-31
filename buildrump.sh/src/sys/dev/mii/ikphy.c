@@ -1,4 +1,4 @@
-/*	$NetBSD: ikphy.c,v 1.11 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: ikphy.c,v 1.19 2020/03/15 23:04:50 thorpej Exp $	*/
 
 /*******************************************************************************
 Copyright (c) 2001-2005, Intel Corporation 
@@ -59,7 +59,7 @@ POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ikphy.c,v 1.11 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ikphy.c,v 1.19 2020/03/15 23:04:50 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -92,11 +92,8 @@ static const struct mii_phy_funcs ikphy_funcs = {
 };
 
 static const struct mii_phydesc ikphys[] = {
-	{ MII_OUI_xxMARVELL,		MII_MODEL_xxMARVELL_I82563,
-	  MII_STR_xxMARVELL_I82563 },
-
-	{ 0,				0,
-	  NULL },
+	MII_PHY_DESC(xxMARVELL, I82563),
+	MII_PHY_END,
 };
 
 static int
@@ -105,9 +102,9 @@ ikphymatch(device_t parent, cfdata_t match, void *aux)
 	struct mii_attach_args *ma = aux;
 
 	if (mii_phy_match(ma, ikphys) != NULL)
-		return (10);
+		return 10;
 
-	return (0);
+	return 0;
 }
 
 static void
@@ -125,38 +122,40 @@ ikphyattach(device_t parent, device_t self, void *aux)
 	sc->mii_dev = self;
 	sc->mii_inst = mii->mii_instance;
 	sc->mii_phy = ma->mii_phyno;
+	sc->mii_mpd_oui = MII_OUI(ma->mii_id1, ma->mii_id2);
+	sc->mii_mpd_model = MII_MODEL(ma->mii_id2);
+	sc->mii_mpd_rev = MII_REV(ma->mii_id2);
 	sc->mii_funcs = &ikphy_funcs;
 	sc->mii_pdata = mii;
 	sc->mii_flags = ma->mii_flags;
-	sc->mii_anegticks = MII_ANEGTICKS;
+
+	mii_lock(mii);
 
 	PHY_RESET(sc);
 
-	sc->mii_capabilities = PHY_READ(sc, MII_BMSR) & ma->mii_capmask;
+	PHY_READ(sc, MII_BMSR, &sc->mii_capabilities);
+	sc->mii_capabilities &= ma->mii_capmask;
 	if (sc->mii_capabilities & BMSR_EXTSTAT)
-	    sc->mii_extcapabilities = PHY_READ(sc, MII_EXTSR);
-	aprint_normal_dev(self, "");
-	if ((sc->mii_capabilities & BMSR_MEDIAMASK) == 0 &&
-	    (sc->mii_extcapabilities & EXTSR_MEDIAMASK) == 0)
-		aprint_error("no media present");
-	else
-		mii_phy_add_media(sc);
-	aprint_normal("\n");
+		PHY_READ(sc, MII_EXTSR, &sc->mii_extcapabilities);
+
+	mii_unlock(mii);
+
+	mii_phy_add_media(sc);
 }
 
 static int
 ikphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 {
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
-	int reg;
+	uint16_t reg;
+
+	KASSERT(mii_locked(mii));
 
 	switch (cmd) {
 	case MII_POLLSTAT:
-		/*
-		 * If we're not polling our PHY instance, just return.
-		 */
+		/* If we're not polling our PHY instance, just return. */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst)
-			return (0);
+			return 0;
 		break;
 
 	case MII_MEDIACHG:
@@ -165,14 +164,12 @@ ikphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		 * isolate ourselves.
 		 */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst) {
-			reg = PHY_READ(sc, MII_BMCR);
+			PHY_READ(sc, MII_BMCR, &reg);
 			PHY_WRITE(sc, MII_BMCR, reg | BMCR_ISO);
-			return (0);
+			return 0;
 		}
 
-		/*
-		 * If the interface is not up, don't do anything.
-		 */
+		/* If the interface is not up, don't do anything. */
 		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
 			break;
 
@@ -180,19 +177,17 @@ ikphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		break;
 
 	case MII_TICK:
-		/*
-		 * If we're not currently selected, just return.
-		 */
+		/* If we're not currently selected, just return. */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst)
-			return (0);
+			return 0;
 
 		if (mii_phy_tick(sc) == EJUSTRETURN)
-			return (0);
+			return 0;
 		break;
 
 	case MII_DOWN:
 		mii_phy_down(sc);
-		return (0);
+		return 0;
 	}
 
 	/* Update the media status. */
@@ -200,7 +195,7 @@ ikphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 
 	/* Callback if something changed. */
 	mii_phy_update(sc, cmd);
-	return (0);
+	return 0;
 }
 
 static void
@@ -210,38 +205,40 @@ ikphy_setmedia(struct mii_softc *sc)
 	struct mii_data *mii = sc->mii_pdata;
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
 
+	KASSERT(mii_locked(mii));
+
 	/* Enable CRS on TX for half-duplex operation. */
-	phy_data = PHY_READ(sc, GG82563_PHY_MAC_SPEC_CTRL);
+	PHY_READ(sc, GG82563_PHY_MAC_SPEC_CTRL, &phy_data);
 	phy_data |= GG82563_MSCR_ASSERT_CRS_ON_TX;
 	/* Use 25MHz for both link down and 1000BASE-T for Tx clock */
 	phy_data |= GG82563_MSCR_TX_CLK_1000MBPS_25MHZ;
 	PHY_WRITE(sc, GG82563_PHY_MAC_SPEC_CTRL, phy_data);
 
-	/* set mdi/mid-x options */
-	phy_data = PHY_READ(sc, GG82563_PHY_SPEC_CTRL);
+	/* Set mdi/mid-x options */
+	PHY_READ(sc, GG82563_PHY_SPEC_CTRL, &phy_data);
 	phy_data &= ~GG82563_PSCR_CROSSOVER_MODE_MASK;
 	if (IFM_SUBTYPE(ife->ifm_media) == IFM_AUTO)
 		phy_data |= GG82563_PSCR_CROSSOVER_MODE_AUTO;
 	else
 		phy_data |= GG82563_PSCR_CROSSOVER_MODE_MDI;
-	/* set polarity correction */
+	/* Set polarity correction */
 	phy_data &= ~GG82563_PSCR_POLARITY_REVERSAL_DISABLE;
 	PHY_WRITE(sc, GG82563_PHY_SPEC_CTRL, phy_data);
 
 	/* SW Reset the PHY so all changes take effect */
 	PHY_RESET(sc);
 
-	/* for the i80003 */
-	phy_data = PHY_READ(sc, GG82563_PHY_SPEC_CTRL_2);
+	/* For the i80003 */
+	PHY_READ(sc, GG82563_PHY_SPEC_CTRL_2, &phy_data);
 	phy_data &= ~GG82563_PSCR2_REVERSE_AUTO_NEG;
 	PHY_WRITE(sc, GG82563_PHY_SPEC_CTRL_2, phy_data);
 
 	/* Enable Electrical Idle on the PHY */
-	phy_data = PHY_READ(sc, GG82563_PHY_PWR_MGMT_CTRL);
+	PHY_READ(sc, GG82563_PHY_PWR_MGMT_CTRL, &phy_data);
 	phy_data |= GG82563_PMCR_ENABLE_ELECTRICAL_IDLE;
 	PHY_WRITE(sc, GG82563_PHY_PWR_MGMT_CTRL, phy_data);
 
-	phy_data = PHY_READ(sc, GG82563_PHY_KMRN_MODE_CTRL);
+	PHY_READ(sc, GG82563_PHY_KMRN_MODE_CTRL, &phy_data);
 	phy_data &= ~GG82563_KMCR_PASS_FALSE_CARRIER;
 	PHY_WRITE(sc, GG82563_PHY_KMRN_MODE_CTRL, phy_data);
 
@@ -249,23 +246,23 @@ ikphy_setmedia(struct mii_softc *sc)
 	 * Workaround: Disable padding in Kumeran interface in the MAC
 	 * and in the PHY to avoid CRC errors.
 	 */
-	phy_data = PHY_READ(sc, GG82563_PHY_INBAND_CTRL);
+	PHY_READ(sc, GG82563_PHY_INBAND_CTRL, &phy_data);
 	phy_data |= GG82563_ICR_DIS_PADDING;
 	PHY_WRITE(sc, GG82563_PHY_INBAND_CTRL, phy_data);
 
 	mii_phy_setmedia(sc);
 	if (IFM_SUBTYPE(ife->ifm_media) != IFM_AUTO) {
 		/*
-		 * when not in auto mode, we need to restart nego
+		 * When not in auto mode, we need to restart nego
 		 * anyway, or a switch from a fixed mode to another
 		 * fixed mode may not be seen by the switch.
 		 */
-		PHY_WRITE(sc, MII_BMCR,
-		    PHY_READ(sc, MII_BMCR) | BMCR_STARTNEG);
+		PHY_READ(sc, MII_BMCR, &phy_data);
+		PHY_WRITE(sc, MII_BMCR, phy_data | BMCR_STARTNEG);
 	}
-	phy_data = PHY_READ(sc, GG82563_PHY_MAC_SPEC_CTRL);
+	PHY_READ(sc, GG82563_PHY_MAC_SPEC_CTRL, &phy_data);
 	phy_data &= ~GG82563_MSCR_TX_CLK_MASK;
-	switch(IFM_SUBTYPE(ife->ifm_media)) {
+	switch (IFM_SUBTYPE(ife->ifm_media)) {
 	case IFM_10_T:
 		phy_data |= GG82563_MSCR_TX_CLK_10MBPS_2_5MHZ;
 		break;
@@ -285,17 +282,19 @@ ikphy_status(struct mii_softc *sc)
 {
 	struct mii_data *mii = sc->mii_pdata;
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
-	int pssr, bmcr, gtsr, kmrn;
+	uint16_t pssr, bmcr, gtsr, kmrn;
+
+	KASSERT(mii_locked(mii));
 
 	mii->mii_media_status = IFM_AVALID;
 	mii->mii_media_active = IFM_ETHER;
 
-	pssr = PHY_READ(sc, GG82563_PHY_SPEC_STATUS);
+	PHY_READ(sc, GG82563_PHY_SPEC_STATUS, &pssr);
 
 	if (pssr & GG82563_PSSR_LINK)
 		mii->mii_media_status |= IFM_ACTIVE;
 
-	bmcr = PHY_READ(sc, MII_BMCR);
+	PHY_READ(sc, MII_BMCR, &bmcr);
 	if (bmcr & BMCR_ISO) {
 		mii->mii_media_active |= IFM_NONE;
 		mii->mii_media_status = 0;
@@ -307,7 +306,7 @@ ikphy_status(struct mii_softc *sc)
 
 	if (bmcr & BMCR_AUTOEN) {
 		/*
-		 * The media status bits are only valid of autonegotiation
+		 * The media status bits are only valid if autonegotiation
 		 * has completed (or it's disabled).
 		 */
 		if ((pssr & GG82563_PSSR_SPEED_DUPLEX_RESOLVED) == 0) {
@@ -319,7 +318,7 @@ ikphy_status(struct mii_softc *sc)
 		switch (pssr & GG82563_PSSR_SPEED_MASK) {
 		case GG82563_PSSR_SPEED_1000MBPS:
 			mii->mii_media_active |= IFM_1000_T;
-			gtsr = PHY_READ(sc, MII_100T2SR);
+			PHY_READ(sc, MII_100T2SR, &gtsr);
 			if (gtsr & GTSR_MS_RES)
 				mii->mii_media_active |= IFM_ETH_MASTER;
 			break;
@@ -345,7 +344,7 @@ ikphy_status(struct mii_softc *sc)
 			mii->mii_media_active |= IFM_HDX;
 	} else
 		mii->mii_media_active = ife->ifm_media;
-	kmrn = PHY_READ(sc, GG82563_PHY_KMRN_MODE_CTRL);
+	PHY_READ(sc, GG82563_PHY_KMRN_MODE_CTRL, &kmrn);
 	if (mii->mii_media_active & IFM_FDX)
 		kmrn &= ~GG82563_KMCR_PASS_FALSE_CARRIER;
 	else

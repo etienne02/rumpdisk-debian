@@ -1,4 +1,4 @@
-/*	$NetBSD: ds1307.c,v 1.22 2016/04/05 10:53:16 bouyer Exp $	*/
+/*	$NetBSD: ds1307.c,v 1.39 2021/08/03 23:12:14 andvar Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ds1307.c,v 1.22 2016/04/05 10:53:16 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ds1307.c,v 1.39 2021/08/03 23:12:14 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,60 +53,132 @@ __KERNEL_RCSID(0, "$NetBSD: ds1307.c,v 1.22 2016/04/05 10:53:16 bouyer Exp $");
 #include <dev/i2c/ds1307reg.h>
 #include <dev/sysmon/sysmonvar.h>
 
+#include "ioconf.h"
+#include "opt_dsrtc.h"
+
 struct dsrtc_model {
+	const i2c_addr_t *dm_valid_addrs;
 	uint16_t dm_model;
 	uint8_t dm_ch_reg;
 	uint8_t dm_ch_value;
+	uint8_t dm_vbaten_reg;
+	uint8_t dm_vbaten_value;
 	uint8_t dm_rtc_start;
 	uint8_t dm_rtc_size;
 	uint8_t dm_nvram_start;
 	uint8_t dm_nvram_size;
 	uint8_t dm_flags;
-#define	DSRTC_FLAG_CLOCK_HOLD	1
-#define	DSRTC_FLAG_BCD		2	
-#define	DSRTC_FLAG_TEMP		4	
+#define	DSRTC_FLAG_CLOCK_HOLD		0x01
+#define	DSRTC_FLAG_BCD			0x02
+#define	DSRTC_FLAG_TEMP			0x04
+#define DSRTC_FLAG_VBATEN		0x08
+#define	DSRTC_FLAG_YEAR_START_2K	0x10
+#define	DSRTC_FLAG_CLOCK_HOLD_REVERSED	0x20
 };
 
-static const struct dsrtc_model dsrtc_models[] = {
-	{
-		.dm_model = 1307,
-		.dm_ch_reg = DSXXXX_SECONDS,
-		.dm_ch_value = DS1307_SECONDS_CH,
-		.dm_rtc_start = DS1307_RTC_START,
-		.dm_rtc_size = DS1307_RTC_SIZE,
-		.dm_nvram_start = DS1307_NVRAM_START,
-		.dm_nvram_size = DS1307_NVRAM_SIZE,
-		.dm_flags = DSRTC_FLAG_BCD | DSRTC_FLAG_CLOCK_HOLD,
-	}, {
-		.dm_model = 1339,
-		.dm_rtc_start = DS1339_RTC_START,
-		.dm_rtc_size = DS1339_RTC_SIZE,
-		.dm_flags = DSRTC_FLAG_BCD,
-	}, {
-		.dm_model = 1672,
-		.dm_rtc_start = DS1672_RTC_START,
-		.dm_rtc_size = DS1672_RTC_SIZE,
-		.dm_ch_reg = DS1672_CONTROL,
-		.dm_ch_value = DS1672_CONTROL_CH,
-		.dm_flags = 0,
-	}, {
-		.dm_model = 3231,
-		.dm_rtc_start = DS3232_RTC_START,
-		.dm_rtc_size = DS3232_RTC_SIZE,
-		/*
-		 * XXX
-		 * the DS3232 likely has the temperature sensor too but I can't
-		 * easily verify or test that right now
-		 */
-		.dm_flags = DSRTC_FLAG_BCD | DSRTC_FLAG_TEMP,
-	}, {
-		.dm_model = 3232,
-		.dm_rtc_start = DS3232_RTC_START,
-		.dm_rtc_size = DS3232_RTC_SIZE,
-		.dm_nvram_start = DS3232_NVRAM_START,
-		.dm_nvram_size = DS3232_NVRAM_SIZE,
-		.dm_flags = DSRTC_FLAG_BCD,
-	},
+static const i2c_addr_t ds1307_valid_addrs[] = { DS1307_ADDR, 0 };
+static const struct dsrtc_model ds1307_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 1307,
+	.dm_ch_reg = DSXXXX_SECONDS,
+	.dm_ch_value = DS1307_SECONDS_CH,
+	.dm_rtc_start = DS1307_RTC_START,
+	.dm_rtc_size = DS1307_RTC_SIZE,
+	.dm_nvram_start = DS1307_NVRAM_START,
+	.dm_nvram_size = DS1307_NVRAM_SIZE,
+	.dm_flags = DSRTC_FLAG_BCD | DSRTC_FLAG_CLOCK_HOLD,
+};
+
+static const struct dsrtc_model ds1339_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 1339,
+	.dm_rtc_start = DS1339_RTC_START,
+	.dm_rtc_size = DS1339_RTC_SIZE,
+	.dm_flags = DSRTC_FLAG_BCD,
+};
+
+static const struct dsrtc_model ds1340_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 1340,
+	.dm_ch_reg = DSXXXX_SECONDS,
+	.dm_ch_value = DS1340_SECONDS_EOSC,
+	.dm_rtc_start = DS1340_RTC_START,
+	.dm_rtc_size = DS1340_RTC_SIZE,
+	.dm_flags = DSRTC_FLAG_BCD,
+};
+
+static const struct dsrtc_model ds1672_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 1672,
+	.dm_rtc_start = DS1672_RTC_START,
+	.dm_rtc_size = DS1672_RTC_SIZE,
+	.dm_ch_reg = DS1672_CONTROL,
+	.dm_ch_value = DS1672_CONTROL_CH,
+	.dm_flags = 0,
+};
+
+static const struct dsrtc_model ds3231_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 3231,
+	.dm_rtc_start = DS3232_RTC_START,
+	.dm_rtc_size = DS3232_RTC_SIZE,
+	.dm_flags = DSRTC_FLAG_BCD | DSRTC_FLAG_TEMP,
+};
+
+static const struct dsrtc_model ds3232_model = {
+	.dm_valid_addrs = ds1307_valid_addrs,
+	.dm_model = 3232,
+	.dm_rtc_start = DS3232_RTC_START,
+	.dm_rtc_size = DS3232_RTC_SIZE,
+	.dm_nvram_start = DS3232_NVRAM_START,
+	.dm_nvram_size = DS3232_NVRAM_SIZE,
+	/*
+	 * XXX
+	 * the DS3232 likely has the temperature sensor too but I can't
+	 * easily verify or test that right now
+	 */
+	.dm_flags = DSRTC_FLAG_BCD,
+};
+
+static const i2c_addr_t mcp7940_valid_addrs[] = { MCP7940_ADDR, 0 };
+static const struct dsrtc_model mcp7940_model = {
+	.dm_valid_addrs = mcp7940_valid_addrs,
+	.dm_model = 7940,
+	.dm_rtc_start = DS1307_RTC_START,
+	.dm_rtc_size = DS1307_RTC_SIZE,
+	.dm_ch_reg = DSXXXX_SECONDS,
+	.dm_ch_value = DS1307_SECONDS_CH,
+	.dm_vbaten_reg = DSXXXX_DAY,
+	.dm_vbaten_value = MCP7940_TOD_DAY_VBATEN,
+	.dm_nvram_start = MCP7940_NVRAM_START,
+	.dm_nvram_size = MCP7940_NVRAM_SIZE,
+	.dm_flags = DSRTC_FLAG_BCD | DSRTC_FLAG_CLOCK_HOLD |
+		DSRTC_FLAG_VBATEN | DSRTC_FLAG_CLOCK_HOLD_REVERSED,
+};
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "dallas,ds1307",		.data = &ds1307_model },
+	{ .compat = "maxim,ds1307",		.data = &ds1307_model },
+	{ .compat = "i2c-ds1307",		.data = &ds1307_model },
+
+	{ .compat = "dallas,ds1339",		.data = &ds1339_model },
+	{ .compat = "maxim,ds1339",		.data = &ds1339_model },
+
+	{ .compat = "dallas,ds1340",		.data = &ds1340_model },
+	{ .compat = "maxim,ds1340",		.data = &ds1340_model },
+
+	{ .compat = "dallas,ds1672",		.data = &ds1672_model },
+	{ .compat = "maxim,ds1672",		.data = &ds1672_model },
+
+	{ .compat = "dallas,ds3231",		.data = &ds3231_model },
+	{ .compat = "maxim,ds3231",		.data = &ds3231_model },
+
+	{ .compat = "dallas,ds3232",		.data = &ds3232_model },
+	{ .compat = "maxim,ds3232",		.data = &ds3232_model },
+
+	{ .compat = "microchip,mcp7940",	.data = &mcp7940_model },
+
+	DEVICE_COMPAT_EOL
 };
 
 struct dsrtc_softc {
@@ -125,7 +197,6 @@ static int	dsrtc_match(device_t, cfdata_t, void *);
 
 CFATTACH_DECL_NEW(dsrtc, sizeof(struct dsrtc_softc),
     dsrtc_match, dsrtc_attach, NULL, NULL);
-extern struct cfdriver dsrtc_cd;
 
 dev_type_open(dsrtc_open);
 dev_type_close(dsrtc_close);
@@ -161,34 +232,63 @@ static int dsrtc_read_temp(struct dsrtc_softc *, uint32_t *);
 static void dsrtc_refresh(struct sysmon_envsys *, envsys_data_t *);
 
 static const struct dsrtc_model *
-dsrtc_model(u_int model)
+dsrtc_model_by_number(u_int model)
 {
-	/* no model given, assume it's a DS1307 (the first one) */
-	if (model == 0)
-		return &dsrtc_models[0];
+	const struct device_compatible_entry *dce;
+	const struct dsrtc_model *dm;
 
-	for (const struct dsrtc_model *dm = dsrtc_models;
-	     dm < dsrtc_models + __arraycount(dsrtc_models); dm++) {
+	/* no model given, assume it's a DS1307 */
+	if (model == 0)
+		return &ds1307_model;
+
+	for (dce = compat_data; dce->compat != NULL; dce++) {
+		dm = dce->data;
 		if (dm->dm_model == model)
 			return dm;
 	}
 	return NULL;
 }
 
+static const struct dsrtc_model *
+dsrtc_model_by_compat(const struct i2c_attach_args *ia)
+{
+	const struct dsrtc_model *dm = NULL;
+	const struct device_compatible_entry *dce;
+
+	if ((dce = iic_compatible_lookup(ia, compat_data)) != NULL)
+		dm = dce->data;
+
+	return dm;
+}
+
+static bool
+dsrtc_is_valid_addr_for_model(const struct dsrtc_model *dm, i2c_addr_t addr)
+{
+
+	for (int i = 0; dm->dm_valid_addrs[i] != 0; i++) {
+		if (addr == dm->dm_valid_addrs[i])
+			return true;
+	}
+	return false;
+}
+
 static int
 dsrtc_match(device_t parent, cfdata_t cf, void *arg)
 {
 	struct i2c_attach_args *ia = arg;
+	const struct dsrtc_model *dm;
+	int match_result;
 
-	if (ia->ia_name) {
-		/* direct config - check name */
-		if (strcmp(ia->ia_name, "dsrtc") == 0)
-			return 1;
-	} else {
-		/* indirect config - check typical address */
-		if (ia->ia_addr == DS1307_ADDR)
-			return dsrtc_model(cf->cf_flags & 0xffff) != NULL;
-	}
+	if (iic_use_direct_match(ia, cf, compat_data, &match_result))
+		return match_result;
+
+	dm = dsrtc_model_by_number(cf->cf_flags & 0xffff);
+	if (dm == NULL)
+		return 0;
+
+	if (dsrtc_is_valid_addr_for_model(dm, ia->ia_addr))
+		return I2C_MATCH_ADDRESS_ONLY;
+
 	return 0;
 }
 
@@ -197,8 +297,17 @@ dsrtc_attach(device_t parent, device_t self, void *arg)
 {
 	struct dsrtc_softc *sc = device_private(self);
 	struct i2c_attach_args *ia = arg;
-	const struct dsrtc_model * const dm =
-	    dsrtc_model(device_cfdata(self)->cf_flags);
+	const struct dsrtc_model *dm;
+	prop_dictionary_t dict = device_properties(self);
+	bool base_2k = FALSE;
+
+	if ((dm = dsrtc_model_by_compat(ia)) == NULL)
+		dm = dsrtc_model_by_number(device_cfdata(self)->cf_flags);
+
+	if (dm == NULL) {
+		aprint_error(": unable to determine model!\n");
+		return;
+	}
 
 	aprint_naive(": Real-time Clock%s\n",
 	    dm->dm_nvram_size > 0 ? "/NVRAM" : "");
@@ -211,6 +320,7 @@ dsrtc_attach(device_t parent, device_t self, void *arg)
 	sc->sc_dev = self;
 	sc->sc_open = 0;
 	sc->sc_todr.cookie = sc;
+	
 	if (dm->dm_flags & DSRTC_FLAG_BCD) {
 		sc->sc_todr.todr_gettime_ymdhms = dsrtc_gettime_ymdhms;
 		sc->sc_todr.todr_settime_ymdhms = dsrtc_settime_ymdhms;
@@ -219,6 +329,14 @@ dsrtc_attach(device_t parent, device_t self, void *arg)
 		sc->sc_todr.todr_settime = dsrtc_settime_timeval;
 	}
 	sc->sc_todr.todr_setwen = NULL;
+
+#ifdef DSRTC_YEAR_START_2K
+	sc->sc_model.dm_flags |= DSRTC_FLAG_YEAR_START_2K;
+#endif
+
+	prop_dictionary_get_bool(dict, "base_year_is_2000", &base_2k);
+	if (base_2k) sc->sc_model.dm_flags |= DSRTC_FLAG_YEAR_START_2K;
+
 
 	todr_attach(&sc->sc_todr);
 	if ((sc->sc_model.dm_flags & DSRTC_FLAG_TEMP) != 0) {
@@ -406,7 +524,7 @@ dsrtc_clock_read_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 
 	KASSERT(DSXXXX_RTC_SIZE >= dm->dm_rtc_size);
 
-	if ((error = iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) != 0) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to acquire I2C bus: %d\n",
 		    __func__, error);
@@ -418,11 +536,11 @@ dsrtc_clock_read_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 		cmdbuf[0] = dm->dm_rtc_start + i;
 
 		error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
-		    sc->sc_address, cmdbuf, 1, &bcd[i], 1, I2C_F_POLL);
+		    sc->sc_address, cmdbuf, 1, &bcd[i], 1, 0);
 	}
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	if (error != 0) {
 		aprint_error_dev(sc->sc_dev,
@@ -450,9 +568,13 @@ dsrtc_clock_read_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 	dt->dt_mon = bcdtobin(bcd[DSXXXX_MONTH] & DSXXXX_MONTH_MASK);
 
 	/* XXX: Should be an MD way to specify EPOCH used by BIOS/Firmware */
-	dt->dt_year = bcdtobin(bcd[DSXXXX_YEAR]) + POSIX_BASE_YEAR;
-	if (bcd[DSXXXX_MONTH] & DSXXXX_MONTH_CENTURY)
-		dt->dt_year += 100;
+	if (sc->sc_model.dm_flags & DSRTC_FLAG_YEAR_START_2K)
+		dt->dt_year = bcdtobin(bcd[DSXXXX_YEAR]) + 2000;
+	else {
+		dt->dt_year = bcdtobin(bcd[DSXXXX_YEAR]) + POSIX_BASE_YEAR;
+		if (bcd[DSXXXX_MONTH] & DSXXXX_MONTH_CENTURY)
+			dt->dt_year += 100;
+	}
 
 	return 1;
 }
@@ -462,7 +584,7 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 {
 	struct dsrtc_model * const dm = &sc->sc_model;
 	uint8_t bcd[DSXXXX_RTC_SIZE], cmdbuf[2];
-	int error;
+	int error, offset;
 
 	KASSERT(DSXXXX_RTC_SIZE >= dm->dm_rtc_size);
 
@@ -476,11 +598,18 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 	bcd[DSXXXX_DATE] = bintobcd(dt->dt_day);
 	bcd[DSXXXX_DAY] = bintobcd(dt->dt_wday);
 	bcd[DSXXXX_MONTH] = bintobcd(dt->dt_mon);
-	bcd[DSXXXX_YEAR] = bintobcd((dt->dt_year - POSIX_BASE_YEAR) % 100);
-	if (dt->dt_year - POSIX_BASE_YEAR >= 100)
+	
+	if (sc->sc_model.dm_flags & DSRTC_FLAG_YEAR_START_2K) {
+		offset = 2000;
+	} else {
+		offset = POSIX_BASE_YEAR;
+	}
+
+	bcd[DSXXXX_YEAR] = bintobcd((dt->dt_year - offset) % 100);
+	if (dt->dt_year - offset >= 100)
 		bcd[DSXXXX_MONTH] |= DSXXXX_MONTH_CENTURY;
 
-	if ((error = iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) != 0) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to acquire I2C bus: %d\n",
 		    __func__, error);
@@ -491,19 +620,22 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 	cmdbuf[0] = dm->dm_ch_reg;
 
 	if ((error = iic_exec(sc->sc_tag, I2C_OP_READ, sc->sc_address,
-	    cmdbuf, 1, &cmdbuf[1], 1, I2C_F_POLL)) != 0) {
-		iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	    cmdbuf, 1, &cmdbuf[1], 1, 0)) != 0) {
+		iic_release_bus(sc->sc_tag, 0);
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to read Hold Clock: %d\n",
 		    __func__, error);
 		return 0;
 	}
 
-	cmdbuf[1] |= dm->dm_ch_value;
+	if (sc->sc_model.dm_flags & DSRTC_FLAG_CLOCK_HOLD_REVERSED)
+		cmdbuf[1] &= ~dm->dm_ch_value;
+	else
+		cmdbuf[1] |= dm->dm_ch_value;
 
 	if ((error = iic_exec(sc->sc_tag, I2C_OP_WRITE, sc->sc_address,
-	    cmdbuf, 1, &cmdbuf[1], 1, I2C_F_POLL)) != 0) {
-		iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	    cmdbuf, 1, &cmdbuf[1], 1, 0)) != 0) {
+		iic_release_bus(sc->sc_tag, 0);
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to write Hold Clock: %d\n",
 		    __func__, error);
@@ -517,12 +649,17 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 	uint8_t op = I2C_OP_WRITE;
 	for (signed int i = dm->dm_rtc_size - 1; i >= 0; i--) {
 		cmdbuf[0] = dm->dm_rtc_start + i;
+		if ((dm->dm_flags & DSRTC_FLAG_VBATEN) &&
+				dm->dm_rtc_start + i == dm->dm_vbaten_reg)
+			bcd[i] |= dm->dm_vbaten_value;
 		if (dm->dm_rtc_start + i == dm->dm_ch_reg) {
 			op = I2C_OP_WRITE_WITH_STOP;
+			if (dm->dm_flags & DSRTC_FLAG_CLOCK_HOLD_REVERSED)
+				bcd[i] |= dm->dm_ch_value;
 		}
 		if ((error = iic_exec(sc->sc_tag, op, sc->sc_address,
-		    cmdbuf, 1, &bcd[i], 1, I2C_F_POLL)) != 0) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+		    cmdbuf, 1, &bcd[i], 1, 0)) != 0) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "%s: failed to write rtc at 0x%x: %d\n",
 			    __func__, i, error);
@@ -532,16 +669,18 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 	}
 	/*
 	 * If the clock hold register isn't the same register as seconds,
-	 * we need to reeanble the clock.
+	 * we need to reenable the clock.
 	 */
 	if (op != I2C_OP_WRITE_WITH_STOP) {
 		cmdbuf[0] = dm->dm_ch_reg;
-		cmdbuf[1] &= ~dm->dm_ch_value;
+		if (dm->dm_flags & DSRTC_FLAG_CLOCK_HOLD_REVERSED)
+			cmdbuf[1] |= dm->dm_ch_value;
+		else
+			cmdbuf[1] &= ~dm->dm_ch_value;
 
 		if ((error = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP,
-		    sc->sc_address, cmdbuf, 1, &cmdbuf[1], 1,
-		    I2C_F_POLL)) != 0) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+		    sc->sc_address, cmdbuf, 1, &cmdbuf[1], 1, 0)) != 0) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "%s: failed to Hold Clock: %d\n",
 			    __func__, error);
@@ -549,7 +688,7 @@ dsrtc_clock_write_ymdhms(struct dsrtc_softc *sc, struct clock_ymdhms *dt)
 		}
 	}
 
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	return 1;
 }
@@ -600,7 +739,7 @@ dsrtc_clock_read_timeval(struct dsrtc_softc *sc, time_t *tp)
 	uint8_t buf[4];
 	int error;
 
-	if ((error = iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) != 0) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to acquire I2C bus: %d\n",
 		    __func__, error);
@@ -610,10 +749,10 @@ dsrtc_clock_read_timeval(struct dsrtc_softc *sc, time_t *tp)
 	/* read all registers: */
 	uint8_t reg = dm->dm_rtc_start;
 	error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
-	     &reg, 1, buf, 4, I2C_F_POLL);
+	     &reg, 1, buf, 4, 0);
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	if (error != 0) {
 		aprint_error_dev(sc->sc_dev,
@@ -635,8 +774,9 @@ static int
 dsrtc_clock_write_timeval(struct dsrtc_softc *sc, time_t t)
 {
 	const struct dsrtc_model * const dm = &sc->sc_model;
-	size_t buflen = dm->dm_rtc_size + 2; 
-	uint8_t buf[buflen];
+	size_t buflen = dm->dm_rtc_size + 2;
+	/* XXX: the biggest dm_rtc_size we have now is 7, so we should be ok */ 
+	uint8_t buf[16];
 	int error;
 
 	KASSERT((dm->dm_flags & DSRTC_FLAG_CLOCK_HOLD) == 0);
@@ -649,7 +789,7 @@ dsrtc_clock_write_timeval(struct dsrtc_softc *sc, time_t t)
 	buf[4] = (t >> 24) & 0xff;
 	buf[5] = 0;
 
-	if ((error = iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) != 0) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to acquire I2C bus: %d\n",
 		    __func__, error);
@@ -657,10 +797,10 @@ dsrtc_clock_write_timeval(struct dsrtc_softc *sc, time_t t)
 	}
 
 	error = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP, sc->sc_address,
-	    &buf, buflen, NULL, 0, I2C_F_POLL);
+	    &buf, buflen, NULL, 0, 0);
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	/* send data */
 	if (error != 0) {
@@ -683,7 +823,7 @@ dsrtc_read_temp(struct dsrtc_softc *sc, uint32_t *temp)
 	if ((sc->sc_model.dm_flags & DSRTC_FLAG_TEMP) == 0)
 		return ENOTSUP;
 
-	if ((error = iic_acquire_bus(sc->sc_tag, I2C_F_POLL)) != 0) {
+	if ((error = iic_acquire_bus(sc->sc_tag, 0)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "%s: failed to acquire I2C bus: %d\n",
 		    __func__, error);
@@ -692,10 +832,10 @@ dsrtc_read_temp(struct dsrtc_softc *sc, uint32_t *temp)
 
 	/* read temperature registers: */
 	error = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_address,
-	     &reg, 1, buf, 2, I2C_F_POLL);
+	     &reg, 1, buf, 2, 0);
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	if (error != 0) {
 		aprint_error_dev(sc->sc_dev,

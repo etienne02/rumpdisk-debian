@@ -1,4 +1,4 @@
-/*	$NetBSD: strcat.c,v 1.2 2007/06/04 18:19:27 christos Exp $	*/
+/*	$NetBSD: strcat.c,v 1.4 2020/04/07 08:07:58 skrll Exp $	*/
 
 /*
  * Copyright (c) 1988, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)strcat.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: strcat.c,v 1.2 2007/06/04 18:19:27 christos Exp $");
+__RCSID("$NetBSD: strcat.c,v 1.4 2020/04/07 08:07:58 skrll Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -45,7 +45,7 @@ __RCSID("$NetBSD: strcat.c,v 1.2 2007/06/04 18:19:27 christos Exp $");
 #include <lib/libkern/libkern.h>
 #endif
 
-#ifdef _FORTIFY_SOURCE
+#if defined(_FORTIFY_SOURCE) || defined(KASAN)
 #undef strcat
 #endif
 
@@ -55,7 +55,6 @@ strcat(char *s, const char *append)
 	char	*t = s;
 
 	_DIAGASSERT(t != NULL);
-	_DIAGASSERT(append != NULL);
 
 	for (; *t; ++t)
 		;

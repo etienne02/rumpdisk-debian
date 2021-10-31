@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.268 2012/11/04 00:32:47 chs Exp $	*/
+/*	$NetBSD: locore.s,v 1.281 2021/08/09 21:08:06 andvar Exp $	*/
 
 /*
  * Copyright (c) 1996 Paul Kranenburg
@@ -53,7 +53,6 @@
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
 #include "opt_compat_netbsd.h"
-#include "opt_compat_svr4.h"
 #include "opt_compat_sunos.h"
 #include "opt_multiprocessor.h"
 #include "opt_lockdebug.h"
@@ -357,7 +356,7 @@ sun4_notsup:
 	_C_LABEL(kernel_text) = start		! for kvm_mkdb(8)
 _ASM_LABEL(start):
 /*
- * Put sun4 traptable first, since it needs the most stringent aligment (8192)
+ * Put sun4 traptable first, since it needs the most stringent alignment (8192)
  */
 #if defined(SUN4)
 trapbase_sun4:
@@ -1955,10 +1954,11 @@ memfault_sun4c:
 #if defined(SUN4M)
 _ENTRY(memfault_sun4m)
 memfault_sun4m:
-	sethi	%hi(CPUINFO_VA), %l4
+	sethi	%hi(CPUINFO_VA+CPUINFO_GETSYNCFLT), %l4
 	ld	[%l4 + %lo(CPUINFO_VA+CPUINFO_GETSYNCFLT)], %l5
+	sethi	%hi(CPUINFO_VA+CPUINFO_SYNCFLTDUMP), %l4
 	jmpl	%l5, %l7
-	 or	%l4, %lo(CPUINFO_SYNCFLTDUMP), %l4
+	 or	%l4, %lo(CPUINFO_VA+CPUINFO_SYNCFLTDUMP), %l4
 	TRAP_SETUP(-CCFSZ-80)
 	! tally fault (curcpu()->cpu_data.cpu_nfault++) (clobbers %o0,%o1,%o2)
 	INCR64(CPUINFO_VA + CPUINFO_NFAULT)
@@ -2520,10 +2520,10 @@ softintr_common:
 	set	_C_LABEL(sintrhand), %l4! %l4 = sintrhand[intlev];
 	ld	[%l4 + %l5], %l4
 
-	sethi	%hi(CPUINFO_VA), %o2
-	ld	[ %o2 + CPUINFO_IDEPTH ], %o3
+	sethi	%hi(CPUINFO_VA+CPUINFO_IDEPTH), %o2
+	ld	[ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ], %o3
 	inc	%o3
-	st	%o3, [ %o2 + CPUINFO_IDEPTH ]
+	st	%o3, [ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ]
 
 	b	3f
 	 st	%fp, [%sp + CCFSZ + 16]
@@ -2544,10 +2544,10 @@ softintr_common:
 	bnz	1b
 	 nop
 
-	sethi	%hi(CPUINFO_VA), %o2
-	ld	[ %o2 + CPUINFO_IDEPTH ], %o3
+	sethi	%hi(CPUINFO_VA+CPUINFO_IDEPTH), %o2
+	ld	[ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ], %o3
 	dec	%o3
-	st	%o3, [ %o2 + CPUINFO_IDEPTH ]
+	st	%o3, [ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ]
 
 	mov	%l7, %g1
 	wr	%l6, 0, %y
@@ -2564,8 +2564,8 @@ softintr_common:
 #if defined(SUN4M)
 _ENTRY(_C_LABEL(sparc_interrupt4m))
 #if !defined(MSIIEP)	/* "normal" sun4m */
-	sethi	%hi(CPUINFO_VA), %l6
-	ld	[%l6 + CPUINFO_INTREG], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_INTREG), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_INTREG)], %l7
 	mov	1, %l4
 	ld	[%l7 + ICR_PI_PEND_OFFSET], %l5	! get pending interrupts
 	sll	%l4, %l3, %l4	! hw intr bits are in the lower halfword
@@ -2662,7 +2662,7 @@ sparc_interrupt4m_bogus:
 	bnz,a	1f			!	splhigh();
 	 or	%l0, 0xf00, %l0		! } else
 
-	call	_C_LABEL(bogusintr)	!	strayintr(&intrframe)
+	call	_C_LABEL(bogusintr)	!	bogusintr(&intrframe)
 	 add	%sp, CCFSZ, %o0
 	/* all done: restore registers and go return */
 1:
@@ -2705,10 +2705,10 @@ sparc_interrupt_common:
 	set	_C_LABEL(intrhand), %l4	! %l4 = intrhand[intlev];
 	ld	[%l4 + %l5], %l4
 
-	sethi	%hi(CPUINFO_VA), %o2
-	ld	[ %o2 + CPUINFO_IDEPTH ], %o3
+	sethi	%hi(CPUINFO_VA+CPUINFO_IDEPTH), %o2
+	ld	[ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ], %o3
 	inc	%o3
-	st	%o3, [ %o2 + CPUINFO_IDEPTH ]
+	st	%o3, [ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ]
 
 	b	3f
 	 st	%fp, [%sp + CCFSZ + 16]
@@ -2743,10 +2743,10 @@ sparc_interrupt_common:
 	 add	%sp, CCFSZ, %o0
 	/* all done: restore registers and go return */
 4:
-	sethi	%hi(CPUINFO_VA), %o2
-	ld	[ %o2 + CPUINFO_IDEPTH ], %o3
+	sethi	%hi(CPUINFO_VA+CPUINFO_IDEPTH), %o2
+	ld	[ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ], %o3
 	dec	%o3
-	st	%o3, [ %o2 + CPUINFO_IDEPTH ]
+	st	%o3, [ %o2 + %lo(CPUINFO_VA+CPUINFO_IDEPTH) ]
 
 	mov	%l7, %g1
 	wr	%l6, 0, %y
@@ -2764,20 +2764,22 @@ sparc_interrupt_common:
  * %l6 = &cpuinfo
  */
 lev14_softint:
-	sethi	%hi(CPUINFO_VA), %l7
-	ldd	[%l7 + CPUINFO_LEV14], %l4
+	sethi	%hi(CPUINFO_VA+CPUINFO_LEV14), %l7
+	ldd	[%l7 + %lo(CPUINFO_VA+CPUINFO_LEV14)], %l4
 	inccc	%l5
 	addx	%l4, %g0, %l4
 	std	%l4, [%l7 + CPUINFO_LEV14]
 
-	ld	[%l6 + CPUINFO_XMSG_TRAP], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_TRAP), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_TRAP)], %l7
 #ifdef DIAGNOSTIC
 	tst	%l7
 	bz	sparc_interrupt4m_bogus
 	 nop
 #endif
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG0), %l6
 	jmp	%l7
-	 ld	[%l6 + CPUINFO_XMSG_ARG0], %l3	! prefetch 1st arg
+	 ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG0)], %l3	! prefetch 1st arg
 
 /*
  * Fast flush handlers. xcalled from other CPUs throught soft interrupt 14
@@ -2789,9 +2791,11 @@ lev14_softint:
  */
 _ENTRY(_C_LABEL(ft_tlb_flush))
 	!	<%l3 already fetched for us>	! va
-	ld	[%l6 + CPUINFO_XMSG_ARG2], %l5	! level
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG2), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG2)], %l5	! level
 	andn	%l3, 0xfff, %l3			! %l3 = (va&~0xfff | lvl);
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l4	! context
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l4	! context
 	or	%l3, %l5, %l3
 
 	mov	SRMMU_CXR, %l7			!
@@ -2805,7 +2809,8 @@ ft_rett:
 	! enter here with %l5 = ctx to restore, %l6 = CPUINFO_VA, %l7 = ctx reg
 	mov	1, %l4				!
 	sta	%l5, [%l7]ASI_SRMMU		! restore context
-	st	%l4, [%l6 + CPUINFO_XMSG_CMPLT]	! completed = 1
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_CMPLT), %l6
+	st	%l4, [%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_CMPLT)]	! completed = 1
 
 	mov	%l0, %psr			! return from trap
 	 nop
@@ -2813,21 +2818,24 @@ ft_rett:
 
 _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_page))
 	!	<%l3 already fetched for us>	! va
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l4	! context
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l4	! context
 
 	mov	SRMMU_CXR, %l7			!
 	lda	[%l7]ASI_SRMMU, %l5		! %l5 = old context
 	sta	%l4, [%l7]ASI_SRMMU		! set new context
 
 	set	4096, %l4			! N = page size
-	ld	[%l6 + CPUINFO_CACHE_LINESZ], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_LINESZ), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_LINESZ)], %l7
 1:
 	sta	%g0, [%l3]ASI_IDCACHELFP	!  flush cache line
 	subcc	%l4, %l7, %l4			!  p += linesz;
 	bgu	1b				! while ((N -= linesz) > 0)
 	 add	%l3, %l7, %l3
 
-	ld	[%l6 + CPUINFO_XMSG_ARG0], %l3	! reload va
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG0), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG0)], %l3	! reload va
 	!or	%l3, ASI_SRMMUFP_L3(=0), %l3	! va |= ASI_SRMMUFP_L3
 	sta	%g0, [%l3]ASI_SRMMUFP		! flush TLB
 
@@ -2836,8 +2844,10 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_page))
 
 _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_segment))
 	!	<%l3 already fetched for us>	! vr
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l5	! vs
-	ld	[%l6 + CPUINFO_XMSG_ARG2], %l4	! context
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l5	! vs
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG2), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG2)], %l4	! context
 
 	sll	%l3, 24, %l3			! va = VSTOVA(vr,vs)
 	sll	%l5, 18, %l5
@@ -2847,8 +2857,10 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_segment))
 	lda	[%l7]ASI_SRMMU, %l5		! %l5 = old context
 	sta	%l4, [%l7]ASI_SRMMU		! set new context
 
-	ld	[%l6 + CPUINFO_CACHE_NLINES], %l4
-	ld	[%l6 + CPUINFO_CACHE_LINESZ], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_NLINES), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_NLINES)], %l4
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_LINESZ), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_LINESZ)], %l7
 1:
 	sta	%g0, [%l3]ASI_IDCACHELFS	!  flush cache line
 	deccc	%l4				!  p += linesz;
@@ -2860,7 +2872,8 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_segment))
 
 _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_region))
 	!	<%l3 already fetched for us>	! vr
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l4	! context
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l4	! context
 
 	sll	%l3, 24, %l3			! va = VRTOVA(vr)
 
@@ -2868,8 +2881,10 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_region))
 	lda	[%l7]ASI_SRMMU, %l5		! %l5 = old context
 	sta	%l4, [%l7]ASI_SRMMU		! set new context
 
-	ld	[%l6 + CPUINFO_CACHE_NLINES], %l4
-	ld	[%l6 + CPUINFO_CACHE_LINESZ], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_NLINES), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_NLINES)], %l4
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_LINESZ), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_LINESZ)], %l7
 1:
 	sta	%g0, [%l3]ASI_IDCACHELFR	!  flush cache line
 	deccc	%l4				!  p += linesz;
@@ -2886,8 +2901,10 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_context))
 	lda	[%l7]ASI_SRMMU, %l5		! %l5 = old context
 	sta	%l3, [%l7]ASI_SRMMU		! set new context
 
-	ld	[%l6 + CPUINFO_CACHE_NLINES], %l4
-	ld	[%l6 + CPUINFO_CACHE_LINESZ], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_NLINES), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_NLINES)], %l4
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_LINESZ), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_LINESZ)], %l7
 	mov	%g0, %l3			! va = 0
 1:
 	sta	%g0, [%l3]ASI_IDCACHELFC	!  flush cache line
@@ -2900,18 +2917,21 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_context))
 
 _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_range))
 	!	<%l3 already fetched for us>	! va
-	ld	[%l6 + CPUINFO_XMSG_ARG2], %l4	! context
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG2), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG2)], %l4	! context
 
 	mov	SRMMU_CXR, %l7			!
 	lda	[%l7]ASI_SRMMU, %l5		! %l5 = old context
 	sta	%l4, [%l7]ASI_SRMMU		! set new context
 
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l4	! size
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l4	! size
 	and	%l3, 7, %l7			! double-word alignment
 	andn	%l3, 7, %l3			!  off = va & 7; va &= ~7
 	add	%l4, %l7, %l4			!  sz += off
 
-	ld	[%l6 + CPUINFO_CACHE_LINESZ], %l7
+	sethi	%hi(CPUINFO_VA+CPUINFO_CACHE_LINESZ), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_CACHE_LINESZ)], %l7
 1:
 	sta	%g0, [%l3]ASI_IDCACHELFP	!  flush cache line
 	subcc	%l4, %l7, %l4			!  p += linesz;
@@ -2919,8 +2939,10 @@ _ENTRY(_C_LABEL(ft_srmmu_vcache_flush_range))
 	 add	%l3, %l7, %l3
 
 	/* Flush TLB on all pages we visited */
-	ld	[%l6 + CPUINFO_XMSG_ARG0], %l3	! reload va
-	ld	[%l6 + CPUINFO_XMSG_ARG1], %l4	! reload sz
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG0), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG0)], %l3	! reload va
+	sethi	%hi(CPUINFO_VA+CPUINFO_XMSG_ARG1), %l6
+	ld	[%l6 + %lo(CPUINFO_VA+CPUINFO_XMSG_ARG1)], %l4	! reload sz
 	add	%l3, %l4, %l4			! %l4 = round_page(va + sz)
 	add	%l4, 0xfff, %l4
 	andn	%l4, 0xfff, %l4
@@ -4715,41 +4737,6 @@ Lcsdone:				! done:
 	 st	%g0, [%o4 + PCB_ONFAULT]! return (error);
 
 /*
- * copystr(fromaddr, toaddr, maxlength, &lencopied)
- *
- * Copy a null terminated string from one point to another in
- * the kernel address space.  (This is a leaf procedure, but
- * it does not seem that way to the C compiler.)
- */
-ENTRY(copystr)
-	mov	%o1, %o5		!	to0 = to;
-	tst	%o2			! if (maxlength == 0)
-	beq,a	2f			!
-	 mov	ENAMETOOLONG, %o0	!	ret = ENAMETOOLONG; goto done;
-
-0:					! loop:
-	ldsb	[%o0], %o4		!	c = *from;
-	tst	%o4
-	stb	%o4, [%o1]		!	*to++ = c;
-	be	1f			!	if (c == 0)
-	 inc	%o1			!		goto ok;
-	deccc	%o2			!	if (--len > 0) {
-	bgu,a	0b			!		from++;
-	 inc	%o0			!		goto loop;
-	b	2f			!	}
-	 mov	ENAMETOOLONG, %o0	!	ret = ENAMETOOLONG; goto done;
-1:					! ok:
-	clr	%o0			!	ret = 0;
-2:
-	sub	%o1, %o5, %o1		!	len = to - to0;
-	tst	%o3			!	if (lencopied)
-	bnz,a	3f
-	 st	%o1, [%o3]		!		*lencopied = len;
-3:
-	retl
-	 nop
-
-/*
  * Copyin(src, dst, len)
  *
  * Copy specified amount of data from user space into the kernel.
@@ -4863,9 +4850,7 @@ ENTRY(cpu_switchto)
 
 	sethi	%hi(cpcb), %l6
 
-	tst	%i0				! if (oldlwp == NULL)
-	bz	Lnosaveoldlwp
-	 rd	%psr, %l1			! psr = %psr;
+	rd	%psr, %l1			! psr = %psr;
 
 	ld	[%l6 + %lo(cpcb)], %o0
 
@@ -4881,7 +4866,6 @@ ENTRY(cpu_switchto)
 Lwb1:	SAVE; SAVE; SAVE; SAVE; SAVE; SAVE;	/* 6 of each: */
 	restore; restore; restore; restore; restore; restore
 
-Lnosaveoldlwp:
 	andn	%l1, PSR_PIL, %l1		! oldpsr &= ~PSR_PIL;
 
 	/*
@@ -4962,13 +4946,13 @@ Lsw_noras:
  * Call the idlespin() function if it exists, otherwise just return.
  */
 ENTRY(cpu_idle)
-	sethi	%hi(CPUINFO_VA), %o0
-	ld	[%o0 + CPUINFO_IDLESPIN], %o1
+	sethi	%hi(CPUINFO_VA+CPUINFO_IDLESPIN), %o0
+	ld	[%o0 + %lo(CPUINFO_VA+CPUINFO_IDLESPIN)], %o1
 	tst	%o1
 	bz	1f
 	 nop
 	jmp	%o1
-	 nop	! CPUINFO_VA is already in %o0
+	 nop
 1:
 	retl
 	 nop
@@ -5037,149 +5021,88 @@ ENTRY(lwp_trampoline)
 	b	return_from_syscall
 	 add	%l1, 4, %l2		! npc = pc+4
 
-/*
- * {fu,su}{,i}{byte,word}
- */
-_ENTRY(fuiword)
-ENTRY(fuword)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE...
-	bgeu	Lfsbadaddr
-	 .empty
-	btst	3, %o0			! or has low bits set...
-	bnz	Lfsbadaddr		!	go return -1
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
+/**************************************************************************/
+
+#define	UFETCHSTORE_PROLOGUE						 \
+	set	KERNBASE, %o2					 	;\
+	cmp	%o0, %o2		/* if addr >= KERNBASE... */	;\
+	bgeu	Lufetchstore_badaddr				 	;\
+	 .empty							 	;\
+	sethi	%hi(cpcb), %o2		/* cpcb->pcb_onfault =	  */ 	;\
+	ld	[%o2 + %lo(cpcb)], %o2	/*    Lufetchstore_fault  */	;\
+	set	Lufetchstore_fault, %o3				 	;\
 	st	%o3, [%o2 + PCB_ONFAULT]
-	ld	[%o0], %o0		! fetch the word
-	retl				! phew, made it, return the word
-	 st	%g0, [%o2 + PCB_ONFAULT]! but first clear onfault
 
-Lfserr:
-	st	%g0, [%o2 + PCB_ONFAULT]! error in r/w, clear pcb_onfault
-Lfsbadaddr:
-	retl				! and return error indicator
-	 mov	-1, %o0
+	/* keep to a single insn; it's used in a branch delay slot */
+#define	UFETCHSTORE_EPILOGUE						\
+	st	%g0, [%o2 + PCB_ONFAULT]! cpcb->pcb_onfault = NULL
 
-	/*
-	 * This is just like Lfserr, but it's a global label that allows
-	 * mem_access_fault() to check to see that we don't want to try to
-	 * page in the fault.  It's used by fuswintr() etc.
-	 */
-	.globl	_C_LABEL(Lfsbail)
-_C_LABEL(Lfsbail):
-	st	%g0, [%o2 + PCB_ONFAULT]! error in r/w, clear pcb_onfault
-	retl				! and return error indicator
-	 mov	-1, %o0
+#define	UFETCHSTORE_RETURN_SUCCESS					\
+	retl							;	\
+	 clr	%o0
 
-	/*
-	 * Like fusword but callable from interrupt context.
-	 * Fails if data isn't resident.
-	 */
-ENTRY(fuswintr)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfsbail;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	_C_LABEL(Lfsbail), %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	lduh	[%o0], %o0		! fetch the halfword
-	retl				! made it
-	st	%g0, [%o2 + PCB_ONFAULT]! but first clear onfault
+/* LINTSTUB: int _ufetch_8(const uint8_t *uaddr, uint8_t *valp); */
+ENTRY(_ufetch_8)
+	UFETCHSTORE_PROLOGUE
+	ldub	[%o0], %o0		! %o0 = *uaddr
+	UFETCHSTORE_EPILOGUE
+	stb	%o0, [%o1]		! *valp = %o0
+	UFETCHSTORE_RETURN_SUCCESS
 
-ENTRY(fusword)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	lduh	[%o0], %o0		! fetch the halfword
-	retl				! made it
-	st	%g0, [%o2 + PCB_ONFAULT]! but first clear onfault
+/* LINTSTUB: int _ufetch_16(const uint16_t *uaddr, uint16_t *valp); */
+ENTRY(_ufetch_16)
+	UFETCHSTORE_PROLOGUE
+	lduh	[%o0], %o0		! %o0 = *uaddr
+	UFETCHSTORE_EPILOGUE
+	sth	%o0, [%o1]		! *valp = %o0
+	UFETCHSTORE_RETURN_SUCCESS
 
-_ENTRY(fuibyte)
-ENTRY(fubyte)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	ldub	[%o0], %o0		! fetch the byte
-	retl				! made it
-	st	%g0, [%o2 + PCB_ONFAULT]! but first clear onfault
+/* LINTSTUB: int _ufetch_32(const uint32_t *uaddr, uint32_t *valp); */
+ENTRY(_ufetch_32)
+	UFETCHSTORE_PROLOGUE
+	ld	[%o0], %o0		! %o0 = *uaddr
+	UFETCHSTORE_EPILOGUE
+	st	%o0, [%o1]		! *valp = %o0
+	UFETCHSTORE_RETURN_SUCCESS
 
-_ENTRY(suiword)
-ENTRY(suword)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE ...
-	bgeu	Lfsbadaddr
-	 .empty
-	btst	3, %o0			! or has low bits set ...
-	bnz	Lfsbadaddr		!	go return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	st	%o1, [%o0]		! store the word
-	st	%g0, [%o2 + PCB_ONFAULT]! made it, clear onfault
-	retl				! and return 0
-	clr	%o0
+/* LINTSTUB: int _ustore_8(uint8_t *uaddr, uint8_t val); */
+ENTRY(_ustore_8)
+	UFETCHSTORE_PROLOGUE
+	stb	%o1, [%o0]		! *uaddr = val
+	UFETCHSTORE_EPILOGUE
+	UFETCHSTORE_RETURN_SUCCESS
 
-ENTRY(suswintr)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	go return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfsbail;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	_C_LABEL(Lfsbail), %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	sth	%o1, [%o0]		! store the halfword
-	st	%g0, [%o2 + PCB_ONFAULT]! made it, clear onfault
-	retl				! and return 0
-	clr	%o0
+/* LINTSTUB: int _ustore_16(uint16_t *uaddr, uint16_t val); */
+ENTRY(_ustore_16)
+	UFETCHSTORE_PROLOGUE
+	sth	%o1, [%o0]		! *uaddr = val
+	UFETCHSTORE_EPILOGUE
+	UFETCHSTORE_RETURN_SUCCESS
 
-ENTRY(susword)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	go return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	sth	%o1, [%o0]		! store the halfword
-	st	%g0, [%o2 + PCB_ONFAULT]! made it, clear onfault
-	retl				! and return 0
-	clr	%o0
+/* LINTSTUB: int _ustore_32(uint32_t *uaddr, uint32_t val); */
+ENTRY(_ustore_32)
+	UFETCHSTORE_PROLOGUE
+	st	%o1, [%o0]		! *uaddr = val
+	UFETCHSTORE_EPILOGUE
+	UFETCHSTORE_RETURN_SUCCESS
 
-_ENTRY(suibyte)
-ENTRY(subyte)
-	set	KERNBASE, %o2
-	cmp	%o0, %o2		! if addr >= KERNBASE
-	bgeu	Lfsbadaddr		!	go return error
-	 .empty
-	sethi	%hi(cpcb), %o2		! cpcb->pcb_onfault = Lfserr;
-	ld	[%o2 + %lo(cpcb)], %o2
-	set	Lfserr, %o3
-	st	%o3, [%o2 + PCB_ONFAULT]
-	stb	%o1, [%o0]		! store the byte
-	st	%g0, [%o2 + PCB_ONFAULT]! made it, clear onfault
-	retl				! and return 0
-	clr	%o0
+Lufetchstore_badaddr:
+	retl				! return EFAULT
+	 mov	EFAULT, %o0
+
+Lufetchstore_fault:
+	retl
+	 UFETCHSTORE_EPILOGUE		! error already in %o0
+
+/**************************************************************************/
 
 /* probeget and probeset are meant to be used during autoconfiguration */
+
+	.globl	_C_LABEL(sparc_fsbail)
+_C_LABEL(sparc_fsbail):
+	st	%g0, [%o2 + PCB_ONFAULT]! error in r/w, clear pcb_onfault
+	retl				! and return error indicator
+	 mov	-1, %o0
 
 /*
  * probeget(addr, size) void *addr; int size;
@@ -5193,8 +5116,8 @@ ENTRY(subyte)
 ENTRY(probeget)
 	! %o0 = addr, %o1 = (1,2,4)
 	sethi	%hi(cpcb), %o2
-	ld	[%o2 + %lo(cpcb)], %o2	! cpcb->pcb_onfault = Lfserr;
-	set	Lfserr, %o5
+	ld	[%o2 + %lo(cpcb)], %o2	! cpcb->pcb_onfault = sparc_fsbail;
+	set	sparc_fsbail, %o5
 	st	%o5, [%o2 + PCB_ONFAULT]
 	btst	1, %o1
 	bnz,a	0f			! if (len & 1)
@@ -5216,8 +5139,8 @@ ENTRY(probeget)
 ENTRY(probeset)
 	! %o0 = addr, %o1 = (1,2,4), %o2 = val
 	sethi	%hi(cpcb), %o3
-	ld	[%o3 + %lo(cpcb)], %o3	! cpcb->pcb_onfault = Lfserr;
-	set	Lfserr, %o5
+	ld	[%o3 + %lo(cpcb)], %o3	! cpcb->pcb_onfault = sparc_fsbail;
+	set	sparc_fsbail, %o5
 	st	%o5, [%o3 + PCB_ONFAULT]
 	btst	1, %o1
 	bnz,a	0f			! if (len & 1)
@@ -5240,9 +5163,9 @@ ENTRY(probeset)
  */
 ENTRY(xldcontrolb)
 	!sethi	%hi(cpcb), %o2
-	!ld	[%o2 + %lo(cpcb)], %o2	! cpcb->pcb_onfault = Lfsbail;
+	!ld	[%o2 + %lo(cpcb)], %o2	! cpcb->pcb_onfault = sparc_fsbail;
 	or	%o1, %g0, %o2		! %o2 = %o1
-	set	_C_LABEL(Lfsbail), %o5
+	set	_C_LABEL(sparc_fsbail), %o5
 	st	%o5, [%o2 + PCB_ONFAULT]
 	lduba	[%o0] ASI_CONTROL, %o0	! read
 0:	retl
@@ -5258,7 +5181,7 @@ ENTRY(xldcontrolb)
  */
 ENTRY(fkbyte)
 	or	%o1, %g0, %o2		! %o2 = %o1
-	set	_C_LABEL(Lfsbail), %o5
+	set	_C_LABEL(sparc_fsbail), %o5
 	st	%o5, [%o2 + PCB_ONFAULT]
 	ldub	[%o0], %o0		! fetch the byte
 	retl				! made it
@@ -5331,7 +5254,6 @@ ENTRY(qzero)
 
 ENTRY(bcopy)
 	cmp	%o2, BCOPY_SMALL
-Lbcopy_start:
 	bge,a	Lbcopy_fancy	! if >= this many, go be fancy.
 	btst	7, %o0		! (part of being fancy)
 
@@ -5494,164 +5416,6 @@ Lbcopy_done:
 1:
 	retl
 	 stb	%o4,[%o1]
-/*
- * ovbcopy(src, dst, len): like bcopy, but regions may overlap.
- */
-ENTRY(ovbcopy)
-	cmp	%o0, %o1	! src < dst?
-	bgeu	Lbcopy_start	! no, go copy forwards as via bcopy
-	cmp	%o2, BCOPY_SMALL! (check length for doublecopy first)
-
-	/*
-	 * Since src comes before dst, and the regions might overlap,
-	 * we have to do the copy starting at the end and working backwards.
-	 */
-	add	%o2, %o0, %o0	! src += len
-	add	%o2, %o1, %o1	! dst += len
-	bge,a	Lback_fancy	! if len >= BCOPY_SMALL, go be fancy
-	btst	3, %o0
-
-	/*
-	 * Not much to copy, just do it a byte at a time.
-	 */
-	deccc	%o2		! while (--len >= 0)
-	bl	1f
-	 .empty
-0:
-	dec	%o0		!	*--dst = *--src;
-	ldsb	[%o0], %o4
-	dec	%o1
-	deccc	%o2
-	bge	0b
-	stb	%o4, [%o1]
-1:
-	retl
-	nop
-
-	/*
-	 * Plenty to copy, try to be optimal.
-	 * We only bother with word/halfword/byte copies here.
-	 */
-Lback_fancy:
-!	btst	3, %o0		! done already
-	bnz	1f		! if ((src & 3) == 0 &&
-	btst	3, %o1		!     (dst & 3) == 0)
-	bz,a	Lback_words	!	goto words;
-	dec	4, %o2		! (done early for word copy)
-
-1:
-	/*
-	 * See if the low bits match.
-	 */
-	xor	%o0, %o1, %o3	! t = src ^ dst;
-	btst	1, %o3
-	bz,a	3f		! if (t & 1) == 0, can do better
-	btst	1, %o0
-
-	/*
-	 * Nope; gotta do byte copy.
-	 */
-2:
-	dec	%o0		! do {
-	ldsb	[%o0], %o4	!	*--dst = *--src;
-	dec	%o1
-	deccc	%o2		! } while (--len != 0);
-	bnz	2b
-	stb	%o4, [%o1]
-	retl
-	nop
-
-3:
-	/*
-	 * Can do halfword or word copy, but might have to copy 1 byte first.
-	 */
-!	btst	1, %o0		! done earlier
-	bz,a	4f		! if (src & 1) {	/* copy 1 byte */
-	btst	2, %o3		! (done early)
-	dec	%o0		!	*--dst = *--src;
-	ldsb	[%o0], %o4
-	dec	%o1
-	stb	%o4, [%o1]
-	dec	%o2		!	len--;
-	btst	2, %o3		! }
-
-4:
-	/*
-	 * See if we can do a word copy ((t&2) == 0).
-	 */
-!	btst	2, %o3		! done earlier
-	bz,a	6f		! if (t & 2) == 0, can do word copy
-	btst	2, %o0		! (src&2, done early)
-
-	/*
-	 * Gotta do halfword copy.
-	 */
-	dec	2, %o2		! len -= 2;
-5:
-	dec	2, %o0		! do {
-	ldsh	[%o0], %o4	!	src -= 2;
-	dec	2, %o1		!	dst -= 2;
-	deccc	2, %o0		!	*(short *)dst = *(short *)src;
-	bge	5b		! } while ((len -= 2) >= 0);
-	sth	%o4, [%o1]
-	b	Lback_mopb	! goto mop_up_byte;
-	btst	1, %o2		! (len&1, done early)
-
-6:
-	/*
-	 * We can do word copies, but we might have to copy
-	 * one halfword first.
-	 */
-!	btst	2, %o0		! done already
-	bz	7f		! if (src & 2) {
-	dec	4, %o2		! (len -= 4, done early)
-	dec	2, %o0		!	src -= 2, dst -= 2;
-	ldsh	[%o0], %o4	!	*(short *)dst = *(short *)src;
-	dec	2, %o1
-	sth	%o4, [%o1]
-	dec	2, %o2		!	len -= 2;
-				! }
-
-7:
-Lback_words:
-	/*
-	 * Do word copies (backwards), then mop up trailing halfword
-	 * and byte if any.
-	 */
-!	dec	4, %o2		! len -= 4, done already
-0:				! do {
-	dec	4, %o0		!	src -= 4;
-	dec	4, %o1		!	src -= 4;
-	ld	[%o0], %o4	!	*(int *)dst = *(int *)src;
-	deccc	4, %o2		! } while ((len -= 4) >= 0);
-	bge	0b
-	st	%o4, [%o1]
-
-	/*
-	 * Check for trailing shortword.
-	 */
-	btst	2, %o2		! if (len & 2) {
-	bz,a	1f
-	btst	1, %o2		! (len&1, done early)
-	dec	2, %o0		!	src -= 2, dst -= 2;
-	ldsh	[%o0], %o4	!	*(short *)dst = *(short *)src;
-	dec	2, %o1
-	sth	%o4, [%o1]	! }
-	btst	1, %o2
-
-	/*
-	 * Check for trailing byte.
-	 */
-1:
-Lback_mopb:
-!	btst	1, %o2		! (done already)
-	bnz,a	1f		! if (len & 1) {
-	ldsb	[%o0 - 1], %o4	!	b = src[-1];
-	retl
-	nop
-1:
-	retl			!	dst[-1] = b;
-	stb	%o4, [%o1 - 1]	! }
 
 /*
  * kcopy() is exactly like bcopy except that it set pcb_onfault such that
@@ -5862,16 +5626,14 @@ Lpanic_savefpstate:
 	_ALIGN
 
 ENTRY(ipi_savefpstate)
-	sethi	%hi(CPUINFO_VA), %o5
-	ldd	[%o5 + CPUINFO_SAVEFPSTATE], %o2
+	sethi	%hi(CPUINFO_VA+CPUINFO_SAVEFPSTATE), %o5
+	ldd	[%o5 + %lo(CPUINFO_VA+CPUINFO_SAVEFPSTATE)], %o2
 	inccc   %o3
 	addx    %o2, 0, %o2
 	std	%o2, [%o5 + CPUINFO_SAVEFPSTATE]
 
 ENTRY(savefpstate)
 	cmp	%o0, 0
-	bz	Lfp_null_fpstate
-	 nop
 	rd	%psr, %o1		! enable FP before we begin
 	set	PSR_EF, %o2
 	or	%o1, %o2, %o1
@@ -5912,26 +5674,6 @@ Lfp_finish:
 	std	%f28, [%o0 + FS_REGS + (4*28)]
 	retl
 	 std	%f30, [%o0 + FS_REGS + (4*30)]
-
-/*
- * We really should panic here but while we figure out what the bug is
- * that a remote CPU gets a NULL struct fpstate *, this lets the system
- * work at least seemingly stably.
- */
-Lfp_null_fpstate:
-#if 1
-	sethi	%hi(CPUINFO_VA), %o5
-	ldd	[%o5 + CPUINFO_SAVEFPSTATE_NULL], %o2
-	inccc   %o3
-	addx    %o2, 0, %o2
-	retl
-	 std	%o2, [%o5 + CPUINFO_SAVEFPSTATE_NULL]
-#else
-	ld	[%o5 + CPUINFO_CPUNO], %o1
-	sethi	%hi(Lpanic_savefpstate), %o0
-	call	_C_LABEL(panic)
-	 or	%o0, %lo(Lpanic_savefpstate), %o0
-#endif
 
 /*
  * Store the (now known nonempty) FP queue.
@@ -6098,16 +5840,19 @@ _ENTRY(_C_LABEL(cypress_get_syncflt))
 _ENTRY(_C_LABEL(smp_get_syncflt))
 	save    %sp, -CCFSZ, %sp
 
-	sethi	%hi(CPUINFO_VA), %o4
+	sethi	%hi(CPUINFO_VA+CPUINFO_GETSYNCFLT), %o4
 	ld	[%l4 + %lo(CPUINFO_VA+CPUINFO_GETSYNCFLT)], %o5
 	clr	%l1
 	clr	%l3
+	sethi	%hi(CPUINFO_VA+CPUINFO_SYNCFLTDUMP), %o4
 	jmpl	%o5, %l7
-	 or	%o4, %lo(CPUINFO_SYNCFLTDUMP), %l4
+	 or	%o4, %lo(CPUINFO_VA+CPUINFO_SYNCFLTDUMP), %l4
 
 	! load values out of the dump
+	sethi	%hi(CPUINFO_VA+CPUINFO_SYNCFLTDUMP), %o4
 	ld	[%o4 + %lo(CPUINFO_VA+CPUINFO_SYNCFLTDUMP)], %o5
 	st	%o5, [%i0]
+	sethi	%hi(CPUINFO_VA+CPUINFO_SYNCFLTDUMP+4), %o4
 	ld	[%o4 + %lo(CPUINFO_VA+CPUINFO_SYNCFLTDUMP+4)], %o5
 	st	%o5, [%i1]
 	ret
@@ -6288,8 +6033,9 @@ ENTRY(longjmp)
 	cmp	%fp, %g7	! compare against desired frame
 	bl,a	1b		! if below,
 	 restore		!    pop frame and loop
-	be,a	2f		! if there,
-	 ldd	[%g1+0], %o2	!    fetch return %sp and pc, and get out
+	ld	[%g1+0], %o2	! fetch return %sp
+	be,a	2f		! we're there, get out
+	 ld	[%g1+4], %o3	! fetch return pc
 
 Llongjmpbotch:
 				! otherwise, went too far; bomb out

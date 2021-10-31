@@ -1,5 +1,3 @@
-/*	$NetBSD: npf_sendpkt.c,v 1.15 2014/07/20 00:37:41 rmind Exp $	*/
-
 /*-
  * Copyright (c) 2010-2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -33,8 +31,9 @@
  * NPF module for packet construction routines.
  */
 
+#ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npf_sendpkt.c,v 1.15 2014/07/20 00:37:41 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: npf_sendpkt.c,v 1.22 2020/05/30 14:16:56 rmind Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -48,16 +47,42 @@ __KERNEL_RCSID(0, "$NetBSD: npf_sendpkt.c,v 1.15 2014/07/20 00:37:41 rmind Exp $
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
 #include <netinet6/ip6_var.h>
+#include <netinet6/scope6_var.h>
 #include <sys/mbuf.h>
+#endif
 
 #include "npf_impl.h"
 
 #define	DEFAULT_IP_TTL		(ip_defttl)
 
-#ifndef INET6
+#if defined(_NPF_STANDALONE)
+#define	m_gethdr(t, f)		(npf)->mbufops->alloc((npf), 0, 0)
+#define	m_freem(m)		(npc)->npc_ctx->mbufops->free(m)
+#define	mtod(m,t)		((t)((npc)->npc_ctx->mbufops->getdata(m)))
+#endif
+
+#if !defined(INET6) || defined(_NPF_STANDALONE)
 #define	in6_cksum(...)		0
 #define	ip6_output(...)		0
 #define	icmp6_error(m, ...)	m_freem(m)
+#define	npf_ip6_setscope(n, i)	((void)(i), 0)
+#endif
+
+#if defined(INET6)
+static int
+npf_ip6_setscope(const npf_cache_t *npc, struct ip6_hdr *ip6)
+{
+	const struct ifnet *rcvif = npc->npc_nbuf->nb_ifp;
+
+	if (in6_clearscope(&ip6->ip6_src) || in6_clearscope(&ip6->ip6_dst)) {
+		return EINVAL;
+	}
+	if (in6_setscope(&ip6->ip6_src, rcvif, NULL) ||
+	    in6_setscope(&ip6->ip6_dst, rcvif, NULL)) {
+		return EINVAL;
+	}
+	return 0;
+}
 #endif
 
 /*
@@ -66,6 +91,7 @@ __KERNEL_RCSID(0, "$NetBSD: npf_sendpkt.c,v 1.15 2014/07/20 00:37:41 rmind Exp $
 static int
 npf_return_tcp(npf_cache_t *npc)
 {
+	npf_t *npf = npc->npc_ctx;
 	struct mbuf *m;
 	struct ip *ip = NULL;
 	struct ip6_hdr *ip6 = NULL;
@@ -97,10 +123,12 @@ npf_return_tcp(npf_cache_t *npc)
 	if (m == NULL) {
 		return ENOMEM;
 	}
+#if !defined(_NPF_STANDALONE)
 	m->m_data += max_linkhdr;
 	m->m_len = len;
 	m->m_pkthdr.len = len;
-
+	(void)npf;
+#endif
 	if (npf_iscached(npc, NPC_IP4)) {
 		struct ip *oip = npc->npc_ip.v4;
 
@@ -162,6 +190,11 @@ npf_return_tcp(npf_cache_t *npc)
 		KASSERT(npf_iscached(npc, NPC_IP6));
 		th->th_sum = in6_cksum(m, IPPROTO_TCP, sizeof(struct ip6_hdr),
 		    sizeof(struct tcphdr));
+
+		/* Handle IPv6 scopes */
+		if (npf_ip6_setscope(npc, ip6) != 0) {
+			goto bad;
+		}
 	}
 
 	/* Pass to IP layer. */
@@ -169,6 +202,9 @@ npf_return_tcp(npf_cache_t *npc)
 		return ip_output(m, NULL, NULL, IP_FORWARDING, NULL, NULL);
 	}
 	return ip6_output(m, NULL, NULL, IPV6_FORWARDING, NULL, NULL, NULL);
+bad:
+	m_freem(m);
+	return EINVAL;
 }
 
 /*
@@ -183,6 +219,12 @@ npf_return_icmp(const npf_cache_t *npc)
 		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_ADMIN_PROHIBIT, 0, 0);
 		return 0;
 	} else if (npf_iscached(npc, NPC_IP6)) {
+		/* Handle IPv6 scopes */
+		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+
+		if (npf_ip6_setscope(npc, ip6) != 0) {
+			return EINVAL;
+		}
 		icmp6_error(m, ICMP6_DST_UNREACH, ICMP6_DST_UNREACH_ADMIN, 0);
 		return 0;
 	}

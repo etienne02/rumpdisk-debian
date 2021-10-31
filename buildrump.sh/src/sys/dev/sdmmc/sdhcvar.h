@@ -1,4 +1,4 @@
-/*	$NetBSD: sdhcvar.h,v 1.26 2015/12/31 11:53:19 ryo Exp $	*/
+/*	$NetBSD: sdhcvar.h,v 1.31 2019/10/23 05:20:52 hkenken Exp $	*/
 /*	$OpenBSD: sdhcvar.h,v 1.3 2007/09/06 08:01:01 jsg Exp $	*/
 
 /*
@@ -59,6 +59,14 @@ struct sdhc_softc {
 #define	SDHC_FLAG_POLL_CARD_DET	0x00200000 /* polling card detect */
 #define	SDHC_FLAG_SLOW_SDR50  	0x00400000 /* reduce SDR50 speed */
 #define	SDHC_FLAG_USDHC		0x00800000 /* Freescale uSDHC */
+#define	SDHC_FLAG_NO_AUTO_STOP	0x01000000 /* No auto CMD12 */
+#define	SDHC_FLAG_NO_BUSY_INTR	0x02000000 /* No intr when RESP_BUSY */
+#define	SDHC_FLAG_STOP_WITH_TC	0x04000000 /* CMD12 can set xfer complete w/o SCF_RSP_BSY */
+#define	SDHC_FLAG_BROKEN_ADMA2_ZEROLEN 0x08000000 /*
+						   * Broken ADMA2 zero length descriptor
+						   * Can't 64K Byte data transfer
+						   */
+#define	SDHC_FLAG_NO_1_8_V	0x10000000 /* No 1.8V supply */
 
 	uint32_t		sc_clkbase;
 	int			sc_clkmsk;	/* Mask for SDCLK */
@@ -70,7 +78,10 @@ struct sdhc_softc {
 	int (*sc_vendor_card_detect)(struct sdhc_softc *);
 	int (*sc_vendor_bus_width)(struct sdhc_softc *, int);
 	int (*sc_vendor_bus_clock)(struct sdhc_softc *, int);
+	int (*sc_vendor_bus_clock_post)(struct sdhc_softc *, int);
 	int (*sc_vendor_transfer_data_dma)(struct sdhc_softc *, struct sdmmc_command *);
+	void (*sc_vendor_hw_reset)(struct sdhc_softc *, struct sdhc_host *);
+	int (*sc_vendor_signal_voltage)(struct sdhc_softc *, int);
 };
 
 /* Host controller functions called by the attachment driver. */
@@ -82,5 +93,11 @@ bool	sdhc_suspend(device_t, const pmf_qual_t *);
 bool	sdhc_resume(device_t, const pmf_qual_t *);
 bool	sdhc_shutdown(device_t, int);
 kmutex_t *sdhc_host_lock(struct sdhc_host *);
+uint8_t	sdhc_host_read_1(struct sdhc_host *, int);
+uint16_t sdhc_host_read_2(struct sdhc_host *, int);
+uint32_t sdhc_host_read_4(struct sdhc_host *, int);
+void	sdhc_host_write_1(struct sdhc_host *, int, uint8_t);
+void	sdhc_host_write_2(struct sdhc_host *, int, uint16_t);
+void	sdhc_host_write_4(struct sdhc_host *, int, uint32_t);
 
 #endif	/* _SDHCVAR_H_ */

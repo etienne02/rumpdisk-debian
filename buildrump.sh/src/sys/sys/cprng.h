@@ -1,4 +1,4 @@
-/*	$NetBSD: cprng.h,v 1.12 2015/04/13 15:51:30 riastradh Exp $ */
+/*	$NetBSD: cprng.h,v 1.17 2020/04/30 03:28:19 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2011-2013 The NetBSD Foundation, Inc.
@@ -38,13 +38,10 @@
 
 #include <sys/types.h>
 
-#include <crypto/nist_ctr_drbg/nist_ctr_drbg.h>
+#include <crypto/nist_hash_drbg/nist_hash_drbg.h>
 #include <crypto/cprng_fast/cprng_fast.h>
 
-/*
- * NIST SP800-90 says 2^19 bytes per request for the CTR_DRBG.
- */
-#define CPRNG_MAX_LEN	524288
+#define CPRNG_MAX_LEN	NIST_HASH_DRBG_MAX_REQUEST_BYTES
 
 typedef struct cprng_strong cprng_strong_t;
 
@@ -65,32 +62,10 @@ cprng_strong_t *
 void	cprng_strong_destroy(cprng_strong_t *);
 size_t	cprng_strong(cprng_strong_t *, void *, size_t, int);
 
-struct knote;			/* XXX temp, for /dev/random */
-int	cprng_strong_kqfilter(cprng_strong_t *, struct knote *); /* XXX " */
-int	cprng_strong_poll(cprng_strong_t *, int); /* XXX " */
+extern cprng_strong_t	*kern_cprng; /* IPL_VM */
+extern cprng_strong_t	*user_cprng; /* IPL_NONE, thread context only */
 
-extern cprng_strong_t	*kern_cprng;
-
-static inline uint32_t
-cprng_strong32(void)
-{
-	uint32_t r;
-	cprng_strong(kern_cprng, &r, sizeof(r), 0);
-	return r;
-}
-
-static inline uint64_t
-cprng_strong64(void)
-{
-	uint64_t r;
-	cprng_strong(kern_cprng, &r, sizeof(r), 0);
-	return r;
-}
-
-static inline unsigned int
-cprng_strong_strength(cprng_strong_t *c)
-{
-	return NIST_BLOCK_KEYLEN_BYTES;
-}
+uint32_t cprng_strong32(void);
+uint64_t cprng_strong64(void);
 
 #endif	/* _CPRNG_H */

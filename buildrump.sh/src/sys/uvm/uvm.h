@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm.h,v 1.66 2015/04/13 22:04:44 riastradh Exp $	*/
+/*	$NetBSD: uvm.h,v 1.77 2020/05/17 15:11:57 ad Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -62,6 +62,7 @@
 
 #ifdef _KERNEL
 
+#include <uvm/uvm_physseg.h>
 #include <sys/rndsource.h>
 
 /*
@@ -70,21 +71,28 @@
 #include <machine/vmparam.h>
 
 struct workqueue;
+struct pgflcache;
 
 /*
  * per-cpu data
  */
 
 struct uvm_cpu {
-	struct pgfreelist page_free[VM_NFREELIST]; /* unallocated pages */
-	int page_free_nextcolor;	/* next color to allocate from */
-	int page_idlezero_next;		/* which color to zero next */
-	bool page_idle_zero;		/* TRUE if we should try to zero
-					   pages in the idle loop */
-	int pages[PGFL_NQUEUES];	/* total of pages in page_free */
-	u_int emap_gen;			/* emap generation number */
+	/* allocator */
+	struct pgflcache *pgflcache[VM_NFREELIST];/* cpu-local cached pages */
+	void		*pgflcachemem;		/* pointer to allocated mem */
+	size_t		pgflcachememsz;		/* size of allocated memory */
+	u_int		pgflcolor;		/* next color to allocate */
+	u_int		pgflbucket;		/* where to send our pages */
 
-	krndsource_t rs;		/* entropy source */
+	/* entropy */
+	krndsource_t 	rs;			/* entropy source */
+
+	/* uvmpdpol: queue of intended page status changes. */
+	struct vm_page	**pdq;			/* queue entries */
+	u_int		pdqhead;		/* current queue head */
+	u_int		pdqtail;		/* maximum number entries */
+	int		pdqtime;		/* last time queue cleared */
 };
 
 /*
@@ -97,20 +105,12 @@ struct uvm {
 
 		/* vm_page queues */
 	struct pgfreelist page_free[VM_NFREELIST]; /* unallocated pages */
-	bool page_init_done;		/* TRUE if uvm_page_init() finished */
+	u_int	bucketcount;
+	bool	page_init_done;		/* true if uvm_page_init() finished */
 
 		/* page daemon trigger */
 	int pagedaemon;			/* daemon sleeps on this */
 	struct lwp *pagedaemon_lwp;	/* daemon's lid */
-
-		/* aiodone daemon */
-	struct workqueue *aiodone_queue;
-
-	/* aio_done is locked by uvm.pagedaemon_lock and splbio! */
-	TAILQ_HEAD(, buf) aio_done;		/* done async i/o reqs */
-
-	/* per-cpu data */
-	struct uvm_cpu *cpus[MAXCPUS];
 };
 
 /*
@@ -122,10 +122,7 @@ extern struct uvm_object *uvm_kernel_object;
  * locks (made globals for lockstat).
  */
 
-extern kmutex_t uvm_pageqlock;		/* lock for active/inactive page q */
-extern kmutex_t uvm_fpageqlock;		/* lock for free page q */
 extern kmutex_t uvm_kentry_lock;
-extern kmutex_t uvm_swap_data_lock;
 
 #endif /* _KERNEL */
 

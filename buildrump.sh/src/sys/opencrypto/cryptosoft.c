@@ -1,4 +1,4 @@
-/*	$NetBSD: cryptosoft.c,v 1.47 2015/08/20 14:40:19 christos Exp $ */
+/*	$NetBSD: cryptosoft.c,v 1.61 2021/04/06 03:38:04 knakahara Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptosoft.c,v 1.2.2.1 2002/11/21 23:34:23 sam Exp $	*/
 /*	$OpenBSD: cryptosoft.c,v 1.35 2002/04/26 08:43:50 deraadt Exp $	*/
 
@@ -24,11 +24,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cryptosoft.c,v 1.47 2015/08/20 14:40:19 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cryptosoft.c,v 1.61 2021/04/06 03:38:04 knakahara Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/mbuf.h>
 #include <sys/sysctl.h>
 #include <sys/errno.h>
@@ -76,6 +76,9 @@ static	int swcr_combined(struct cryptop *, int);
 static	int swcr_process(void *, struct cryptop *, int);
 static	int swcr_newsession(void *, u_int32_t *, struct cryptoini *);
 static	int swcr_freesession(void *, u_int64_t);
+static void swcr_freesession_internal(struct swcr_data *);
+
+static	int swcryptoattach_internal(void);
 
 /*
  * Apply a symmetric encryption/decryption algorithm.
@@ -110,25 +113,7 @@ swcr_encdec(struct cryptodesc *crd, const struct swcr_data *sw, void *bufv,
 		} else if (exf->reinit) {
 			exf->reinit(sw->sw_kschedule, 0, iv);
 		} else {
-			/* Get random IV */
-			for (i = 0;
-			    i + sizeof (u_int32_t) <= EALG_MAX_BLOCK_LEN;
-			    i += sizeof (u_int32_t)) {
-				u_int32_t temp = cprng_fast32();
-
-				memcpy(iv + i, &temp, sizeof(u_int32_t));
-			}
-			/*
-			 * What if the block size is not a multiple
-			 * of sizeof (u_int32_t), which is the size of
-			 * what arc4random() returns ?
-			 */
-			if (EALG_MAX_BLOCK_LEN % sizeof (u_int32_t) != 0) {
-				u_int32_t temp = cprng_fast32();
-
-				bcopy (&temp, iv + i,
-				    EALG_MAX_BLOCK_LEN - i);
-			}
+			cprng_fast(iv, EALG_MAX_BLOCK_LEN);
 		}
 
 		/* Do we need to write the IV */
@@ -498,7 +483,7 @@ swcr_authcompute(struct cryptop *crp, struct cryptodesc *crd,
 		break;
 	case CRYPTO_BUF_MBUF:
 		err = m_apply((struct mbuf *) buf, crd->crd_skip, crd->crd_len,
-		    (int (*)(void*, void *, unsigned int)) axf->Update,
+		    (int (*)(void*, void *, unsigned int))(void *)axf->Update,
 		    (void *) &ctx);
 		if (err)
 			return err;
@@ -506,7 +491,7 @@ swcr_authcompute(struct cryptop *crp, struct cryptodesc *crd,
 	case CRYPTO_BUF_IOV:
 		err = cuio_apply((struct uio *) buf, crd->crd_skip,
 		    crd->crd_len,
-		    (int (*)(void *, void *, unsigned int)) axf->Update,
+		    (int (*)(void *, void *, unsigned int))(void *)axf->Update,
 		    (void *) &ctx);
 		if (err) {
 			return err;
@@ -759,7 +744,6 @@ swcr_compdec(struct cryptodesc *crd, const struct swcr_data *sw,
 	if (result < crd->crd_len) {
 		adj = result - crd->crd_len;
 		if (outtype == CRYPTO_BUF_MBUF) {
-			adj = result - crd->crd_len;
 			m_adj((struct mbuf *)buf, adj);
 		}
 		/* Don't adjust the iov_len, it breaks the kmem_free */
@@ -775,6 +759,7 @@ static int
 swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 {
 	struct swcr_data **swd;
+	struct swcr_data *first, *tmp;
 	const struct swcr_auth_hash *axf;
 	const struct swcr_enc_xform *txf;
 	const struct swcr_comp_algo *cxf;
@@ -792,45 +777,43 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 		i = 1;		/* NB: to silence compiler warning */
 
 	if (swcr_sessions == NULL || i == swcr_sesnum) {
+		u_int32_t newnum;
+		struct swcr_data **newsessions;
+
 		if (swcr_sessions == NULL) {
 			i = 1; /* We leave swcr_sessions[0] empty */
-			swcr_sesnum = CRYPTO_SW_SESSIONS;
+			newnum = CRYPTO_SW_SESSIONS;
 		} else
-			swcr_sesnum *= 2;
+			newnum = swcr_sesnum *= 2;
 
-		swd = malloc(swcr_sesnum * sizeof(struct swcr_data *),
-		    M_CRYPTO_DATA, M_NOWAIT);
-		if (swd == NULL) {
-			/* Reset session number */
-			if (swcr_sesnum == CRYPTO_SW_SESSIONS)
-				swcr_sesnum = 0;
-			else
-				swcr_sesnum /= 2;
+		newsessions = kmem_zalloc(newnum * sizeof(struct swcr_data *),
+		    KM_NOSLEEP);
+		if (newsessions == NULL) {
 			return ENOBUFS;
 		}
-
-		memset(swd, 0, swcr_sesnum * sizeof(struct swcr_data *));
 
 		/* Copy existing sessions */
 		if (swcr_sessions) {
-			memcpy(swd, swcr_sessions,
-			    (swcr_sesnum / 2) * sizeof(struct swcr_data *));
-			free(swcr_sessions, M_CRYPTO_DATA);
+			memcpy(newsessions, swcr_sessions,
+			    swcr_sesnum * sizeof(struct swcr_data *));
+			kmem_free(swcr_sessions,
+			    swcr_sesnum * sizeof(struct swcr_data *));
 		}
 
-		swcr_sessions = swd;
+		swcr_sesnum = newnum;
+		swcr_sessions = newsessions;
 	}
 
-	swd = &swcr_sessions[i];
-	*sid = i;
-
+	first = NULL;
+	swd = &tmp;
 	while (cri) {
-		*swd = malloc(sizeof **swd, M_CRYPTO_DATA, M_NOWAIT);
+		*swd = kmem_zalloc(sizeof **swd, KM_NOSLEEP);
 		if (*swd == NULL) {
-			swcr_freesession(NULL, i);
+			if (first != NULL)
+				swcr_freesession_internal(first);
 			return ENOBUFS;
-		}
-		memset(*swd, 0, sizeof(struct swcr_data));
+		} else if (first == NULL)
+			first = *swd;
 
 		switch (cri->cri_alg) {
 		case CRYPTO_DES_CBC:
@@ -848,8 +831,8 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 		case CRYPTO_SKIPJACK_CBC:
 			txf = &swcr_enc_xform_skipjack;
 			goto enccommon;
-		case CRYPTO_RIJNDAEL128_CBC:
-			txf = &swcr_enc_xform_rijndael128;
+		case CRYPTO_AES_CBC:
+			txf = &swcr_enc_xform_aes;
 			goto enccommon;
 		case CRYPTO_CAMELLIA_CBC:
 			txf = &swcr_enc_xform_camellia;
@@ -870,7 +853,7 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 			error = txf->setkey(&((*swd)->sw_kschedule),
 					cri->cri_key, cri->cri_klen / 8);
 			if (error) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return error;
 			}
 			(*swd)->sw_exf = txf;
@@ -907,17 +890,15 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 			axf = &swcr_auth_hash_hmac_ripemd_160_96;
 			goto authcommon;	/* leave this for safety */
 		authcommon:
-			(*swd)->sw_ictx = malloc(axf->ctxsize,
-			    M_CRYPTO_DATA, M_NOWAIT);
+			(*swd)->sw_ictx = kmem_alloc(axf->ctxsize, KM_NOSLEEP);
 			if ((*swd)->sw_ictx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 
-			(*swd)->sw_octx = malloc(axf->ctxsize,
-			    M_CRYPTO_DATA, M_NOWAIT);
+			(*swd)->sw_octx = kmem_alloc(axf->ctxsize, KM_NOSLEEP);
 			if ((*swd)->sw_octx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 
@@ -948,21 +929,22 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 			axf = &swcr_auth_hash_key_md5;
 			goto auth2common;
 
-		case CRYPTO_SHA1_KPDK:
+		case CRYPTO_SHA1_KPDK: {
+			unsigned char digest[SHA1_DIGEST_LENGTH];
+			CTASSERT(SHA1_DIGEST_LENGTH >= MD5_DIGEST_LENGTH);
 			axf = &swcr_auth_hash_key_sha1;
 		auth2common:
-			(*swd)->sw_ictx = malloc(axf->ctxsize,
-			    M_CRYPTO_DATA, M_NOWAIT);
+			(*swd)->sw_ictx = kmem_alloc(axf->ctxsize, KM_NOSLEEP);
 			if ((*swd)->sw_ictx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 
 			/* Store the key so we can "append" it to the payload */
-			(*swd)->sw_octx = malloc(cri->cri_klen / 8, M_CRYPTO_DATA,
-			    M_NOWAIT);
+			(*swd)->sw_octx = kmem_alloc(cri->cri_klen / 8,
+			    KM_NOSLEEP);
 			if ((*swd)->sw_octx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 
@@ -971,9 +953,10 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 			axf->Init((*swd)->sw_ictx);
 			axf->Update((*swd)->sw_ictx, cri->cri_key,
 			    cri->cri_klen / 8);
-			axf->Final(NULL, (*swd)->sw_ictx);
+			axf->Final(digest, (*swd)->sw_ictx);
 			(*swd)->sw_axf = axf;
 			break;
+		    }
 
 		case CRYPTO_MD5:
 			axf = &swcr_auth_hash_md5;
@@ -982,10 +965,9 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 		case CRYPTO_SHA1:
 			axf = &swcr_auth_hash_sha1;
 		auth3common:
-			(*swd)->sw_ictx = malloc(axf->ctxsize,
-			    M_CRYPTO_DATA, M_NOWAIT);
+			(*swd)->sw_ictx = kmem_alloc(axf->ctxsize, KM_NOSLEEP);
 			if ((*swd)->sw_ictx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 
@@ -1005,10 +987,9 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 		case CRYPTO_AES_256_GMAC:
 			axf = &swcr_auth_hash_gmac_aes_256;
 		auth4common:
-			(*swd)->sw_ictx = malloc(axf->ctxsize,
-			    M_CRYPTO_DATA, M_NOWAIT);
+			(*swd)->sw_ictx = kmem_alloc(axf->ctxsize, KM_NOSLEEP);
 			if ((*swd)->sw_ictx == NULL) {
-				swcr_freesession(NULL, i);
+				swcr_freesession_internal(first);
 				return ENOBUFS;
 			}
 			axf->Init((*swd)->sw_ictx);
@@ -1032,7 +1013,7 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 			(*swd)->sw_cxf = cxf;
 			break;
 		default:
-			swcr_freesession(NULL, i);
+			swcr_freesession_internal(first);
 			return EINVAL;
 		}
 
@@ -1040,30 +1021,25 @@ swcr_newsession(void *arg, u_int32_t *sid, struct cryptoini *cri)
 		cri = cri->cri_next;
 		swd = &((*swd)->sw_next);
 	}
+
+	swcr_sessions[i] = first;
+	*sid = i;
 	return 0;
 }
 
-/*
- * Free a session.
- */
-static int
-swcr_freesession(void *arg, u_int64_t tid)
+static void
+swcr_freesession_internal(struct swcr_data *arg)
 {
-	struct swcr_data *swd;
+	struct swcr_data *swd, *swd0;
 	const struct swcr_enc_xform *txf;
 	const struct swcr_auth_hash *axf;
-	u_int32_t sid = ((u_int32_t) tid) & 0xffffffff;
 
-	if (sid > swcr_sesnum || swcr_sessions == NULL ||
-	    swcr_sessions[sid] == NULL)
-		return EINVAL;
+	if (arg == NULL)
+		return;
 
-	/* Silently accept and return */
-	if (sid == 0)
-		return 0;
-
-	while ((swd = swcr_sessions[sid]) != NULL) {
-		swcr_sessions[sid] = swd->sw_next;
+	swd0 = arg;
+	while ((swd = swd0) != NULL) {
+		swd0 = swd->sw_next;
 
 		switch (swd->sw_alg) {
 		case CRYPTO_DES_CBC:
@@ -1071,7 +1047,7 @@ swcr_freesession(void *arg, u_int64_t tid)
 		case CRYPTO_BLF_CBC:
 		case CRYPTO_CAST_CBC:
 		case CRYPTO_SKIPJACK_CBC:
-		case CRYPTO_RIJNDAEL128_CBC:
+		case CRYPTO_AES_CBC:
 		case CRYPTO_CAMELLIA_CBC:
 		case CRYPTO_AES_CTR:
 		case CRYPTO_AES_GCM_16:
@@ -1097,11 +1073,11 @@ swcr_freesession(void *arg, u_int64_t tid)
 
 			if (swd->sw_ictx) {
 				explicit_memset(swd->sw_ictx, 0, axf->ctxsize);
-				free(swd->sw_ictx, M_CRYPTO_DATA);
+				kmem_free(swd->sw_ictx, axf->ctxsize);
 			}
 			if (swd->sw_octx) {
 				explicit_memset(swd->sw_octx, 0, axf->ctxsize);
-				free(swd->sw_octx, M_CRYPTO_DATA);
+				kmem_free(swd->sw_octx, axf->ctxsize);
 			}
 			break;
 
@@ -1111,11 +1087,11 @@ swcr_freesession(void *arg, u_int64_t tid)
 
 			if (swd->sw_ictx) {
 				explicit_memset(swd->sw_ictx, 0, axf->ctxsize);
-				free(swd->sw_ictx, M_CRYPTO_DATA);
+				kmem_free(swd->sw_ictx, axf->ctxsize);
 			}
 			if (swd->sw_octx) {
 				explicit_memset(swd->sw_octx, 0, swd->sw_klen);
-				free(swd->sw_octx, M_CRYPTO_DATA);
+				kmem_free(swd->sw_octx, swd->sw_klen);
 			}
 			break;
 
@@ -1129,7 +1105,7 @@ swcr_freesession(void *arg, u_int64_t tid)
 
 			if (swd->sw_ictx) {
 				explicit_memset(swd->sw_ictx, 0, axf->ctxsize);
-				free(swd->sw_ictx, M_CRYPTO_DATA);
+				kmem_free(swd->sw_ictx, axf->ctxsize);
 			}
 			break;
 
@@ -1139,8 +1115,31 @@ swcr_freesession(void *arg, u_int64_t tid)
 			break;
 		}
 
-		free(swd, M_CRYPTO_DATA);
+		kmem_free(swd, sizeof(*swd));
 	}
+}
+
+/*
+ * Free a session.
+ */
+static int
+swcr_freesession(void *arg, u_int64_t tid)
+{
+	struct swcr_data *swd;
+	u_int32_t sid = ((u_int32_t) tid) & 0xffffffff;
+
+	if (sid > swcr_sesnum || swcr_sessions == NULL ||
+	    swcr_sessions[sid] == NULL)
+		return EINVAL;
+
+	/* Silently accept and return */
+	if (sid == 0)
+		return 0;
+
+	swd = swcr_sessions[sid];
+	swcr_sessions[sid] = NULL;
+	swcr_freesession_internal(swd);
+
 	return 0;
 }
 
@@ -1207,7 +1206,7 @@ swcr_process(void *arg, struct cryptop *crp, int hint)
 		case CRYPTO_BLF_CBC:
 		case CRYPTO_CAST_CBC:
 		case CRYPTO_SKIPJACK_CBC:
-		case CRYPTO_RIJNDAEL128_CBC:
+		case CRYPTO_AES_CBC:
 		case CRYPTO_CAMELLIA_CBC:
 		case CRYPTO_AES_CTR:
 			if ((crp->crp_etype = swcr_encdec(crd, sw,
@@ -1248,7 +1247,7 @@ swcr_process(void *arg, struct cryptop *crp, int hint)
 		case CRYPTO_DEFLATE_COMP:
 		case CRYPTO_DEFLATE_COMP_NOGROW:
 		case CRYPTO_GZIP_COMP:
-			DPRINTF(("swcr_process: compdec for %d\n", sw->sw_alg));
+			DPRINTF("compdec for %d\n", sw->sw_alg);
 			if ((crp->crp_etype = swcr_compdec(crd, sw,
 			    crp->crp_buf, type, &crp->crp_olen)) != 0)
 				goto done;
@@ -1262,7 +1261,7 @@ swcr_process(void *arg, struct cryptop *crp, int hint)
 	}
 
 done:
-	DPRINTF(("request %p done\n", crp));
+	DPRINTF("request %p done\n", crp);
 	crypto_done(crp);
 	return 0;
 }
@@ -1308,7 +1307,7 @@ swcr_init(void)
 	REGISTER(CRYPTO_AES_128_GMAC);
 	REGISTER(CRYPTO_AES_192_GMAC);
 	REGISTER(CRYPTO_AES_256_GMAC);
-	REGISTER(CRYPTO_RIJNDAEL128_CBC);
+	REGISTER(CRYPTO_AES_CBC);
 	REGISTER(CRYPTO_DEFLATE_COMP);
 	REGISTER(CRYPTO_DEFLATE_COMP_NOGROW);
 	REGISTER(CRYPTO_GZIP_COMP);
@@ -1323,8 +1322,18 @@ swcr_init(void)
 void
 swcryptoattach(int num)
 {
-
-	swcr_init();
+	/*
+	 * swcrypto_attach() must be called after attached cpus, because
+	 * it calls softint_establish() through below call path.
+	 *     swcr_init() => crypto_get_driverid() => crypto_init()
+	 *         => crypto_init0()
+	 * If softint_establish() is called before attached cpus that ncpu == 0,
+	 * the softint handler is established to CPU#0 only.
+	 *
+	 * So, swcrypto_attach() must be called from not module_init_class()
+	 * but config_finalize() when it is built as builtin module.
+	 */
+	swcryptoattach_internal();
 }
 
 void	swcrypto_attach(device_t, device_t, void *);
@@ -1382,43 +1391,61 @@ static struct cfdata swcrypto_cfdata[] = {
 	{ NULL, NULL, 0, 0, NULL, 0, NULL }
 };
 
+/*
+ * Internal attach routine.
+ * Don't call before attached cpus.
+ */
 static int
-swcrypto_modcmd(modcmd_t cmd, void *arg)
+swcryptoattach_internal(void)
 {
 	int error;
 
+	error = config_cfdriver_attach(&swcrypto_cd);
+	if (error) {
+		return error;
+	}
+
+	error = config_cfattach_attach(swcrypto_cd.cd_name, &swcrypto_ca);
+	if (error) {
+		config_cfdriver_detach(&swcrypto_cd);
+		aprint_error("%s: unable to register cfattach\n",
+		    swcrypto_cd.cd_name);
+
+		return error;
+	}
+
+	error = config_cfdata_attach(swcrypto_cfdata, 1);
+	if (error) {
+		config_cfattach_detach(swcrypto_cd.cd_name,
+		    &swcrypto_ca);
+		config_cfdriver_detach(&swcrypto_cd);
+		aprint_error("%s: unable to register cfdata\n",
+		    swcrypto_cd.cd_name);
+
+		return error;
+	}
+
+	(void)config_attach_pseudo(swcrypto_cfdata);
+
+	return 0;
+}
+
+static int
+swcrypto_modcmd(modcmd_t cmd, void *arg)
+{
+	int error = 0;
+
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		error = config_cfdriver_attach(&swcrypto_cd);
-		if (error) {
-			return error;
-		}
-
-		error = config_cfattach_attach(swcrypto_cd.cd_name,
-		    &swcrypto_ca);
-		if (error) {
-			config_cfdriver_detach(&swcrypto_cd);
-			aprint_error("%s: unable to register cfattach\n",
-				swcrypto_cd.cd_name);
-
-			return error;
-		}
-
-		error = config_cfdata_attach(swcrypto_cfdata, 1);
-		if (error) {
-			config_cfattach_detach(swcrypto_cd.cd_name,
-			    &swcrypto_ca);
-			config_cfdriver_detach(&swcrypto_cd);
-			aprint_error("%s: unable to register cfdata\n",
-				swcrypto_cd.cd_name);
-
-			return error;
-		}
-
-		(void)config_attach_pseudo(swcrypto_cfdata);
-
-		return 0;
+#ifdef _MODULE
+		error = swcryptoattach_internal();
+#endif
+		return error;
 	case MODULE_CMD_FINI:
+#if 1
+		// XXX: Need to keep track if we are in use.
+		return ENOTTY;
+#else
 		error = config_cfdata_detach(swcrypto_cfdata);
 		if (error) {
 			return error;
@@ -1428,6 +1455,7 @@ swcrypto_modcmd(modcmd_t cmd, void *arg)
 		config_cfdriver_detach(&swcrypto_cd);
 
 		return 0;
+#endif
 	default:
 		return ENOTTY;
 	}

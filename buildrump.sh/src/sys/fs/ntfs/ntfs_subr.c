@@ -1,4 +1,4 @@
-/*	$NetBSD: ntfs_subr.c,v 1.61 2015/03/28 19:24:05 maxv Exp $	*/
+/*	$NetBSD: ntfs_subr.c,v 1.64 2021/05/13 08:57:29 hannken Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 Semen Ustimenko (semenu@FreeBSD.org)
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ntfs_subr.c,v 1.61 2015/03/28 19:24:05 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ntfs_subr.c,v 1.64 2021/05/13 08:57:29 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -267,10 +267,13 @@ ntfs_loadntnode(struct ntfsmount *ntmp, struct ntnode *ip)
 
 	mfrp = malloc(ntfs_bntob(ntmp->ntm_bpmftrec), M_TEMP, M_WAITOK);
 
-	if (ip->i_number < NTFS_SYSNODESNUM) {
+	if (ip->i_number < NTFS_SYSNODESNUM ||
+	    ntmp->ntm_sysvn[NTFS_MFTINO] == NULL) {
 		struct buf *bp;
 		daddr_t bn;
 		off_t boff;
+		size_t resid, l;
+		char *data;
 
 		dprintf(("%s: read system node\n", __func__));
 
@@ -281,17 +284,26 @@ ntfs_loadntnode(struct ntfsmount *ntmp, struct ntnode *ip)
 		boff = ntfs_cntob(ntmp->ntm_mftcn) +
 		    ntfs_bntob(ntmp->ntm_bpmftrec) * ip->i_number;
 		bn = ntfs_cntobn(ntfs_btocn(boff));
-		off = ntfs_btocnoff(boff);
+		boff = ntfs_btocnoff(boff);
+		resid = ntfs_bntob(ntmp->ntm_bpmftrec);
+		data = (char *)mfrp;
+		while (resid > 0) {
+			l = MIN(resid, ntfs_cntob(1) - boff);
 
-		error = bread(ntmp->ntm_devvp, bn, ntfs_cntob(1),
-		    0, &bp);
-		if (error) {
-			printf("%s: BREAD FAILED\n", __func__);
-			goto out;
+			error = bread(ntmp->ntm_devvp, bn, ntfs_cntob(1),
+			    0, &bp);
+			if (error) {
+				printf("%s: BREAD FAILED\n", __func__);
+				goto out;
+			}
+			memcpy(data, (char *)bp->b_data + boff, l);
+			bqrelse(bp);
+
+			bn += ntfs_cntobn(1);
+			boff = 0;
+			data += l;
+			resid -= l;
 		}
-		memcpy(mfrp, (char *)bp->b_data + off,
-		    ntfs_bntob(ntmp->ntm_bpmftrec));
-		bqrelse(bp);
 	} else {
 		struct vnode   *vp;
 
@@ -1761,7 +1773,7 @@ ntfs_toupper_use(struct mount *mp, struct ntfsmount *ntmp)
 	ntfs_toupper_tab = malloc(256 * 256 * sizeof(*ntfs_toupper_tab),
 	    M_NTFSRDATA, M_WAITOK);
 
-	if ((error = VFS_VGET(mp, NTFS_UPCASEINO, &vp)))
+	if ((error = VFS_VGET(mp, NTFS_UPCASEINO, LK_EXCLUSIVE, &vp)))
 		goto out;
 	error = ntfs_readattr(ntmp, VTONT(vp), NTFS_A_DATA, NULL,
 	    0, 256 * 256 * sizeof(*ntfs_toupper_tab), (char *)ntfs_toupper_tab,

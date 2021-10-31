@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisatareg.h,v 1.12 2012/10/17 23:40:42 matt Exp $	*/
+/*	$NetBSD: ahcisatareg.h,v 1.16 2021/07/24 21:31:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -97,7 +97,7 @@ struct ahci_r_fis {
 /* class Mass storage, subclass SATA, interface AHCI */
 #define PCI_INTERFACE_SATA_AHCI	0x01
 
-#define AHCI_PCI_ABAR	0x24 /* native ACHI registers (memory mapped) */
+#define AHCI_PCI_ABAR	0x24 /* native AHCI registers (memory mapped) */
 
 /*  ABAR registers */
 /* Global registers */
@@ -120,7 +120,7 @@ struct ahci_r_fis {
 #define		AHCI_CAP_IS_GEN3	0x00300000 /* 6.0 Gb/s */
 #define		AHCI_CAP_CLO	0x01000000 /* Command list override */
 #define		AHCI_CAP_AL	0x02000000 /* Single Activitly LED */
-#define		AHCI_CAP_ALP	0x04000000 /* Agressive link power management */
+#define		AHCI_CAP_ALP	0x04000000 /* Aggressive link power management */
 #define		AHCI_CAP_SSU	0x08000000 /* Staggered spin-up */
 #define		AHCI_CAP_MPS	0x10000000 /* Mechanical swicth */
 #define		AHCI_CAP_NTF	0x20000000 /* Snotification */
@@ -208,7 +208,7 @@ struct ahci_r_fis {
 #define		AHCI_P_IX_PRCS	0x00400000 /* Phy Ready change */
 #define		AHCI_P_IX_DMPS	0x00000080 /* Device Mechanical Presence */
 #define		AHCI_P_IX_PCS	0x00000040 /* port Connect change */
-#define		AHCI_P_IX_DPS	0x00000020 /* dexcriptor processed */
+#define		AHCI_P_IX_DPS	0x00000020 /* descriptor processed */
 #define		AHCI_P_IX_UFS	0x00000010 /* Unknown FIS */
 #define		AHCI_P_IX_SDBS	0x00000008 /* Set device bit */
 #define		AHCI_P_IX_DSS	0x00000004 /* DMA setup FIS */
@@ -221,8 +221,8 @@ struct ahci_r_fis {
 #define		AHCI_P_CMD_ICC_PA   0x20000000 /* State partial */
 #define		AHCI_P_CMD_ICC_AC   0x10000000 /* State active */
 #define		AHCI_P_CMD_ICC_NO   0x00000000 /* State idle/NOP */
-#define		AHCI_P_CMD_ASP	0x08000000 /* Agressive Slumber/Partial */
-#define		AHCI_P_CMD_ALPE	0x04000000 /* Agressive link power management */
+#define		AHCI_P_CMD_ASP	0x08000000 /* Aggressive Slumber/Partial */
+#define		AHCI_P_CMD_ALPE	0x04000000 /* Aggressive link power management */
 #define		AHCI_P_CMD_DLAE	0x02000000 /* drive LED on ATAPI */
 #define		AHCI_P_CMD_ATAP	0x01000000 /* Device is ATAPI */
 #define		AHCI_P_CMD_ESP	0x00200000 /* external SATA port */
@@ -234,8 +234,8 @@ struct ahci_r_fis {
 #define		AHCI_P_CMD_CR	0x00008000 /* command list running */
 #define		AHCI_P_CMD_FR	0x00004000 /* FIS receive running */
 #define		AHCI_P_CMD_MPSS	0x00002000 /* mechanical switch state */
-#define		AHCI_P_CMD_CCS_MASK 0x00001f00 /* current command slot */
-#define		AHCI_P_CMD_CCS_SHIFT 12
+#define		AHCI_P_CMD_CCS_MASK __BITS(12, 8) /* current command slot */
+#define		AHCI_P_CMD_CCS_SHIFT 8
 #define		AHCI_P_CMD_FRE	0x00000010 /* FIS receive enable */
 #define		AHCI_P_CMD_CLO	0x00000008 /* command list override */
 #define		AHCI_P_CMD_POD	0x00000004 /* power on device */
@@ -247,6 +247,10 @@ struct ahci_r_fis {
 #define		AHCI_P_TFD_ERR_SHIFT	8
 #define		AHCI_P_TFD_ST		0x000000ff /* status register */
 #define		AHCI_P_TFD_ST_SHIFT	0
+#define		AHCI_TFD_ERR(tfd)	\
+	(((tfd) & AHCI_P_TFD_ERR_MASK) >> AHCI_P_TFD_ERR_SHIFT)
+#define		AHCI_TFD_ST(tfd)	\
+	(((tfd) & AHCI_P_TFD_ST) >> AHCI_P_TFD_ST_SHIFT)
 
 #define AHCI_P_SIG(p)	(0x124 + AHCI_P_OFFSET(p)) /* device signature */
 #define		AHCI_P_SIG_LBAH_MASK	0xff000000
@@ -272,3 +276,14 @@ struct ahci_r_fis {
 
 #define AHCI_P_FNTF(p)	(0x13c + AHCI_P_OFFSET(p)) /* SNotification */
 	/* one bit per port */
+
+#define AHCI_P_FBS(p)	(0x140 + AHCI_P_OFFSET(p)) /* Port task file data */
+#define		AHCI_P_FBS_EN		0x00000001 /* Enable */
+#define		AHCI_P_FBS_DEC		0x00000002 /* Device Error Clear */
+#define		AHCI_P_FBS_SDE		0x00000004 /* Single Device Error */
+#define		AHCI_P_FBS_DEV		0x00000f00 /* Device To Issue */
+#define		AHCI_P_FBS_DEV_SHIFT	8
+#define		AHCI_P_FBS_ADO		0x0000f000 /* Active Device Optimiz.*/
+#define		AHCI_P_FBS_ADO_SHIFT	12
+#define		AHCI_P_FBS_DWE		0x000f0000 /* Device With Error */
+#define		AHCI_P_FBS_DWE_SHIFT	16

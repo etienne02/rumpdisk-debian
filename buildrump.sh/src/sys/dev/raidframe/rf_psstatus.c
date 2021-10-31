@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_psstatus.c,v 1.34 2011/05/03 08:18:43 mrg Exp $	*/
+/*	$NetBSD: rf_psstatus.c,v 1.38 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -37,7 +37,7 @@
  *****************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_psstatus.c,v 1.34 2011/05/03 08:18:43 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_psstatus.c,v 1.38 2021/07/23 00:54:45 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -69,17 +69,21 @@ static void rf_ShutdownPSStatus(void *);
 static void
 rf_ShutdownPSStatus(void *arg)
 {
+	RF_Raid_t *raidPtr;
 
-	pool_destroy(&rf_pools.pss);
+	raidPtr = (RF_Raid_t *) arg;
+
+	pool_destroy(&raidPtr->pools.pss);
 }
 
 int
-rf_ConfigurePSStatus(RF_ShutdownList_t **listp)
+rf_ConfigurePSStatus(RF_ShutdownList_t **listp, RF_Raid_t *raidPtr,
+		     RF_Config_t *cfgPtr)
 {
 
-	rf_pool_init(&rf_pools.pss, sizeof(RF_ReconParityStripeStatus_t),
-		     "raidpsspl", RF_MIN_FREE_PSS, RF_MAX_FREE_PSS);
-	rf_ShutdownCreate(listp, rf_ShutdownPSStatus, NULL);
+	rf_pool_init(raidPtr, raidPtr->poolNames.pss, &raidPtr->pools.pss, sizeof(RF_ReconParityStripeStatus_t),
+		     "pss", RF_MIN_FREE_PSS, RF_MAX_FREE_PSS);
+	rf_ShutdownCreate(listp, rf_ShutdownPSStatus, raidPtr);
 
 	return (0);
 }
@@ -102,9 +106,7 @@ rf_MakeParityStripeStatusTable(RF_Raid_t *raidPtr)
 	RF_PSStatusHeader_t *pssTable;
 	int     i;
 
-	RF_Malloc(pssTable,
-		  raidPtr->pssTableSize * sizeof(RF_PSStatusHeader_t),
-		  (RF_PSStatusHeader_t *));
+	pssTable = RF_Malloc(raidPtr->pssTableSize * sizeof(*pssTable));
 	for (i = 0; i < raidPtr->pssTableSize; i++) {
 		rf_init_mutex2(pssTable[i].mutex, IPL_VM);
 		rf_init_cond2(pssTable[i].cond, "rfpsslk");
@@ -222,7 +224,7 @@ rf_RemoveFromActiveReconTable(RF_Raid_t *raidPtr, RF_StripeNum_t psid,
 {
 	RF_PSStatusHeader_t *hdr = &(raidPtr->reconControl->pssTable[RF_HASH_PSID(raidPtr, psid)]);
 	RF_ReconParityStripeStatus_t *p, *pt;
-	RF_CallbackDesc_t *cb, *cb1;
+	RF_CallbackFuncDesc_t *cb, *cb1;
 
 	rf_lock_mutex2(hdr->mutex);
 	while(hdr->lock) {
@@ -259,7 +261,7 @@ rf_RemoveFromActiveReconTable(RF_Raid_t *raidPtr, RF_StripeNum_t psid,
 		Dprintf1("Waking up access waiting on parity stripe ID %ld\n", p->parityStripeID);
 		cb1 = cb->next;
 		(cb->callbackFunc) (cb->callbackArg);
-		rf_FreeCallbackDesc(cb);
+		rf_FreeCallbackFuncDesc(raidPtr, cb);
 		cb = cb1;
 	}
 
@@ -269,11 +271,7 @@ rf_RemoveFromActiveReconTable(RF_Raid_t *raidPtr, RF_StripeNum_t psid,
 RF_ReconParityStripeStatus_t *
 rf_AllocPSStatus(RF_Raid_t *raidPtr)
 {
-	RF_ReconParityStripeStatus_t *p;
-
-	p = pool_get(&rf_pools.pss, PR_WAITOK);
-	memset(p, 0, sizeof(RF_ReconParityStripeStatus_t));
-	return (p);
+	return pool_get(&raidPtr->pools.pss, PR_WAITOK | PR_ZERO);
 }
 
 void
@@ -283,7 +281,7 @@ rf_FreePSStatus(RF_Raid_t *raidPtr, RF_ReconParityStripeStatus_t *p)
 	RF_ASSERT(p->blockWaitList == NULL);
 	RF_ASSERT(p->bufWaitList == NULL);
 
-	pool_put(&rf_pools.pss, p);
+	pool_put(&raidPtr->pools.pss, p);
 }
 
 static void
@@ -291,17 +289,18 @@ RealPrintPSStatusTable(RF_Raid_t *raidPtr, RF_PSStatusHeader_t *pssTable)
 {
 	int     i, j, procsWaiting, blocksWaiting, bufsWaiting;
 	RF_ReconParityStripeStatus_t *p;
-	RF_CallbackDesc_t *cb;
+	RF_CallbackValueDesc_t *vb;
+	RF_CallbackFuncDesc_t *fb;
 
 	printf("\nParity Stripe Status Table\n");
 	for (i = 0; i < raidPtr->pssTableSize; i++) {
 		for (p = pssTable[i].chain; p; p = p->next) {
 			procsWaiting = blocksWaiting = bufsWaiting = 0;
-			for (cb = p->procWaitList; cb; cb = cb->next)
+			for (fb = p->procWaitList; fb; fb = fb->next)
 				procsWaiting++;
-			for (cb = p->blockWaitList; cb; cb = cb->next)
+			for (vb = p->blockWaitList; vb; vb = vb->next)
 				blocksWaiting++;
-			for (cb = p->bufWaitList; cb; cb = cb->next)
+			for (vb = p->bufWaitList; vb; vb = vb->next)
 				bufsWaiting++;
 			printf("PSID %ld RU %d : blockCount %d %d/%d/%d proc/block/buf waiting, issued ",
 			    (long) p->parityStripeID, p->which_ru, p->blockCount, procsWaiting, blocksWaiting, bufsWaiting);

@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_space.c,v 1.38 2012/01/27 18:53:07 para Exp $	*/
+/*	$NetBSD: bus_space.c,v 1.45 2020/04/25 15:26:18 bouyer Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus_space.c,v 1.38 2012/01/27 18:53:07 para Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_space.c,v 1.45 2020/04/25 15:26:18 bouyer Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -129,21 +129,21 @@ x86_bus_space_init(void)
 	ioport_ex = extent_create("ioport", 0x0, 0xffff,
 	    (void *)ioport_ex_storage, sizeof(ioport_ex_storage),
 	    EX_NOCOALESCE|EX_NOWAIT);
-	iomem_ex = extent_create("iomem", 0x0, 0xffffffff,
+	iomem_ex = extent_create("iomem", 0x0, MAXIOMEM,
 	    (void *)iomem_ex_storage, sizeof(iomem_ex_storage),
 	    EX_NOCOALESCE|EX_NOWAIT);
 
-#ifdef XEN
+#ifdef XENPV
 	/* We are privileged guest os - should have IO privileges. */
 	if (xendomain_is_privileged()) {
-		struct physdev_op physop;
-		physop.cmd = PHYSDEVOP_SET_IOPL;
-		physop.u.set_iopl.iopl = 1;
-		if (HYPERVISOR_physdev_op(&physop) != 0)
+		struct physdev_set_iopl set_iopl;
+		memset(&set_iopl, 0, sizeof(set_iopl));
+		set_iopl.iopl = 1;
+		if (HYPERVISOR_physdev_op(PHYSDEVOP_set_iopl, &set_iopl) != 0)
 			panic("Unable to obtain IOPL, "
 			    "despite being SIF_PRIVILEGED");
 	}
-#endif	/* XEN */
+#endif	/* XENPV */
 }
 
 void
@@ -209,12 +209,12 @@ bus_space_reservation_map(bus_space_tag_t t, bus_space_reservation_t *bsr,
 		return 0;
 	}
 
-#ifndef XEN
+#ifndef XENPV
 	if (bpa >= IOM_BEGIN && (bpa + size) != 0 && (bpa + size) <= IOM_END) {
 		*bshp = (bus_space_handle_t)ISA_HOLE_VADDR(bpa);
 		return 0;
 	}
-#endif	/* !XEN */
+#endif	/* !XENPV */
 
 	/*
 	 * For memory space, map the bus physical address to
@@ -445,11 +445,11 @@ x86_mem_add_mapping(bus_addr_t bpa, bus_size_t size,
 		panic("x86_mem_add_mapping: overflow");
 #endif
 
-#ifdef XEN
+#ifdef XENPV
 	if (bpa >= IOM_BEGIN && (bpa + size) != 0 && (bpa + size) <= IOM_END) {
 		sva = (vaddr_t)ISA_HOLE_VADDR(pa);
 	} else
-#endif	/* XEN */
+#endif	/* XENPV */
 	{
 		sva = uvm_km_alloc(kernel_map, endpa - pa, 0,
 		    UVM_KMF_VAONLY | UVM_KMF_NOWAIT);
@@ -878,7 +878,43 @@ bus_space_barrier(bus_space_tag_t tag, bus_space_handle_t bsh,
 		  bus_size_t offset, bus_size_t len, int flags)
 {
 
-	/* Function call is enough to prevent reordering of loads. */
+	/* I/O instructions always happen in program order.  */
+	if (x86_bus_space_is_io(tag))
+		return;
+
+	/*
+	 * For default mappings, which are mapped with UC-type memory
+	 * regions, all loads and stores are issued in program order.
+	 *
+	 * For BUS_SPACE_MAP_PREFETCHABLE mappings, which are mapped
+	 * with WC-type memory regions, loads and stores may be issued
+	 * out of order, potentially requiring any of the three x86
+	 * fences -- LFENCE, SFENCE, MFENCE.
+	 *
+	 * For BUS_SPACE_MAP_CACHEABLE mappings, which are mapped with
+	 * WB-type memory regions (like normal memory), store/load may
+	 * be reordered to load/store, potentially requiring MFENCE.
+	 *
+	 * We can't easily tell here how the region was mapped (without
+	 * consulting the page tables), so just issue the fence
+	 * unconditionally.  Chances are either it's necessary or the
+	 * cost is small in comparison to device register I/O.
+	 */
+	switch (flags) {
+	case 0:
+		break;
+	case BUS_SPACE_BARRIER_READ:
+		x86_lfence();
+		break;
+	case BUS_SPACE_BARRIER_WRITE:
+		x86_sfence();
+		break;
+	case BUS_SPACE_BARRIER_READ|BUS_SPACE_BARRIER_WRITE:
+		x86_mfence();
+		break;
+	default:
+		panic("unknown bus space barrier: 0x%x", (unsigned)flags);
+	}
 }
 
 void *
@@ -934,10 +970,6 @@ bus_space_tag_create(bus_space_tag_t obst, const uint64_t present,
 		return EINVAL;
 
 	bst = kmem_alloc(sizeof(struct bus_space_tag), KM_SLEEP);
-
-	if (bst == NULL)
-		return ENOMEM;
-
 	bst->bst_super = obst;
 	bst->bst_type = obst->bst_type;
 
