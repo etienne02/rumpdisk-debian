@@ -30,7 +30,8 @@ override_dh_auto_clean:
 
 override_dh_auto_build-arch:
 	dh_testdir -a
-	cd buildrump.sh/src && HOST_CC=gcc LDADD="-L/usr/lib/i386-gnu -L/usr/lib/gcc/i686-gnu/11" \
+	cd buildrump.sh/src && HOST_CC=gcc \
+            LDADD="-L/usr/lib/i386-gnu -L/usr/lib/gcc/i686-gnu/11 -L/lib/i386-gnu" \
             _GCC_CRTENDS= _GCC_CRTBEGINS= _GCC_CRTI= _GCC_CRTN= \
             CFLAGS="-Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=stringop-overflow -D_FILE_OFFSET_BITS=64" \
             ./build.sh \
