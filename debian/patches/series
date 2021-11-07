@@ -7,7 +7,6 @@ gnumach-update
 rumpuser-rng-debug.diff
 machirqdev.diff
 ahcisata-atapi.diff
-print-error.diff
 intr_lock.diff
 dealloc.diff
 netbsd-build.diff
