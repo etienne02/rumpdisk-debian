@@ -16,7 +16,7 @@ else
 NUMJOBS = 1
 endif
 
-RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/rumpmake
+RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-i386
 
 %:
 	rm -f debian/*.debhelper.log
@@ -33,7 +33,8 @@ override_dh_auto_build-arch:
 	cd buildrump.sh/src && HOST_CC=gcc LDADD="-L/usr/lib/i386-gnu -L/usr/lib/gcc/i686-gnu/10" \
             _GCC_CRTENDS= _GCC_CRTBEGINS= _GCC_CRTI= _GCC_CRTN= \
             CFLAGS="-Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=stringop-overflow -D_FILE_OFFSET_BITS=64" \
-            ./build.sh -V TOOLS_BUILDRUMP=yes -V MKGROFF=no \
+            ./build.sh \
+                -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -U -u -T ./obj/tooldir -m i386 -j $(NUMJOBS) tools rump
 ifeq ($(DEB_HOST_ARCH_OS), linux)
 #	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
