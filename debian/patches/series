@@ -1,6 +1,4 @@
 path_max.diff
-rpcgen.diff
-Wno-error.diff
 piixide-rump.diff
 ahcisata-rump.diff
 busspaceunmap-rump.diff
@@ -12,4 +10,4 @@ ahcisata-atapi.diff
 print-error.diff
 intr_lock.diff
 dealloc.diff
-64bit.diff
+netbsd-build.diff
