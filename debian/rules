@@ -48,6 +48,7 @@ override_dh_auto_build-arch:
                 -V _GCC_CRTI=" " -V _GCC_CRTN=" " \
                 -V LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
                 -U -u -T ./obj/tooldir -m i386 -j $(NUMJOBS) tools rump
+#	cd buildrump.sh/src/lib/librumpuser && $(RUMPMAKE) dependall
 ifeq ($(DEB_HOST_ARCH_OS), linux)
 #	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
 endif
@@ -56,15 +57,13 @@ ifeq ($(DEB_HOST_ARCH_OS), hurd)
 endif
 
 override_dh_auto_install:
-	cd buildrump.sh/src && ./build.sh -d $(CURDIR)/debian/tmp/usr install
-
-ifeq ($(DEB_HOST_ARCH_OS), linux)
-#	cd pci-userspace/src-linux-uio && $(RUMPMAKE) install
-endif
-ifeq ($(DEB_HOST_ARCH_OS), hurd)
-	cd pci-userspace/src-gnu && $(RUMPMAKE) install
-endif
-	cp -a $(CURDIR)/buildrump.sh/src/rump/lib/* $(CURDIR)/debian/tmp/usr/lib/
+	mkdir -p $(CURDIR)/debian/tmp/usr/include
+	mkdir -p $(CURDIR)/debian/tmp/usr/lib
+	cp -a $(CURDIR)/buildrump.sh/src/sys/rump/include/rump $(CURDIR)/debian/tmp/usr/include
+	find $(CURDIR)/buildrump.sh/src -type f,l \
+            -name "librump*.so*" -exec cp -a {} $(CURDIR)/debian/tmp/usr/lib/ \;
+	find $(CURDIR)/buildrump.sh/src -type f \
+            -name "librump*.a" -exec cp -a {} $(CURDIR)/debian/tmp/usr/lib/ \;
 
 	# Remove it to make lintian happy
 	rm -f $(CURDIR)/debian/tmp/usr/lib/librumpkern_z.*
