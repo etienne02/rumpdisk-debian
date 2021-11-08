@@ -1,3 +1,32 @@
+diff --git a/buildrump.sh/src/sys/rump/include/sys/bus.h b/buildrump.sh/src/sys/rump/include/sys/bus.h
+index c7eedbcb5..bdc51f7f5 100644
+--- a/buildrump.sh/src/sys/rump/include/sys/bus.h
++++ b/buildrump.sh/src/sys/rump/include/sys/bus.h
+@@ -68,4 +68,12 @@ typedef struct {
+ 
+ #include <sys/bus_proto.h>
+ 
++/*
++ * Convenience macros to correctly extract the upper and lower
++ * 32 bits of a bus_addr_t (which may be a 32-bit or 64-bit
++ * value).
++ */
++#define BUS_ADDR_HI32(a)        ((uint32_t) __SHIFTOUT(a, __BITS(32,63)))
++#define BUS_ADDR_LO32(a)        ((uint32_t) __SHIFTOUT(a, __BITS(0,31)))
++
+ #endif /* _SYS_RUMP_BUS_H_ */
+diff --git a/buildrump.sh/src/sys/dev/ic/ahcisata_core.c b/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
+index 8910f0a08..00a701094 100644
+--- a/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
++++ b/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
+@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.100 2021/08/07 16:19:11 thorpej
+ #include <sys/disklabel.h>
+ #include <sys/proc.h>
+ #include <sys/buf.h>
++#include <sys/bus.h>
+ 
+ #include <dev/ata/atareg.h>
+ #include <dev/ata/satavar.h>
 diff --git a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
 index 272304e3..44b607f6 100644
 --- a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
