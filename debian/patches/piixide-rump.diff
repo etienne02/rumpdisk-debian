@@ -61,6 +61,13 @@ index 00000000..110fc0ce
 +# ATAPI support
 +atapibus*	at piixide? channel ?
 +cd*		at atapibus? drive ? flags 0x0000
+diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wd.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wd.h
+new file mode 100644
+index 00000000..e69de29b
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/opt_wd.h
+@@ -0,0 +1 @@
++
 diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/ataraid.h
 new file mode 100644
 index 00000000..e69de29b
