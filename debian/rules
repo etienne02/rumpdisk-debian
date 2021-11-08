@@ -13,7 +13,7 @@ CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS) $(HOST_CFLAGS) \
         -Wno-error=array-parameter \
         -Wno-error=stringop-overflow \
         -D_FILE_OFFSET_BITS=64 \
-        -Wno-error=address-of-packed-member
+
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -41,7 +41,7 @@ override_dh_auto_build-arch:
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
-                -V CWARNFLAGS="-Wno-error=maybe-uninitialized" \
+                -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
                 -V _GCC_CRTBEGINS=" " -V _GCC_CRTBEGIN=" " \
