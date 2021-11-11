@@ -7,7 +7,7 @@ index 3c03cb90..98da14bd 100644
   */
  
 +// putchar debug hack
-+#include <mach.h>
++void mach_print(char *c);
 +
  #include "rumpuser_port.h"
  
