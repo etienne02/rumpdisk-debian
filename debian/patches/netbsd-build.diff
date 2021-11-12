@@ -1,5 +1,5 @@
 diff --git a/buildrump.sh/src/build.sh b/buildrump.sh/src/build.sh
-index fb13abdcc..c457956f1 100755
+index fb13abdcc..8f81fb568 100755
 --- a/buildrump.sh/src/build.sh
 +++ b/buildrump.sh/src/build.sh
 @@ -2195,6 +2195,121 @@ installworld()
@@ -142,7 +142,7 @@ index fb13abdcc..c457956f1 100755
  		      awk -v quirks="${md_quirks}" '
  			/undefined reference/ &&
  			    !/more undefined references.*follow/{
-@@ -2485,16 +2600,26 @@ main()
+@@ -2485,16 +2600,27 @@ main()
  			;;
  
  		rump)
@@ -157,6 +157,7 @@ index fb13abdcc..c457956f1 100755
 +				makerumptools
 +				make_in_dir sys includes
 +				make_in_dir lib/librumpuser includes
++				make_in_dir lib/libpthread includes
 +			else
 +				make_in_dir . includes
 +				make_in_dir lib/csu dependall
