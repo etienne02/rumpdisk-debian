@@ -41,6 +41,7 @@ override_dh_auto_build-arch:
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
+                -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
