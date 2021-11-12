@@ -38,6 +38,7 @@ override_dh_auto_build-arch:
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable -Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=array-bounds -Wno-error=stringop-overflow -D_FILE_OFFSET_BITS=64" \
+                -V CPPFLAGS="-I../../sys/sys -I../../include" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
                 -V _GCC_CRTBEGINS=" " -V _GCC_CRTBEGIN=" " \
