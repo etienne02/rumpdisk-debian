@@ -1,0 +1,13 @@
+--- a/pci-userspace/src-gnu/Makefile.inc
++++ b/pci-userspace/src-gnu/Makefile.inc
+@@ -4,6 +4,6 @@
+ .PATH:		${PCIDIR}
+ 
+ RUMPCOMP_USER_SRCS=	pci_user-gnu.c mach_debugUser.c
+-RUMPCOMP_USER_CPPFLAGS+=-I${PCIDIR}
+-RUMPCOMP_CPPFLAGS+=	-I${PCIDIR}
++RUMPCOMP_USER_CPPFLAGS+=-I${PCIDIR} -I${DESTDIR}/usr/include
++RUMPCOMP_CPPFLAGS+=	-I${PCIDIR} -I${DESTDIR}/usr/include
+ CPPFLAGS+=		-I${PCIDIR}
+ LDFLAGS+= -lmachuser -Wl,--no-as-needed -lpciaccess -Wl,--as-needed
+ 
