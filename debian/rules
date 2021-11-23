@@ -62,5 +62,7 @@ override_dh_auto_install:
 	find $(CURDIR)/buildrump.sh/src -type f \
             -name "librump*.a" -exec cp -a {} $(CURDIR)/debian/tmp/usr/lib/ \;
 
+	# rempve non lib files
+	rm -f $(CURDIR)/debian/tmp/usr/lib/*.map
 	# Remove it to make lintian happy
 	rm -f $(CURDIR)/debian/tmp/usr/lib/librumpkern_z.*
