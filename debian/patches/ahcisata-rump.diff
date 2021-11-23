@@ -84,7 +84,7 @@ index 00000000..1f6b870e
 +SRCS+=	sata_subr.c satafis_subr.c
 +SRCS+=	ahcisata_core.c
 +SRCS+=	atapi_wdc.c atapi_base.c
-+SRCS+=	wd.c ata.c ata_wdc.c
++SRCS+=	wd.c ata.c ata_wdc.c ata_subr.c
 +SRCS+=	wdc.c
 +
 +SRCS+=	ahcisata_component.c
