@@ -11,3 +11,4 @@ dealloc.diff
 netbsd-build.diff
 no-virtio-rump.diff
 pci-userspace-rump.diff
+rumpuser-evcnt.diff
