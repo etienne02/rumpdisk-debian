@@ -142,7 +142,7 @@ index fb13abdcc..8f81fb568 100755
  		      awk -v quirks="${md_quirks}" '
  			/undefined reference/ &&
  			    !/more undefined references.*follow/{
-@@ -2485,16 +2600,27 @@ main()
+@@ -2485,16 +2600,26 @@ main()
  			;;
  
  		rump)
@@ -155,9 +155,8 @@ index fb13abdcc..8f81fb568 100755
 +			if [ "${uname_s}" != "NetBSD" ] || \
 +				[ "${uname_m}" != "${MACHINE}" ]; then
 +				makerumptools
-+				make_in_dir sys includes
++				make_in_dir sys/rump includes
 +				make_in_dir lib/librumpuser includes
-+				make_in_dir lib/libpthread includes
 +			else
 +				make_in_dir . includes
 +				make_in_dir lib/csu dependall
