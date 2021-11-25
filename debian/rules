@@ -45,7 +45,7 @@ override_dh_auto_build-arch:
                 -V _GCC_CRTI=" " -V _GCC_CRTN=" " \
                 -V LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
                 -U -u -T ./obj/tooldir -m i386 -j $(NUMJOBS) tools rump
-	cd buildrump.sh/src/lib/librumpuser && $(RUMPMAKE) dependall
+	cd buildrump.sh/src/lib/librumpuser && RUMPRUN=true $(RUMPMAKE) dependall
 ifeq ($(DEB_HOST_ARCH_OS), linux)
 #	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall
 endif
