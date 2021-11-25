@@ -10,5 +10,4 @@ ahcisata-atapi.diff
 dealloc.diff
 netbsd-build.diff
 no-virtio-rump.diff
-rumpuser-port.diff
 pci-userspace-rump.diff

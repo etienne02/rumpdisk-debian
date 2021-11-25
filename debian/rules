@@ -30,6 +30,7 @@ override_dh_auto_clean:
 
 override_dh_auto_build-arch:
 	dh_testdir -a
+	cd buildrump.sh/src/lib/librumpuser && ./configure
 	cd buildrump.sh/src && HOST_CC=gcc \
             LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
             _GCC_CRTENDS= _GCC_CRTEND= _GCC_CRTBEGINS= _GCC_CRTBEGIN= _GCC_CRTI= _GCC_CRTN= \
@@ -37,7 +38,7 @@ override_dh_auto_build-arch:
                 -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
-				-V CPPFLAGS="-I../../obj/destdir.i386/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int" \
+				-V CPPFLAGS="-I../../obj/destdir.i386/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes " \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable -Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=array-bounds -Wno-error=stringop-overflow" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
