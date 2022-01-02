@@ -26,7 +26,7 @@ override_dh_auto_clean:
 	-cd pci-userspace/src-linux-uio && $(RUMPMAKE) clean
 	-cd pci-userspace/src-gnu && $(RUMPMAKE) clean
 	rm -rf buildrump.sh/src/{obj,rump}
-	find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f
+	-find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f
 
 override_dh_auto_build-arch:
 	dh_testdir -a
