@@ -1,7 +1,7 @@
-diff --git a/buildrump.sh/src/sys/rump/include/sys/bus.h b/buildrump.sh/src/sys/rump/include/sys/bus.h
-index c7eedbcb5..bdc51f7f5 100644
---- a/buildrump.sh/src/sys/rump/include/sys/bus.h
-+++ b/buildrump.sh/src/sys/rump/include/sys/bus.h
+Index: rumpkernel/buildrump.sh/src/sys/rump/include/sys/bus.h
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/include/sys/bus.h
++++ rumpkernel/buildrump.sh/src/sys/rump/include/sys/bus.h
 @@ -68,4 +68,12 @@ typedef struct {
  
  #include <sys/bus_proto.h>
@@ -15,11 +15,11 @@ index c7eedbcb5..bdc51f7f5 100644
 +#define BUS_ADDR_LO32(a)        ((uint32_t) __SHIFTOUT(a, __BITS(0,31)))
 +
  #endif /* _SYS_RUMP_BUS_H_ */
-diff --git a/buildrump.sh/src/sys/dev/ic/ahcisata_core.c b/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-index 8910f0a08..00a701094 100644
---- a/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-+++ b/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.100 2021/08/07 16:19:11 thorpej
+Index: rumpkernel/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
++++ rumpkernel/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
+@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: ahcisata_cor
  #include <sys/disklabel.h>
  #include <sys/proc.h>
  #include <sys/buf.h>
@@ -27,23 +27,22 @@ index 8910f0a08..00a701094 100644
  
  #include <dev/ata/atareg.h>
  #include <dev/ata/satavar.h>
-diff --git a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-index 272304e3..44b607f6 100644
---- a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-+++ b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-@@ -8,6 +8,7 @@ RUMPDEVCOMP=	audio bpf cgd disk dm drvctl fss md netsmb		\
- RUMPUSBDEVS=	ubt ucom ugenhc ulpt umass usb
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+@@ -8,6 +8,7 @@ RUMPDEVCOMP=	audio bpf cgd disk dm drvct
+ RUMPUSBDEVS=	ualea ubt ucom ugenhc ulpt umass usb
  
  RUMPPCIDEVS=	pci pci_if_iwn pci_if_pcn pci_if_wm
 +RUMPPCIDEVS+=	pci_ahcisata
  RUMPPCIDEVS+=	pci_piixide
  RUMPPCIDEVS+=	pci_usbhc
  RUMPPCIDEVS+=	pci_virtio virtio_if_vioif virtio_ld virtio_viornd
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
-new file mode 100644
-index 00000000..2b7263bf
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
 @@ -0,0 +1,19 @@
 +ioconf ahcisata
 +
@@ -64,11 +63,10 @@ index 00000000..2b7263bf
 +
 +# ATAPI support
 +atapi*		at ahcisata?
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
-new file mode 100644
-index 00000000..1f6b870e
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
 @@ -0,0 +1,21 @@
 +.PATH:	${.CURDIR}/../../../../dev/pci \
 +	${.CURDIR}/../../../../dev/ata \
@@ -91,11 +89,10 @@ index 00000000..1f6b870e
 +
 +.include <bsd.lib.mk>
 +.include <bsd.klinks.mk>
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
-new file mode 100644
-index 00000000..0cc9f481
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
 @@ -0,0 +1,40 @@
 +#include <sys/param.h>
 +#include <sys/conf.h>
@@ -137,47 +134,41 @@ index 00000000..0cc9f481
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
 +	    cmaj, 24, 8));
 +}
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
-new file mode 100644
-index 00000000..e69de29b
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
 @@ -0,0 +1 @@
 +
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
-new file mode 100644
-index 00000000..e69de29b
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
 @@ -0,0 +1 @@
 +
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
-new file mode 100644
-index 00000000..e69de29b
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
 @@ -0,0 +1 @@
 +
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
-new file mode 100644
-index 00000000..ad9cf43a
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
 @@ -0,0 +1,3 @@
 +#define NWD	1
 +#define NSATA	1
 +#define WDC_NO_IDS
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
-new file mode 100644
-index 00000000..e69de29b
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
 @@ -0,0 +1 @@
 +
-diff --git a/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
-new file mode 100644
-index 00000000..e69de29b
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
+===================================================================
 --- /dev/null
-+++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
 @@ -0,0 +1 @@
 +

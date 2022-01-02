@@ -5,7 +5,7 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/include/rump/rumpuser.h
 ===================================================================
 --- rumpkernel.orig/buildrump.sh/src/sys/rump/include/rump/rumpuser.h
 +++ rumpkernel/buildrump.sh/src/sys/rump/include/rump/rumpuser.h
-@@ -251,4 +251,8 @@ int	rumpuser_sp_raise(void *, int);
+@@ -255,4 +255,8 @@ int	rumpuser_sp_raise(void *, int);
  void	rumpuser_sp_fini(void *);
  #endif /* _RUMP_SYSPROXY || LIBRUMPUSER */
  
@@ -18,8 +18,8 @@ Index: rumpkernel/buildrump.sh/src/lib/librumpuser/sp_common.c
 ===================================================================
 --- rumpkernel.orig/buildrump.sh/src/lib/librumpuser/sp_common.c
 +++ rumpkernel/buildrump.sh/src/lib/librumpuser/sp_common.c
-@@ -64,6 +64,10 @@
- #define __unused __attribute__((__unused__))
+@@ -67,6 +67,10 @@
+ #define __printflike(a,b) __attribute__((__format__(__printf__, a, b))))
  #endif
  
 +#ifndef PATH_MAX

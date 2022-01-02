@@ -1,6 +1,8 @@
---- a/pci-userspace/src-gnu/Makefile.inc
-+++ b/pci-userspace/src-gnu/Makefile.inc
-@@ -4,6 +4,6 @@
+Index: rumpkernel/pci-userspace/src-gnu/Makefile.inc
+===================================================================
+--- rumpkernel.orig/pci-userspace/src-gnu/Makefile.inc
++++ rumpkernel/pci-userspace/src-gnu/Makefile.inc
+@@ -4,8 +4,8 @@ PCIDIR:=	${.PARSEDIR}
  .PATH:		${PCIDIR}
  
  RUMPCOMP_USER_SRCS=	pci_user-gnu.c mach_debugUser.c
