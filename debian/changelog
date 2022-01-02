@@ -1,3 +1,11 @@
+rumpkernel (0~20211031-1) unreleased; urgency=medium
+
+  [ Damien Zammit ]
+  * Imported upstream NetBSD from git
+    904baec69ddf1787b030ceb7e2bbf6a9e652e93b.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 02 Jan 2022 17:47:00 +0000
+
 rumpkernel (0~20191130-8) unreleased; urgency=medium
 
   [ Damien Zammit ]
