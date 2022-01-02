@@ -3,6 +3,23 @@ rumpkernel (0~20211031-1) unreleased; urgency=medium
   [ Damien Zammit ]
   * Imported upstream NetBSD from git
     904baec69ddf1787b030ceb7e2bbf6a9e652e93b.
+    - debian/librump-dev.install: Add usr/lib/librumpvfs_nofifofs_pic.a.
+  * compat: Bump to 10.
+  * debian/patches/64bit.diff: Drop patch.
+  * debian/patches/Wno-error.diff: Drop patch.
+  * debian/patches/intr_lock.diff: Drop patch.
+  * debian/patches/print-error.diff: Drop patch.
+  * debian/patches/rpcgen.diff: Drop patch.
+  * debian/patches/ahcisata-atapi.diff: Add ata_subr.c ata_recovery.c..
+  * debian/patches/ahcisata-rump.diff: New patch.
+  * debian/patches/netbsd-build.diff: New patch.
+  * debian/patches/no-virtio-rump.diff: New patch.
+  * debian/patches/pci-userspace-rump.diff: New patch.
+  * debian/patches/piixide-rump.diff: New patch.
+  * debian/patches/rumpuser-evcnt.diff: New patch.
+  * debian/patches/rumpuser-rng-debug.diff: Update.
+  * debian/rules: Drop get-orig-src rule. Update clean rule. Rewrite build and
+    install rules.
 
   [ Samuel Thibault ]
   * patches/ps-comm.diff: Fix sh detection.
