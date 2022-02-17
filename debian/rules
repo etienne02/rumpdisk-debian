@@ -30,7 +30,7 @@ override_dh_auto_clean:
 
 override_dh_auto_build-arch:
 	dh_testdir -a
-	mkdir obj
+	mkdir -p obj
 	cd buildrump.sh/src/lib/librumpuser && ./configure
 	cd buildrump.sh/src && HOST_CC=gcc \
             LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
