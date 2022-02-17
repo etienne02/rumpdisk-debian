@@ -25,15 +25,17 @@ RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-i386
 override_dh_auto_clean:
 	-cd pci-userspace/src-linux-uio && $(RUMPMAKE) clean
 	-cd pci-userspace/src-gnu && $(RUMPMAKE) clean
-	rm -rf buildrump.sh/src/{obj,rump}
+	rm -rf buildrump.sh/src/{obj,rump} obj
 	-find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f
 
 override_dh_auto_build-arch:
 	dh_testdir -a
+	mkdir obj
 	cd buildrump.sh/src/lib/librumpuser && ./configure
 	cd buildrump.sh/src && HOST_CC=gcc \
             LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
             _GCC_CRTENDS= _GCC_CRTEND= _GCC_CRTBEGINS= _GCC_CRTBEGIN= _GCC_CRTI= _GCC_CRTN= \
+            BSDOBJDIR=$(CURDIR)/obj \
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \

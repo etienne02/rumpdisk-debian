@@ -1,3 +1,9 @@
+rumpkernel (0~20211031-2) UNRELEASED; urgency=medium
+
+  * debian/rules: Set BSDOBJDIR to $(CURDIR)/obj.
+
+ -- Samuel Thibault <sthibault@debian.org>  Thu, 17 Feb 2022 00:01:26 +0000
+
 rumpkernel (0~20211031-1) unreleased; urgency=medium
 
   [ Damien Zammit ]
