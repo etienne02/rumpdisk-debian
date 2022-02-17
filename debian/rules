@@ -60,9 +60,9 @@ override_dh_auto_install:
 	mkdir -p $(CURDIR)/debian/tmp/usr/include
 	mkdir -p $(CURDIR)/debian/tmp/usr/lib
 	cp -a $(CURDIR)/buildrump.sh/src/sys/rump/include/rump $(CURDIR)/debian/tmp/usr/include/
-	find $(CURDIR)/buildrump.sh/src -type f,l \
+	find $(CURDIR)/buildrump.sh/src $(CURDIR)/obj -type f,l \
             -name "librump*.so*" -exec cp -a {} $(CURDIR)/debian/tmp/usr/lib/ \;
-	find $(CURDIR)/buildrump.sh/src -type f \
+	find $(CURDIR)/buildrump.sh/src $(CURDIR)/obj -type f \
             -name "librump*.a" -exec cp -a {} $(CURDIR)/debian/tmp/usr/lib/ \;
 
 	# rempve non lib files
