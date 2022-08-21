@@ -26,7 +26,7 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_piixide/Makefile
 +IOCONF=	PIIXIDE.ioconf
 +
 +SRCS+=	pciide_common.c piixide.c
-+SRCS+=	wd.c ata.c ata_wdc.c
++SRCS+=	wd.c ata.c ata_wdc.c ata_subr.c ata_recovery.c
 +SRCS+=	atapi_wdc.c atapi_base.c cd.c
 +SRCS+=	wdc.c
 +
