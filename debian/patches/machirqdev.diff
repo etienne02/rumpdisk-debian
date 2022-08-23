@@ -40,7 +40,7 @@
  #include "mach_debug_U.h"
  #include <mach/vm_param.h>
  #include <mach.h>
-@@ -89,6 +89,7 @@
+@@ -89,11 +89,10 @@ static int numdevs =3D -1;
  
  static mach_port_t master_host;
  static mach_port_t master_device;
@@ -48,6 +48,25 @@
  
  #define PCI_CFG1_START 0xcf8
  #define PCI_CFG1_END   0xcff
+-#define PCI_CFG2_START 0xc000
+-#define PCI_CFG2_END   0xcfff
+
+ int
+ rumpcomp_pci_iospace_init(void)
+@@ -105,11 +104,8 @@ rumpcomp_pci_iospace_init(void)
+ 	/* 0-0xcf7 */
+ 	if (ioperm(0, PCI_CFG1_START, 1))
+ 		return rumpuser_component_errtrans(errno);
+-	/* 0xd00-0xbfff */
+-	if (ioperm(PCI_CFG1_END+1, PCI_CFG2_START - (PCI_CFG1_END+1), 1))
+-		return rumpuser_component_errtrans(errno);
+-	/* 0xd000-0xffff */
+-	if (ioperm(PCI_CFG2_END+1, 0x10000 - (PCI_CFG2_END+1), 1))
++	/* 0xd00-0xffff */
++	if (ioperm(PCI_CFG1_END+1, 0x10000 - (PCI_CFG1_END+1), 1))
+ 		return rumpuser_component_errtrans(errno);
+
+ 	return 0;
 @@ -131,6 +132,9 @@
  	if (get_privileged_ports (&master_host, &master_device))
  		err(1, "get_privileged_ports");
