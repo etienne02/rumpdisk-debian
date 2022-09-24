@@ -43,31 +43,25 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioc
 ===================================================================
 --- /dev/null
 +++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,11 @@
 +ioconf ahcisata
 +
 +include "conf/files"
-+include "dev/ata/files.ata"
++#include "dev/ata/files.ata"
 +include "dev/pci/files.pci"
 +include "rump/dev/files.rump"
 +
 +pseudo-root pci*
 +
 +# AHCI support
-+ahcisata*	at pci? dev ? function ?
-+atabus*		at ahcisata? channel ?
-+ata_hl*		at atabus? drive ?
-+
-+# Disks
-+wd*     	at ata_hl?
-+
-+# ATAPI support
-+atapi*		at ahcisata?
++ahcisata*	at pci? dev ? function ? flags 0x0000
 Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
 ===================================================================
 --- /dev/null
 +++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,20 @@
++RUMPTOP=${TOPRUMP}
++
 +.PATH:	${.CURDIR}/../../../../dev/pci \
 +	${.CURDIR}/../../../../dev/ata \
 +	${.CURDIR}/../../../../dev/scsipi \
@@ -77,98 +71,12 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
 +COMMENT=AHCI support with SATA && ATAPI
 +
 +IOCONF=	AHCISATA.ioconf
++RUMP_COMPONENT=ioconf
 +
 +SRCS+=	ahcisata_pci.c
 +SRCS+=	sata_subr.c satafis_subr.c
 +SRCS+=	ahcisata_core.c
-+SRCS+=	atapi_wdc.c atapi_base.c
-+SRCS+=	wd.c ata.c ata_wdc.c ata_subr.c ata_recovery.c
-+SRCS+=	wdc.c
 +
-+SRCS+=	ahcisata_component.c
-+
++.include "${RUMPTOP}/Makefile.rump"
 +.include <bsd.lib.mk>
 +.include <bsd.klinks.mk>
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ahcisata_component.c
-@@ -0,0 +1,40 @@
-+#include <sys/param.h>
-+#include <sys/conf.h>
-+#include <sys/device.h>
-+#include <sys/kmem.h>
-+#include <sys/stat.h>
-+
-+#include "ioconf.c"
-+
-+#include <rump-sys/kern.h>
-+#include <rump-sys/vfs.h>
-+
-+RUMP_COMPONENT(RUMP_COMPONENT_DEV)
-+{
-+	extern struct bdevsw wd_bdevsw;
-+	extern struct cdevsw wd_cdevsw;
-+	devmajor_t bmaj, cmaj;
-+
-+	config_init_component(cfdriver_ioconf_ahcisata,
-+	    cfattach_ioconf_ahcisata, cfdata_ioconf_ahcisata);
-+
-+	bmaj = cmaj = -1;
-+	FLAWLESSCALL(devsw_attach("wd", &wd_bdevsw, &bmaj, &wd_cdevsw, &cmaj));
-+
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd0", 'a',
-+	    bmaj, 0, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd0", 'a',
-+	    cmaj, 0, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd1", 'a',
-+	    bmaj, 8, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd1", 'a',
-+	    cmaj, 8, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd2", 'a',
-+	    bmaj, 16, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd2", 'a',
-+	    cmaj, 16, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd3", 'a',
-+	    bmaj, 24, 8));
-+	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
-+	    cmaj, 24, 8));
-+}
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wd.h
-@@ -0,0 +1 @@
-+
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/ataraid.h
-@@ -0,0 +1 @@
-+
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ata.h
-@@ -0,0 +1 @@
-+
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_wdc.h
-@@ -0,0 +1,3 @@
-+#define NWD	1
-+#define NSATA	1
-+#define WDC_NO_IDS
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata.h
-@@ -0,0 +1 @@
-+
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
-===================================================================
---- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/sata_pmp.h
-@@ -0,0 +1 @@
-+

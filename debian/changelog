@@ -1,8 +1,13 @@
 rumpkernel (0~20211031-2) UNRELEASED; urgency=medium
 
+  [ Samuel Thibault ]
   * debian/rules: Set BSDOBJDIR to $(CURDIR)/obj.
   * debian/patches/idtype_t.diff: Fix build with glibc 2.36 that doesn't get
     idtype_t magically defined.
+
+  [ Etienne Brateau ]
+  * Move ata code from rumpdev_ahcisata to a new rumpdev_ata so it can be used
+    from both rumpdev_ahcisata and rumpdev_piixide.
 
  -- Samuel Thibault <sthibault@debian.org>  Thu, 17 Feb 2022 00:01:26 +0000
 

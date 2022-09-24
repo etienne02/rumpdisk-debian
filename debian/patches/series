@@ -1,4 +1,5 @@
 path_max.diff
+ata-rump.diff
 piixide-rump.diff
 ahcisata-rump.diff
 busspaceunmap-rump.diff
@@ -6,7 +7,6 @@ memory-range.diff
 gnumach-update
 rumpuser-rng-debug.diff
 machirqdev.diff
-ahcisata-atapi.diff
 dealloc.diff
 netbsd-build.diff
 no-virtio-rump.diff

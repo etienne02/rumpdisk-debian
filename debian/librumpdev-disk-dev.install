@@ -1,6 +1,9 @@
 usr/lib/librumpdev_disk.a
 usr/lib/librumpdev_disk_pic.a
 usr/lib/librumpdev_disk.so
+usr/lib/librumpdev_ata.a
+usr/lib/librumpdev_ata_pic.a
+usr/lib/librumpdev_ata.so
 usr/lib/librumpdev_umass.a
 usr/lib/librumpdev_umass_pic.a
 usr/lib/librumpdev_umass.so
