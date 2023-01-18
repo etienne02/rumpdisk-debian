@@ -14,3 +14,4 @@ pci-userspace-rump.diff
 rumpuser-evcnt.diff
 ps-comm.diff
 idtype_t.diff
+acpi.diff
