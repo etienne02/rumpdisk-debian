@@ -10,13 +10,16 @@ HOST_CFLAGS = -fcommon
 LDFLAGS ?= $(shell dpkg-buildflags --get LDFLAGS)
 CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS) $(HOST_CFLAGS)
 
+# Some files use -Wno-format, which then conflicts
+CFLAGS := $(filter-out -Werror=format-security,$(CFLAGS))
+
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 else
 NUMJOBS = 1
 endif
 
-RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-i386
+RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-$(DEB_HOST_ARCH_CPU)
 
 %:
 	rm -f debian/*.debhelper.log
@@ -25,29 +28,34 @@ RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-i386
 override_dh_auto_clean:
 	-cd pci-userspace/src-linux-uio && $(RUMPMAKE) clean
 	-cd pci-userspace/src-gnu && $(RUMPMAKE) clean
+	-cd buildrump.sh/src/lib/librumpuser && RUMPRUN=true $(RUMPMAKE) clean
 	rm -rf buildrump.sh/src/{obj,rump} obj
 	-find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f
+
+override_dh_auto_configure-arch:
+	dh_testdir -a
+	mkdir -p obj
+	dh_auto_configure -D buildrump.sh/src/lib/librumpuser
 
 override_dh_auto_build-arch:
 	dh_testdir -a
 	mkdir -p obj
-	cd buildrump.sh/src/lib/librumpuser && ./configure
-	cd buildrump.sh/src && HOST_CC=gcc \
-            LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
+	cd buildrump.sh/src && HOST_CC=gcc TARGET_CC=$(DEB_HOST_GNU_TYPE)-gcc TARGET_CXX=$(DEB_HOST_GNU_TYPE)-gcc TARGET_LD=$(DEB_HOST_GNU_TYPE)-ld \
+            TARGET_LDADD="-B/usr/lib/$(DEB_HOST_MULTIARCH) -L/usr/lib/$(DEB_HOST_MULTIARCH) -L/lib/$(DEB_HOST_MULTIARCH)" \
             _GCC_CRTENDS= _GCC_CRTEND= _GCC_CRTBEGINS= _GCC_CRTBEGIN= _GCC_CRTI= _GCC_CRTN= \
             BSDOBJDIR=$(CURDIR)/obj \
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
-				-V CPPFLAGS="-I../../obj/destdir.i386/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1" \
+				-V CPPFLAGS="-I../../obj/destdir.$(DEB_HOST_ARCH_CPU)/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1" \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable -Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=array-bounds -Wno-error=stringop-overflow" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
                 -V _GCC_CRTBEGINS=" " -V _GCC_CRTBEGIN=" " \
                 -V _GCC_CRTI=" " -V _GCC_CRTN=" " \
-                -V LDADD="-L/usr/lib/i386-gnu -L/lib/i386-gnu" \
-                -U -u -T ./obj/tooldir -m i386 -j $(NUMJOBS) tools rump
+                -V TARGET_LDADD="-B/usr/lib/$(DEB_HOST_MULTIARCH) -L/usr/lib/$(DEB_HOST_MULTIARCH) -L/lib/$(DEB_HOST_MULTIARCH)" \
+                -U -u -T ./obj/tooldir -m $(DEB_HOST_ARCH_CPU) -j $(NUMJOBS) tools rump
 	cd buildrump.sh/src/lib/librumpuser && RUMPRUN=true $(RUMPMAKE) dependall
 ifeq ($(DEB_HOST_ARCH_OS), linux)
 #	cd pci-userspace/src-linux-uio && $(RUMPMAKE) dependall

@@ -1,0 +1,44 @@
+TODO: "TARGET" is a terrible name since that's confusing compared to the
+build/host/target convention of the GNU toolchain.
+
+---
+ buildrump.sh/src/build.sh            |    8 +++++---
+ buildrump.sh/src/share/mk/bsd.lib.mk |    2 +-
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+--- a/buildrump.sh/src/build.sh
++++ b/buildrump.sh/src/build.sh
+@@ -1693,7 +1693,7 @@ rebuildmake()
+ 
+ 	statusmsg "Bootstrapping ${toolprefix}make"
+ 	${runcmd} cd "${tmpdir}"
+-	${runcmd} env CC="${HOST_CC-cc}" CPPFLAGS="${HOST_CPPFLAGS}" \
++	${runcmd} env CC="${BUILD_CC-${HOST_CC-cc}}" CPPFLAGS="${HOST_CPPFLAGS}" \
+ 		CFLAGS="${HOST_CFLAGS--O}" LDFLAGS="${HOST_LDFLAGS}" \
+ 	    ${HOST_SH} "${TOP}/tools/make/configure" ${configure_args} ||
+ 	( cp ${tmpdir}/config.log ${tmpdir}-config.log
+@@ -2231,9 +2231,11 @@ maketoolwrapper ()
+ 	tool=$2
+ 
+ 	if [ "${tool}" = "CC" ]; then
+-		lctool=gcc
++		lctool=${TARGET_CC-gcc}
+ 	elif [ "${tool}" = "CXX" ]; then
+-		lctool=g++
++		lctool=${TARGET_CXX-g++}
++	elif [ "${tool}" = "LD" ]; then
++		lctool=${TARGET_LD-ld}
+ 	else
+ 		lctool=$(echo ${tool} | tr '[A-Z]' '[a-z]')
+ 	fi
+--- a/buildrump.sh/src/share/mk/bsd.lib.mk
++++ b/buildrump.sh/src/share/mk/bsd.lib.mk
+@@ -622,7 +622,7 @@ LIBDPLIBS+=     stdc++	${.CURDIR}/../../
+ LIBCC:=	${CC}
+ .endif
+ 
+-_LDADD.${_LIB}=	${LDADD} ${LDADD.${_LIB}}
++_LDADD.${_LIB}=	${LDADD} ${TARGET_LDADD} ${LDADD.${_LIB}}
+ _LDFLAGS.${_LIB}=	${LDFLAGS} ${LDFLAGS.${_LIB}}
+ 
+ _MAINLIBDEPS=	${SOLIB} ${DPADD} ${DPLIBC} \

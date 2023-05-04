@@ -15,3 +15,5 @@ rumpuser-evcnt.diff
 ps-comm.diff
 idtype_t.diff
 acpi.diff
+linux
+crossbuild
