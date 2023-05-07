@@ -2,7 +2,7 @@ rumpkernel (0~20211031-3) UNRELEASED; urgency=medium
 
   [ Damien Zammit ]
   * debian/patches/acpi.diff: pci-userspace: Add acpi lookup of irqs with
-    fallback.
+    fallback. Disabled for now as it breaks booting.
 
   [ Samuel Thibault ]
   * debian/patches/linux: Fix build on Linux.
