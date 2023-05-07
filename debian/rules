@@ -5,7 +5,10 @@ export SHELL = bash
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-DEB_HOST_ARCH_OS ?= $(dpkg-architecture -qDEB_HOST_ARCH_OS)
+DEB_HOST_ARCH_OS ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_OS)
+DEB_HOST_ARCH_CPU ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_CPU)
+DEB_HOST_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 HOST_CFLAGS = -fcommon
 LDFLAGS ?= $(shell dpkg-buildflags --get LDFLAGS)
 CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS) $(HOST_CFLAGS)
@@ -26,11 +29,24 @@ RUMPMAKE := $(CURDIR)/buildrump.sh/src/obj/tooldir/bin/nbmake-$(DEB_HOST_ARCH_CP
 	dh $@ 
 
 override_dh_auto_clean:
-	-cd pci-userspace/src-linux-uio && $(RUMPMAKE) clean
-	-cd pci-userspace/src-gnu && $(RUMPMAKE) clean
-	-cd buildrump.sh/src/lib/librumpuser && RUMPRUN=true $(RUMPMAKE) clean
-	rm -rf buildrump.sh/src/{obj,rump} obj
+	if test -e $(RUMPMAKE); then \
+	( cd pci-userspace/src-linux-uio && $(RUMPMAKE) clean ) ; \
+	( cd pci-userspace/src-gnu && $(RUMPMAKE) clean ) ; \
+	( cd buildrump.sh/src/lib/librumpuser && RUMPRUN=true $(RUMPMAKE) clean ) ; \
+	( cd buildrump.sh/src && HOST_CC=gcc HOST_SH=/bin/sh \
+            BSDOBJDIR=$(CURDIR)/obj \
+            ./build.sh \
+                -V TOOLS_BUILDRUMP=yes \
+                -V MKBINUTILS=no -V MKGCC=no -V MKGDB=no -V MKGROFF=no \
+                -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
+                -U -u -T ./obj/tooldir -m $(DEB_HOST_ARCH_CPU) cleandir ) ; \
+	fi
+	rm -fr obj
 	-find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f
+	-find buildrump.sh/src -type l -name obj | xargs -L512 rm -f
+	rm -f buildrump.sh/src/lib/librumpuser/config.log
+	rm -f buildrump.sh/src/lib/librumpuser/config.status
+	rm -f buildrump.sh/src/lib/librumpuser/rumpuser_config.h
 
 override_dh_auto_configure-arch:
 	dh_testdir -a
@@ -45,7 +61,9 @@ override_dh_auto_build-arch:
             _GCC_CRTENDS= _GCC_CRTEND= _GCC_CRTBEGINS= _GCC_CRTBEGIN= _GCC_CRTI= _GCC_CRTN= \
             BSDOBJDIR=$(CURDIR)/obj \
             ./build.sh \
-                -V TOOLS_BUILDRUMP=yes -V MKGROFF=no -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
+                -V TOOLS_BUILDRUMP=yes \
+                -V MKBINUTILS=no -V MKGDB=no -V MKGROFF=no \
+                -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
 				-V CPPFLAGS="-I../../obj/destdir.$(DEB_HOST_ARCH_CPU)/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1" \

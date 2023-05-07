@@ -17,3 +17,4 @@ idtype_t.diff
 #acpi.diff
 linux
 crossbuild
+clean_libpci

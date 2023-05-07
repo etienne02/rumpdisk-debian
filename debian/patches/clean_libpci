@@ -1,0 +1,15 @@
+Index: rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+@@ -27,8 +27,8 @@ RUMPDEVLDADD+=-lrumpdev_${var}
+ RUMPDEVLIBS+=lib${var}
+ .endfor
+ 
+-.if make(rumpdescribe)
++#.if make(rumpdescribe)
+ .for var in ${RUMPPCIDEVS}
+ RUMPDEVLIBS+=lib${var}
+ .endfor
+-.endif
++#.endif
