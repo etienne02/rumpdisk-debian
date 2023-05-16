@@ -1,6 +1,6 @@
 --- a/pci-userspace/src-gnu/Makefile.inc
 +++ b/pci-userspace/src-gnu/Makefile.inc
-@@ -3,7 +3,7 @@
+@@ -3,8 +3,8 @@
  PCIDIR:=	${.PARSEDIR}
  .PATH:		${PCIDIR}
 
@@ -9,6 +9,7 @@
  RUMPCOMP_USER_CPPFLAGS+=-I${PCIDIR} -I${DESTDIR}/usr/include
  RUMPCOMP_CPPFLAGS+=	-I${PCIDIR} -I${DESTDIR}/usr/include
  CPPFLAGS+=		-I${PCIDIR}
+ MIG=mig
 @@ -16,3 +16,11 @@
  			-user mach_debugUser.c \
  			-server /dev/null \
@@ -17,7 +18,7 @@
 +acpiUser.c:
 +	echo '#include <hurd/acpi.defs>' \
 +		| ${CC} -E -x c - -o - \
-+		| mig -cc cat - /dev/null -subrprefix __ \
++		| $(MIG) -cc cat - /dev/null -subrprefix __ \
 +			-user acpiUser.c \
 +			-server /dev/null \
 +			-header acpi_U.h
