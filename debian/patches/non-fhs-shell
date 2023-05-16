@@ -1,0 +1,37 @@
+Cater for SH not being in /BIN, avoiding "#! /gnu/store/bash-0/bin/sh"
+to be subsituted with "#! /gnu/store/bash-0/gnu/store/bash-0/bin/sh".
+
+---
+ buildrump.sh/src/tools/genassym/Makefile | 2 +-
+ buildrump.sh/src/tools/lorder/Makefile   | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/buildrump.sh/src/tools/genassym/Makefile b/buildrump.sh/src/tools/genassym/Makefile
+index e597c522b..96ca4ac21 100644
+--- a/buildrump.sh/src/tools/genassym/Makefile
++++ b/buildrump.sh/src/tools/genassym/Makefile
+@@ -17,7 +17,7 @@ ${TIMESTAMP}: genassym
+ 	${HOST_INSTALL_FILE} -m ${BINMODE} ${.ALLSRC} ${.TARGET}
+ 
+ genassym: genassym.sh
+-	${TOOL_SED} -e "s,/bin/sh,${HOST_BSHELL},g" \
++	${TOOL_SED} -e "s,\([ \!]\)/bin/sh,\1${HOST_BSHELL},g" \
+ 	    -e "s,{AWK:=.*},{AWK:="${TOOL_AWK:Q}"}," \
+ 		< ${.ALLSRC} > ${.TARGET}
+ 
+diff --git a/buildrump.sh/src/tools/lorder/Makefile b/buildrump.sh/src/tools/lorder/Makefile
+index f3c599e12..92af83d51 100644
+--- a/buildrump.sh/src/tools/lorder/Makefile
++++ b/buildrump.sh/src/tools/lorder/Makefile
+@@ -17,7 +17,7 @@ ${TIMESTAMP}: lorder
+ 	${HOST_INSTALL_FILE} -m ${BINMODE} ${.ALLSRC} ${.TARGET}
+ 
+ lorder: lorder.sh
+-	${TOOL_SED} -e "s,/bin/sh,"${HOST_BSHELL:Q}",g" \
++	${TOOL_SED} -e "s,\([ \!]\)/bin/sh,\1"${HOST_BSHELL:Q}",g" \
+ 	    -e "s,{JOIN:=.*},{JOIN:="${TOOL_JOIN:Q}"}," \
+ 	    -e "s,{MKTEMP:=.*},{MKTEMP:="${TOOL_MKTEMP:Q}"}," \
+ 	    -e "s,{NM:=.*},{NM:="${NM:Q}"}," \
+-- 
+2.39.2
+

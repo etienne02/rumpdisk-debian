@@ -2,6 +2,7 @@ rumpkernel (0~20211031-4) UNRELEASED; urgency=medium
 
   [ Janneke Nieuwenhuizen ]
   * debian/patches/crossbuild: Fix cross-builds on Arch.
+  * debian/patches/non-fhs-shell: Cater for non-FHS shell.
 
  -- Samuel Thibault <sthibault@debian.org>  Tue, 16 May 2023 13:55:58 +0200
 
