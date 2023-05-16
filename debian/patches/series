@@ -19,4 +19,4 @@ linux
 crossbuild
 clean_libpci
 random
-non-fsh-shell
+non-fhs-shell
