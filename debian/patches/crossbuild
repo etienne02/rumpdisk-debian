@@ -2,10 +2,13 @@ TODO: "TARGET" is a terrible name since that's confusing compared to the
 build/host/target convention of the GNU toolchain.
 
 ---
- buildrump.sh/src/build.sh            |    8 +++++---
- buildrump.sh/src/share/mk/bsd.lib.mk |    2 +-
- 2 files changed, 6 insertions(+), 4 deletions(-)
+ buildrump.sh/src/build.sh            | 18 +++++++++++++-----
+ buildrump.sh/src/share/mk/bsd.lib.mk |  2 +-
+ pci-userspace/src-gnu/Makefile.inc   |  3 ++-
+ 3 files changed, 16 insertions(+), 7 deletions(-)
 
+diff --git a/buildrump.sh/src/build.sh b/buildrump.sh/src/build.sh
+index d2ee76786..0e80813c1 100755
 --- a/buildrump.sh/src/build.sh
 +++ b/buildrump.sh/src/build.sh
 @@ -1693,7 +1693,7 @@ rebuildmake()
@@ -17,23 +20,42 @@ build/host/target convention of the GNU toolchain.
  		CFLAGS="${HOST_CFLAGS--O}" LDFLAGS="${HOST_LDFLAGS}" \
  	    ${HOST_SH} "${TOP}/tools/make/configure" ${configure_args} ||
  	( cp ${tmpdir}/config.log ${tmpdir}-config.log
-@@ -2231,9 +2231,11 @@ maketoolwrapper ()
+@@ -2230,10 +2230,18 @@ maketoolwrapper ()
+ 	musthave=$1
  	tool=$2
  
- 	if [ "${tool}" = "CC" ]; then
+-	if [ "${tool}" = "CC" ]; then
 -		lctool=gcc
++	if [ "${tool}" = "AR" ]; then
++		lctool=${TARGET_AR-ar}
++	elif [ "${tool}" = "CC" ]; then
 +		lctool=${TARGET_CC-gcc}
  	elif [ "${tool}" = "CXX" ]; then
 -		lctool=g++
 +		lctool=${TARGET_CXX-g++}
 +	elif [ "${tool}" = "LD" ]; then
 +		lctool=${TARGET_LD-ld}
++	elif [ "${tool}" = "MIG" ]; then
++		lctool=${TARGET_MIG-mig}
++	elif [ "${tool}" = "NM" ]; then
++		lctool=${TARGET_NM-nm}
  	else
  		lctool=$(echo ${tool} | tr '[A-Z]' '[a-z]')
  	fi
+@@ -2300,7 +2308,7 @@ makerumptools ()
+ 	for x in CC AR NM OBJCOPY; do
+ 		maketoolwrapper true $x
+ 	done
+-	for x in AS LD OBJDUMP RANLIB READELF SIZE STRINGS STRIP CXX; do
++	for x in AS LD OBJDUMP RANLIB READELF SIZE STRINGS STRIP CXX MIG; do
+ 		maketoolwrapper false $x
+ 	done
+ 
+diff --git a/buildrump.sh/src/share/mk/bsd.lib.mk b/buildrump.sh/src/share/mk/bsd.lib.mk
+index 2225f7891..7c91cabea 100644
 --- a/buildrump.sh/src/share/mk/bsd.lib.mk
 +++ b/buildrump.sh/src/share/mk/bsd.lib.mk
-@@ -622,7 +622,7 @@ LIBDPLIBS+=     stdc++	${.CURDIR}/../../
+@@ -622,7 +622,7 @@ LIBDPLIBS+=     stdc++	${.CURDIR}/../../../../../external/gpl3/${EXTERNAL_GCC_SU
  LIBCC:=	${CC}
  .endif
  
@@ -42,3 +64,24 @@ build/host/target convention of the GNU toolchain.
  _LDFLAGS.${_LIB}=	${LDFLAGS} ${LDFLAGS.${_LIB}}
  
  _MAINLIBDEPS=	${SOLIB} ${DPADD} ${DPLIBC} \
+diff --git a/pci-userspace/src-gnu/Makefile.inc b/pci-userspace/src-gnu/Makefile.inc
+index 6f8db357e..ef25bac3a 100644
+--- a/pci-userspace/src-gnu/Makefile.inc
++++ b/pci-userspace/src-gnu/Makefile.inc
+@@ -8,11 +8,12 @@ RUMPCOMP_USER_CPPFLAGS+=-I${PCIDIR} -I${DESTDIR}/usr/include
+ RUMPCOMP_CPPFLAGS+=	-I${PCIDIR} -I${DESTDIR}/usr/include
+ CPPFLAGS+=		-I${PCIDIR}
+ LDFLAGS+= -lmachuser -Wl,--no-as-needed -lpciaccess -Wl,--as-needed
++MIG=mig
+ 
+ mach_debugUser.c:
+ 	echo '#include <mach_debug/mach_debug.defs>' \
+ 		| ${CC} -E -x c - -o - \
+-		| mig -cc cat - /dev/null -subrprefix __ \
++		| $(MIG) -cc cat - /dev/null -subrprefix __ \
+ 			-user mach_debugUser.c \
+ 			-server /dev/null \
+ 			-header mach_debug_U.h
+-- 
+2.39.2
+
