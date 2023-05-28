@@ -61,7 +61,7 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libata/ata_component.c
 ===================================================================
 --- /dev/null
 +++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libata/ata_component.c
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,67 @@
 +#include <sys/param.h>
 +#include <sys/conf.h>
 +#include <sys/device.h>
@@ -103,6 +103,22 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libata/ata_component.c
 +	    bmaj, 24, 4));
 +	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd3", 'a',
 +	    cmaj, 24, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd4", 'a',
++	    bmaj, 32, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd4", 'a',
++	    cmaj, 32, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd5", 'a',
++	    bmaj, 40, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd5", 'a',
++	    cmaj, 40, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd6", 'a',
++	    bmaj, 48, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd6", 'a',
++	    cmaj, 48, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFBLK, "/dev/wd7", 'a',
++	    bmaj, 56, 4));
++	FLAWLESSCALL(rump_vfs_makedevnodes(S_IFCHR, "/dev/rwd7", 'a',
++	    cmaj, 56, 4));
 +/* Borked
 +	bmaj = cmaj = -1;
 +	FLAWLESSCALL(devsw_attach("cd", &cd_bdevsw, &bmaj, &cd_cdevsw, &cmaj));
