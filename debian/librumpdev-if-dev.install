@@ -1,2 +1,4 @@
 usr/lib/librumpdev_pci_if_*.a
 usr/lib/librumpdev_pci_if_*.so
+usr/lib/librumpdev_miiphy*.a
+usr/lib/librumpdev_miiphy*.so
