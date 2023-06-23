@@ -1,4 +1,4 @@
-/*	$NetBSD: uipc_sem.c,v 1.42 2014/09/05 09:20:59 matt Exp $	*/
+/*	$NetBSD: uipc_sem.c,v 1.46 2016/06/10 23:24:33 christos Exp $	*/
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.42 2014/09/05 09:20:59 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.46 2016/06/10 23:24:33 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -77,15 +77,17 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_sem.c,v 1.42 2014/09/05 09:20:59 matt Exp $");
 #include <sys/kauth.h>
 #include <sys/module.h>
 #include <sys/mount.h>
+#include <sys/semaphore.h>
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
+#include <sys/sysctl.h>
 
 MODULE(MODULE_CLASS_MISC, ksem, NULL);
 
 #define	SEM_MAX_NAMELEN		14
-#define	SEM_VALUE_MAX		(~0U)
 
+#define	SEM_NSEMS_MAX		256
 #define	KS_UNLINKED		0x01
 
 static kmutex_t		ksem_lock	__cacheline_aligned;
@@ -129,6 +131,9 @@ static const struct syscall_package ksem_syscalls[] = {
 	{ 0, 0, NULL },
 };
 
+struct sysctllog *ksem_clog;
+int ksem_max;
+
 static int
 ksem_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
     void *arg0, void *arg1, void *arg2, void *arg3)
@@ -154,6 +159,7 @@ static int
 ksem_sysinit(void)
 {
 	int error;
+	const struct sysctlnode *rnode;
 
 	mutex_init(&ksem_lock, MUTEX_DEFAULT, IPL_NONE);
 	LIST_INIT(&ksem_head);
@@ -167,6 +173,30 @@ ksem_sysinit(void)
 
 	ksem_listener = kauth_listen_scope(KAUTH_SCOPE_SYSTEM,
 	    ksem_listener_cb, NULL);
+
+	/* Define module-specific sysctl tree */
+
+	ksem_max = KSEM_MAX;
+	ksem_clog = NULL;
+
+	sysctl_createv(&ksem_clog, 0, NULL, &rnode,
+			CTLFLAG_PERMANENT,
+			CTLTYPE_NODE, "posix",
+			SYSCTL_DESCR("POSIX options"),
+			NULL, 0, NULL, 0,
+			CTL_KERN, CTL_CREATE, CTL_EOL);
+	sysctl_createv(&ksem_clog, 0, &rnode, NULL,
+			CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+			CTLTYPE_INT, "semmax",
+			SYSCTL_DESCR("Maximal number of semaphores"),
+			NULL, 0, &ksem_max, 0,
+			CTL_CREATE, CTL_EOL);
+	sysctl_createv(&ksem_clog, 0, &rnode, NULL,
+			CTLFLAG_PERMANENT | CTLFLAG_READONLY,
+			CTLTYPE_INT, "semcnt",
+			SYSCTL_DESCR("Current number of semaphores"),
+			NULL, 0, &nsems, 0,
+			CTL_CREATE, CTL_EOL);
 
 	return error;
 }
@@ -193,6 +223,7 @@ ksem_sysfini(bool interface)
 	}
 	kauth_unlisten_scope(ksem_listener);
 	mutex_destroy(&ksem_lock);
+	sysctl_teardown(&ksem_clog);
 	return 0;
 }
 
@@ -303,6 +334,11 @@ ksem_create(lwp_t *l, const char *name, ksem_t **ksret, mode_t mode, u_int val)
 		len = 0;
 	}
 
+	if (atomic_inc_uint_nv(&l->l_proc->p_nsems) > SEM_NSEMS_MAX) {
+               atomic_dec_uint(&l->l_proc->p_nsems);
+		return -1;
+       }
+
 	ks = kmem_zalloc(sizeof(ksem_t), KM_SLEEP);
 	mutex_init(&ks->ks_lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&ks->ks_cv, "psem");
@@ -336,6 +372,7 @@ ksem_free(ksem_t *ks)
 	kmem_free(ks, sizeof(ksem_t));
 
 	atomic_dec_uint(&nsems_total);
+ 	atomic_dec_uint(&curproc->p_nsems);	
 }
 
 int

@@ -1,4 +1,4 @@
-/*	$NetBSD: ipmi.c,v 1.61 2015/04/13 16:03:51 riastradh Exp $ */
+/*	$NetBSD: ipmi.c,v 1.64 2016/07/07 06:55:40 msaitoh Exp $ */
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ipmi.c,v 1.61 2015/04/13 16:03:51 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ipmi.c,v 1.64 2016/07/07 06:55:40 msaitoh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -939,9 +939,10 @@ ipmi_smbios_probe(struct smbios_ipmi *pipmi, struct ipmi_attach_args *ia)
 
 	platform = pmf_get_platform("system-product");
 	if (platform != NULL &&
-	    strcmp(platform, "ProLiant MicroServer") == 0) {
+	    strcmp(platform, "ProLiant MicroServer") == 0 &&
+	    pipmi->smipmi_base_address != 0) {
                 ia->iaa_if_iospacing = 1;
-                ia->iaa_if_iobase = pipmi->smipmi_base_address - 7;
+                ia->iaa_if_iobase = pipmi->smipmi_base_address & ~0x7;
                 ia->iaa_if_iotype = 'i';
                 return;
         }
@@ -1303,7 +1304,7 @@ signextend(unsigned long val, int bits)
 
 /* fixpoint arithmetic */
 #define FIX2INT(x)   ((int64_t)((x) >> 32))
-#define INT2FIX(x)   ((int64_t)((int64_t)(x) << 32))
+#define INT2FIX(x)   ((int64_t)((uint64_t)(x) << 32))
 
 #define FIX2            0x0000000200000000ll /* 2.0 */
 #define FIX3            0x0000000300000000ll /* 3.0 */
@@ -1329,7 +1330,7 @@ static int64_t fixlog_a[] = {
 	0x0000000024924925ll /* 1.0/7.0 */,
 	0x0000000020000000ll /* -1.0/8.0 */,
 	0x000000001c71c71cll /* 1.0/9.0 */
-}; 
+};
 
 static int64_t fixexp_a[] = {
 	0x0000000100000000ll /* 1.0/1.0 */,
@@ -1341,13 +1342,13 @@ static int64_t fixexp_a[] = {
 	0x00000000005b05b0ll /* 1.0/720.0 */,
 	0x00000000000d00d0ll /* 1.0/5040.0 */,
 	0x000000000001a01all /* 1.0/40320.0 */
-};      
+};
 
 static int64_t
 fixmul(int64_t x, int64_t y)
 {
 	int64_t z;
-	int64_t a,b,c,d; 
+	int64_t a,b,c,d;
 	int neg;
 
 	neg = 0;
@@ -1387,7 +1388,7 @@ poly(int64_t x0, int64_t x, int64_t a[], int n)
 static int64_t
 logx(int64_t x, int64_t y)
 {
-	int64_t z; 
+	int64_t z;
 
 	if (x <= INT2FIX(0)) {
 		z = INT2FIX(-99999);

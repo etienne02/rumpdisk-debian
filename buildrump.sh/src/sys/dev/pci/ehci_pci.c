@@ -1,4 +1,4 @@
-/*	$NetBSD: ehci_pci.c,v 1.59 2014/09/21 14:30:22 christos Exp $	*/
+/*	$NetBSD: ehci_pci.c,v 1.63 2016/04/23 10:15:31 skrll Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.59 2014/09/21 14:30:22 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.63 2016/04/23 10:15:31 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -119,14 +119,13 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	char const *intrstr;
 	pci_intr_handle_t ih;
 	pcireg_t csr;
-	usbd_status r;
 	int ncomp;
 	struct usb_pci *up;
 	int quirk;
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	sc->sc.sc_dev = self;
-	sc->sc.sc_bus.hci_private = sc;
+	sc->sc.sc_bus.ub_hcpriv = sc;
 
 	pci_aprint_devinfo(pa, "USB controller");
 
@@ -142,14 +141,14 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
+	sc->sc_pc = pc;
+	sc->sc_tag = tag;
+	sc->sc.sc_bus.ub_dmatag = pa->pa_dmat;
+
 	/* Disable interrupts, so we don't get any spurious ones. */
 	sc->sc.sc_offs = EREAD1(&sc->sc, EHCI_CAPLENGTH);
 	DPRINTF(("%s: offs=%d\n", device_xname(self), sc->sc.sc_offs));
 	EOWRITE4(&sc->sc, EHCI_USBINTR, 0);
-
-	sc->sc_pc = pc;
-	sc->sc_tag = tag;
-	sc->sc.sc_bus.dmatag = pa->pa_dmat;
 
 	/* Handle quirks */
 	switch (quirk) {
@@ -177,13 +176,13 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	 * Allocate IRQ
 	 */
 	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_SCHED, ehci_intr, sc);
+	sc->sc_ih = pci_intr_establish(pc, ih, IPL_USB, ehci_intr, sc);
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
 		aprint_error("\n");
-		return;
+		goto fail;
 	}
 	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
 
@@ -191,14 +190,14 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	case PCI_USBREV_PRE_1_0:
 	case PCI_USBREV_1_0:
 	case PCI_USBREV_1_1:
-		sc->sc.sc_bus.usbrev = USBREV_UNKNOWN;
+		sc->sc.sc_bus.ub_revision = USBREV_UNKNOWN;
 		aprint_verbose_dev(self, "pre-2.0 USB rev\n");
-		return;
+		goto fail;
 	case PCI_USBREV_2_0:
-		sc->sc.sc_bus.usbrev = USBREV_2_0;
+		sc->sc.sc_bus.ub_revision = USBREV_2_0;
 		break;
 	default:
-		sc->sc.sc_bus.usbrev = USBREV_UNKNOWN;
+		sc->sc.sc_bus.ub_revision = USBREV_UNKNOWN;
 		break;
 	}
 
@@ -239,9 +238,9 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 
 	ehci_get_ownership(&sc->sc, pc, tag);
 
-	r = ehci_init(&sc->sc);
-	if (r != USBD_NORMAL_COMPLETION) {
-		aprint_error_dev(self, "init failed, error=%d\n", r);
+	int err = ehci_init(&sc->sc);
+	if (err) {
+		aprint_error_dev(self, "init failed, error=%d\n", err);
 		goto fail;
 	}
 
@@ -325,7 +324,7 @@ ehci_dump_caps(ehci_softc_t *sc, pci_chipset_tag_t pc, pcitag_t tag)
 		switch (id) {
 		case EHCI_CAP_ID_LEGACY:
 			legctlsts = pci_conf_read(pc, tag,
-						  addr + PCI_EHCI_USBLEGCTLSTS);
+			    addr + PCI_EHCI_USBLEGCTLSTS);
 			printf("ehci_dump_caps: legsup=0x%08x "
 			       "legctlsts=0x%08x\n", cap, legctlsts);
 			break;
@@ -463,7 +462,7 @@ static int
 ehci_apply_amd_quirks(struct ehci_pci_softc *sc)
 {
 	pcireg_t value;
- 
+
 	aprint_normal_dev(sc->sc.sc_dev,
 	    "applying AMD SB600/SB700 USB freeze workaround\n");
 	value = pci_conf_read(sc->sc_pc, sc->sc_tag, EHCI_SBx00_WORKAROUND_REG);

@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveau_subdev_bar_base.c,v 1.2 2014/08/23 08:03:34 riastradh Exp $	*/
+/*	$NetBSD: nouveau_subdev_bar_base.c,v 1.5 2016/04/12 15:12:12 riastradh Exp $	*/
 
 /*
  * Copyright 2012 Red Hat Inc.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveau_subdev_bar_base.c,v 1.2 2014/08/23 08:03:34 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveau_subdev_bar_base.c,v 1.5 2016/04/12 15:12:12 riastradh Exp $");
 
 #include <core/object.h>
 
@@ -65,11 +65,21 @@ nouveau_barobj_ctor(struct nouveau_object *parent,
 		return ret;
 
 #ifdef __NetBSD__
+    {
+	/* Yes, truncation is really intended here.  */
+	uint32_t offset = barobj->vma.offset & 0xffffffffUL;
+
+	KASSERTMSG(offset < bar->iomemsz,
+	    "bar object vma exceeds range: %"PRIx32" > %"PRIxMAX,
+	    offset, (uintmax_t)bar->iomemsz);
+
 	barobj->iomemt = bar->iomemt;
-	if (bus_space_subregion(bar->iomemt, bar->iomemh, barobj->vma.offset,
-		bar->iomemsz - barobj->vma.offset, &barobj->iomemh) != 0)
-		/* XXX error branch */
+	/* XXX errno NetBSD->Linux */
+	ret = -bus_space_subregion(bar->iomemt, bar->iomemh, offset,
+	    bar->iomemsz - offset, &barobj->iomemh);
+	if (ret)
 		return ret;
+    }
 #else
 	barobj->iomem = bar->iomem + (u32)barobj->vma.offset;
 #endif
@@ -145,14 +155,17 @@ nouveau_bar_create_(struct nouveau_object *parent,
 		return ret;
 
 #ifdef __NetBSD__
-	bar->iomemt = nv_device_resource_tag(device, 3);
-	bar->iomemsz = nv_device_resource_len(device, 3);
-	if (bus_space_map(bar->iomemt, nv_device_resource_start(device, 3),
-		bar->iomemsz, 0, &bar->iomemh))
-		bar->iomemsz = 0; /* XXX Fail?  */
+	if (nv_device_resource_len(device, 3) != 0) {
+		bar->iomemt = nv_device_resource_tag(device, 3);
+		bar->iomemsz = nv_device_resource_len(device, 3);
+		if (bus_space_map(bar->iomemt, nv_device_resource_start(device, 3),
+			bar->iomemsz, 0, &bar->iomemh))
+			bar->iomemsz = 0; /* XXX Fail?  */
+	}
 #else
-	bar->iomem = ioremap(nv_device_resource_start(device, 3),
-			     nv_device_resource_len(device, 3));
+	if (nv_device_resource_len(device, 3) != 0)
+		bar->iomem = ioremap(nv_device_resource_start(device, 3),
+				     nv_device_resource_len(device, 3));
 #endif
 	return 0;
 }

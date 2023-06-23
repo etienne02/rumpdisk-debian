@@ -1,4 +1,4 @@
-/*	$NetBSD: bpf.c,v 1.190 2014/12/29 13:38:13 ozaki-r Exp $	*/
+/*	$NetBSD: bpf.c,v 1.203 2016/07/19 02:47:45 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1990, 1991, 1993
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bpf.c,v 1.190 2014/12/29 13:38:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bpf.c,v 1.203 2016/07/19 02:47:45 pgoyette Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_bpf.h"
@@ -59,7 +59,6 @@ __KERNEL_RCSID(0, "$NetBSD: bpf.c,v 1.190 2014/12/29 13:38:13 ozaki-r Exp $");
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/module.h>
-#include <sys/once.h>
 #include <sys/atomic.h>
 
 #include <sys/file.h>
@@ -300,7 +299,7 @@ bpf_movein(struct uio *uio, int linktype, uint64_t mtu, struct mbuf **mp,
 		return (EIO);
 
 	m = m_gethdr(M_WAIT, MT_DATA);
-	m->m_pkthdr.rcvif = NULL;
+	m_reset_rcvif(m);
 	m->m_pkthdr.len = (int)(len - hlen);
 	if (len + align > MHLEN) {
 		m_clget(m, M_WAIT);
@@ -340,6 +339,7 @@ bad:
 static void
 bpf_attachd(struct bpf_d *d, struct bpf_if *bp)
 {
+	KASSERT(mutex_owned(&bpf_mtx));
 	/*
 	 * Point d at bp, and add d to the interface's list of listeners.
 	 * Finally, point the driver's bpf cookie at the interface so
@@ -360,6 +360,8 @@ bpf_detachd(struct bpf_d *d)
 {
 	struct bpf_d **p;
 	struct bpf_if *bp;
+
+	KASSERT(mutex_owned(&bpf_mtx));
 
 	bp = d->bd_bif;
 	/*
@@ -399,8 +401,8 @@ bpf_detachd(struct bpf_d *d)
 	d->bd_bif = NULL;
 }
 
-static int
-doinit(void)
+static void
+bpf_init(void)
 {
 
 	mutex_init(&bpf_mtx, MUTEX_DEFAULT, IPL_NONE);
@@ -411,19 +413,18 @@ doinit(void)
 	bpf_gstats.bs_drop = 0;
 	bpf_gstats.bs_capt = 0;
 
-	return 0;
+	return;
 }
 
 /*
- * bpfilterattach() is called at boot time.
+ * bpfilterattach() is called at boot time.  We don't need to do anything
+ * here, since any initialization will happen as part of module init code.
  */
 /* ARGSUSED */
 void
 bpfilterattach(int n)
 {
-	static ONCE_DECL(control);
 
-	RUN_ONCE(&control, doinit);
 }
 
 /*
@@ -437,7 +438,7 @@ bpfopen(dev_t dev, int flag, int mode, struct lwp *l)
 	struct file *fp;
 	int error, fd;
 
-	/* falloc() will use the descriptor for us. */
+	/* falloc() will fill in the descriptor for us. */
 	if ((error = fd_allocfile(&fp, &fd)) != 0)
 		return error;
 
@@ -472,10 +473,17 @@ bpfopen(dev_t dev, int flag, int mode, struct lwp *l)
 static int
 bpf_close(struct file *fp)
 {
-	struct bpf_d *d = fp->f_bpf;
+	struct bpf_d *d;
 	int s;
 
 	KERNEL_LOCK(1, NULL);
+	mutex_enter(&bpf_mtx);
+
+	if ((d = fp->f_bpf) == NULL) {
+		mutex_exit(&bpf_mtx);
+		KERNEL_UNLOCK_ONE(NULL);
+		return 0;
+	}
 
 	/*
 	 * Refresh the PID associated with this bpf file.
@@ -490,16 +498,16 @@ bpf_close(struct file *fp)
 		bpf_detachd(d);
 	splx(s);
 	bpf_freed(d);
-	mutex_enter(&bpf_mtx);
 	LIST_REMOVE(d, bd_list);
+	fp->f_bpf = NULL;
+
 	mutex_exit(&bpf_mtx);
+	KERNEL_UNLOCK_ONE(NULL);
+
 	callout_destroy(&d->bd_callout);
 	seldestroy(&d->bd_sel);
 	softint_disestablish(d->bd_sih);
 	free(d, M_DEVBUF);
-	fp->f_bpf = NULL;
-
-	KERNEL_UNLOCK_ONE(NULL);
 
 	return (0);
 }
@@ -705,7 +713,7 @@ bpf_write(struct file *fp, off_t *offp, struct uio *uio,
 	if (d->bd_feedback) {
 		mc = m_dup(m, 0, M_COPYALL, M_NOWAIT);
 		if (mc != NULL)
-			mc->m_pkthdr.rcvif = ifp;
+			m_set_rcvif(mc, ifp);
 		/* Set M_PROMISC for outgoing packets to be discarded. */
 		if (1 /*d->bd_direction == BPF_D_INOUT*/)
 			m->m_flags |= M_PROMISC;
@@ -713,12 +721,13 @@ bpf_write(struct file *fp, off_t *offp, struct uio *uio,
 		mc = NULL;
 
 	s = splsoftnet();
-	error = (*ifp->if_output)(ifp, m, (struct sockaddr *) &dst, NULL);
+	error = if_output_lock(ifp, ifp, m, (struct sockaddr *) &dst, NULL);
 
 	if (mc != NULL) {
 		if (error == 0)
-			(*ifp->if_input)(ifp, mc);
-		m_freem(mc);
+			ifp->_if_input(ifp, mc);
+		else
+			m_freem(mc);
 	}
 	splx(s);
 	KERNEL_UNLOCK_ONE(NULL);
@@ -900,10 +909,12 @@ bpf_ioctl(struct file *fp, u_long cmd, void *addr)
 	 * Set device parameters.
 	 */
 	case BIOCSDLT:
+		mutex_enter(&bpf_mtx);
 		if (d->bd_bif == NULL)
 			error = EINVAL;
 		else
 			error = bpf_setdlt(d, *(u_int *)addr);
+		mutex_exit(&bpf_mtx);
 		break;
 
 	/*
@@ -926,7 +937,9 @@ bpf_ioctl(struct file *fp, u_long cmd, void *addr)
 	case OBIOCSETIF:
 #endif
 	case BIOCSETIF:
+		mutex_enter(&bpf_mtx);
 		error = bpf_setif(d, addr);
+		mutex_exit(&bpf_mtx);
 		break;
 
 	/*
@@ -1152,6 +1165,7 @@ bpf_setif(struct bpf_d *d, struct ifreq *ifr)
 	char *cp;
 	int unit_seen, i, s, error;
 
+	KASSERT(mutex_owned(&bpf_mtx));
 	/*
 	 * Make sure the provided name has a unit number, and default
 	 * it to '0' if not specified.
@@ -1453,7 +1467,7 @@ _bpf_mtap2(struct bpf_if *bp, void *data, u_int dlen, struct mbuf *m)
 	struct mbuf mb;
 
 	/* Skip outgoing duplicate packets. */
-	if ((m->m_flags & M_PROMISC) != 0 && m->m_pkthdr.rcvif == NULL) {
+	if ((m->m_flags & M_PROMISC) != 0 && m->m_pkthdr.rcvif_index == 0) {
 		m->m_flags &= ~M_PROMISC;
 		return;
 	}
@@ -1470,7 +1484,7 @@ _bpf_mtap2(struct bpf_if *bp, void *data, u_int dlen, struct mbuf *m)
 	mb.m_data = data;
 	mb.m_len = dlen;
 
-	bpf_deliver(bp, bpf_mcpy, &mb, pktlen, 0, m->m_pkthdr.rcvif != NULL);
+	bpf_deliver(bp, bpf_mcpy, &mb, pktlen, 0, m->m_pkthdr.rcvif_index != 0);
 }
 
 /*
@@ -1484,7 +1498,7 @@ _bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 	void *marg;
 
 	/* Skip outgoing duplicate packets. */
-	if ((m->m_flags & M_PROMISC) != 0 && m->m_pkthdr.rcvif == NULL) {
+	if ((m->m_flags & M_PROMISC) != 0 && m->m_pkthdr.rcvif_index == 0) {
 		m->m_flags &= ~M_PROMISC;
 		return;
 	}
@@ -1501,7 +1515,7 @@ _bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 		buflen = 0;
 	}
 
-	bpf_deliver(bp, cpfn, marg, pktlen, buflen, m->m_pkthdr.rcvif != NULL);
+	bpf_deliver(bp, cpfn, marg, pktlen, buflen, m->m_pkthdr.rcvif_index != 0);
 }
 
 /*
@@ -1717,10 +1731,10 @@ static int
 bpf_allocbufs(struct bpf_d *d)
 {
 
-	d->bd_fbuf = malloc(d->bd_bufsize, M_DEVBUF, M_WAITOK | M_CANFAIL);
+	d->bd_fbuf = malloc(d->bd_bufsize, M_DEVBUF, M_NOWAIT);
 	if (!d->bd_fbuf)
 		return (ENOBUFS);
-	d->bd_sbuf = malloc(d->bd_bufsize, M_DEVBUF, M_WAITOK | M_CANFAIL);
+	d->bd_sbuf = malloc(d->bd_bufsize, M_DEVBUF, M_NOWAIT);
 	if (!d->bd_sbuf) {
 		free(d->bd_fbuf, M_DEVBUF);
 		return (ENOBUFS);
@@ -1770,6 +1784,7 @@ _bpfattach(struct ifnet *ifp, u_int dlt, u_int hdrlen, struct bpf_if **driverp)
 	if (bp == NULL)
 		panic("bpfattach");
 
+	mutex_enter(&bpf_mtx);
 	bp->bif_dlist = NULL;
 	bp->bif_driverp = driverp;
 	bp->bif_ifp = ifp;
@@ -1781,6 +1796,7 @@ _bpfattach(struct ifnet *ifp, u_int dlt, u_int hdrlen, struct bpf_if **driverp)
 	*bp->bif_driverp = NULL;
 
 	bp->bif_hdrlen = hdrlen;
+	mutex_exit(&bpf_mtx);
 #if 0
 	printf("bpf: %s attached\n", ifp->if_xname);
 #endif
@@ -1796,6 +1812,7 @@ _bpfdetach(struct ifnet *ifp)
 	struct bpf_d *d;
 	int s;
 
+	mutex_enter(&bpf_mtx);
 	/* Nuke the vnodes for any open instances */
 	LIST_FOREACH(d, &bpf_list, bd_list) {
 		if (d->bd_bif != NULL && d->bd_bif->bif_ifp == ifp) {
@@ -1819,6 +1836,7 @@ _bpfdetach(struct ifnet *ifp)
 			goto again;
 		}
 	}
+	mutex_exit(&bpf_mtx);
 }
 
 /*
@@ -1878,6 +1896,8 @@ bpf_setdlt(struct bpf_d *d, u_int dlt)
 	int s, error, opromisc;
 	struct ifnet *ifp;
 	struct bpf_if *bp;
+
+	KASSERT(mutex_owned(&bpf_mtx));
 
 	if (d->bd_bif->bif_dlt == dlt)
 		return 0;
@@ -2085,25 +2105,26 @@ struct bpf_ops bpf_ops_kernel = {
 	.bpf_mtap_sl_out =	_bpf_mtap_sl_out,
 };
 
-MODULE(MODULE_CLASS_DRIVER, bpf, NULL);
+MODULE(MODULE_CLASS_DRIVER, bpf, "bpf_filter");
 
 static int
 bpf_modcmd(modcmd_t cmd, void *arg)
 {
+#ifdef _MODULE
 	devmajor_t bmajor, cmajor;
-	int error;
-
-	bmajor = cmajor = NODEVMAJOR;
+#endif
+	int error = 0;
 
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		bpfilterattach(0);
+		bpf_init();
+#ifdef _MODULE
+		bmajor = cmajor = NODEVMAJOR;
 		error = devsw_attach("bpf", NULL, &bmajor,
 		    &bpf_cdevsw, &cmajor);
-		if (error == EEXIST)
-			error = 0; /* maybe built-in ... improve eventually */
 		if (error)
 			break;
+#endif
 
 		bpf_ops_handover_enter(&bpf_ops_kernel);
 		atomic_swap_ptr(&bpf_ops, &bpf_ops_kernel);

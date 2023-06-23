@@ -1,4 +1,4 @@
-/*	$NetBSD: arn5008.c,v 1.6 2014/02/23 15:29:11 christos Exp $	*/
+/*	$NetBSD: arn5008.c,v 1.11 2016/06/10 13:27:13 ozaki-r Exp $	*/
 /*	$OpenBSD: ar5008.c,v 1.21 2012/08/25 12:14:31 kettenis Exp $	*/
 
 /*-
@@ -24,7 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arn5008.c,v 1.6 2014/02/23 15:29:11 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arn5008.c,v 1.11 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/sockio.h>
@@ -518,8 +518,8 @@ ar5008_tx_alloc(struct athn_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	error = bus_dmamap_load_raw(sc->sc_dmat, sc->sc_map, &sc->sc_seg, 1, size,
-	    BUS_DMA_NOWAIT);
+	error = bus_dmamap_load(sc->sc_dmat, sc->sc_map, sc->sc_descs,
+	    size, NULL, BUS_DMA_NOWAIT);
 	if (error != 0)
 		goto fail;
 
@@ -606,8 +606,8 @@ ar5008_rx_alloc(struct athn_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	error = bus_dmamap_load_raw(sc->sc_dmat, rxq->map, &rxq->seg, 1,
-	    size, BUS_DMA_NOWAIT);
+	error = bus_dmamap_load(sc->sc_dmat, rxq->map, rxq->descs,
+	    size, NULL, BUS_DMA_NOWAIT);
 	if (error != 0)
 		goto fail;
 
@@ -849,7 +849,7 @@ ar5008_rx_process(struct athn_softc *sc)
 
 			len = MS(ds->ds_status1, AR_RXS1_DATA_LEN);
 			m = bf->bf_m;
-			m->m_pkthdr.rcvif = ifp;
+			m_set_rcvif(m, ifp);
 			m->m_pkthdr.len = m->m_len = len;
 			wh = mtod(m, struct ieee80211_frame *);
 
@@ -905,7 +905,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	bf->bf_m = m1;
 
 	/* Finalize mbuf. */
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 	m->m_pkthdr.len = m->m_len = len;
 
 	/* Grab a reference to the source node. */
@@ -1257,8 +1257,9 @@ ar5008_intr(struct athn_softc *sc)
 
 		if ((sc->sc_flags & ATHN_FLAG_RFSILENT) &&
 		    (sync & AR_INTR_SYNC_GPIO_PIN(sc->sc_rfsilent_pin))) {
+			AR_WRITE(sc, AR_INTR_SYNC_ENABLE, 0);
+			(void)AR_READ(sc, AR_INTR_SYNC_ENABLE);
 			pmf_event_inject(sc->sc_dev, PMFE_RADIO_OFF);
-			return 1;
 		}
 
 		AR_WRITE(sc, AR_INTR_SYNC_CAUSE, sync);
@@ -2019,7 +2020,7 @@ ar5008_calib_iq(struct athn_softc *sc)
 		if (cal->pwr_meas_q == 0)
 			continue;
 
-		if ((iq_corr_neg = cal->iq_corr_meas < 0))
+		if ((iq_corr_neg = cal->iq_corr_meas) < 0)
 			cal->iq_corr_meas = -cal->iq_corr_meas;
 
 		i_coff_denom =

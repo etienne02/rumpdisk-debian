@@ -1,4 +1,4 @@
-/*	$NetBSD: scsiconf.c,v 1.273 2014/07/25 08:10:38 dholland Exp $	*/
+/*	$NetBSD: scsiconf.c,v 1.275 2016/06/26 07:31:35 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2004 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.273 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.275 2016/06/26 07:31:35 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -121,7 +121,8 @@ const struct cdevsw scsibus_cdevsw = {
 };
 
 static int	scsibusprint(void *, const char *);
-static void	scsibus_config(struct scsipi_channel *, void *);
+static void	scsibus_discover_thread(void *);
+static void	scsibus_config(struct scsibus_softc *);
 
 const struct scsipi_bustype scsi_bustype = {
 	SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI, SCSIPI_BUSTYPE_SCSI_PSCSI),
@@ -245,8 +246,8 @@ scsibusattach(device_t parent, device_t self, void *aux)
 	RUN_ONCE(&scsi_conf_ctrl, scsibus_init);
 
 	/* Initialize the channel structure first */
-	chan->chan_init_cb = scsibus_config;
-	chan->chan_init_cb_arg = sc;
+	chan->chan_init_cb = NULL;
+	chan->chan_init_cb_arg = NULL;
 
 	scsi_initq = malloc(sizeof(struct scsi_initq), M_DEVBUF, M_WAITOK);
 	scsi_initq->sc_channel = chan;
@@ -256,12 +257,31 @@ scsibusattach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(sc->sc_dev, "failed to init channel\n");
 		return;
 	}
+
+        /*
+         * Create the discover thread
+         */
+        if (kthread_create(PRI_NONE, 0, NULL, scsibus_discover_thread, sc,
+            NULL, "%s-d", chan->chan_name)) {
+                aprint_error_dev(sc->sc_dev, "unable to create discovery "
+		    "thread for channel %d\n", chan->chan_channel);
+                return;
+        }
 }
 
 static void
-scsibus_config(struct scsipi_channel *chan, void *arg)
+scsibus_discover_thread(void *arg)
 {
 	struct scsibus_softc *sc = arg;
+
+	scsibus_config(sc);
+	kthread_exit(0);
+}
+
+static void
+scsibus_config(struct scsibus_softc *sc)
+{
+	struct scsipi_channel *chan = sc->sc_channel;
 	struct scsi_initq *scsi_initq;
 
 #ifndef SCSI_DELAY
@@ -493,9 +513,12 @@ scsibusprint(void *aux, const char *pnp)
 
 	dtype = scsipi_dtype(type);
 
-	scsipi_strvis(vendor, 33, inqbuf->vendor, 8);
-	scsipi_strvis(product, 65, inqbuf->product, 16);
-	scsipi_strvis(revision, 17, inqbuf->revision, 4);
+	strnvisx(vendor, sizeof(vendor), inqbuf->vendor, 8,
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(product, sizeof(product), inqbuf->product, 16,
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(revision, sizeof(revision), inqbuf->revision, 4,
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 
 	aprint_normal(" target %d lun %d: <%s, %s, %s> %s %s",
 	    target, lun, vendor, product, revision, dtype,

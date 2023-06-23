@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.1 2014/04/28 19:09:29 jakllsch Exp $
+#	$NetBSD: Makefile,v 1.4 2016/03/22 08:25:23 mrg Exp $
 
 LIB=	gnuefi
 LIBISPRIVATE?= yes
@@ -39,7 +39,7 @@ COPTS.hw.c= -Wno-shadow
 
 .include <bsd.lib.mk>
 
-lib${LIB}.o:: ${OBJS}
+lib${LIB}.o:: ${OBJS:O}
 	@echo building standard ${LIB} library
 	@rm -f lib${LIB}.o
 	@${LD} -r -o lib${LIB}.o `lorder ${OBJS} | tsort`

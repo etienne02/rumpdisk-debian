@@ -1,9 +1,9 @@
-#	$NetBSD: Makefile,v 1.57 2014/07/05 19:22:05 dholland Exp $
+#	$NetBSD: Makefile,v 1.59 2016/02/18 20:33:40 sjg Exp $
 #	@(#)Makefile	5.2 (Berkeley) 12/28/90
 
 PROG=	make
 SRCS=	arch.c buf.c compat.c cond.c dir.c for.c hash.c job.c main.c \
-	make.c parse.c str.c suff.c targ.c trace.c var.c util.c 
+	make.c metachar.c parse.c str.c suff.c targ.c trace.c var.c util.c 
 SRCS+=  strlist.c
 SRCS+=  make_malloc.c
 SRCS+=	lstAppend.c lstAtEnd.c lstAtFront.c lstClose.c lstConcat.c \
@@ -13,8 +13,7 @@ SRCS+=	lstAppend.c lstAtEnd.c lstAtFront.c lstClose.c lstConcat.c \
 	lstMember.c lstNext.c lstOpen.c lstRemove.c lstReplace.c lstSucc.c
 SRCS += lstPrev.c
 
-# let people experiment for a bit
-USE_META ?= no
+USE_META ?= yes
 .if ${USE_META:tl} != "no"
 SRCS+=	meta.c
 CPPFLAGS+= -DUSE_META

@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.own.mk,v 1.854 2015/06/18 22:29:12 pooka Exp $
+#	$NetBSD: bsd.own.mk,v 1.938 2016/07/07 07:52:24 martin Exp $
 
 # This needs to be before bsd.init.mk
 .if defined(BSD_MK_COMPAT_FILE)
@@ -44,9 +44,9 @@ NEED_OWN_INSTALL_TARGET?=	yes
 # If some future port is not supported by the in-tree toolchain, this should
 # be set to "yes" for that port only.
 #
-.if ${MACHINE} == "playstation2"
-TOOLCHAIN_MISSING?=	yes
-.endif
+# .if ${MACHINE} == "playstation2"
+# TOOLCHAIN_MISSING?=	yes
+# .endif
 
 TOOLCHAIN_MISSING?=	no
 
@@ -61,11 +61,27 @@ MKGCC?=		no
 #
 .if ${MKGCC:Uyes} != "no"
 
-.if ${MACHINE} == "playstation2" || ${MACHINE_CPU} == "aarch64"
-HAVE_GCC?=    0
+#
+# What GCC is used?
+#
+.if ${MACHINE_CPU} == "aarch64"
+HAVE_GCC?=	0
+.elif \
+    ${MACHINE} == "alpha" || \
+    ${MACHINE} == "amd64" || \
+    ${MACHINE} == "hppa" || \
+    ${MACHINE} == "i386" || \
+    ${MACHINE} == "ia64" || \
+    ${MACHINE} == "playstation2" || \
+    ${MACHINE} == "sparc" || \
+    ${MACHINE} == "sparc64" || \
+    ${MACHINE_CPU} == "arm" || \
+    ${MACHINE_CPU} == "powerpc" || \
+    ${MACHINE_ARCH} == "vax"
+HAVE_GCC?=	53
 .else
 # Otherwise, default to GCC4.8
-HAVE_GCC?=    48
+HAVE_GCC?=	48
 .endif
 
 #
@@ -78,12 +94,15 @@ MKGCCCMDS?=	no
 # We import the old gcc as "gcc.old" when upgrading.  EXTERNAL_GCC_SUBDIR is
 # set to the relevant subdirectory in src/external/gpl3 for his HAVE_GCC.
 #
-.if ${HAVE_GCC} == 48
+.if ${HAVE_GCC} == 53
 EXTERNAL_GCC_SUBDIR=	gcc
+.elif ${HAVE_GCC} == 48
+EXTERNAL_GCC_SUBDIR=	gcc.old
 .else
 EXTERNAL_GCC_SUBDIR=	/does/not/exist
 .endif
-
+.else
+MKGCCCMDS?=	no
 .endif
 
 .if !empty(MACHINE_ARCH:Mearm*)
@@ -94,6 +113,8 @@ _LIBC_COMPILER_RT.aarch64=	yes
 _LIBC_COMPILER_RT.i386=		yes
 _LIBC_COMPILER_RT.powerpc=	yes
 _LIBC_COMPILER_RT.powerpc64=	yes
+_LIBC_COMPILER_RT.sparc=	yes
+_LIBC_COMPILER_RT.sparc64=	yes
 _LIBC_COMPILER_RT.x86_64=	yes
 
 .if ${HAVE_LLVM:Uno} == "yes" && ${_LIBC_COMPILER_RT.${MACHINE_ARCH}:Uno} == "yes"
@@ -110,18 +131,70 @@ HAVE_LIBGCC_EH?=	no
 HAVE_LIBGCC_EH?=	yes
 .endif
 
-HAVE_GDB?=	7
-
-.if (${MACHINE_ARCH} == "alpha") || \
-    (${MACHINE_ARCH} == "hppa") || \
-    (${MACHINE_ARCH} == "ia64") || \
-    (${MACHINE_CPU} == "mips")
+.if ${MACHINE} == "alpha" || \
+    ${MACHINE} == "hppa" || \
+    ${MACHINE} == "ia64" || \
+    ${MACHINE_CPU} == "mips"
 HAVE_SSP?=	no
 .else
 HAVE_SSP?=	yes
-.if ${USE_FORT:Uno} != "no"
+.if !defined(NOFORT) && ${USE_FORT:Uno} != "no"
 USE_SSP?=	yes
 .endif
+.endif
+
+#
+# What GDB is used?
+#
+.if ${MACHINE} == "alpha" || \
+    ${MACHINE} == "amd64" || \
+    ${MACHINE} == "i386" || \
+    ${MACHINE} == "ia64" || \
+    ${MACHINE} == "playstation2" || \
+    ${MACHINE} == "sparc" || \
+    ${MACHINE} == "sparc64" || \
+    ${MACHINE} == "vax" || \
+    ${MACHINE_CPU} == "arm" || \
+    ${MACHINE_CPU} == "powerpc" || \
+    ${MACHINE_CPU} == "sh3" || \
+    ${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el"
+HAVE_GDB?=	710
+.else
+HAVE_GDB?=	79
+.endif
+
+.if ${HAVE_GDB} == 79
+EXTERNAL_GDB_SUBDIR=		gdb.old
+.else
+EXTERNAL_GDB_SUBDIR=		gdb
+.endif
+
+#
+# What binutils is used?
+#
+.if ${MACHINE} == "alpha" || \
+    ${MACHINE} == "amd64" || \
+    ${MACHINE} == "evbarm" || \
+    ${MACHINE} == "hppa" || \
+    ${MACHINE} == "i386" || \
+    ${MACHINE} == "ia64" || \
+    ${MACHINE} == "playstation2" || \
+    ${MACHINE} == "sparc" || \
+    ${MACHINE} == "sparc64" || \
+    ${MACHINE} == "vax" || \
+    ${MACHINE_CPU} == "sh3" || \
+    ${MACHINE_ARCH} == "powerpc"
+HAVE_BINUTILS?=	226
+.else
+HAVE_BINUTILS?=	223
+.endif
+
+.if ${HAVE_BINUTILS} == 223
+EXTERNAL_BINUTILS_SUBDIR=	binutils.old
+.elif ${HAVE_BINUTILS} == 226
+EXTERNAL_BINUTILS_SUBDIR=	binutils
+.else
+EXTERNAL_BINUTILS_SUBDIR=	/does/not/exist
 .endif
 
 .if empty(.MAKEFLAGS:tW:M*-V .OBJDIR*)
@@ -272,7 +345,7 @@ TOOL_OBJC.clang=	${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-clang
 
 # PCC supports C and Fortran
 TOOL_CC.pcc=		${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-pcc
-TOOL_CPP.pcc=		${TOOLDIR}/libexec/${MACHINE_GNU_PLATFORM}-cpp
+TOOL_CPP.pcc=		${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-pcpp
 TOOL_CXX.pcc=		${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-p++
 
 #
@@ -321,6 +394,7 @@ TOOL_CRUNCHGEN=		MAKE=${.MAKE:Q} ${TOOLDIR}/bin/${_TOOL_PREFIX}crunchgen
 TOOL_CTAGS=		${TOOLDIR}/bin/${_TOOL_PREFIX}ctags
 TOOL_CTFCONVERT=	${TOOLDIR}/bin/${_TOOL_PREFIX}ctfconvert
 TOOL_CTFMERGE=		${TOOLDIR}/bin/${_TOOL_PREFIX}ctfmerge
+TOOL_CVSLATEST=		${TOOLDIR}/bin/${_TOOL_PREFIX}cvslatest
 TOOL_DB=		${TOOLDIR}/bin/${_TOOL_PREFIX}db
 TOOL_DISKLABEL=		${TOOLDIR}/bin/nbdisklabel
 TOOL_EQN=		${TOOLDIR}/bin/${_TOOL_PREFIX}eqn
@@ -329,7 +403,9 @@ TOOL_FGEN=		${TOOLDIR}/bin/${_TOOL_PREFIX}fgen
 TOOL_GENASSYM=		${TOOLDIR}/bin/${_TOOL_PREFIX}genassym
 TOOL_GENCAT=		${TOOLDIR}/bin/${_TOOL_PREFIX}gencat
 TOOL_GMAKE=		${TOOLDIR}/bin/${_TOOL_PREFIX}gmake
-TOOL_GREP=		${TOOLDIR}/bin/${_TOOL_PREFIX}grep
+# grep exists in src/tools, but is not hooked up into the build.
+#TOOL_GREP=		${TOOLDIR}/bin/${_TOOL_PREFIX}grep
+TOOL_GREP=		grep
 TOOL_GROFF=		PATH=${TOOLDIR}/lib/groff:$${PATH} ${TOOLDIR}/bin/${_TOOL_PREFIX}groff
 TOOL_HEXDUMP=		${TOOLDIR}/bin/${_TOOL_PREFIX}hexdump
 TOOL_HP300MKBOOT=	${TOOLDIR}/bin/${_TOOL_PREFIX}hp300-mkboot
@@ -343,6 +419,8 @@ TOOL_M4=		${TOOLDIR}/bin/${_TOOL_PREFIX}m4
 TOOL_MACPPCFIXCOFF=	${TOOLDIR}/bin/${_TOOL_PREFIX}macppc-fixcoff
 TOOL_MAKEFS=		${TOOLDIR}/bin/${_TOOL_PREFIX}makefs
 TOOL_MAKEINFO=		${TOOLDIR}/bin/${_TOOL_PREFIX}makeinfo
+TOOL_MAKEKEYS=		${TOOLDIR}/bin/${_TOOL_PREFIX}makekeys
+TOOL_MAKESTRS=		${TOOLDIR}/bin/${_TOOL_PREFIX}makestrs
 TOOL_MAKEWHATIS=	${TOOLDIR}/bin/${_TOOL_PREFIX}makewhatis
 TOOL_MANDOC_ASCII=	${TOOLDIR}/bin/${_TOOL_PREFIX}mandoc -Tascii
 TOOL_MANDOC_HTML=	${TOOLDIR}/bin/${_TOOL_PREFIX}mandoc -Thtml
@@ -381,6 +459,7 @@ TOOL_RPCGEN=		RPCGEN_CPP=${CPP:Q} ${TOOLDIR}/bin/${_TOOL_PREFIX}rpcgen
 TOOL_SED=		${TOOLDIR}/bin/${_TOOL_PREFIX}sed
 TOOL_SLC=		${TOOLDIR}/bin/${_TOOL_PREFIX}slc
 TOOL_SOELIM=		${TOOLDIR}/bin/${_TOOL_PREFIX}soelim
+TOOL_SORTINFO=		${TOOLDIR}/bin/${_TOOL_PREFIX}sortinfo
 TOOL_SPARKCRC=		${TOOLDIR}/bin/${_TOOL_PREFIX}sparkcrc
 TOOL_STAT=		${TOOLDIR}/bin/${_TOOL_PREFIX}stat
 TOOL_STRFILE=		${TOOLDIR}/bin/${_TOOL_PREFIX}strfile
@@ -409,7 +488,7 @@ TOOL_OBJC.gcc=	gcc
 
 # PCC supports C and Fortran
 TOOL_CC.pcc=		pcc
-TOOL_CPP.pcc=		/usr/libexec/pcpp
+TOOL_CPP.pcc=		pcpp
 TOOL_CXX.pcc=		p++
 
 TOOL_AMIGAAOUT2BB=	amiga-aout2bb
@@ -427,6 +506,7 @@ TOOL_CRUNCHGEN=		crunchgen
 TOOL_CTAGS=		ctags
 TOOL_CTFCONVERT=	ctfconvert
 TOOL_CTFMERGE=		ctfmerge
+TOOL_CVSLATEST=		cvslatest
 TOOL_DB=		db
 TOOL_DISKLABEL=		disklabel
 TOOL_EQN=		eqn
@@ -449,6 +529,8 @@ TOOL_M4=		m4
 TOOL_MACPPCFIXCOFF=	macppc-fixcoff
 TOOL_MAKEFS=		makefs
 TOOL_MAKEINFO=		makeinfo
+TOOL_MAKEKEYS=		makekeys
+TOOL_MAKESTRS=		makestrs
 TOOL_MAKEWHATIS=	/usr/libexec/makewhatis
 TOOL_MANDOC_ASCII=	mandoc -Tascii
 TOOL_MANDOC_HTML=	mandoc -Thtml
@@ -486,6 +568,7 @@ TOOL_ROFF_RAW=		${TOOL_GROFF} -Z
 TOOL_RPCGEN=		rpcgen
 TOOL_SED=		sed
 TOOL_SOELIM=		soelim
+TOOL_SORTINFO=		sortinfo
 TOOL_SPARKCRC=		sparkcrc
 TOOL_STAT=		stat
 TOOL_STRFILE=		strfile
@@ -498,6 +581,13 @@ TOOL_VFONTEDPR=		/usr/libexec/vfontedpr
 TOOL_ZIC=		zic
 
 .endif	# USETOOLS != yes						# }
+
+# Standalone code should not be compiled with PIE or CTF
+# Should create a better test
+.if defined(BINDIR) && ${BINDIR} == "/usr/mdec"
+NOPIE=			# defined
+NOCTF=			# defined
+.endif
 
 # Fallback to ensure that all variables are defined to something
 TOOL_CC.false=		false
@@ -518,12 +608,6 @@ CPP=		${TOOL_CPP.${ACTIVE_CPP}}
 CXX=		${TOOL_CXX.${ACTIVE_CXX}}
 FC=		${TOOL_FC.${ACTIVE_FC}}
 OBJC=		${TOOL_OBJC.${ACTIVE_OBJC}}
-
-# Override with tools versions if needed
-.if ${MKCTF:Uno} != "no" && !defined(NOCTF)
-CTFCONVERT=	${TOOL_CTFCONVERT}
-CTFMERGE=	${TOOL_CTFMERGE}
-.endif
 
 # For each ${MACHINE_CPU}, list the ports that use it.
 MACHINES.aarch64=	evbarm64
@@ -568,6 +652,7 @@ OBJCOPY_ELF2AOUT_FLAGS?=	\
 	-R .ARM.attributes	\
 	-R .ARM.exidx		\
 	-R .ARM.extab		\
+	-R .SUNW_ctf		\
 	-R .arm.atpcs		\
 	-R .comment		\
 	-R .debug_abbrev	\
@@ -758,6 +843,10 @@ MKGDB.ia64=	no
 MKPICLIB:=	no
 .endif
 
+# PowerPC64 and AArch64 ABI's are PIC
+MKPICLIB.powerpc64=	no
+#MKPICLIB.aarch64=	no
+
 #
 # On VAX using ELF, all objects are PIC, not just shared libraries,
 # so don't build the _pic version.
@@ -831,11 +920,13 @@ ARM_APCS_FLAGS+=${${ACTIVE_CC} == "clang":? -target ${MACHINE_GNU_ARCH}--netbsde
 GENASSYM_CPPFLAGS+=	${${ACTIVE_CC} == "clang":? -no-integrated-as :}
 
 TARGETS+=	all clean cleandir depend dependall includes \
-		install lint obj regress tags html analyze
+		install lint obj regress tags html analyze describe \
+		rumpdescribe
 PHONY_NOTMAIN =	all clean cleandir depend dependall distclean includes \
 		install lint obj regress beforedepend afterdepend \
 		beforeinstall afterinstall realinstall realdepend realall \
-		html subdir-all subdir-install subdir-depend analyze
+		html subdir-all subdir-install subdir-depend analyze describe \
+		rumpdescribe
 .PHONY:		${PHONY_NOTMAIN}
 .NOTMAIN:	${PHONY_NOTMAIN}
 
@@ -900,16 +991,21 @@ MK${var}:=	yes
 .if ${MACHINE_ARCH} == "x86_64" || ${MACHINE_ARCH} == "sparc64" \
     || ${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el" \
     || ${MACHINE_ARCH} == "powerpc64" || ${MACHINE_CPU} == "aarch64" \
-    || ${MACHINE_ARCH} == "riscv64" \
-    || !empty(MACHINE_ARCH:Mearm*)
+    || ${MACHINE_ARCH} == "riscv64" || !empty(MACHINE_ARCH:Mearm*)
 MKCOMPAT?=	yes
 .else
 # Don't let this build where it really isn't supported.
 MKCOMPAT:=	no
 .endif
 
-.if ${MACHINE_ARCH} == "x86_64" || ${MACHINE_ARCH} == "i386" || \
-    (${MACHINE} == "evbppc" && ${MACHINE_ARCH} == "powerpc")
+.if ${MKCOMPAT} == "no"
+MKCOMPATTESTS:=	no
+MKCOMPATX11:=	no
+.endif
+
+.if ${MACHINE_ARCH} == "x86_64" || ${MACHINE_ARCH} == "i386" \
+    || ${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el" \
+    || (${MACHINE} == "evbppc" && ${MACHINE_ARCH} == "powerpc")
 MKCOMPATMODULES?=	yes
 .else
 MKCOMPATMODULES:=	no
@@ -953,6 +1049,38 @@ MKBINUTILS?=	${MKBFD}
 #
 .if ${MACHINE} == "amd64"
 MKZFS?=		yes
+.endif
+
+#
+# DTrace works on amd64, i386 and earm*
+#
+
+.if ${MACHINE_ARCH} == "i386" || \
+    ${MACHINE_ARCH} == "x86_64" || \
+    !empty(MACHINE_ARCH:Mearm*)
+MKDTRACE?=	yes
+MKCTF?=		yes
+.endif
+#
+# PIE is enabled on amd64 by default
+#
+.if ${MACHINE_ARCH} == "i386" || \
+    ${MACHINE_ARCH} == "x86_64" || \
+    ${MACHINE} == "evbarm" || \
+    ${MACHINE} == "sparc64"
+MKPIE?=		yes
+.else
+MKPIE?=		no
+.endif
+
+#
+# RELRO is enabled on i386 and amd64 by default
+#
+.if ${MACHINE_ARCH} == "i386" || \
+    ${MACHINE_ARCH} == "x86_64"
+MKRELRO?=	partial
+.else
+MKRELRO?=	no
 .endif
 
 #
@@ -1004,7 +1132,7 @@ MKKMOD=		no
 #
 _MKVARS.no= \
 	MKBSDGREP MKBSDTAR \
-	MKCATPAGES MKCRYPTO_RC5 MKCTF MKDEBUG \
+	MKCATPAGES MKCOMPATTESTS MKCOMPATX11 MKCRYPTO_RC5 MKCTF MKDEBUG \
 	MKDEBUGLIB MKDTRACE MKEXTSRC MKGROFFHTMLDOC \
 	MKKYUA MKLLD MKLLDB MKLINT \
 	MKMANZ MKMCLINKER MKOBJDIRS \
@@ -1018,27 +1146,12 @@ ${var}?=	${${var}.${MACHINE_ARCH}:Uno}
 .endfor
 
 #
-# Do we default to XFree86 or Xorg for this platform?
-#
-.if \
-    ${MACHINE} == "acorn32"	|| \
-    ${MACHINE} == "alpha"	|| \
-    ${MACHINE} == "amiga"	|| \
-    ${MACHINE} == "mac68k"	|| \
-    ${MACHINE} == "pmax"	|| \
-    ${MACHINE} == "sun3"
-X11FLAVOUR?=	XFree86
-.else
-X11FLAVOUR?=	Xorg
-.endif
-
-#
 # Which platforms build the xorg-server drivers (as opposed
 # to just Xnest and Xvfb.)
 #
-.if ${X11FLAVOUR} == "Xorg"	&& ( \
-    ${MACHINE} == "alpha"	|| \
+.if ${MACHINE} == "alpha"	|| \
     ${MACHINE} == "amd64"	|| \
+    ${MACHINE} == "amiga"	|| \
     ${MACHINE} == "bebox"	|| \
     ${MACHINE} == "cats"	|| \
     ${MACHINE} == "dreamcast"	|| \
@@ -1050,7 +1163,9 @@ X11FLAVOUR?=	Xorg
     ${MACHINE} == "hpcmips"	|| \
     ${MACHINE} == "hpcsh"	|| \
     ${MACHINE} == "i386"	|| \
+    ${MACHINE} == "ibmnws"	|| \
     ${MACHINE} == "luna68k"	|| \
+    ${MACHINE} == "mac68k"	|| \
     ${MACHINE} == "macppc"	|| \
     ${MACHINE} == "netwinder"	|| \
     ${MACHINE} == "newsmips"	|| \
@@ -1061,7 +1176,7 @@ X11FLAVOUR?=	Xorg
     ${MACHINE} == "sparc"	|| \
     ${MACHINE} == "sparc64"	|| \
     ${MACHINE} == "vax"		|| \
-    ${MACHINE} == "zaurus"	)
+    ${MACHINE} == "zaurus"
 MKXORG_SERVER?=yes
 .else
 MKXORG_SERVER?=no
@@ -1121,11 +1236,13 @@ MKNLS:=		no
 .if !empty(MACHINE_ARCH:Mearm*)
 _NEEDS_LIBCXX.${MACHINE_ARCH}=	yes
 .endif
+_NEEDS_LIBCXX.aarch64=		yes
 _NEEDS_LIBCXX.i386=		yes
 _NEEDS_LIBCXX.powerpc=		yes
 _NEEDS_LIBCXX.powerpc64=	yes
+_NEEDS_LIBCXX.sparc=		yes
+_NEEDS_LIBCXX.sparc64=		yes
 _NEEDS_LIBCXX.x86_64=		yes
-_NEEDS_LIBCXX.aarch64=		yes
 
 .if ${MKLLVM} == "yes" && ${_NEEDS_LIBCXX.${MACHINE_ARCH}:Uno} == "yes"
 MKLIBCXX:=	yes
@@ -1229,13 +1346,8 @@ X11SRCDIR=		/usr/xsrc
 .endif
 .endif # !defined(X11SRCDIR)
 
-X11SRCDIR.xc?=		${X11SRCDIR}/xfree/xc
 X11SRCDIR.local?=	${X11SRCDIR}/local
-.if ${X11FLAVOUR} == "Xorg"
 X11ROOTDIR?=		/usr/X11R7
-.else
-X11ROOTDIR?=		/usr/X11R6
-.endif
 X11BINDIR?=		${X11ROOTDIR}/bin
 X11ETCDIR?=		/etc/X11
 X11FONTDIR?=		${X11ROOTDIR}/lib/X11/fonts
@@ -1243,7 +1355,7 @@ X11INCDIR?=		${X11ROOTDIR}/include
 X11LIBDIR?=		${X11ROOTDIR}/lib/X11
 X11MANDIR?=		${X11ROOTDIR}/man
 X11SHAREDIR?=		${X11ROOTDIR}/share
-X11USRLIBDIR?=		${X11ROOTDIR}/lib
+X11USRLIBDIR?=		${X11ROOTDIR}/lib${MLIBDIR:D/${MLIBDIR}}
 
 #
 # New modular-xorg based builds
@@ -1251,7 +1363,7 @@ X11USRLIBDIR?=		${X11ROOTDIR}/lib
 X11SRCDIRMIT?=		${X11SRCDIR}/external/mit
 .for _lib in \
 	FS ICE SM X11 XScrnSaver XTrap Xau Xcomposite Xcursor Xdamage \
-	Xdmcp Xevie Xext Xfixes Xfont Xft Xi Xinerama Xmu Xpm \
+	Xdmcp Xevie Xext Xfixes Xfont Xft Xi Xinerama Xmu Xpresent Xpm \
 	Xrandr Xrender Xres Xt Xtst Xv XvMC Xxf86dga Xxf86misc Xxf86vm drm \
 	fontenc xkbfile xkbui Xaw Xfontcache pciaccess xcb \
 	pthread-stubs
@@ -1266,15 +1378,25 @@ X11SRCDIR.${_lib}?=		${X11SRCDIRMIT}/lib${_lib}/dist
 X11SRCDIR.${_proto}proto?=		${X11SRCDIRMIT}/${_proto}proto/dist
 .endfor
 
+# During transition from xorg-server 1.10 to 1.18
+.if 0
+XORG_SERVER_SUBDIR?=xorg-server
+.else
+XORG_SERVER_SUBDIR?=xorg-server.old
+.endif
+
+X11SRCDIR.xorg-server?=		${X11SRCDIRMIT}/${XORG_SERVER_SUBDIR}/dist
+
 .for _dir in \
 	xtrans fontconfig freetype evieext mkfontscale bdftopcf \
-	xkbcomp xorg-cf-files imake xorg-server xbiff xkeyboard-config \
+	xkbcomp xorg-cf-files imake xbiff xkeyboard-config \
 	xbitmaps appres xeyes xev xedit sessreg pixman \
 	beforelight bitmap editres makedepend fonttosfnt fslsfonts fstobdf \
 	glu glw mesa-demos MesaGLUT MesaLib MesaLib7 \
 	ico iceauth listres lndir \
 	luit xproxymanagementprotocol mkfontdir oclock proxymngr rgb \
-	setxkbmap smproxy twm viewres x11perf xauth xcalc xclipboard \
+	rstart setxkbmap showfont smproxy twm viewres \
+	x11perf xauth xcalc xclipboard \
 	xclock xcmsdb xconsole xditview xdpyinfo xdriinfo xdm \
 	xfd xf86dga xfindproxy xfontsel xfwp xgamma xgc xhost xinit \
 	xkill xload xlogo xlsatoms xlsclients xlsfonts xmag xmessage \
@@ -1302,8 +1424,9 @@ X11SRCDIR.xf86-input-${_i}?=	${X11SRCDIRMIT}/xf86-input-${_i}/dist
 
 .for _v in \
 	ag10e apm ark ast ati ati-kms chips cirrus crime \
-	geode glint i128 i740 igs imstt intel intel-old mach64 mga \
-	neomagic newport nsc nv nvxbox openchrome pnozz \
+	geode glint i128 i740 igs imstt intel intel-old \
+	modesetting mach64 mga \
+	neomagic newport nouveau nsc nv nvxbox openchrome pnozz \
 	r128 radeonhd rendition \
 	s3 s3virge savage siliconmotion sis suncg14 \
 	suncg6 sunffb sunleo suntcx \
@@ -1317,11 +1440,7 @@ MKRADEONFIRMWARE?=		yes
 .endif
 MKRADEONFIRMWARE?=		no
 
-.if ${X11FLAVOUR} == "Xorg"
 X11DRI?=			yes
-.endif
-
-X11DRI?=			no
 X11LOADABLE?=			yes
 
 
@@ -1428,6 +1547,12 @@ _MKTARGET_YACC?=	${_MKMSG_YACC} ${.CURDIR:T}/${.TARGET}
 TARGETS+=	lintmanpages
 .endif
 
-TESTSBASE=	/usr/tests
+TESTSBASE=	/usr/tests${MLIBDIR:D/${MLIBDIR}}
+
+# Override with tools versions if needed
+.if ${MKCTF:Uno} != "no" && !defined(NOCTF)
+CTFCONVERT=	${TOOL_CTFCONVERT}
+CTFMERGE=	${TOOL_CTFMERGE}
+.endif
 
 .endif	# !defined(_BSD_OWN_MK_)

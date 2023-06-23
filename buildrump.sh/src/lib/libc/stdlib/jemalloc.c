@@ -1,4 +1,4 @@
-/*	$NetBSD: jemalloc.c,v 1.37 2015/01/20 18:31:25 christos Exp $	*/
+/*	$NetBSD: jemalloc.c,v 1.40 2016/04/12 18:07:08 joerg Exp $	*/
 
 /*-
  * Copyright (C) 2006,2007 Jason Evans <jasone@FreeBSD.org>.
@@ -118,7 +118,7 @@
 
 #include <sys/cdefs.h>
 /* __FBSDID("$FreeBSD: src/lib/libc/stdlib/malloc.c,v 1.147 2007/06/15 22:00:16 jasone Exp $"); */ 
-__RCSID("$NetBSD: jemalloc.c,v 1.37 2015/01/20 18:31:25 christos Exp $");
+__RCSID("$NetBSD: jemalloc.c,v 1.40 2016/04/12 18:07:08 joerg Exp $");
 
 #ifdef __FreeBSD__
 #include "libc_private.h"
@@ -143,8 +143,8 @@ __RCSID("$NetBSD: jemalloc.c,v 1.37 2015/01/20 18:31:25 christos Exp $");
 #ifdef __FreeBSD__
 #include <machine/atomic.h>
 #include <machine/cpufunc.h>
-#endif
 #include <machine/vmparam.h>
+#endif
 
 #include <errno.h>
 #include <limits.h>
@@ -783,20 +783,58 @@ static unsigned		next_arena;
 static malloc_mutex_t	arenas_mtx; /* Protects arenas initialization. */
 #endif
 
-#ifndef NO_TLS
 /*
  * Map of pthread_self() --> arenas[???], used for selecting an arena to use
  * for allocations.
  */
-static __thread arena_t	*arenas_map;
-#define	get_arenas_map()	(arenas_map)
-#define	set_arenas_map(x)	(arenas_map = x)
+#ifndef NO_TLS
+static __thread arena_t	**arenas_map;
 #else
-#ifdef _REENTRANT
-static thread_key_t arenas_map_key;
+static arena_t	**arenas_map;
 #endif
-#define	get_arenas_map()	thr_getspecific(arenas_map_key)
-#define	set_arenas_map(x)	thr_setspecific(arenas_map_key, x)
+
+#if !defined(NO_TLS) || !defined(_REENTRANT)
+# define	get_arenas_map()	(arenas_map)
+# define	set_arenas_map(x)	(arenas_map = x)
+#else
+
+static thread_key_t arenas_map_key = -1;
+
+static inline arena_t **
+get_arenas_map(void)
+{
+	if (!__isthreaded)
+		return arenas_map;
+
+	if (arenas_map_key == -1) {
+		(void)thr_keycreate(&arenas_map_key, NULL);
+		if (arenas_map != NULL) {
+			thr_setspecific(arenas_map_key, arenas_map);
+			arenas_map = NULL;
+		}
+	}
+
+	return thr_getspecific(arenas_map_key);
+}
+
+static __inline void
+set_arenas_map(arena_t **a)
+{
+	if (!__isthreaded) {
+		arenas_map = a;
+		return;
+	}
+
+	if (arenas_map_key == -1) {
+		(void)thr_keycreate(&arenas_map_key, NULL);
+		if (arenas_map != NULL) {
+			_DIAGASSERT(arenas_map == a);
+			arenas_map = NULL;
+		}
+	}
+
+	thr_setspecific(arenas_map_key, a);
+}
 #endif
 
 #ifdef MALLOC_STATS
@@ -1623,6 +1661,11 @@ arena_chunk_comp(arena_chunk_t *a, arena_chunk_t *b)
 	assert(a != NULL);
 	assert(b != NULL);
 
+	if (a->max_frun_npages < b->max_frun_npages)
+		return -1;
+	if (a->max_frun_npages > b->max_frun_npages)
+		return 1;
+
 	if ((uintptr_t)a < (uintptr_t)b)
 		return (-1);
 	else if (a == b)
@@ -1874,9 +1917,6 @@ arena_chunk_alloc(arena_t *arena)
 
 		chunk->arena = arena;
 
-		/* LINTED */
-		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
-
 		/*
 		 * Claim that no pages are in use, since the header is merely
 		 * overhead.
@@ -1896,6 +1936,8 @@ arena_chunk_alloc(arena_t *arena)
 		chunk->map[chunk_npages - 1].npages = chunk_npages -
 		    arena_chunk_header_npages;
 		chunk->map[chunk_npages - 1].pos = POS_FREE;
+
+		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
 	}
 
 	return (chunk);
@@ -1932,30 +1974,44 @@ arena_chunk_dealloc(arena_t *arena, arena_chunk_t *chunk)
 static arena_run_t *
 arena_run_alloc(arena_t *arena, size_t size)
 {
-	arena_chunk_t *chunk;
+	arena_chunk_t *chunk, *chunk_tmp;
 	arena_run_t *run;
-	unsigned need_npages, limit_pages, compl_need_npages;
+	unsigned need_npages;
 
 	assert(size <= (chunksize - (arena_chunk_header_npages <<
 	    pagesize_2pow)));
 	assert((size & pagesize_mask) == 0);
 
 	/*
-	 * Search through arena's chunks in address order for a free run that is
-	 * large enough.  Look for the first fit.
+	 * Search through the arena chunk tree for a large enough free run.
+	 * Tree order ensures that any exact fit is picked immediately or
+	 * otherwise the lowest address of the next size.
 	 */
 	need_npages = (unsigned)(size >> pagesize_2pow);
-	limit_pages = chunk_npages - arena_chunk_header_npages;
-	compl_need_npages = limit_pages - need_npages;
 	/* LINTED */
-	RB_FOREACH(chunk, arena_chunk_tree_s, &arena->chunks) {
+	for (;;) {
+		chunk_tmp = RB_ROOT(&arena->chunks);
+		chunk = NULL;
+		while (chunk_tmp) {
+			if (chunk_tmp->max_frun_npages == need_npages) {
+				chunk = chunk_tmp;
+				break;
+			}
+			if (chunk_tmp->max_frun_npages < need_npages) {
+				chunk_tmp = RB_RIGHT(chunk_tmp, link);
+				continue;
+			}
+			chunk = chunk_tmp;
+			chunk_tmp = RB_LEFT(chunk, link);
+		}
+		if (chunk == NULL)
+			break;
 		/*
-		 * Avoid searching this chunk if there are not enough
-		 * contiguous free pages for there to possibly be a large
-		 * enough free run.
+		 * At this point, the chunk must have a cached run size large
+		 * enough to fit the allocation.
 		 */
-		if (chunk->pages_used <= compl_need_npages &&
-		    need_npages <= chunk->max_frun_npages) {
+		assert(need_npages <= chunk->max_frun_npages);
+		{
 			arena_chunk_map_t *mapelm;
 			unsigned i;
 			unsigned max_frun_npages = 0;
@@ -1993,7 +2049,9 @@ arena_run_alloc(arena_t *arena, size_t size)
 			 * chunk->min_frun_ind was already reset above (if
 			 * necessary).
 			 */
+			RB_REMOVE(arena_chunk_tree_s, &arena->chunks, chunk);
 			chunk->max_frun_npages = max_frun_npages;
+			RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
 		}
 	}
 
@@ -2076,8 +2134,11 @@ arena_run_dalloc(arena_t *arena, arena_run_t *run, size_t size)
 		assert(chunk->map[run_ind + run_pages - 1].pos == POS_FREE);
 	}
 
-	if (chunk->map[run_ind].npages > chunk->max_frun_npages)
+	if (chunk->map[run_ind].npages > chunk->max_frun_npages) {
+		RB_REMOVE(arena_chunk_tree_s, &arena->chunks, chunk);
 		chunk->max_frun_npages = chunk->map[run_ind].npages;
+		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
+	}
 	if (run_ind < chunk->min_frun_ind)
 		chunk->min_frun_ind = run_ind;
 
@@ -3653,11 +3714,6 @@ malloc_init_hard(void)
 		 */
 		opt_narenas_lshift += 2;
 	}
-
-#ifdef NO_TLS
-	/* Initialize arena key. */
-	(void)thr_keycreate(&arenas_map_key, NULL);
-#endif
 
 	/* Determine how many arenas to use. */
 	narenas = ncpus;

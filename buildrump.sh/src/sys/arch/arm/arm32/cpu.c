@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.c,v 1.108 2015/05/17 06:30:06 matt Exp $	*/
+/*	$NetBSD: cpu.c,v 1.114 2016/07/11 14:35:00 kiyohara Exp $	*/
 
 /*
  * Copyright (c) 1995 Mark Brinicombe.
@@ -46,7 +46,7 @@
 
 #include <sys/param.h>
 
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.108 2015/05/17 06:30:06 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.114 2016/07/11 14:35:00 kiyohara Exp $");
 
 #include <sys/systm.h>
 #include <sys/conf.h>
@@ -89,7 +89,7 @@ cpu_attach(device_t dv, cpuid_t id)
 
 		/* Get the CPU ID from coprocessor 15 */
 
-		ci->ci_arm_cpuid = cpu_id();
+		ci->ci_arm_cpuid = cpu_idnum();
 		ci->ci_arm_cputype = ci->ci_arm_cpuid & CPU_ID_CPU_MASK;
 		ci->ci_arm_cpurev = ci->ci_arm_cpuid & CPU_ID_REVISION_MASK;
 	} else {
@@ -501,6 +501,8 @@ const struct cpuidtab cpuids[] = {
 	  pN_steppings, "7A" },
 	{ CPU_ID_CORTEXA8R3,	CPU_CLASS_CORTEX,	"Cortex-A8 r3",
 	  pN_steppings, "7A" },
+	{ CPU_ID_CORTEXA9R1,	CPU_CLASS_CORTEX,	"Cortex-A9 r1",
+	  pN_steppings, "7A" },
 	{ CPU_ID_CORTEXA9R2,	CPU_CLASS_CORTEX,	"Cortex-A9 r2",
 	  pN_steppings, "7A" },
 	{ CPU_ID_CORTEXA9R3,	CPU_CLASS_CORTEX,	"Cortex-A9 r3",
@@ -513,6 +515,14 @@ const struct cpuidtab cpuids[] = {
 	  pN_steppings, "7A" },
 	{ CPU_ID_CORTEXA17R1,	CPU_CLASS_CORTEX,	"Cortex-A17 r1",
 	  pN_steppings, "7A" },
+	{ CPU_ID_CORTEXA53R0,	CPU_CLASS_CORTEX,	"Cortex-A53 r0",
+	  pN_steppings, "8A" },
+	{ CPU_ID_CORTEXA57R0,	CPU_CLASS_CORTEX,	"Cortex-A57 r0",
+	  pN_steppings, "8A" },
+	{ CPU_ID_CORTEXA57R1,	CPU_CLASS_CORTEX,	"Cortex-A57 r1",
+	  pN_steppings, "8A" },
+	{ CPU_ID_CORTEXA72R0,	CPU_CLASS_CORTEX,	"Cortex-A72 r0",
+	  pN_steppings, "8A" },
 
 	{ CPU_ID_MV88SV581X_V6, CPU_CLASS_PJ4B,      "Sheeva 88SV581x",
 	  generic_steppings },
@@ -840,10 +850,13 @@ identify_features(device_t dv)
 	cpu_processor_features[0] = armreg_pfr0_read();
 	cpu_processor_features[1] = armreg_pfr1_read();
 
+	aprint_debug_dev(dv, "sctlr: %#x\n", armreg_sctlr_read());
+	aprint_debug_dev(dv, "actlr: %#x\n", armreg_auxctl_read());
+	aprint_debug_dev(dv, "revidr: %#x\n", armreg_revidr_read());
 #ifdef MULTIPROCESSOR
-	aprint_verbose_dev(dv, "mpidr: %#x\n", armreg_mpidr_read());
+	aprint_debug_dev(dv, "mpidr: %#x\n", armreg_mpidr_read());
 #endif
-	aprint_verbose_dev(dv,
+	aprint_debug_dev(dv,
 	    "isar: [0]=%#x [1]=%#x [2]=%#x [3]=%#x, [4]=%#x, [5]=%#x\n",
 	    cpu_instruction_set_attributes[0],
 	    cpu_instruction_set_attributes[1],
@@ -851,11 +864,11 @@ identify_features(device_t dv)
 	    cpu_instruction_set_attributes[3],
 	    cpu_instruction_set_attributes[4],
 	    cpu_instruction_set_attributes[5]);
-	aprint_verbose_dev(dv,
+	aprint_debug_dev(dv,
 	    "mmfr: [0]=%#x [1]=%#x [2]=%#x [3]=%#x\n",
 	    cpu_memory_model_features[0], cpu_memory_model_features[1],
 	    cpu_memory_model_features[2], cpu_memory_model_features[3]);
-	aprint_verbose_dev(dv,
+	aprint_debug_dev(dv,
 	    "pfr: [0]=%#x [1]=%#x\n",
 	    cpu_processor_features[0], cpu_processor_features[1]);
 }

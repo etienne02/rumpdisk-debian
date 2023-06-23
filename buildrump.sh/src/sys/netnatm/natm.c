@@ -1,4 +1,4 @@
-/*	$NetBSD: natm.c,v 1.49 2015/05/02 17:18:04 rtr Exp $	*/
+/*	$NetBSD: natm.c,v 1.52 2016/06/10 13:31:44 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 1996 Charles D. Cranor and Washington University.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: natm.c,v 1.49 2015/05/02 17:18:04 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: natm.c,v 1.52 2016/06/10 13:31:44 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/kmem.h>
@@ -125,7 +125,7 @@ static int
 natm_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 {
 	int error = 0, s2;
-	struct natmpcb *npcb;
+	struct natmpcb *npcb = (struct natmpcb *)so->so_pcb;
 	struct sockaddr_natm *snatm = (struct sockaddr_natm *)nam;
 	struct atm_pseudoioctl api;
 	struct atm_pseudohdr *aph;
@@ -135,7 +135,7 @@ natm_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 	KASSERT(solocked(so));
 
 	/*
-	 * validate nam and npcb
+	 * validate snatm and npcb
 	 */
 
 	if (snatm->snatm_len != sizeof(*snatm) ||
@@ -457,7 +457,7 @@ next:
     panic("natmintr no HDR");
 #endif
 
-  npcb = (struct natmpcb *) m->m_pkthdr.rcvif; /* XXX: overloaded */
+  npcb = (struct natmpcb *) m_get_rcvif_NOMPSAFE(m); /* XXX: overloaded */
   so = npcb->npcb_socket;
 
   s = splnet();			/* could have atm devs @ different levels */
@@ -477,10 +477,10 @@ next:
   }
 
 #ifdef NEED_TO_RESTORE_IFP
-  m->m_pkthdr.rcvif = npcb->npcb_ifp;
+  m_set_rcvif(m, npcb->npcb_ifp);
 #else
 #ifdef DIAGNOSTIC
-m->m_pkthdr.rcvif = NULL;	/* null it out to be safe */
+  m_reset_rcvif(m);	/* null it out to be safe */
 #endif
 #endif
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: vm.c,v 1.166 2015/04/18 15:49:18 pooka Exp $	*/
+/*	$NetBSD: vm.c,v 1.170 2016/07/20 17:03:50 christos Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.166 2015/04/18 15:49:18 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.170 2016/07/20 17:03:50 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -55,8 +55,6 @@ __KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.166 2015/04/18 15:49:18 pooka Exp $");
 
 #include <machine/pmap.h>
 
-#include <rump/rumpuser.h>
-
 #include <uvm/uvm.h>
 #include <uvm/uvm_ddb.h>
 #include <uvm/uvm_pdpolicy.h>
@@ -64,8 +62,10 @@ __KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.166 2015/04/18 15:49:18 pooka Exp $");
 #include <uvm/uvm_readahead.h>
 #include <uvm/uvm_device.h>
 
-#include "rump_private.h"
-#include "rump_vfs_private.h"
+#include <rump-sys/kern.h>
+#include <rump-sys/vfs.h>
+
+#include <rump/rumpuser.h>
 
 kmutex_t uvm_pageqlock; /* non-free page lock */
 kmutex_t uvm_fpageqlock; /* free page lock, non-gpl license */
@@ -700,7 +700,7 @@ ubc_purge(struct uvm_object *uobj)
 }
 
 vaddr_t
-uvm_default_mapaddr(struct proc *p, vaddr_t base, vsize_t sz)
+uvm_default_mapaddr(struct proc *p, vaddr_t base, vsize_t sz, int topdown)
 {
 
 	return 0;
@@ -779,6 +779,12 @@ uvm_km_free(struct vm_map *map, vaddr_t vaddr, vsize_t size, uvm_flag_t flags)
 		rumpuser_unmap((void *)vaddr, size);
 	else
 		rumpuser_free((void *)vaddr, size);
+}
+
+int
+uvm_km_protect(struct vm_map *map, vaddr_t vaddr, vsize_t size, vm_prot_t prot)
+{
+	return 0;
 }
 
 struct vm_map *
@@ -1176,7 +1182,7 @@ uvm_pageout(void *arg)
 		    uvmexp.paging == 0) {
 			rumpuser_dprintf("pagedaemoness: failed to reclaim "
 			    "memory ... sleeping (deadlock?)\n");
-			cv_timedwait(&pdaemoncv, &pdaemonmtx, hz);
+			kpause("pddlk", false, hz, &pdaemonmtx);
 		}
 	}
 

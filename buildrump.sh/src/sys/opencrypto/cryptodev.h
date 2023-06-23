@@ -1,4 +1,4 @@
-/*	$NetBSD: cryptodev.h,v 1.25 2011/06/09 14:41:24 drochner Exp $ */
+/*	$NetBSD: cryptodev.h,v 1.28 2016/07/07 06:55:43 msaitoh Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptodev.h,v 1.2.2.6 2003/07/02 17:04:50 sam Exp $	*/
 /*	$OpenBSD: cryptodev.h,v 1.33 2002/07/17 23:52:39 art Exp $	*/
 
@@ -87,6 +87,7 @@
 
 #include <sys/ioccom.h>
 #include <sys/condvar.h>
+#include <sys/time.h>
 
 /* Some initial values */
 #define CRYPTO_DRIVERS_INITIAL	4
@@ -250,7 +251,7 @@ struct crypt_mop {
 struct crypt_sfop {
 	size_t		count;
 	u_int32_t	*sesid;
-}; 
+};
 
 struct crypt_sgop {
 	size_t		count;
@@ -316,7 +317,7 @@ struct crypt_result {
 struct cryptret {
 	size_t		count;		/* space for how many */
 	struct crypt_result *	results;	/* where to put them */
-}; 
+};
 
 
 /* Assymetric key operations */
@@ -625,7 +626,7 @@ extern	kmutex_t	crypto_mtx;
  * (This declaration doesnt really belong here but there's no header
  * for the raw framework.)
  */
-void	crypto_init(void);
+int	crypto_init(void);
 
 /*
  * Crypto-related utility routines used mainly by drivers.

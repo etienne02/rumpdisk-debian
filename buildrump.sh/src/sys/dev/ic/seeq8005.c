@@ -1,4 +1,4 @@
-/* $NetBSD: seeq8005.c,v 1.53 2015/04/13 16:33:24 riastradh Exp $ */
+/* $NetBSD: seeq8005.c,v 1.56 2016/06/10 13:27:13 ozaki-r Exp $ */
 
 /*
  * Copyright (c) 2000, 2001 Ben Harris
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: seeq8005.c,v 1.53 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: seeq8005.c,v 1.56 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -875,8 +875,10 @@ ea_start(struct ifnet *ifp)
 	 * us (actually ea_txpacket()) back when the card's ready for more
 	 * frames.
 	 */
-	if (ifp->if_flags & IFF_OACTIVE)
+	if (ifp->if_flags & IFF_OACTIVE) {
+		splx(s);
 		return;
+	}
 
 	/* Mark interface as output active */
 
@@ -1250,7 +1252,7 @@ ea_read(struct seeq8005_softc *sc, int addr, int len)
 	 */
 	bpf_mtap(ifp, m);
 
-	(*ifp->if_input)(ifp, m);
+	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
 /*
@@ -1272,7 +1274,7 @@ ea_get(struct seeq8005_softc *sc, int addr, int totlen, struct ifnet *ifp)
         MGETHDR(m, M_DONTWAIT, MT_DATA);
         if (m == NULL)
                 return NULL;
-        m->m_pkthdr.rcvif = ifp;
+        m_set_rcvif(m, ifp);
         m->m_pkthdr.len = totlen;
         m->m_len = MHLEN;
         top = NULL;

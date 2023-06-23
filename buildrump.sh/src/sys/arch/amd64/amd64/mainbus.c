@@ -1,4 +1,4 @@
-/*	$NetBSD: mainbus.c,v 1.35 2015/04/27 07:03:57 knakahara Exp $	*/
+/*	$NetBSD: mainbus.c,v 1.37 2016/06/21 11:33:32 nonaka Exp $	*/
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.35 2015/04/27 07:03:57 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.37 2016/06/21 11:33:32 nonaka Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -126,11 +126,15 @@ int mp_nintr;
 int mp_isa_bus = -1;
 int mp_eisa_bus = -1;
 
-#ifdef MPVERBOSE
+# ifdef MPVERBOSE
+#  if MPVERBOSE > 0
+int mp_verbose = MPVERBOSE;
+#  else
 int mp_verbose = 1;
-#else
+#  endif
+# else
 int mp_verbose = 0;
-#endif
+# endif
 #endif
 
 
@@ -244,6 +248,8 @@ mainbus_attach(device_t parent, device_t self, void *aux)
 		    PCI_FLAGS_MRL_OKAY | PCI_FLAGS_MRM_OKAY |
 		    PCI_FLAGS_MWI_OKAY;
 		mba.mba_acpi.aa_ic = &x86_isa_chipset;
+		mba.mba_acpi.aa_dmat = &pci_bus_dma_tag;
+		mba.mba_acpi.aa_dmat64 = &pci_bus_dma64_tag;
 		config_found_ia(self, "acpibus", &mba.mba_acpi, 0);
 	}
 #endif

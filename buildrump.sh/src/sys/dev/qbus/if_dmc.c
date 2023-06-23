@@ -1,4 +1,4 @@
-/*	$NetBSD: if_dmc.c,v 1.23 2014/06/05 23:48:16 rmind Exp $	*/
+/*	$NetBSD: if_dmc.c,v 1.26 2016/07/20 07:37:51 ozaki-r Exp $	*/
 /*
  * Copyright (c) 1982, 1986 Regents of the University of California.
  * All rights reserved.
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_dmc.c,v 1.23 2014/06/05 23:48:16 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_dmc.c,v 1.26 2016/07/20 07:37:51 ozaki-r Exp $");
 
 #undef DMCDEBUG	/* for base table dump on fatal error */
 
@@ -313,10 +313,13 @@ dmcinit(struct ifnet *ifp)
 	 * Check to see that an address has been set
 	 * (both local and destination for an address family).
 	 */
-	IFADDR_FOREACH(ifa, ifp)
+	s = pserialize_read_enter();
+	IFADDR_READER_FOREACH(ifa, ifp) {
 		if (ifa->ifa_addr->sa_family && ifa->ifa_dstaddr->sa_family)
 			break;
-	if (ifa == (struct ifaddr *) 0)
+	}
+	pserialize_read_exit(s);
+	if (ifa == NULL)
 		return 0;
 
 	if ((DMC_RBYTE(DMC_BSEL1) & DMC_RUN) == 0) {
@@ -762,14 +765,13 @@ dmcoutput(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst,
 	int type, error, s;
 	struct mbuf *m = m0;
 	struct dmc_header *dh;
-	ALTQ_DECL(struct altq_pktattr pktattr;)
 
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		error = ENETDOWN;
 		goto bad;
 	}
 
-	IFQ_CLASSIFY(&ifp->if_snd, m, dst->sa_family, &pktattr);
+	IFQ_CLASSIFY(&ifp->if_snd, m, dst->sa_family);
 
 	switch (dst->sa_family) {
 #ifdef	INET
@@ -807,7 +809,7 @@ dmcoutput(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst,
 	 * not yet active.
 	 */
 	s = splnet();
-	IFQ_ENQUEUE(&ifp->if_snd, m, &pktattr, error);
+	IFQ_ENQUEUE(&ifp->if_snd, m, error);
 	if (error) {
 		/* mbuf is already freed */
 		splx(s);

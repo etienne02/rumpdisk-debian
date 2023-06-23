@@ -1,4 +1,4 @@
-#	$NetBSD: files.pci,v 1.376 2015/03/28 14:09:59 jmcneill Exp $
+#	$NetBSD: files.pci,v 1.381 2016/05/01 10:21:02 nonaka Exp $
 #
 # Config file and device description for machine-independent PCI code.
 # Included by ports that need it.  Requires that the SCSI files be
@@ -781,6 +781,11 @@ file	dev/pci/if_atw_pci.c		atw_pci
 attach	rtw at pci with rtw_pci
 file	dev/pci/if_rtw_pci.c		rtw_pci
 
+# Realtek RTL8188CE Mini-PCIe
+device	rtwn: ifnet, arp, wlan, firmload
+attach	rtwn at pci
+file	dev/pci/if_rtwn.c		rtwn
+
 # Ralink RT2500/RT2600 PCI/Mini-PCI
 attach	ral at pci with ral_pci
 file	dev/pci/if_ral_pci.c		ral_pci
@@ -1131,13 +1136,17 @@ device	viomb
 attach	viomb at virtio
 file	dev/pci/viomb.c		viomb
 
-device	vioif
+device	vioif: ether, ifnet, arp
 attach	vioif at virtio
 file	dev/pci/if_vioif.c	vioif
 
 device	viornd
 attach	viornd at virtio
-file dev/pci/viornd.c		viornd
+file	dev/pci/viornd.c	viornd
+
+device	vioscsi: scsi
+attach	vioscsi at virtio
+file	dev/pci/vioscsi.c	vioscsi
 
 # Silicon Motion SM712(LynxEM+) frame buffer
 device	lynxfb: wsemuldisplaydev, rasops16
@@ -1166,5 +1175,14 @@ defflag	opt_gffb.h	GFFB_DEBUG
 attach	rtsx at pci with rtsx_pci
 file	dev/pci/rtsx_pci.c	rtsx_pci
 
+# NVM Express Controller
+attach	nvme at pci with nvme_pci
+file	dev/pci/nvme_pci.c	nvme_pci
+
 # PCI graphics devices with DRM/KMS
 include "external/bsd/drm2/pci/files.drmkms_pci"
+
+# Intel S1200,C2000 (non-pch) SMBus controller
+device	ismt: i2cbus
+attach	ismt at pci
+file	dev/pci/ismt.c		ismt

@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.155 2015/05/17 05:21:38 pgoyette Exp $
+#	$NetBSD: Makefile,v 1.167 2016/06/09 04:44:18 pgoyette Exp $
 
 .include <bsd.own.mk>
 
@@ -10,22 +10,24 @@ SUBDIR+=	adosfs
 SUBDIR+=	aio
 SUBDIR+=	blowfish
 SUBDIR+=	bpf
+SUBDIR+=	bpf_filter
 SUBDIR+=	camellia
 SUBDIR+=	cast128
 SUBDIR+=	ccd
 SUBDIR+=	cd9660
 SUBDIR+=	cgd
 SUBDIR+=	chfs
+SUBDIR+=	clockctl
 SUBDIR+=	crypto
 SUBDIR+=	coda
 SUBDIR+=	coda5
 SUBDIR+=	compat
-SUBDIR+=	compat_sysv
 SUBDIR+=	compat_ossaudio
 SUBDIR+=	coredump
 SUBDIR+=	dbcool
 SUBDIR+=	des
 SUBDIR+=	dk_subr
+SUBDIR+=	drvctl
 SUBDIR+=	efs
 SUBDIR+=	ext2fs
 SUBDIR+=	exec_script
@@ -42,11 +44,13 @@ SUBDIR+=	gpiosim
 SUBDIR+=	hfs
 SUBDIR+=	hythygtemp
 SUBDIR+=	i2cexec
+SUBDIR+=	i2c_bitbang
 SUBDIR+=	if_axe
 SUBDIR+=	if_axen
 SUBDIR+=	if_npflog
 SUBDIR+=	if_smsc
 SUBDIR+=	iic
+SUBDIR+=	ipl
 SUBDIR+=	kernfs
 SUBDIR+=	layerfs
 SUBDIR+=	lfs
@@ -81,6 +85,7 @@ SUBDIR+=	procfs
 SUBDIR+=	ptyfs
 SUBDIR+=	puffs
 SUBDIR+=	putter
+SUBDIR+=	raid
 SUBDIR+=	scsiverbose
 SUBDIR+=	sdtemp
 SUBDIR+=	secmodel_bsd44
@@ -110,6 +115,7 @@ SUBDIR+=	usbverbose
 SUBDIR+=	vcoda
 SUBDIR+=	v7fs
 SUBDIR+=	vnd
+SUBDIR+=	wapbl
 SUBDIR+=	zlib
 SUBDIR+=	tprof
 .if (defined(NOTYET))
@@ -206,13 +212,20 @@ SUBDIR+=	wmihp
 SUBDIR+=	wmimsi
 .endif
 
-.if ${MACHINE_CPU} == "arm" || !empty(MACHINE_ARCH:Mmips64*)
+.if ${MACHINE_CPU} == "arm" \
+    || (!empty(MACHINE_ARCH:Mmips64*) && !defined(BSD_MK_COMPAT_FILE))
 SUBDIR+=	compat_netbsd32
+SUBDIR+=	compat_netbsd32_nfssrv
+SUBDIR+=	compat_netbsd32_mqueue
+SUBDIR+=	compat_netbsd32_sysvipc
 .endif
 
 .if ${MACHINE_ARCH} == "x86_64"
 SUBDIR+=	compat_linux32
 SUBDIR+=	compat_netbsd32
+SUBDIR+=	compat_netbsd32_nfssrv
+SUBDIR+=	compat_netbsd32_mqueue
+SUBDIR+=	compat_netbsd32_sysvipc
 .endif
 
 .if ${MACHINE_ARCH} == "i386"

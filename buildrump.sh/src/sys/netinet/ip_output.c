@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_output.c,v 1.238 2015/04/27 10:14:44 ozaki-r Exp $	*/
+/*	$NetBSD: ip_output.c,v 1.259 2016/07/08 04:33:30 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -91,12 +91,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.238 2015/04/27 10:14:44 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.259 2016/07/08 04:33:30 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_ipsec.h"
 #include "opt_mrouting.h"
 #include "opt_net_mpsafe.h"
+#include "opt_mpls.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/kmem.h>
@@ -111,6 +114,7 @@ __KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.238 2015/04/27 10:14:44 ozaki-r Exp 
 #include <sys/systm.h>
 
 #include <net/if.h>
+#include <net/if_types.h>
 #include <net/route.h>
 #include <net/pfil.h>
 
@@ -138,6 +142,11 @@ __KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.238 2015/04/27 10:14:44 ozaki-r Exp 
 #include <netipsec/key.h>
 #endif
 
+#ifdef MPLS
+#include <netmpls/mpls.h>
+#include <netmpls/mpls_var.h>
+#endif
+
 static int ip_pcbopts(struct inpcb *, const struct sockopt *);
 static struct mbuf *ip_insertoptions(struct mbuf *, struct mbuf *, int *);
 static struct ifnet *ip_multicast_if(struct in_addr *, int *);
@@ -148,6 +157,66 @@ extern pfil_head_t *inet_pfil_hook;			/* XXX */
 
 int	ip_do_loopback_cksum = 0;
 
+static int
+ip_mark_mpls(struct ifnet * const ifp, struct mbuf * const m,
+    const struct rtentry *rt)
+{
+	int error = 0;
+#ifdef MPLS
+	union mpls_shim msh;
+
+	if (rt == NULL || rt_gettag(rt) == NULL ||
+	    rt_gettag(rt)->sa_family != AF_MPLS ||
+	    (m->m_flags & (M_MCAST | M_BCAST)) != 0 ||
+	    ifp->if_type != IFT_ETHER)
+		return 0;
+
+	msh.s_addr = MPLS_GETSADDR(rt);
+	if (msh.shim.label != MPLS_LABEL_IMPLNULL) {
+		struct m_tag *mtag;
+		/*
+		 * XXX tentative solution to tell ether_output
+		 * it's MPLS. Need some more efficient solution.
+		 */
+		mtag = m_tag_get(PACKET_TAG_MPLS,
+		    sizeof(int) /* dummy */,
+		    M_NOWAIT);
+		if (mtag == NULL)
+			return ENOMEM;
+		m_tag_prepend(m, mtag);
+	}
+#endif
+	return error;
+}
+
+/*
+ * Send an IP packet to a host.
+ */
+int
+ip_if_output(struct ifnet * const ifp, struct mbuf * const m,
+    const struct sockaddr * const dst, const struct rtentry *rt)
+{
+	int error = 0;
+
+	if (rt != NULL) {
+		error = rt_check_reject_route(rt, ifp);
+		if (error != 0) {
+			m_freem(m);
+			return error;
+		}
+	}
+
+	error = ip_mark_mpls(ifp, m, rt);
+	if (error != 0) {
+		m_freem(m);
+		return error;
+	}
+
+	error = if_output_lock(ifp, ifp, m, dst, rt);
+
+	return error;
+}
+
 /*
  * IP output.  The packet in mbuf chain m contains a skeletal IP
  * header (with len, off, ttl, proto, tos, src, dst).
@@ -155,11 +224,12 @@ int	ip_do_loopback_cksum = 0;
  * The mbuf opt, if present, will not be freed.
  */
 int
-ip_output(struct mbuf *m0, ...)
+ip_output(struct mbuf *m0, struct mbuf *opt, struct route *ro, int flags,
+    struct ip_moptions *imo, struct socket *so)
 {
 	struct rtentry *rt;
 	struct ip *ip;
-	struct ifnet *ifp;
+	struct ifnet *ifp, *mifp = NULL;
 	struct mbuf *m = m0;
 	int hlen = sizeof (struct ip);
 	int len, error = 0;
@@ -167,13 +237,8 @@ ip_output(struct mbuf *m0, ...)
 	const struct sockaddr_in *dst;
 	struct in_ifaddr *ia;
 	int isbroadcast;
-	struct mbuf *opt;
-	struct route *ro;
-	int flags, sw_csum;
+	int sw_csum;
 	u_long mtu;
-	struct ip_moptions *imo;
-	struct socket *so;
-	va_list ap;
 #ifdef IPSEC
 	struct secpolicy *sp = NULL;
 #endif
@@ -186,15 +251,10 @@ ip_output(struct mbuf *m0, ...)
 	struct sockaddr *rdst = &u.dst;	/* real IP destination, as opposed
 					 * to the nexthop
 					 */
+	struct psref psref;
+	int bound;
 
 	len = 0;
-	va_start(ap, m0);
-	opt = va_arg(ap, struct mbuf *);
-	ro = va_arg(ap, struct route *);
-	flags = va_arg(ap, int);
-	imo = va_arg(ap, struct ip_moptions *);
-	so = va_arg(ap, struct socket *);
-	va_end(ap);
 
 	MCLAIM(m, &ip_tx_mowner);
 
@@ -266,10 +326,17 @@ ip_output(struct mbuf *m0, ...)
 		isbroadcast = in_broadcast(dst->sin_addr, ifp);
 	} else if ((IN_MULTICAST(ip->ip_dst.s_addr) ||
 	    ip->ip_dst.s_addr == INADDR_BROADCAST) &&
-	    imo != NULL && imo->imo_multicast_ifp != NULL) {
-		ifp = imo->imo_multicast_ifp;
+	    imo != NULL && imo->imo_multicast_if_index != 0) {
+		bound = curlwp_bind();
+		ifp = mifp = if_get_byindex(imo->imo_multicast_if_index, &psref);
+		if (ifp == NULL) {
+			curlwp_bindx(bound);
+			IP_STATINC(IP_STAT_NOROUTE);
+			error = ENETUNREACH;
+			goto bad;
+		}
 		mtu = ifp->if_mtu;
-		IFP_TO_IA(ifp, ia);
+		ia = in_get_ia_from_ifp(ifp);
 		isbroadcast = 0;
 	} else {
 		if (rt == NULL)
@@ -337,7 +404,7 @@ ip_output(struct mbuf *m0, ...)
 			struct in_ifaddr *xia;
 			struct ifaddr *xifa;
 
-			IFP_TO_IA(ifp, xia);
+			xia = in_get_ia_from_ifp(ifp);
 			if (!xia) {
 				error = EADDRNOTAVAIL;
 				goto bad;
@@ -345,6 +412,10 @@ ip_output(struct mbuf *m0, ...)
 			xifa = &xia->ia_ifa;
 			if (xifa->ifa_getifa != NULL) {
 				xia = ifatoia((*xifa->ifa_getifa)(xifa, rdst));
+				if (xia == NULL) {
+					error = EADDRNOTAVAIL;
+					goto bad;
+				}
 			}
 			ip->ip_src = xia->ia_addr.sin_addr;
 		}
@@ -405,8 +476,13 @@ ip_output(struct mbuf *m0, ...)
 		struct ifaddr *xifa;
 
 		xifa = &ia->ia_ifa;
-		if (xifa->ifa_getifa != NULL)
+		if (xifa->ifa_getifa != NULL) {
 			ia = ifatoia((*xifa->ifa_getifa)(xifa, rdst));
+			if (ia == NULL) {
+				error = EADDRNOTAVAIL;
+				goto bad;
+			}
+		}
 		ip->ip_src = ia->ia_addr.sin_addr;
 	}
 
@@ -507,7 +583,7 @@ sendit:
 	 * search for the source address structure to
 	 * maintain output statistics.
 	 */
-	INADDR_TO_IA(ip->ip_src, ia);
+	ia = in_get_ia(ip->ip_src);
 #endif
 
 	/* Maybe skip checksums on loopback interfaces. */
@@ -560,13 +636,7 @@ sendit:
 		if (__predict_true(
 		    (m->m_pkthdr.csum_flags & M_CSUM_TSOv4) == 0 ||
 		    (ifp->if_capenable & IFCAP_TSOv4) != 0)) {
-#ifndef NET_MPSAFE
-			KERNEL_LOCK(1, NULL);
-#endif
-			error = (*ifp->if_output)(ifp, m, sa, rt);
-#ifndef NET_MPSAFE
-			KERNEL_UNLOCK_ONE(NULL);
-#endif
+			error = ip_if_output(ifp, m, sa, rt);
 		} else {
 			error = ip_tso_output(ifp, m, sa, rt);
 		}
@@ -634,15 +704,9 @@ sendit:
 		} else {
 			KASSERT((m->m_pkthdr.csum_flags &
 			    (M_CSUM_UDPv4 | M_CSUM_TCPv4)) == 0);
-#ifndef NET_MPSAFE
-			KERNEL_LOCK(1, NULL);
-#endif
-			error = (*ifp->if_output)(ifp, m,
+			error = ip_if_output(ifp, m,
 			    (m->m_flags & M_MCAST) ?
 			    sintocsa(rdst) : sintocsa(dst), rt);
-#ifndef NET_MPSAFE
-			KERNEL_UNLOCK_ONE(NULL);
-#endif
 		}
 	}
 	if (error == 0) {
@@ -657,6 +721,10 @@ done:
 		KEY_FREESP(&sp);
 	}
 #endif
+	if (mifp != NULL) {
+		if_put(mifp, &psref);
+		curlwp_bindx(bound);
+	}
 	return error;
 bad:
 	m_freem(m);
@@ -733,7 +801,7 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 			goto sendorfree;
 		}
 		m->m_pkthdr.len = mhlen + len;
-		m->m_pkthdr.rcvif = NULL;
+		m_reset_rcvif(m);
 		mhip->ip_sum = 0;
 		KASSERT((m->m_pkthdr.csum_flags & M_CSUM_IPv4) == 0);
 		if (sw_csum & M_CSUM_IPv4) {
@@ -1438,7 +1506,7 @@ ip_get_membership(const struct sockopt *sopt, struct ifnet **ifp,
 static int
 ip_add_membership(struct ip_moptions *imo, const struct sockopt *sopt)
 {
-	struct ifnet *ifp;
+	struct ifnet *ifp = NULL;	// XXX: gcc [ppc]
 	struct in_addr ia;
 	int i, error;
 
@@ -1494,8 +1562,8 @@ ip_add_membership(struct ip_moptions *imo, const struct sockopt *sopt)
 static int
 ip_drop_membership(struct ip_moptions *imo, const struct sockopt *sopt)
 {
-	struct in_addr ia;
-	struct ifnet *ifp;
+	struct in_addr ia = { .s_addr = 0 };	// XXX: gcc [ppc]
+	struct ifnet *ifp = NULL;		// XXX: gcc [ppc]
 	int i, error;
 
 	if (sopt->sopt_size == sizeof(struct ip_mreq))
@@ -1557,7 +1625,7 @@ ip_setmoptions(struct ip_moptions **pimo, const struct sockopt *sopt)
 		if (imo == NULL)
 			return ENOBUFS;
 
-		imo->imo_multicast_ifp = NULL;
+		imo->imo_multicast_if_index = 0;
 		imo->imo_multicast_addr.s_addr = INADDR_ANY;
 		imo->imo_multicast_ttl = IP_DEFAULT_MULTICAST_TTL;
 		imo->imo_multicast_loop = IP_DEFAULT_MULTICAST_LOOP;
@@ -1580,7 +1648,7 @@ ip_setmoptions(struct ip_moptions **pimo, const struct sockopt *sopt)
 		 * chosen every time a multicast packet is sent.
 		 */
 		if (in_nullhost(addr)) {
-			imo->imo_multicast_ifp = NULL;
+			imo->imo_multicast_if_index = 0;
 			break;
 		}
 		/*
@@ -1593,7 +1661,7 @@ ip_setmoptions(struct ip_moptions **pimo, const struct sockopt *sopt)
 			error = EADDRNOTAVAIL;
 			break;
 		}
-		imo->imo_multicast_ifp = ifp;
+		imo->imo_multicast_if_index = ifp->if_index;
 		if (ifindex)
 			imo->imo_multicast_addr = addr;
 		else
@@ -1631,7 +1699,7 @@ ip_setmoptions(struct ip_moptions **pimo, const struct sockopt *sopt)
 	/*
 	 * If all options have default values, no need to keep the mbuf.
 	 */
-	if (imo->imo_multicast_ifp == NULL &&
+	if (imo->imo_multicast_if_index == 0 &&
 	    imo->imo_multicast_ttl == IP_DEFAULT_MULTICAST_TTL &&
 	    imo->imo_multicast_loop == IP_DEFAULT_MULTICAST_LOOP &&
 	    imo->imo_num_memberships == 0) {
@@ -1649,20 +1717,27 @@ int
 ip_getmoptions(struct ip_moptions *imo, struct sockopt *sopt)
 {
 	struct in_addr addr;
-	struct in_ifaddr *ia;
 	uint8_t optval;
 	int error = 0;
 
 	switch (sopt->sopt_name) {
 	case IP_MULTICAST_IF:
-		if (imo == NULL || imo->imo_multicast_ifp == NULL)
+		if (imo == NULL || imo->imo_multicast_if_index == 0)
 			addr = zeroin_addr;
 		else if (imo->imo_multicast_addr.s_addr) {
 			/* return the value user has set */
 			addr = imo->imo_multicast_addr;
 		} else {
-			IFP_TO_IA(imo->imo_multicast_ifp, ia);
+			struct ifnet *ifp;
+			struct in_ifaddr *ia = NULL;
+			int s = pserialize_read_enter();
+
+			ifp = if_byindex(imo->imo_multicast_if_index);
+			if (ifp != NULL) {
+				ia = in_get_ia_from_ifp(ifp);
+			}
 			addr = ia ? ia->ia_addr.sin_addr : zeroin_addr;
+			pserialize_read_exit(s);
 		}
 		error = sockopt_set(sopt, &addr, sizeof(addr));
 		break;

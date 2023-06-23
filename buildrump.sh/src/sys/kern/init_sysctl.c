@@ -1,4 +1,4 @@
-/*	$NetBSD: init_sysctl.c,v 1.207 2015/05/20 11:17:24 pooka Exp $ */
+/*	$NetBSD: init_sysctl.c,v 1.211 2016/05/31 05:44:19 pgoyette Exp $ */
 
 /*-
  * Copyright (c) 2003, 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.207 2015/05/20 11:17:24 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.211 2016/05/31 05:44:19 pgoyette Exp $");
 
 #include "opt_sysv.h"
 #include "opt_compat_netbsd.h"
@@ -56,6 +56,7 @@ __KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.207 2015/05/20 11:17:24 pooka Exp 
 #include <sys/filedesc.h>
 #include <sys/tty.h>
 #include <sys/kmem.h>
+#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/exec.h>
@@ -64,7 +65,6 @@ __KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.207 2015/05/20 11:17:24 pooka Exp 
 #include <sys/stat.h>
 #include <sys/kauth.h>
 #include <sys/ktrace.h>
-#include <sys/ksem.h>
 
 #include <sys/cpu.h>
 
@@ -111,6 +111,7 @@ dcopyout(struct lwp *l, const void *kaddr, void *uaddr, size_t len)
 static int sysctl_kern_trigger_panic(SYSCTLFN_PROTO);
 #endif
 static int sysctl_kern_maxvnodes(SYSCTLFN_PROTO);
+static int sysctl_kern_messages(SYSCTLFN_PROTO);
 static int sysctl_kern_rtc_offset(SYSCTLFN_PROTO);
 static int sysctl_kern_maxproc(SYSCTLFN_PROTO);
 static int sysctl_kern_hostid(SYSCTLFN_PROTO);
@@ -591,60 +592,17 @@ SYSCTL_SETUP(sysctl_kern_setup, "sysctl kern subtree setup")
 			SYSCTL_DESCR("Information from build environment"),
 			NULL, 0, __UNCONST(buildinfo), 0,
 			CTL_KERN, CTL_CREATE, CTL_EOL);
-
-	/* kern.posix. */
-	sysctl_createv(clog, 0, NULL, &rnode,
-			CTLFLAG_PERMANENT,
-			CTLTYPE_NODE, "posix",
-			SYSCTL_DESCR("POSIX options"),
-			NULL, 0, NULL, 0,
+	sysctl_createv(clog, 0, NULL, NULL,
+			CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+			CTLTYPE_INT, "messages",
+			SYSCTL_DESCR("Kernel message verbosity"),
+			sysctl_kern_messages, 0, NULL, 0,
 			CTL_KERN, CTL_CREATE, CTL_EOL);
-	sysctl_createv(clog, 0, &rnode, NULL,
-			CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
-			CTLTYPE_INT, "semmax",
-			SYSCTL_DESCR("Maximal number of semaphores"),
-			NULL, 0, &ksem_max, 0,
-			CTL_CREATE, CTL_EOL);
 }
 
-SYSCTL_SETUP(sysctl_hw_setup, "sysctl hw subtree setup")
+SYSCTL_SETUP(sysctl_hw_misc_setup, "sysctl hw subtree misc setup")
 {
-	u_int u;
-	u_quad_t q;
-	const char *model = cpu_getmodel();
 
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_STRING, "machine",
-		       SYSCTL_DESCR("Machine class"),
-		       NULL, 0, machine, 0,
-		       CTL_HW, HW_MACHINE, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_STRING, "model",
-		       SYSCTL_DESCR("Machine model"),
-		       NULL, 0, __UNCONST(model), 0,
-		       CTL_HW, HW_MODEL, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_INT, "ncpu",
-		       SYSCTL_DESCR("Number of CPUs configured"),
-		       NULL, 0, &ncpu, 0,
-		       CTL_HW, HW_NCPU, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
-		       CTLTYPE_INT, "byteorder",
-		       SYSCTL_DESCR("System byte order"),
-		       NULL, BYTE_ORDER, NULL, 0,
-		       CTL_HW, HW_BYTEORDER, CTL_EOL);
-	u = ((u_int)physmem > (UINT_MAX / PAGE_SIZE)) ?
-		UINT_MAX : physmem * PAGE_SIZE;
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
-		       CTLTYPE_INT, "physmem",
-		       SYSCTL_DESCR("Bytes of physical memory"),
-		       NULL, u, NULL, 0,
-		       CTL_HW, HW_PHYSMEM, CTL_EOL);
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT,
 		       CTLTYPE_INT, "usermem",
@@ -652,49 +610,17 @@ SYSCTL_SETUP(sysctl_hw_setup, "sysctl hw subtree setup")
 		       sysctl_hw_usermem, 0, NULL, 0,
 		       CTL_HW, HW_USERMEM, CTL_EOL);
 	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
-		       CTLTYPE_INT, "pagesize",
-		       SYSCTL_DESCR("Software page size"),
-		       NULL, PAGE_SIZE, NULL, 0,
-		       CTL_HW, HW_PAGESIZE, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_STRING, "machine_arch",
-		       SYSCTL_DESCR("Machine CPU class"),
-		       NULL, 0, machine_arch, 0,
-		       CTL_HW, HW_MACHINE_ARCH, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
-		       CTLTYPE_INT, "alignbytes",
-		       SYSCTL_DESCR("Alignment constraint for all possible "
-				    "data types"),
-		       NULL, ALIGNBYTES, NULL, 0,
-		       CTL_HW, HW_ALIGNBYTES, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE|CTLFLAG_HEX,
 		       CTLTYPE_STRING, "cnmagic",
 		       SYSCTL_DESCR("Console magic key sequence"),
 		       sysctl_hw_cnmagic, 0, NULL, CNS_LEN,
 		       CTL_HW, HW_CNMAGIC, CTL_EOL);
-	q = (u_quad_t)physmem * PAGE_SIZE;
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
-		       CTLTYPE_QUAD, "physmem64",
-		       SYSCTL_DESCR("Bytes of physical memory"),
-		       NULL, q, NULL, 0,
-		       CTL_HW, HW_PHYSMEM64, CTL_EOL);
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT,
 		       CTLTYPE_QUAD, "usermem64",
 		       SYSCTL_DESCR("Bytes of non-kernel memory"),
 		       sysctl_hw_usermem, 0, NULL, 0,
 		       CTL_HW, HW_USERMEM64, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_INT, "ncpuonline",
-		       SYSCTL_DESCR("Number of CPUs online"),
-		       NULL, 0, &ncpuonline, 0,
-		       CTL_HW, HW_NCPUONLINE, CTL_EOL);
 }
 
 #ifdef DEBUG
@@ -837,6 +763,72 @@ sysctl_kern_maxvnodes(SYSCTLFN_ARGS)
 	}
 	vfs_reinit();
 	nchreinit();
+
+	return (0);
+}
+
+/*
+ * sysctl helper routine for kern.messages.
+ * Alters boothowto to display kernel messages in increasing verbosity
+ * from 0 to 4.
+ */
+
+#define MAXMESSAGES            4
+static int
+sysctl_kern_messages(SYSCTLFN_ARGS)
+{
+	int error, messageverbose, messagemask, newboothowto;
+	struct sysctlnode node;
+
+	messagemask = (AB_NORMAL|AB_QUIET|AB_SILENT|AB_VERBOSE|AB_DEBUG);
+	switch (boothowto & messagemask) {
+	case AB_SILENT:
+		messageverbose = 0;
+		break;
+	case AB_QUIET:
+		messageverbose = 1;
+		break;
+	case AB_VERBOSE:
+		messageverbose = 3;
+		break;
+	case AB_DEBUG:
+		messageverbose = 4;
+		break;
+	case AB_NORMAL:
+	default:
+		messageverbose = 2;
+}
+
+	node = *rnode;
+	node.sysctl_data = &messageverbose;
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error || newp == NULL)
+		return (error);
+	if (messageverbose < 0 || messageverbose > MAXMESSAGES)
+		return EINVAL;
+
+	/* Set boothowto */
+	newboothowto = boothowto & ~messagemask;
+
+	switch (messageverbose) {
+	case 0:
+		newboothowto |= AB_SILENT;
+		break;
+	case 1:
+		newboothowto |= AB_QUIET;
+		break;
+	case 3:
+		newboothowto |= AB_VERBOSE;
+		break;
+	case 4:
+		newboothowto |= AB_DEBUG;
+		break;
+	case 2:
+	default:                /* Messages default to normal. */
+		break;
+	}
+
+	boothowto = newboothowto;
 
 	return (0);
 }

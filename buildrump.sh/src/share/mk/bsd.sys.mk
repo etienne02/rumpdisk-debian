@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.sys.mk,v 1.245 2014/09/03 19:22:53 matt Exp $
+#	$NetBSD: bsd.sys.mk,v 1.260 2016/07/07 20:52:53 matt Exp $
 #
 # Build definitions used for NetBSD source tree builds.
 
@@ -14,10 +14,24 @@ error2:
 	@(echo "bsd.own.mk must be included before bsd.sys.mk" >& 2; exit 1)
 .endif
 
-.if ${MKREPRO:Uno} == "yes"
+# XXX: LLVM does not support -iremap and -fdebug-*
+.if ${MKREPRO:Uno} == "yes" && ${MKLLVM:Uno} != "yes"
+.export NETBSDSRCDIR DESTDIR X11SRCDIR
+
+.if !empty(DESTDIR)
+CPPFLAGS+=	-Wp,-iremap,${DESTDIR}:
+REPROFLAGS+=	-fdebug-prefix-map=\$$DESTDIR=
+.endif
+
 CPPFLAGS+=	-Wp,-iremap,${NETBSDSRCDIR}:/usr/src
-CPPFLAGS+=	-Wp,-iremap,${DESTDIR}/:/
 CPPFLAGS+=	-Wp,-iremap,${X11SRCDIR}:/usr/xsrc
+REPROFLAGS+=	-fdebug-prefix-map=\$$NETBSDSRCDIR=/usr/src
+REPROFLAGS+=	-fdebug-prefix-map=\$$X11SRCDIR=/usr/xsrc
+
+REPROFLAGS+=	-fdebug-regex-map='/usr/src/(.*)/obj.${MACHINE}=/usr/obj/\1'
+
+CFLAGS+=	${REPROFLAGS}
+CXXFLAGS+=	${REPROFLAGS}
 .endif
 
 # NetBSD sources use C99 style, with some GCC extensions.
@@ -42,6 +56,14 @@ CFLAGS+=	${${ACTIVE_CC} == "gcc" :? -Wno-traditional :}
 # Set assembler warnings to be fatal
 CFLAGS+=	-Wa,--fatal-warnings
 .endif
+
+.if ${MKRELRO:Uno} != "no"
+LDFLAGS+=	-Wl,-z,relro
+.endif
+.if ${MKRELRO:Uno} == "full"
+LDFLAGS+=	-Wl,-z,now
+.endif
+
 # Set linker warnings to be fatal
 # XXX no proper way to avoid "FOO is a patented algorithm" warnings
 # XXX on linking static libs
@@ -53,6 +75,9 @@ LDFLAGS+=	-Wl,--fatal-warnings
 . endif
 .endif
 .endif
+
+LDFLAGS+=	-Wl,--warn-shared-textrel
+
 .if ${WARNS} > 1
 CFLAGS+=	-Wreturn-type -Wswitch -Wshadow
 .endif
@@ -71,7 +96,7 @@ CXXFLAGS+=	${${ACTIVE_CXX} == "gcc":? -Wno-non-template-friend -Wno-pmf-conversi
 .if ${WARNS} > 4
 CFLAGS+=	-Wold-style-definition
 .endif
-.if ${WARNS} > 5 && !(defined(HAVE_GCC) && ${HAVE_GCC} <= 45)
+.if ${WARNS} > 5
 CFLAGS+=	-Wconversion
 .endif
 CFLAGS+=	-Wsign-compare -Wformat=2
@@ -89,9 +114,7 @@ CFLAGS+=	${${ACTIVE_CC} == "clang":? -Wpointer-sign -Wmissing-noreturn :}
 # XXX GCC 4.5 for sh3 and m68k (which we compile with -Os) is extra noisy for
 # cases it should be better with
 CFLAGS+=	-Wno-uninitialized
-.if ${HAVE_GCC} >= 48
 CFLAGS+=	-Wno-maybe-uninitialized
-.endif
 .endif
 .endif
 
@@ -102,22 +125,25 @@ _NOWERROR=	${defined(NOGCCERROR) || (${ACTIVE_CC} == "clang" && defined(NOCLANGE
 CFLAGS+=	${${_NOWERROR} == "no" :?-Werror:} ${CWARNFLAGS}
 LINTFLAGS+=	${DESTDIR:D-d ${DESTDIR}/usr/include}
 
-.if (${USE_SSP:Uno} != "no") && (${BINDIR:Ux} != "/usr/mdec")
+.if !defined(NOSSP) && (${USE_SSP:Uno} != "no") && (${BINDIR:Ux} != "/usr/mdec")
 .if !defined(KERNSRCDIR) && !defined(KERN) # not for kernels nor kern modules
 CPPFLAGS+=	-D_FORTIFY_SOURCE=2
 .endif
 COPTS+=	-fstack-protector -Wstack-protector 
 
-# gcc 4.8 on m68k erroneously does not protect functions with
+# GCC 4.8 on m68k erroneously does not protect functions with
 # variables needing special alignement, see
 #	http://gcc.gnu.org/bugzilla/show_bug.cgi?id=59674
 # (the underlying issue for sh and vax may be different, needs more
 # investigation, symptoms are similar but for different sources)
-.if "${ACTIVE_CC}" == "gcc" && "${HAVE_GCC}" == "48" && \
-	( ${MACHINE_CPU} == "sh3" || \
-	  ${MACHINE_ARCH} == "vax" || \
-	  ${MACHINE_CPU} == "m68k" || \
-	  ${MACHINE_CPU} == "or1k" )
+# also true for GCC 5.3
+.if "${ACTIVE_CC}" == "gcc" && \
+     ( ${HAVE_GCC} == "48" || \
+       ${HAVE_GCC} == "53" ) && \
+     ( ${MACHINE_CPU} == "sh3" || \
+       ${MACHINE_ARCH} == "vax" || \
+       ${MACHINE_CPU} == "m68k" || \
+       ${MACHINE_CPU} == "or1k" )
 COPTS+=	-Wno-error=stack-protector 
 .endif
 
@@ -132,6 +158,11 @@ FOPTS+=		-msoft-float
 COPTS+=		-mhard-float
 FOPTS+=		-mhard-float
 .endif
+
+#.if !empty(MACHINE_ARCH:Mearmv7*)
+#COPTS+=		-mthumb
+#FOPTS+=		-mthumb
+#.endif
 
 .if ${MKIEEEFP:Uno} != "no"
 .if ${MACHINE_ARCH} == "alpha"
@@ -161,11 +192,11 @@ CPUFLAGS+=	-Wa,--fatal-warnings
 CFLAGS+=	${CPUFLAGS}
 AFLAGS+=	${CPUFLAGS}
 
-.if !defined(LDSTATIC) || ${LDSTATIC} != "-static"
+.if !defined(NOPIE) && (!defined(LDSTATIC) || ${LDSTATIC} != "-static")
 # Position Independent Executable flags
-PIE_CFLAGS?=        -fPIC
-PIE_LDFLAGS?=       -Wl,-pie ${${ACTIVE_CC} == "gcc":? -shared-libgcc :}
-PIE_AFLAGS?=	    -fPIC
+PIE_CFLAGS?=        -fPIE
+PIE_LDFLAGS?=       -pie ${${ACTIVE_CC} == "gcc":? -shared-libgcc :}
+PIE_AFLAGS?=	    -fPIE
 .endif
 
 ELF2ECOFF?=	elf2ecoff
@@ -263,7 +294,7 @@ YFLAGS+=	${YPREFIX:D-p${YPREFIX}} ${YHEADER:D-d}
 .if ${MACHINE_ARCH} == aarch64eb
 # AARCH64 big endian needs to preserve $x/$d symbols for the linker.
 OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][dx]' -K '[$$][dx]\.*'
-.elif !empty(MACHINE_ARCH:M*arm*eb)
+.elif ${MACHINE_CPU} == "arm"
 # ARM big endian needs to preserve $a/$d/$t symbols for the linker.
 OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][adt]' -K '[$$][adt]\.*'
 .endif

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_shmem.c,v 1.63 2014/08/15 15:03:03 ozaki-r Exp $	*/
+/*	$NetBSD: if_shmem.c,v 1.69 2016/07/07 06:55:44 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010 Antti Kantee.  All Rights Reserved.
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_shmem.c,v 1.63 2014/08/15 15:03:03 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_shmem.c,v 1.69 2016/07/07 06:55:44 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -47,11 +47,12 @@ __KERNEL_RCSID(0, "$NetBSD: if_shmem.c,v 1.63 2014/08/15 15:03:03 ozaki-r Exp $"
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 
+#include <rump-sys/kern.h>
+#include <rump-sys/net.h>
+
 #include <rump/rump.h>
 #include <rump/rumpuser.h>
 
-#include "rump_private.h"
-#include "rump_net_private.h"
 #include "shmif_user.h"
 
 static int shmif_clone(struct if_clone *, int);
@@ -186,8 +187,9 @@ allocif(int unit, struct shmif_sc **scp)
 	mutex_init(&sc->sc_mtx, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&sc->sc_cv, "shmifcv");
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ether_ifattach(ifp, enaddr);
+	if_register(ifp);
 
 	aprint_verbose("shmif%d: Ethernet address %s\n",
 	    unit, ether_sprintf(enaddr));
@@ -228,7 +230,7 @@ initbackend(struct shmif_sc *sc, int memfd)
 	    && sc->sc_busmem->shm_magic != SHMIF_MAGIC) {
 		printf("bus is not magical");
 		rumpuser_unmap(sc->sc_busmem, BUSMEM_SIZE);
-		return ENOEXEC; 
+		return ENOEXEC;
 	}
 
 	/*
@@ -741,7 +743,7 @@ shmif_rcv(void *arg)
 		}
 
 		m->m_len = m->m_pkthdr.len = sp.sp_len;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 
 		/*
 		 * Test if we want to pass the packet upwards
@@ -762,10 +764,14 @@ shmif_rcv(void *arg)
 		}
 
 		if (passup) {
+			int bound;
 			ifp->if_ipackets++;
 			KERNEL_LOCK(1, NULL);
+			/* Prevent LWP migrations between CPUs for psref(9) */
+			bound = curlwp_bind();
 			bpf_mtap(ifp, m);
-			ifp->if_input(ifp, m);
+			if_input(ifp, m);
+			curlwp_bindx(bound);
 			KERNEL_UNLOCK_ONE(NULL);
 			m = NULL;
 		}

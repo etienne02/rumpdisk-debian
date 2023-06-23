@@ -1,4 +1,4 @@
-/*	$NetBSD: if_virt.c,v 1.49 2014/11/06 23:25:16 pooka Exp $	*/
+/*	$NetBSD: if_virt.c,v 1.53 2016/06/16 02:38:40 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 2008, 2013 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_virt.c,v 1.49 2014/11/06 23:25:16 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_virt.c,v 1.53 2016/06/16 02:38:40 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -121,7 +121,8 @@ virtif_clone(struct if_clone *ifc, int num)
 	ifp->if_mtu = ETHERMTU;
 	ifp->if_dlt = DLT_EN10MB;
 
-	if_attach(ifp);
+	if_initialize(ifp);
+	if_register(ifp);
 
 #ifndef RUMP_VIF_LINKSTR
 	/*
@@ -373,11 +374,15 @@ VIF_DELIVERPKT(struct virtif_sc *sc, struct iovec *iov, size_t iovlen)
 	}
 
 	if (passup) {
+		int bound;
 		ifp->if_ipackets++;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		KERNEL_LOCK(1, NULL);
+		/* Prevent LWP migrations between CPUs for psref(9) */
+		bound = curlwp_bind();
 		bpf_mtap(ifp, m);
-		ifp->if_input(ifp, m);
+		if_input(ifp, m);
+		curlwp_bindx(bound);
 		KERNEL_UNLOCK_LAST(NULL);
 	} else {
 		m_freem(m);

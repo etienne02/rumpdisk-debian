@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpe.c,v 1.1 2015/05/03 14:38:10 hsuenaga Exp $	*/
+/*	$NetBSD: if_mvxpe.c,v 1.13 2016/06/10 13:27:14 ozaki-r Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -25,7 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_mvxpe.c,v 1.1 2015/05/03 14:38:10 hsuenaga Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_mvxpe.c,v 1.13 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -58,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_mvxpe.c,v 1.1 2015/05/03 14:38:10 hsuenaga Exp $"
 
 #include <dev/marvell/marvellreg.h>
 #include <dev/marvell/marvellvar.h>
+#include <dev/marvell/mvxpbmvar.h>
 #include <dev/marvell/if_mvxpereg.h>
 #include <dev/marvell/if_mvxpevar.h>
 
@@ -136,30 +137,20 @@ STATIC void mvxpe_linkup(struct mvxpe_softc *);
 STATIC void mvxpe_linkdown(struct mvxpe_softc *);
 STATIC void mvxpe_linkreset(struct mvxpe_softc *);
 
-/* Packet Buffer Manager(BM) */
-STATIC int mvxpe_bm_init(struct mvxpe_softc *);
-STATIC int mvxpe_bm_init_mbuf_hdr(struct mvxpe_bm_chunk *);
-STATIC struct mvxpe_bm_chunk *mvxpe_bm_alloc(struct mvxpe_softc *);
-STATIC void mvxpe_bm_free_mbuf(struct mbuf *, void *, size_t, void *);
-STATIC void mvxpe_bm_free_chunk(struct mvxpe_bm_chunk *);
-STATIC void mvxpe_bm_sync(struct mvxpe_bm_chunk *, size_t, int);
-STATIC void mvxpe_bm_lock(struct mvxpe_softc *);
-STATIC void mvxpe_bm_unlock(struct mvxpe_softc *);
-
 /* Tx Subroutines */
 STATIC int mvxpe_tx_queue_select(struct mvxpe_softc *, struct mbuf *);
 STATIC int mvxpe_tx_queue(struct mvxpe_softc *, struct mbuf *, int);
 STATIC void mvxpe_tx_set_csumflag(struct ifnet *,
     struct mvxpe_tx_desc *, struct mbuf *);
-STATIC void mvxpe_tx_complete(struct mvxpe_softc *);
-STATIC void mvxpe_tx_queue_del(struct mvxpe_softc *, int);
+STATIC void mvxpe_tx_complete(struct mvxpe_softc *, uint32_t);
+STATIC void mvxpe_tx_queue_complete(struct mvxpe_softc *, int);
 
 /* Rx Subroutines */
-STATIC void mvxpe_rx(struct mvxpe_softc *);
+STATIC void mvxpe_rx(struct mvxpe_softc *, uint32_t);
 STATIC void mvxpe_rx_queue(struct mvxpe_softc *, int, int);
-STATIC int mvxpe_rx_queue_select(struct mvxpe_softc *, int *);
-STATIC void mvxpe_rx_reload(struct mvxpe_softc *);
-STATIC void mvxpe_rx_queue_reload(struct mvxpe_softc *, int);
+STATIC int mvxpe_rx_queue_select(struct mvxpe_softc *, uint32_t, int *);
+STATIC void mvxpe_rx_refill(struct mvxpe_softc *, uint32_t);
+STATIC void mvxpe_rx_queue_refill(struct mvxpe_softc *, int);
 STATIC int mvxpe_rx_queue_add(struct mvxpe_softc *, int);
 STATIC void mvxpe_rx_set_csumflag(struct ifnet *,
     struct mvxpe_rx_desc *, struct mbuf *);
@@ -198,67 +189,71 @@ STATIC struct mvxpe_mib_def {
 	int reg64;
 	const char *sysctl_name;
 	const char *desc;
+	int ext;
+#define MVXPE_MIBEXT_IF_OERRORS	1
+#define MVXPE_MIBEXT_IF_IERRORS	2
+#define MVXPE_MIBEXT_IF_COLLISIONS	3
 } mvxpe_mib_list[] = {
 	{MVXPE_MIB_RX_GOOD_OCT, 1,	"rx_good_oct",
-	    "Good Octets Rx"},
+	    "Good Octets Rx", 0},
 	{MVXPE_MIB_RX_BAD_OCT, 0,	"rx_bad_oct",
-	    "Bad  Octets Rx"},
-	{MVXPE_MIB_RX_MAC_TRNS_ERR, 0,	"rx_mac_err",
-	    "MAC Transmit Error"},
+	    "Bad  Octets Rx", 0},
+	{MVXPE_MIB_TX_MAC_TRNS_ERR, 0,	"tx_mac_err",
+	    "MAC Transmit Error", MVXPE_MIBEXT_IF_OERRORS},
 	{MVXPE_MIB_RX_GOOD_FRAME, 0,	"rx_good_frame",
-	    "Good Frames Rx"},
+	    "Good Frames Rx", 0},
 	{MVXPE_MIB_RX_BAD_FRAME, 0,	"rx_bad_frame",
-	    "Bad Frames Rx"},
+	    "Bad Frames Rx", 0},
 	{MVXPE_MIB_RX_BCAST_FRAME, 0,	"rx_bcast_frame",
-	    "Broadcast Frames Rx"},
+	    "Broadcast Frames Rx", 0},
 	{MVXPE_MIB_RX_MCAST_FRAME, 0,	"rx_mcast_frame",
-	    "Multicast Frames Rx"},
+	    "Multicast Frames Rx", 0},
 	{MVXPE_MIB_RX_FRAME64_OCT, 0,	"rx_frame_1_64",
-	    "Frame Size    1 -   64"},
+	    "Frame Size    1 -   64", 0},
 	{MVXPE_MIB_RX_FRAME127_OCT, 0,	"rx_frame_65_127",
-	    "Frame Size   65 -  127"},
+	    "Frame Size   65 -  127", 0},
 	{MVXPE_MIB_RX_FRAME255_OCT, 0,	"rx_frame_128_255",
-	    "Frame Size  128 -  255"},
+	    "Frame Size  128 -  255", 0},
 	{MVXPE_MIB_RX_FRAME511_OCT, 0,	"rx_frame_256_511",
 	    "Frame Size  256 -  511"},
 	{MVXPE_MIB_RX_FRAME1023_OCT, 0,	"rx_frame_512_1023",
-	    "Frame Size  512 - 1023"},
+	    "Frame Size  512 - 1023", 0},
 	{MVXPE_MIB_RX_FRAMEMAX_OCT, 0,	"rx_fame_1024_max",
-	    "Frame Size 1024 -  Max"},
+	    "Frame Size 1024 -  Max", 0},
 	{MVXPE_MIB_TX_GOOD_OCT, 1,	"tx_good_oct",
-	    "Good Octets Tx"},
+	    "Good Octets Tx", 0},
 	{MVXPE_MIB_TX_GOOD_FRAME, 0,	"tx_good_frame",
-	    "Good Frames Tx"},
+	    "Good Frames Tx", 0},
 	{MVXPE_MIB_TX_EXCES_COL, 0,	"tx_exces_collision",
-	    "Excessive Collision"},
+	    "Excessive Collision", MVXPE_MIBEXT_IF_OERRORS},
 	{MVXPE_MIB_TX_MCAST_FRAME, 0,	"tx_mcast_frame",
 	    "Multicast Frames Tx"},
 	{MVXPE_MIB_TX_BCAST_FRAME, 0,	"tx_bcast_frame",
 	    "Broadcast Frames Tx"},
 	{MVXPE_MIB_TX_MAC_CTL_ERR, 0,	"tx_mac_err",
-	    "Unknown MAC Control"},
+	    "Unknown MAC Control", 0},
 	{MVXPE_MIB_FC_SENT, 0,		"fc_tx",
-	    "Flow Control Tx"},
+	    "Flow Control Tx", 0},
 	{MVXPE_MIB_FC_GOOD, 0,		"fc_rx_good",
-	    "Good Flow Control Rx"},
+	    "Good Flow Control Rx", 0},
 	{MVXPE_MIB_FC_BAD, 0,		"fc_rx_bad",
-	    "Bad Flow Control Rx"},
+	    "Bad Flow Control Rx", 0},
 	{MVXPE_MIB_PKT_UNDERSIZE, 0,	"pkt_undersize",
-	    "Undersized Packets Rx"},
+	    "Undersized Packets Rx", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_PKT_FRAGMENT, 0,	"pkt_fragment",
-	    "Fragmented Packets Rx"},
+	    "Fragmented Packets Rx", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_PKT_OVERSIZE, 0,	"pkt_oversize",
-	    "Oversized Packets Rx"},
+	    "Oversized Packets Rx", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_PKT_JABBER, 0,	"pkt_jabber",
-	    "Jabber Packets Rx"},
+	    "Jabber Packets Rx", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_MAC_RX_ERR, 0,	"mac_rx_err",
-	    "MAC Rx Errors"},
+	    "MAC Rx Errors", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_MAC_CRC_ERR, 0,	"mac_crc_err",
-	    "MAC CRC Errors"},
+	    "MAC CRC Errors", MVXPE_MIBEXT_IF_IERRORS},
 	{MVXPE_MIB_MAC_COL, 0,		"mac_collision",
-	    "MAC Collision"},
+	    "MAC Collision", MVXPE_MIBEXT_IF_COLLISIONS},
 	{MVXPE_MIB_MAC_LATE_COL, 0,	"mac_late_collision",
-	    "MAC Late Collision"},
+	    "MAC Late Collision", MVXPE_MIBEXT_IF_OERRORS},
 };
 
 /*
@@ -330,14 +325,19 @@ mvxpe_attach(device_t parent, device_t self, void *aux)
 	aprint_normal_dev(self, "Port Version %#x\n", sc->sc_version);
 
 	/*
-	 * Software based Buffer Manager(BM) subsystem.
-	 * Try to allocate special memory chunks for Rx packets.
-	 * Some version of SoC has hardware based BM(not supported yet)
+	 * Buffer Manager(BM) subsystem.
 	 */
-	if (mvxpe_bm_init(sc) != 0) {
-		aprint_error_dev(self, "BM pool allocation failure\n");
+	sc->sc_bm = mvxpbm_device(mva);
+	if (sc->sc_bm == NULL) {
+		aprint_error_dev(self, "no Buffer Manager.\n");
 		goto fail;
 	}
+	aprint_normal_dev(self,
+	    "Using Buffer Manager: %s\n", mvxpbm_xname(sc->sc_bm));	
+	aprint_normal_dev(sc->sc_dev,
+	    "%zu kbytes managed buffer, %zu bytes * %u entries allocated.\n",
+	    mvxpbm_buf_size(sc->sc_bm) / 1024,
+	    mvxpbm_chunk_size(sc->sc_bm), mvxpbm_chunk_count(sc->sc_bm));
 
 	/*
 	 * make sure DMA engines are in reset state
@@ -526,9 +526,9 @@ fail:
 STATIC int
 mvxpe_evcnt_attach(struct mvxpe_softc *sc)
 {
+#ifdef MVXPE_EVENT_COUNTERS
 	int q;
 
-#ifdef MVXPE_EVENT_COUNTERS
 	/* Master Interrupt Handler */
 	evcnt_attach_dynamic(&sc->sc_ev.ev_i_rxtxth, EVCNT_TYPE_INTR,
 	    NULL, device_xname(sc->sc_dev), "RxTxTH Intr.");
@@ -854,7 +854,6 @@ mvxpe_initreg(struct ifnet *ifp)
 			aprint_error_ifnet(ifp,
 			    "initialization failed: cannot initialize queue\n");
 			mvxpe_rx_unlockq(sc, q);
-			mvxpe_tx_unlockq(sc, q);
 			return ENOBUFS;
 		}
 		mvxpe_rx_unlockq(sc, q);
@@ -863,7 +862,6 @@ mvxpe_initreg(struct ifnet *ifp)
 		if (mvxpe_tx_queue_init(ifp, q) != 0) {
 			aprint_error_ifnet(ifp,
 			    "initialization failed: cannot initialize queue\n");
-			mvxpe_rx_unlockq(sc, q);
 			mvxpe_tx_unlockq(sc, q);
 			return ENOBUFS;
 		}
@@ -925,6 +923,13 @@ mvxpe_initreg(struct ifnet *ifp)
 	/* Port MAC Control set 3 is used for IPG tune */
 
 	/* Port MAC Control set 4 is not used */
+
+	/* Port Configuration */
+	/* Use queue 0 only */
+	reg = MVXPE_READ(sc, MVXPE_PXC);
+	reg &= ~(MVXPE_PXC_RXQ_MASK | MVXPE_PXC_RXQARP_MASK |
+	    MVXPE_PXC_TCPQ_MASK | MVXPE_PXC_UDPQ_MASK | MVXPE_PXC_BPDUQ_MASK);
+	MVXPE_WRITE(sc, MVXPE_PXC, reg);
 
 	/* Port Configuration Extended: enable Tx CRC generation */
 	reg = MVXPE_READ(sc, MVXPE_PXCX);
@@ -1103,8 +1108,8 @@ mvxpe_ring_init_queue(struct mvxpe_softc *sc, int q)
 	rx->rx_queue_len = rx_default_queue_len[q];
 	if (rx->rx_queue_len > MVXPE_RX_RING_CNT)
 		rx->rx_queue_len = MVXPE_RX_RING_CNT;
-	rx->rx_queue_th_received = rx->rx_queue_len / 4;
-	rx->rx_queue_th_free = rx->rx_queue_len / 2;
+	rx->rx_queue_th_received = rx->rx_queue_len / MVXPE_RXTH_RATIO;
+	rx->rx_queue_th_free = rx->rx_queue_len / MVXPE_RXTH_REFILL_RATIO;
 	rx->rx_queue_th_time = (mvTclk / 1000) / 2; /* 0.5 [ms] */
 
 	/* Tx handle */
@@ -1113,8 +1118,9 @@ mvxpe_ring_init_queue(struct mvxpe_softc *sc, int q)
 		MVXPE_TX_DESC_OFF(sc, q, i) = sizeof(struct mvxpe_tx_desc) * i;
 		MVXPE_TX_MBUF(sc, q, i) = NULL;
 		/* Tx handle needs DMA map for busdma_load_mbuf() */
-		if (bus_dmamap_create(sc->sc_dmat, sc->sc_bm.bm_chunk_size,
-		    MVXPE_TX_SEGLIMIT, sc->sc_bm.bm_chunk_size, 0,
+		if (bus_dmamap_create(sc->sc_dmat,
+		    mvxpbm_chunk_size(sc->sc_bm),
+		    MVXPE_TX_SEGLIMIT, mvxpbm_chunk_size(sc->sc_bm), 0,
 		    BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW,
 		    &MVXPE_TX_MAP(sc, q, i))) {
 			aprint_error_dev(sc->sc_dev,
@@ -1126,8 +1132,8 @@ mvxpe_ring_init_queue(struct mvxpe_softc *sc, int q)
 	tx->tx_queue_len = tx_default_queue_len[q];
 	if (tx->tx_queue_len > MVXPE_TX_RING_CNT)
 		tx->tx_queue_len = MVXPE_TX_RING_CNT;
-       	tx->tx_free_cnt = tx->tx_queue_len;
-	tx->tx_queue_th_free = tx->tx_queue_len / 2;
+       	tx->tx_used = 0;
+	tx->tx_queue_th_free = tx->tx_queue_len / MVXPE_TXTH_RATIO;
 }
 
 STATIC void
@@ -1144,7 +1150,7 @@ mvxpe_ring_flush_queue(struct mvxpe_softc *sc, int q)
 	for (i = 0; i < MVXPE_RX_RING_CNT; i++) {
 		if (MVXPE_RX_PKTBUF(sc, q, i) == NULL)
 			continue;
-		mvxpe_bm_free_chunk(MVXPE_RX_PKTBUF(sc, q, i));
+		mvxpbm_free_chunk(MVXPE_RX_PKTBUF(sc, q, i));
 		MVXPE_RX_PKTBUF(sc, q, i) = NULL;
 	}
 	rx->rx_dma = rx->rx_cpu = 0;
@@ -1158,7 +1164,7 @@ mvxpe_ring_flush_queue(struct mvxpe_softc *sc, int q)
 		MVXPE_TX_MBUF(sc, q, i) = NULL;
 	}
 	tx->tx_dma = tx->tx_cpu = 0;
-       	tx->tx_free_cnt = tx->tx_queue_len;
+       	tx->tx_used = 0;
 }
 
 STATIC void
@@ -1218,17 +1224,22 @@ mvxpe_rx_queue_init(struct ifnet *ifp, int q)
 	MVXPE_WRITE(sc, MVXPE_PRXDQA(q), MVXPE_RX_RING_MEM_PA(sc, q));
 
 	/* Rx buffer size and descriptor ring size */
-	reg  = MVXPE_PRXDQS_BUFFERSIZE(sc->sc_bm.bm_chunk_size >> 3);
+	reg  = MVXPE_PRXDQS_BUFFERSIZE(mvxpbm_chunk_size(sc->sc_bm) >> 3);
 	reg |= MVXPE_PRXDQS_DESCRIPTORSQUEUESIZE(MVXPE_RX_RING_CNT);
 	MVXPE_WRITE(sc, MVXPE_PRXDQS(q), reg);
 	DPRINTIFNET(ifp, 1, "PRXDQS(%d): %#x\n",
 	    q, MVXPE_READ(sc, MVXPE_PRXDQS(q)));
 
 	/* Rx packet offset address */
-	reg = MVXPE_PRXC_PACKETOFFSET(sc->sc_bm.bm_chunk_packet_offset >> 3);
+	reg = MVXPE_PRXC_PACKETOFFSET(mvxpbm_packet_offset(sc->sc_bm) >> 3);
 	MVXPE_WRITE(sc, MVXPE_PRXC(q), reg);
 	DPRINTIFNET(ifp, 1, "PRXC(%d): %#x\n",
 	    q, MVXPE_READ(sc, MVXPE_PRXC(q)));
+
+	/* Rx DMA SNOOP */
+	reg  = MVXPE_PRXSNP_SNOOPNOOFBYTES(MVXPE_MRU);
+	reg |= MVXPE_PRXSNP_L2DEPOSITNOOFBYTES(MVXPE_MRU);
+	MVXPE_WRITE(sc, MVXPE_PRXSNP(q), reg);
 
 	/* if DMA is not working, register is not updated */
 	KASSERT(MVXPE_READ(sc, MVXPE_PRXDQA(q)) == MVXPE_RX_RING_MEM_PA(sc, q));
@@ -1276,11 +1287,6 @@ mvxpe_rx_queue_enable(struct ifnet *ifp, int q)
 
 	reg  = MVXPE_PRXITTH_RITT(rx->rx_queue_th_time);
 	MVXPE_WRITE(sc, MVXPE_PRXITTH(q), reg);
-
-	/* Unmask RXTX Intr. */
-	reg = MVXPE_READ(sc, MVXPE_PRXTXIM);
-	reg |= MVXPE_PRXTXI_RREQ(q); /* Rx resource error */
-	MVXPE_WRITE(sc, MVXPE_PRXTXIM, reg);
 
 	/* Unmask RXTX_TH Intr. */
 	reg = MVXPE_READ(sc, MVXPE_PRXTXTIM);
@@ -1383,15 +1389,19 @@ mvxpe_enable_intr(struct mvxpe_softc *sc)
 	reg |= MVXPE_PMI_RXCRCERROR;
 	reg |= MVXPE_PMI_RXLARGEPACKET;
 	reg |= MVXPE_PMI_TXUNDRN;
+#if 0
+	/*
+	 * The device may raise false interrupts for SERDES even if the device
+	 * is not configured to use SERDES connection.
+	 */
 	reg |= MVXPE_PMI_PRBSERROR;
 	reg |= MVXPE_PMI_SRSE;
+#else
+	reg &= ~MVXPE_PMI_PRBSERROR;
+	reg &= ~MVXPE_PMI_SRSE;
+#endif
 	reg |= MVXPE_PMI_TREQ_MASK;
 	MVXPE_WRITE(sc, MVXPE_PMIM, reg);
-
-	/* Enable RXTX Intr. (via RXTX_TH Summary bit) */
-	reg  = MVXPE_READ(sc, MVXPE_PRXTXIM);
-	reg |= MVXPE_PRXTXI_RREQ_MASK; /* Rx resource error */
-	MVXPE_WRITE(sc, MVXPE_PRXTXIM, reg);
 
 	/* Enable Summary Bit to check all interrupt cause. */
 	reg  = MVXPE_READ(sc, MVXPE_PRXTXTIM);
@@ -1412,58 +1422,55 @@ mvxpe_rxtxth_intr(void *arg)
 {
 	struct mvxpe_softc *sc = arg;
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
-	uint32_t ic, datum = 0;
-	int claimed = 0;
-
+	uint32_t ic, queues, datum = 0;
 
 	DPRINTSC(sc, 2, "got RXTX_TH_Intr\n");
 	MVXPE_EVCNT_INCR(&sc->sc_ev.ev_i_rxtxth);
 
 	mvxpe_sc_lock(sc);
-	for (;;) {
-		ic = MVXPE_READ(sc, MVXPE_PRXTXTIC);
-		if (ic == 0)
-			break;
-		MVXPE_WRITE(sc, MVXPE_PRXTXTIC, ~ic);
-		datum = datum ^ ic;
-		claimed = 1;
+	ic = MVXPE_READ(sc, MVXPE_PRXTXTIC);
+	if (ic == 0) {
+		mvxpe_sc_unlock(sc);
+		return 0;
+	}
+	MVXPE_WRITE(sc, MVXPE_PRXTXTIC, ~ic);
+	datum = datum ^ ic;
 
-		DPRINTIFNET(ifp, 2, "PRXTXTIC: %#x\n", ic);
+	DPRINTIFNET(ifp, 2, "PRXTXTIC: %#x\n", ic);
 
-		/* route maintance interrupt first */
-		if (ic & MVXPE_PRXTXTI_PTXERRORSUMMARY) {
-			DPRINTIFNET(ifp, 1, "PRXTXTIC: +PTXERRORSUMMARY\n");
-			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtxth_txerr);
-		}
-		if ((ic & MVXPE_PRXTXTI_PMISCICSUMMARY)) {
-			DPRINTIFNET(ifp, 2, "PTXTXTIC: +PMISCICSUMMARY\n");
-			mvxpe_misc_intr(sc);
-		}
-		if (ic & MVXPE_PRXTXTI_PRXTXICSUMMARY) {
-			DPRINTIFNET(ifp, 2, "PTXTXTIC: +PRXTXICSUMMARY\n");
-			mvxpe_rxtx_intr(sc);
-		}
-		if (!(ifp->if_flags & IFF_RUNNING))
-			break;
+	/* ack maintance interrupt first */
+	if (ic & MVXPE_PRXTXTI_PTXERRORSUMMARY) {
+		DPRINTIFNET(ifp, 1, "PRXTXTIC: +PTXERRORSUMMARY\n");
+		MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtxth_txerr);
+	}
+	if ((ic & MVXPE_PRXTXTI_PMISCICSUMMARY)) {
+		DPRINTIFNET(ifp, 2, "PTXTXTIC: +PMISCICSUMMARY\n");
+		mvxpe_misc_intr(sc);
+	}
+	if (ic & MVXPE_PRXTXTI_PRXTXICSUMMARY) {
+		DPRINTIFNET(ifp, 2, "PTXTXTIC: +PRXTXICSUMMARY\n");
+		mvxpe_rxtx_intr(sc);
+	}
+	if (!(ifp->if_flags & IFF_RUNNING)) {
+		mvxpe_sc_unlock(sc);
+		return 1;
+	}
 
-		/* RxTx interrupt */
-		if (ic & (MVXPE_PRXTXTI_RBICTAPQ_MASK)) {
-			DPRINTIFNET(ifp, 2, "PRXTXTIC: +RXEOF\n");
-			mvxpe_rx(sc);
-		}
-
-		if (ic & MVXPE_PRXTXTI_TBTCQ_MASK) {
-			DPRINTIFNET(ifp, 2, "PRXTXTIC: +TBTCQ\n");
-			mvxpe_tx_complete(sc);
-		}
-
-		if (ic & MVXPE_PRXTXTI_RDTAQ_MASK) {
-			DPRINTIFNET(ifp, 2, "PRXTXTIC: +RDTAQ\n");
-			mvxpe_rx_reload(sc);
-		}
-
-		/* don' loop here. we are using interrupt coalescing */
-		break;
+	/* RxTxTH interrupt */
+	queues = MVXPE_PRXTXTI_GET_RBICTAPQ(ic);
+	if (queues) {
+		DPRINTIFNET(ifp, 2, "PRXTXTIC: +RXEOF\n");
+		mvxpe_rx(sc, queues);
+	}
+	queues = MVXPE_PRXTXTI_GET_TBTCQ(ic);
+	if (queues) {
+		DPRINTIFNET(ifp, 2, "PRXTXTIC: +TBTCQ\n");
+		mvxpe_tx_complete(sc, queues);
+	}
+	queues = MVXPE_PRXTXTI_GET_RDTAQ(ic);
+	if (queues) {
+		DPRINTIFNET(ifp, 2, "PRXTXTIC: +RDTAQ\n");
+		mvxpe_rx_refill(sc, queues);
 	}
 	mvxpe_sc_unlock(sc);
 
@@ -1472,7 +1479,7 @@ mvxpe_rxtxth_intr(void *arg)
 
 	rnd_add_uint32(&sc->sc_rnd_source, datum);
 
-	return claimed;
+	return 1;
 }
 
 STATIC int
@@ -1689,11 +1696,12 @@ mvxpe_start(struct ifnet *ifp)
 			break;
 		}
 		mvxpe_tx_unlockq(sc, q);
-		KASSERT(sc->sc_tx_ring[q].tx_free_cnt >= 0);
-		KASSERT(sc->sc_tx_ring[q].tx_free_cnt <=
+		KASSERT(sc->sc_tx_ring[q].tx_used >= 0);
+		KASSERT(sc->sc_tx_ring[q].tx_used <=
 		    sc->sc_tx_ring[q].tx_queue_len);
 		DPRINTIFNET(ifp, 1, "a packet is added to tx ring\n");
 		sc->sc_tx_pending++;
+		ifp->if_opackets++;
 		ifp->if_timer = 1;
 		sc->sc_wdogsoft = 1;
 		bpf_mtap(ifp, m);
@@ -1763,7 +1771,7 @@ mvxpe_init(struct ifnet *ifp)
 	for (q = 0; q < MVXPE_QUEUE_SIZE; q++) {
 		mvxpe_rx_lockq(sc, q);
 		mvxpe_rx_queue_enable(ifp, q);
-		mvxpe_rx_queue_reload(sc, q);
+		mvxpe_rx_queue_refill(sc, q);
 		mvxpe_rx_unlockq(sc, q);
 
 		mvxpe_tx_lockq(sc, q);
@@ -1876,7 +1884,7 @@ mvxpe_stop(struct ifnet *ifp, int disable)
 		mvxpe_rx_lockq(sc, q);
 		mvxpe_tx_lockq(sc, q);
 
-		/* Disable Rx packet buffer reloading */
+		/* Disable Rx packet buffer refill request */
 		reg  = MVXPE_PRXDQTH_ODT(rx->rx_queue_th_received);
 		reg |= MVXPE_PRXDQTH_NODT(0);
 		MVXPE_WRITE(sc, MVXPE_PRXITTH(q), reg);
@@ -1912,7 +1920,7 @@ mvxpe_watchdog(struct ifnet *ifp)
 	 * Reclaim first as there is a possibility of losing Tx completion
 	 * interrupts.
 	 */
-	mvxpe_tx_complete(sc);
+	mvxpe_tx_complete(sc, 0xff);
 	for (q = 0; q < MVXPE_QUEUE_SIZE; q++) {
 		struct mvxpe_tx_ring *tx = MVXPE_TX_RING(sc, q);
 
@@ -1989,7 +1997,6 @@ mvxpe_mediastatus(struct ifnet *ifp, struct ifmediareq *ifmr)
  */
 STATIC void mvxpe_linkupdate(struct mvxpe_softc *sc)
 {
-	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	int linkup; /* bool */
 
 	KASSERT_SC_MTX(sc);
@@ -2002,7 +2009,10 @@ STATIC void mvxpe_linkupdate(struct mvxpe_softc *sc)
 	if (sc->sc_linkstate == linkup)
 		return;
 
-	log(LOG_CRIT, "%s: link %s\n", ifp->if_xname, linkup ? "up" : "down");
+#ifdef DEBUG
+	log(LOG_DEBUG,
+	    "%s: link %s\n", device_xname(sc->sc_dev), linkup ? "up" : "down");
+#endif
 	if (linkup)
 		MVXPE_EVCNT_INCR(&sc->sc_ev.ev_link_up);
 	else
@@ -2082,264 +2092,6 @@ mvxpe_linkreset(struct mvxpe_softc *sc)
 }
 
 /*
- * Packet Buffer Manager(BM)
- */
-STATIC int
-mvxpe_bm_init(struct mvxpe_softc *sc)
-{
-	struct mvxpe_bm_softc *bm = &sc->sc_bm;
-	bus_dma_segment_t segs;
-	char *kva, *ptr, *ptr_next, *ptr_data;
-	char *bm_buf_end;
-	paddr_t bm_buf_pa;
-	uint32_t align, pad;
-	size_t bm_buf_size;
-	int nsegs, error;
-
-	error = 0;
-
-	memset(bm, 0, sizeof(*bm));
-	bm->bm_dmat = sc->sc_dmat;
-	bm->bm_chunk_count = 0;
-	bm->bm_chunk_size = MVXPE_BM_SIZE;
-	bm->bm_chunk_header_size = sizeof(struct mvxpe_bm_chunk);
-	bm->bm_chunk_packet_offset = 0;
-	mutex_init(&bm->bm_mtx, MUTEX_DEFAULT, IPL_NET);
-	LIST_INIT(&bm->bm_free);
-	LIST_INIT(&bm->bm_inuse);
-
-	/*
-	 * adjust bm_chunk_size, bm_chunk_header_size, bm_slotsize
-	 * to satisfy alignemnt restrictions. 
-	 *
-	 *    <----------------  bm_slotsize [oct.] ------------------>
-	 *                               <--- bm_chunk_size[oct.] ---->
-	 *    <--- header_size[oct] ---> <-- MBXPE_BM_SIZE[oct.] ----->
-	 *   +-----------------+--------+---------+-----------------+--+
-	 *   | bm_chunk hdr    |pad     |pkt_off  |   packet data   |  |
-	 *   +-----------------+--------+---------+-----------------+--+
-	 *   ^                          ^         ^                    ^
-	 *   |                          |         |                    |
-	 *   ptr                 ptr_data  DMA here         ptr_next
-	 *
-	 * Restrictions:
-	 *   - ptr must be aligned to MVXPE_BM_ADDR_ALIGN
-	 *   - data must be aligned to MVXPE_RXBUF_ALIGN
-	 *   - data size X must be multiple of 8.
-	 */
-	/* assume start of buffer at 0x0000.0000 */
-	ptr = (char *)0;
-	/* align start of packet data */
-	ptr_data = ptr + bm->bm_chunk_header_size;
-	align = (unsigned long)ptr_data & MVXPE_RXBUF_MASK;
-	if (align != 0) {
-		pad = MVXPE_RXBUF_ALIGN - align;
-		bm->bm_chunk_header_size += pad;
-		DPRINTSC(sc, 1, "added padding to BM header, %u bytes\n", pad);
-	}
-	/* align size of packet data */
-	ptr_data = ptr + bm->bm_chunk_header_size;
-	ptr_next = ptr_data + MVXPE_BM_SIZE;
-	align = (unsigned long)ptr_next & MVXPE_BM_ADDR_MASK;
-	if (align != 0) {
-		pad = MVXPE_BM_ADDR_ALIGN - align;
-		ptr_next += pad;
-		DPRINTSC(sc, 1, "added padding to BM pktbuf, %u bytes\n", pad);
-	}
-	bm->bm_slotsize = ptr_next - ptr;
-	bm->bm_chunk_size = ptr_next - ptr_data;
-	KASSERT((bm->bm_chunk_size % 8) == 0);
-	/* align total buffer size to page boundary */
-	bm_buf_size = bm->bm_slotsize * MVXPE_BM_SLOTS;
-	align = (unsigned long)bm_buf_size & (PAGE_SIZE - 1);
-	if (align != 0) {
-		pad = PAGE_SIZE - align;
-		bm_buf_size += pad;
-		DPRINTSC(sc, 1,
-		    "expand buffer to fit page boundary, %u bytes\n", pad);
-	}
-
-	/*
-	 * get the aligned buffer from busdma(9) framework
-	 */
-	if (bus_dmamem_alloc(bm->bm_dmat, bm_buf_size, PAGE_SIZE, 0,
-	    &segs, 1, &nsegs, BUS_DMA_NOWAIT)) {
-		aprint_error_dev(sc->sc_dev, "can't alloc BM buffers\n");
-		return ENOBUFS;
-	}
-	if (bus_dmamem_map(bm->bm_dmat, &segs, nsegs, bm_buf_size,
-	    (void **)&kva, BUS_DMA_NOWAIT)) {
-		aprint_error_dev(sc->sc_dev,
-		    "can't map dma buffers (%zu bytes)\n", bm_buf_size);
-		error = ENOBUFS;
-		goto fail1;
-	}
-	KASSERT(((unsigned long)kva & MVXPE_BM_ADDR_MASK) == 0);
-	if (bus_dmamap_create(bm->bm_dmat, bm_buf_size, 1, bm_buf_size, 0,
-	    BUS_DMA_NOWAIT, &bm->bm_map)) {
-		aprint_error_dev(sc->sc_dev, "can't create dma map\n");
-		error = ENOBUFS;
-		goto fail2;
-	}
-	if (bus_dmamap_load(bm->bm_dmat, bm->bm_map,
-	    kva, bm_buf_size, NULL, BUS_DMA_NOWAIT)) {
-		aprint_error_dev(sc->sc_dev, "can't load dma map\n");
-		error = ENOBUFS;
-		goto fail3;
-	}
-	bm->bm_buf = (void *)kva;
-	bm_buf_end = (void *)(kva + bm_buf_size);
-	bm_buf_pa = segs.ds_addr;
-	DPRINTSC(sc, 1, "memory pool at %p\n", bm->bm_buf);
-
-	/* slice the buffer */
-	mvxpe_bm_lock(sc);
-	for (ptr = bm->bm_buf; ptr + bm->bm_slotsize <= bm_buf_end;
-	    ptr += bm->bm_slotsize) {
-		struct mvxpe_bm_chunk *chunk;
-
-		/* initialzie chunk */
-		ptr_data = ptr + bm->bm_chunk_header_size;
-		chunk = (struct mvxpe_bm_chunk *)ptr;
-		chunk->m = NULL;
-		chunk->sc = sc;
-		chunk->off = (ptr - bm->bm_buf);
-		chunk->pa = (paddr_t)(bm_buf_pa + chunk->off);
-		chunk->buf_off = (ptr_data - bm->bm_buf);
-		chunk->buf_pa = (paddr_t)(bm_buf_pa + chunk->buf_off);
-		chunk->buf_va = (vaddr_t)(bm->bm_buf + chunk->buf_off);
-		chunk->buf_size = bm->bm_chunk_size;
-
-		/* add to array */
-		bm->bm_slots[bm->bm_chunk_count++] = chunk;
-
-		/* add to free list (for software management) */
-		LIST_INSERT_HEAD(&bm->bm_free, chunk, link);
-		mvxpe_bm_sync(chunk, BM_SYNC_ALL, BUS_DMASYNC_PREREAD);
-
-		DPRINTSC(sc, 9, "new chunk %p\n", (void *)chunk->buf_va);
-	}
-	mvxpe_bm_unlock(sc);
-	aprint_normal_dev(sc->sc_dev,
-	    "%zu bytes packet buffer, %zu bytes * %zu entries allocated.\n",
-	    bm_buf_size, bm->bm_chunk_size, bm->bm_chunk_count);
-	return 0;
-
-fail3:
-	bus_dmamap_destroy(bm->bm_dmat, bm->bm_map);
-fail2:
-	bus_dmamem_unmap(bm->bm_dmat, kva, bm_buf_size);
-fail1:
-	bus_dmamem_free(bm->bm_dmat, &segs, nsegs);
-
-	return error;
-}
-
-STATIC int
-mvxpe_bm_init_mbuf_hdr(struct mvxpe_bm_chunk *chunk)
-{
-	struct mvxpe_softc *sc = chunk->sc;
-
-	KASSERT(chunk->m == NULL);
-
-	/* add mbuf header */
-	MGETHDR(chunk->m, M_DONTWAIT, MT_DATA);
-	if (chunk->m == NULL) {
-		aprint_error_dev(sc->sc_dev, "cannot get mbuf\n");
-		return ENOBUFS;
-	}
-	MEXTADD(chunk->m, chunk->buf_va, chunk->buf_size, 0, 
-		mvxpe_bm_free_mbuf, chunk);
-	chunk->m->m_flags |= M_EXT_RW;
-	chunk->m->m_len = chunk->m->m_pkthdr.len = chunk->buf_size;
-	if (sc->sc_bm.bm_chunk_packet_offset)
-		m_adj(chunk->m, sc->sc_bm.bm_chunk_packet_offset);
-
-	return 0;
-}
-
-STATIC struct mvxpe_bm_chunk *
-mvxpe_bm_alloc(struct mvxpe_softc *sc)
-{
-	struct mvxpe_bm_chunk *chunk;
-	struct mvxpe_bm_softc *bm = &sc->sc_bm;
-
-	mvxpe_bm_lock(sc);
-
-	chunk = LIST_FIRST(&bm->bm_free);
-	if (chunk == NULL) {
-		mvxpe_bm_unlock(sc);
-		return NULL;
-	}
-
-	LIST_REMOVE(chunk, link);
-	LIST_INSERT_HEAD(&bm->bm_inuse, chunk, link);
-
-	mvxpe_bm_unlock(sc);
-	return chunk;
-}
-
-STATIC void
-mvxpe_bm_free_mbuf(struct mbuf *m, void *buf, size_t size, void *arg)
-{
-	struct mvxpe_bm_chunk *chunk = (struct mvxpe_bm_chunk *)arg;
-	int s;
-
-	KASSERT(m != NULL);
-	KASSERT(arg != NULL);
-
-	DPRINTFN(3, "free packet %p\n", m);
-	if (m->m_flags & M_PKTHDR)
-		m_tag_delete_chain((m), NULL);
-	chunk->m = NULL;
-	s = splvm();
-	pool_cache_put(mb_cache, m);
-	splx(s);
-	return mvxpe_bm_free_chunk(chunk);
-}
-
-STATIC void
-mvxpe_bm_free_chunk(struct mvxpe_bm_chunk *chunk)
-{
-	struct mvxpe_softc *sc = chunk->sc;
-	struct mvxpe_bm_softc *bm = &sc->sc_bm;
-
-	DPRINTFN(3, "bm chunk free\n");
-
-	mvxpe_bm_lock(sc);
-
-	LIST_REMOVE(chunk, link);
-	LIST_INSERT_HEAD(&bm->bm_free, chunk, link);
-
-	mvxpe_bm_unlock(sc);
-}
-
-STATIC void
-mvxpe_bm_sync(struct mvxpe_bm_chunk *chunk, size_t size, int ops)
-{
-	struct mvxpe_softc *sc = (struct mvxpe_softc *)chunk->sc;
-	struct mvxpe_bm_softc *bm = &sc->sc_bm;
-
-	KASSERT(size <= chunk->buf_size);
-	if (size == 0)
-		size = chunk->buf_size;
-
-	bus_dmamap_sync(bm->bm_dmat, bm->bm_map, chunk->buf_off, size, ops);
-}
-
-STATIC void
-mvxpe_bm_lock(struct mvxpe_softc *sc)
-{
-	mutex_enter(&sc->sc_bm.bm_mtx);
-}
-
-STATIC void
-mvxpe_bm_unlock(struct mvxpe_softc *sc)
-{
-	mutex_exit(&sc->sc_bm.bm_mtx);
-}
-
-/*
  * Tx Subroutines
  */
 STATIC int
@@ -2364,9 +2116,9 @@ mvxpe_tx_queue(struct mvxpe_softc *sc, struct mbuf *m, int q)
 	int start, used;
 	int i;
 
-	KASSERT(mutex_owned(&tx->tx_ring_mtx));
-	KASSERT(tx->tx_free_cnt >= 0);
-	KASSERT(tx->tx_free_cnt <= tx->tx_queue_len);
+	KASSERT_TX_MTX(sc, q);
+	KASSERT(tx->tx_used >= 0);
+	KASSERT(tx->tx_used <= tx->tx_queue_len);
 
 	/* load mbuf using dmamap of 1st descriptor */
 	if (bus_dmamap_load_mbuf(sc->sc_dmat,
@@ -2376,7 +2128,7 @@ mvxpe_tx_queue(struct mvxpe_softc *sc, struct mbuf *m, int q)
 	}
 	txsegs = MVXPE_TX_MAP(sc, q, tx->tx_cpu)->dm_segs;
 	txnsegs = MVXPE_TX_MAP(sc, q, tx->tx_cpu)->dm_nsegs;
-	if (txnsegs <= 0 || txnsegs > tx->tx_free_cnt) {
+	if (txnsegs <= 0 || (txnsegs + tx->tx_used) > tx->tx_queue_len) {
 		/* we have no enough descriptors or mbuf is broken */
 		bus_dmamap_unload(sc->sc_dmat, MVXPE_TX_MAP(sc, q, tx->tx_cpu));
 		m_freem(m);
@@ -2389,7 +2141,7 @@ mvxpe_tx_queue(struct mvxpe_softc *sc, struct mbuf *m, int q)
 	MVXPE_TX_MBUF(sc, q, tx->tx_cpu) = m;
 	bus_dmamap_sync(sc->sc_dmat,
 	    MVXPE_TX_MAP(sc, q, tx->tx_cpu), 0, m->m_pkthdr.len,
-	    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_PREWRITE);
+	    BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
 
 	/* load to tx descriptors */
 	start = tx->tx_cpu;
@@ -2411,7 +2163,7 @@ mvxpe_tx_queue(struct mvxpe_softc *sc, struct mbuf *m, int q)
 		t->bufptr = txsegs[i].ds_addr;
 		t->bytecnt = txsegs[i].ds_len;
 		tx->tx_cpu = tx_counter_adv(tx->tx_cpu, 1);
-		tx->tx_free_cnt--;
+		tx->tx_used++;
 		used++;
 	}
 	/* t is last descriptor here */
@@ -2450,8 +2202,8 @@ mvxpe_tx_queue(struct mvxpe_softc *sc, struct mbuf *m, int q)
 	    "PTXDI: queue %d, %d\n", q, MVXPE_READ(sc, MVXPE_PTXDI(q)));
 	DPRINTSC(sc, 2, "TQC: %#x\n", MVXPE_READ(sc, MVXPE_TQC));
 	DPRINTIFNET(ifp, 2,
-	    "Tx: tx_cpu = %d, tx_dma = %d, tx_free_cnt = %d\n",
-	    tx->tx_cpu, tx->tx_dma, tx->tx_free_cnt);
+	    "Tx: tx_cpu = %d, tx_dma = %d, tx_used = %d\n",
+	    tx->tx_cpu, tx->tx_dma, tx->tx_used);
 	return 0;
 }
 
@@ -2459,61 +2211,72 @@ STATIC void
 mvxpe_tx_set_csumflag(struct ifnet *ifp,
     struct mvxpe_tx_desc *t, struct mbuf *m)
 {
+	struct ether_header *eh;
 	int csum_flags;
 	uint32_t iphl = 0, ipoff = 0;
 
 	
        	csum_flags = ifp->if_csum_flags_tx & m->m_pkthdr.csum_flags;
 
-	if (csum_flags & (M_CSUM_IPv4| M_CSUM_TCPv4|M_CSUM_UDPv4)) {
+	eh = mtod(m, struct ether_header *);
+	switch (htons(eh->ether_type)) {
+	case ETHERTYPE_IP:
+	case ETHERTYPE_IPV6:
+		ipoff = ETHER_HDR_LEN;
+		break;
+	case ETHERTYPE_VLAN:
+		ipoff = ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN;
+		break;
+	}
+
+	if (csum_flags & (M_CSUM_IPv4|M_CSUM_TCPv4|M_CSUM_UDPv4)) {
 		iphl = M_CSUM_DATA_IPv4_IPHL(m->m_pkthdr.csum_data);
-		ipoff = M_CSUM_DATA_IPv4_OFFSET(m->m_pkthdr.csum_data);
+		t->command |= MVXPE_TX_CMD_L3_IP4;
 	}
 	else if (csum_flags & (M_CSUM_TCPv6|M_CSUM_UDPv6)) {
 		iphl = M_CSUM_DATA_IPv6_HL(m->m_pkthdr.csum_data);
-		ipoff = M_CSUM_DATA_IPv6_OFFSET(m->m_pkthdr.csum_data);
+		t->command |= MVXPE_TX_CMD_L3_IP6;
 	}
 	else {
 		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NONE;
 		return;
 	}
 
+
 	/* L3 */
 	if (csum_flags & M_CSUM_IPv4) {
-		t->command |= MVXPE_TX_CMD_L3_IP4;
 		t->command |= MVXPE_TX_CMD_IP4_CHECKSUM;
 	}
 
 	/* L4 */
-	if (csum_flags & M_CSUM_TCPv4) {
-		t->command |= MVXPE_TX_CMD_L3_IP4;
+	if ((csum_flags & 
+	    (M_CSUM_TCPv4|M_CSUM_UDPv4|M_CSUM_TCPv6|M_CSUM_UDPv6)) == 0) {
+		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NONE;
+	}
+	else if (csum_flags & M_CSUM_TCPv4) {
+		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NOFRAG;
 		t->command |= MVXPE_TX_CMD_L4_TCP;
 	}
 	else if (csum_flags & M_CSUM_UDPv4) {
-		t->command |= MVXPE_TX_CMD_L3_IP4;
+		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NOFRAG;
 		t->command |= MVXPE_TX_CMD_L4_UDP;
 	}
 	else if (csum_flags & M_CSUM_TCPv6) {
-		t->command |= MVXPE_TX_CMD_L3_IP6;
+		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NOFRAG;
 		t->command |= MVXPE_TX_CMD_L4_TCP;
 	}
 	else if (csum_flags & M_CSUM_UDPv6) {
-		t->command |= MVXPE_TX_CMD_L3_IP6;
+		t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NOFRAG;
 		t->command |= MVXPE_TX_CMD_L4_UDP;
 	}
 
-	/*
-	 * NetBSD's networking stack is not request H/W csum on fragmented
-	 * packets.
-	 */
 	t->l4ichk = 0;
-	t->command |= MVXPE_TX_CMD_L4_CHECKSUM_NOFRAG;
-	t->command |= MVXPE_TX_CMD_W_IP_HEADER_LEN(iphl >> 2);
-	t->command |= MVXPE_TX_CMD_W_L3_OFFSET(ipoff);
+	t->command |= MVXPE_TX_CMD_IP_HEADER_LEN(iphl >> 2);
+	t->command |= MVXPE_TX_CMD_L3_OFFSET(ipoff);
 }
 
 STATIC void
-mvxpe_tx_complete(struct mvxpe_softc *sc)
+mvxpe_tx_complete(struct mvxpe_softc *sc, uint32_t queues)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	int q;
@@ -2522,10 +2285,11 @@ mvxpe_tx_complete(struct mvxpe_softc *sc)
 
 	KASSERT_SC_MTX(sc);
 
-	/* XXX: check queue bit array */
 	for (q = 0; q < MVXPE_QUEUE_SIZE; q++) {
+		if (!MVXPE_IS_QUEUE_BUSY(queues, q))
+			continue;
 		mvxpe_tx_lockq(sc, q);
-		mvxpe_tx_queue_del(sc, q);
+		mvxpe_tx_queue_complete(sc, q);
 		mvxpe_tx_unlockq(sc, q);
 	}
 	KASSERT(sc->sc_tx_pending >= 0);
@@ -2534,7 +2298,7 @@ mvxpe_tx_complete(struct mvxpe_softc *sc)
 }
 
 STATIC void
-mvxpe_tx_queue_del(struct mvxpe_softc *sc, int q)
+mvxpe_tx_queue_complete(struct mvxpe_softc *sc, int q)
 {
 	struct mvxpe_tx_ring *tx = MVXPE_TX_RING(sc, q);
 	struct mvxpe_tx_desc *t;
@@ -2565,12 +2329,16 @@ mvxpe_tx_queue_del(struct mvxpe_softc *sc, int q)
 			switch (t->flags & MVXPE_TX_F_EC_MASK) {
 			case MVXPE_TX_F_EC_LC:
 				MVXPE_EVCNT_INCR(&sc->sc_ev.ev_txd_lc);
+				break;
 			case MVXPE_TX_F_EC_UR:
 				MVXPE_EVCNT_INCR(&sc->sc_ev.ev_txd_ur);
+				break;
 			case MVXPE_TX_F_EC_RL:
 				MVXPE_EVCNT_INCR(&sc->sc_ev.ev_txd_rl);
+				break;
 			default:
 				MVXPE_EVCNT_INCR(&sc->sc_ev.ev_txd_oth);
+				break;
 			}
 			error = 1;
 		}
@@ -2585,14 +2353,14 @@ mvxpe_tx_queue_del(struct mvxpe_softc *sc, int q)
 		else
 			KASSERT((t->flags & MVXPE_TX_CMD_F) == 0);
 		tx->tx_dma = tx_counter_adv(tx->tx_dma, 1);
-		tx->tx_free_cnt++;
+		tx->tx_used--;
 		if (error)
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_drv_txqe[q]);
 		else
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_drv_txq[q]);
 	}
-	KASSERT(tx->tx_free_cnt >= 0);
-	KASSERT(tx->tx_free_cnt <= tx->tx_queue_len);
+	KASSERT(tx->tx_used >= 0);
+	KASSERT(tx->tx_used <= tx->tx_queue_len);
 	while (ndesc > 255) {
 		ptxsu = MVXPE_PTXSU_NORB(255);
 		MVXPE_WRITE(sc, MVXPE_PTXSU(q), ptxsu);
@@ -2603,22 +2371,22 @@ mvxpe_tx_queue_del(struct mvxpe_softc *sc, int q)
 		MVXPE_WRITE(sc, MVXPE_PTXSU(q), ptxsu);
 	}
 	DPRINTSC(sc, 2,
-	    "Tx complete q %d, tx_cpu = %d, tx_dma = %d, tx_free_cnt = %d\n",
-	    q, tx->tx_cpu, tx->tx_dma, tx->tx_free_cnt);
+	    "Tx complete q %d, tx_cpu = %d, tx_dma = %d, tx_used = %d\n",
+	    q, tx->tx_cpu, tx->tx_dma, tx->tx_used);
 }
 
 /*
  * Rx Subroutines
  */
 STATIC void
-mvxpe_rx(struct mvxpe_softc *sc)
+mvxpe_rx(struct mvxpe_softc *sc, uint32_t queues)
 {
 	int q, npkt;
 
 	KASSERT_SC_MTX(sc);
 
-	while ( (npkt = mvxpe_rx_queue_select(sc, &q))) {
-		/* mutex is held by rx_queue_sel */
+	while ( (npkt = mvxpe_rx_queue_select(sc, queues, &q))) {
+		/* mutex is held by rx_queue_select */
 		mvxpe_rx_queue(sc, q, npkt);
 		mvxpe_rx_unlockq(sc, q);
 	}
@@ -2630,7 +2398,7 @@ mvxpe_rx_queue(struct mvxpe_softc *sc, int q, int npkt)
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	struct mvxpe_rx_ring *rx = MVXPE_RX_RING(sc, q);
 	struct mvxpe_rx_desc *r;
-	struct mvxpe_bm_chunk *chunk;
+	struct mvxpbm_chunk *chunk;
 	struct mbuf *m;
 	uint32_t prxsu;
 	int error = 0;
@@ -2646,7 +2414,7 @@ mvxpe_rx_queue(struct mvxpe_softc *sc, int q, int npkt)
 		chunk = MVXPE_RX_PKTBUF(sc, q, rx->rx_dma);
 		MVXPE_RX_PKTBUF(sc, q, rx->rx_dma) = NULL;
 		r = MVXPE_RX_DESC(sc, q, rx->rx_dma);
-		mvxpe_bm_sync(chunk, r->bytecnt, BUS_DMASYNC_POSTREAD);
+		mvxpbm_dmamap_sync(chunk, r->bytecnt, BUS_DMASYNC_POSTREAD);
 
 		/* check errors */
 		if (r->status & MVXPE_RX_ES) {
@@ -2686,20 +2454,23 @@ mvxpe_rx_queue(struct mvxpe_softc *sc, int q, int npkt)
 		}
 
 		/* extract packet buffer */
-		mvxpe_bm_init_mbuf_hdr(chunk);
+		if (mvxpbm_init_mbuf_hdr(chunk) != 0) {
+			error = 1;
+			goto rx_done;
+		}
 		m = chunk->m;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = r->bytecnt - ETHER_CRC_LEN;
 		m_adj(m, MVXPE_HWHEADER_SIZE); /* strip MH */
 		mvxpe_rx_set_csumflag(ifp, r, m);
 		ifp->if_ipackets++;
 		bpf_mtap(ifp, m);
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 		chunk = NULL; /* the BM chunk goes to networking stack now */
 rx_done:
 		if (chunk) {
 			/* rx error. just return the chunk to BM. */
-			mvxpe_bm_free_chunk(chunk);
+			mvxpbm_free_chunk(chunk);
 		}
 		if (error)
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_drv_rxqe[q]);
@@ -2733,7 +2504,7 @@ rx_done:
 }
 
 STATIC int
-mvxpe_rx_queue_select(struct mvxpe_softc *sc, int *queue)
+mvxpe_rx_queue_select(struct mvxpe_softc *sc, uint32_t queues, int *queue)
 {
 	uint32_t prxs, npkt;
 	int q;
@@ -2743,6 +2514,9 @@ mvxpe_rx_queue_select(struct mvxpe_softc *sc, int *queue)
 	DPRINTSC(sc, 2, "selecting rx queue\n");
 
 	for (q = MVXPE_QUEUE_SIZE - 1; q >= 0; q--) {
+		if (!MVXPE_IS_QUEUE_BUSY(queues, q))
+			continue;
+
 		prxs = MVXPE_READ(sc, MVXPE_PRXS(q));
 		npkt = MVXPE_PRXS_GET_ODC(prxs);
 		if (npkt == 0)
@@ -2760,7 +2534,7 @@ mvxpe_rx_queue_select(struct mvxpe_softc *sc, int *queue)
 }
 
 STATIC void
-mvxpe_rx_reload(struct mvxpe_softc *sc)
+mvxpe_rx_refill(struct mvxpe_softc *sc, uint32_t queues)
 {
 	int q;
 
@@ -2768,37 +2542,38 @@ mvxpe_rx_reload(struct mvxpe_softc *sc)
 
 	/* XXX: check rx bit array */
 	for (q = 0; q < MVXPE_QUEUE_SIZE; q++) {
+		if (!MVXPE_IS_QUEUE_BUSY(queues, q))
+			continue;
+
 		mvxpe_rx_lockq(sc, q);
-
-		mvxpe_rx_queue_reload(sc, q);
-
+		mvxpe_rx_queue_refill(sc, q);
 		mvxpe_rx_unlockq(sc, q);
 	}
 }
 
 STATIC void
-mvxpe_rx_queue_reload(struct mvxpe_softc *sc, int q)
+mvxpe_rx_queue_refill(struct mvxpe_softc *sc, int q)
 {
 	struct mvxpe_rx_ring *rx = MVXPE_RX_RING(sc, q);
 	uint32_t prxs, prxsu, ndesc;
-	int idx, reload = 0;
+	int idx, refill = 0;
 	int npkt;
 
 	KASSERT_RX_MTX(sc, q);
 
 	prxs = MVXPE_READ(sc, MVXPE_PRXS(q));
 	ndesc = MVXPE_PRXS_GET_NODC(prxs) + MVXPE_PRXS_GET_ODC(prxs);
-	reload = rx->rx_queue_len - ndesc;
-	if (reload <= 0)
+	refill = rx->rx_queue_len - ndesc;
+	if (refill <= 0)
 		return;
 	DPRINTPRXS(2, q);
-	DPRINTSC(sc, 2, "%d buffers to reload.\n", reload);
+	DPRINTSC(sc, 2, "%d buffers to refill.\n", refill);
 
 	idx = rx->rx_cpu;
-	for (npkt = 0; npkt < reload; npkt++)
+	for (npkt = 0; npkt < refill; npkt++)
 		if (mvxpe_rx_queue_add(sc, q) != 0)
 			break;
-	DPRINTSC(sc, 2, "queue %d, %d buffer reloaded.\n", q, npkt);
+	DPRINTSC(sc, 2, "queue %d, %d buffer refilled.\n", q, npkt);
 	if (npkt == 0)
 		return;
 
@@ -2823,12 +2598,12 @@ mvxpe_rx_queue_add(struct mvxpe_softc *sc, int q)
 {
 	struct mvxpe_rx_ring *rx = MVXPE_RX_RING(sc, q);
 	struct mvxpe_rx_desc *r;
-	struct mvxpe_bm_chunk *chunk = NULL;
+	struct mvxpbm_chunk *chunk = NULL;
 
 	KASSERT_RX_MTX(sc, q);
 
 	/* Allocate the packet buffer */
-	chunk = mvxpe_bm_alloc(sc);
+	chunk = mvxpbm_alloc(sc->sc_bm);
 	if (chunk == NULL) {
 		DPRINTSC(sc, 1, "BM chunk allocation failed.\n");
 		return ENOBUFS;
@@ -2837,7 +2612,7 @@ mvxpe_rx_queue_add(struct mvxpe_softc *sc, int q)
 	/* Add the packet to descritor */
 	KASSERT(MVXPE_RX_PKTBUF(sc, q, rx->rx_cpu) == NULL);
 	MVXPE_RX_PKTBUF(sc, q, rx->rx_cpu) = chunk;
-	mvxpe_bm_sync(chunk, BM_SYNC_ALL, BUS_DMASYNC_PREREAD);
+	mvxpbm_dmamap_sync(chunk, BM_SYNC_ALL, BUS_DMASYNC_PREREAD);
 
 	r = MVXPE_RX_DESC(sc, q, rx->rx_cpu);
 	r->bufptr = chunk->buf_pa;
@@ -2857,8 +2632,9 @@ mvxpe_rx_set_csumflag(struct ifnet *ifp,
 
 	/* L3 */
 	if (r->status & MVXPE_RX_L3_IP) {
-		csum_flags |= M_CSUM_IPv4;
-		if ((r->status & MVXPE_RX_IP_HEADER_OK) == 0) {
+		csum_flags |= M_CSUM_IPv4 & ifp->if_csum_flags_rx;
+		if ((r->status & MVXPE_RX_IP_HEADER_OK) == 0 &&
+		    (csum_flags & M_CSUM_IPv4) != 0) {
 			csum_flags |= M_CSUM_IPv4_BAD;
 			goto finish;
 		}
@@ -2875,26 +2651,25 @@ mvxpe_rx_set_csumflag(struct ifnet *ifp,
 	switch (r->status & MVXPE_RX_L4_MASK) {
 	case MVXPE_RX_L4_TCP:
 		if (r->status & MVXPE_RX_L3_IP)
-			csum_flags |= M_CSUM_TCPv4;
+			csum_flags |= M_CSUM_TCPv4 & ifp->if_csum_flags_rx;
 		else
-			csum_flags |= M_CSUM_TCPv6;
-		if ((r->status & MVXPE_RX_L4_CHECKSUM_OK) == 0)
-			csum_flags |= M_CSUM_TCP_UDP_BAD;
+			csum_flags |= M_CSUM_TCPv6 & ifp->if_csum_flags_rx;
 		break;
 	case MVXPE_RX_L4_UDP:
 		if (r->status & MVXPE_RX_L3_IP)
-			csum_flags |= M_CSUM_UDPv4;
+			csum_flags |= M_CSUM_UDPv4 & ifp->if_csum_flags_rx;
 		else
-			csum_flags |= M_CSUM_UDPv6;
-		if ((r->status & MVXPE_RX_L4_CHECKSUM_OK) == 0)
-			csum_flags |= M_CSUM_TCP_UDP_BAD;
+			csum_flags |= M_CSUM_UDPv6 & ifp->if_csum_flags_rx;
 		break;
 	case MVXPE_RX_L4_OTH:
 	default:
 		break;
 	}
+	if ((r->status & MVXPE_RX_L4_CHECKSUM_OK) == 0 && (csum_flags &
+	    (M_CSUM_TCPv4 | M_CSUM_TCPv6 | M_CSUM_UDPv4 | M_CSUM_UDPv6)) != 0)
+		csum_flags |= M_CSUM_TCP_UDP_BAD;
 finish:
-	m0->m_pkthdr.csum_flags |= (csum_flags & ifp->if_csum_flags_rx);
+	m0->m_pkthdr.csum_flags = csum_flags;
 }
 
 /*
@@ -2949,11 +2724,11 @@ mvxpe_filter_setup(struct mvxpe_softc *sc)
 		if (memcmp(enm->enm_addrlo, special, 5) == 0) {
 			i = enm->enm_addrlo[5];
 			dfsmt[i>>2] |=
-			    MVXPE_DF(i&3, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS);
+			    MVXPE_DF(i&3, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS);
 		} else {
 			i = mvxpe_crc8(enm->enm_addrlo, ETHER_ADDR_LEN);
 			dfomt[i>>2] |=
-			    MVXPE_DF(i&3, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS);
+			    MVXPE_DF(i&3, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS);
 		}
 
 		ETHER_NEXT_MULTI(step, enm);
@@ -2964,10 +2739,10 @@ allmulti:
 	if (ifp->if_flags & (IFF_ALLMULTI|IFF_PROMISC)) {
 		for (i = 0; i < MVXPE_NDFSMT; i++) {
 			dfsmt[i] = dfomt[i] = 
-			    MVXPE_DF(0, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS) |
-			    MVXPE_DF(1, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS) |
-			    MVXPE_DF(2, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS) |
-			    MVXPE_DF(3, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS);
+			    MVXPE_DF(0, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(1, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(2, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(3, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS);
 		}
 	}
 
@@ -2984,8 +2759,20 @@ set:
 	MVXPE_WRITE(sc, MVXPE_PXC, pxc);
 
 	/* Set Destination Address Filter Unicast Table */
-	i = sc->sc_enaddr[5] & 0xf;		/* last nibble */
-	dfut[i>>2] = MVXPE_DF(i&3, MVXPE_DF_QUEUE_ALL | MVXPE_DF_PASS);
+	if (ifp->if_flags & IFF_PROMISC) {
+		/* pass all unicast addresses */
+		for (i = 0; i < MVXPE_NDFUT; i++) {
+			dfut[i] =
+			    MVXPE_DF(0, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(1, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(2, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS) |
+			    MVXPE_DF(3, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS);
+		}
+	}
+	else {
+		i = sc->sc_enaddr[5] & 0xf;             /* last nibble */
+		dfut[i>>2] = MVXPE_DF(i&3, MVXPE_DF_QUEUE(0) | MVXPE_DF_PASS);
+	}
 	MVXPE_WRITE_REGION(sc, MVXPE_DFUT(0), dfut, MVXPE_NDFUT);
 
 	/* Set Destination Address Filter Multicast Tables */
@@ -3139,8 +2926,10 @@ sysctl_set_queue_length(SYSCTLFN_ARGS)
 	case  MVXPE_SYSCTL_RX:
 		mvxpe_rx_lockq(sc, arg->queue);
 		rx->rx_queue_len = val;
-		rx->rx_queue_th_received = rx->rx_queue_len / 4;
-		rx->rx_queue_th_free = rx->rx_queue_len / 2;
+		rx->rx_queue_th_received = 
+		    rx->rx_queue_len / MVXPE_RXTH_RATIO;
+		rx->rx_queue_th_free = 
+		    rx->rx_queue_len / MVXPE_RXTH_REFILL_RATIO;
 
 		reg  = MVXPE_PRXDQTH_ODT(rx->rx_queue_th_received);
 		reg |= MVXPE_PRXDQTH_NODT(rx->rx_queue_th_free);
@@ -3151,7 +2940,8 @@ sysctl_set_queue_length(SYSCTLFN_ARGS)
 	case  MVXPE_SYSCTL_TX:
 		mvxpe_tx_lockq(sc, arg->queue);
 		tx->tx_queue_len = val;
-		tx->tx_queue_th_free = tx->tx_queue_len / 2;
+		tx->tx_queue_th_free =
+		    tx->tx_queue_len / MVXPE_TXTH_RATIO;
 
 		reg  = MVXPE_PTXDQS_TBT(tx->tx_queue_th_free);
 		reg |= MVXPE_PTXDQS_DQS(MVXPE_TX_RING_CNT);
@@ -3287,7 +3077,7 @@ sysctl_mvxpe_init(struct mvxpe_softc *sc)
 	/* hw.mvxpe.debug */
 	if (sysctl_createv(&sc->sc_mvxpe_clog, 0, NULL, &node,
 	    CTLFLAG_READWRITE, CTLTYPE_INT, "debug",
-	    SYSCTL_DESCR("mvgbe device driver debug control"),
+	    SYSCTL_DESCR("mvxpe device driver debug control"),
 	    NULL, 0, &mvxpe_debug, 0,
 	    CTL_HW, mvxpe_root_num, CTL_CREATE, CTL_EOL) != 0) {
 		aprint_normal_dev(sc->sc_dev, "couldn't create sysctl node\n");
@@ -3330,10 +3120,10 @@ sysctl_mvxpe_init(struct mvxpe_softc *sc)
 #ifdef SYSCTL_INCLUDE_DESCR
 #define MVXPE_SYSCTL_DESCR(num) "configuration parameters for queue " # num
 		static const char *sysctl_queue_descrs[] = {
-			MVXPE_SYSCTL_DESC(0), MVXPE_SYSCTL_DESC(1),
-			MVXPE_SYSCTL_DESC(2), MVXPE_SYSCTL_DESC(3),
-			MVXPE_SYSCTL_DESC(4), MVXPE_SYSCTL_DESC(5),
-			MVXPE_SYSCTL_DESC(6), MVXPE_SYSCTL_DESC(7),
+			MVXPE_SYSCTL_DESCR(0), MVXPE_SYSCTL_DESCR(1),
+			MVXPE_SYSCTL_DESCR(2), MVXPE_SYSCTL_DESCR(3),
+			MVXPE_SYSCTL_DESCR(4), MVXPE_SYSCTL_DESCR(5),
+			MVXPE_SYSCTL_DESCR(6), MVXPE_SYSCTL_DESCR(7),
 		};
 #undef MVXPE_SYSCTL_DESCR
 #endif /* SYSCTL_INCLUDE_DESCR */
@@ -3410,7 +3200,7 @@ sysctl_mvxpe_init(struct mvxpe_softc *sc)
 	/* hw.mvxpe.mvxpe[unit].clear_mib */
 	if (sysctl_createv(&sc->sc_mvxpe_clog, 0, NULL, &node,
 	    CTLFLAG_READWRITE, CTLTYPE_INT, "clear_mib",
-	    SYSCTL_DESCR("mvgbe device driver debug control"),
+	    SYSCTL_DESCR("mvxpe device driver debug control"),
 	    sysctl_clear_mib, 0, (void *)sc, 0,
 	    CTL_HW, mvxpe_root_num, mvxpe_nodenum, CTL_CREATE,
 	    CTL_EOL) != 0) {
@@ -3441,6 +3231,7 @@ mvxpe_clear_mib(struct mvxpe_softc *sc)
 STATIC void
 mvxpe_update_mib(struct mvxpe_softc *sc)
 {
+	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	int i;
 
 	KASSERT_SC_MTX(sc);
@@ -3448,6 +3239,7 @@ mvxpe_update_mib(struct mvxpe_softc *sc)
 	for (i = 0; i < __arraycount(mvxpe_mib_list); i++) {
 		uint32_t val_hi;
 		uint32_t val_lo;
+		uint64_t val;
 
 		if (mvxpe_mib_list[i].reg64) {
 			/* XXX: implement bus_space_read_8() */
@@ -3463,8 +3255,23 @@ mvxpe_update_mib(struct mvxpe_softc *sc)
 		if ((val_lo | val_hi) == 0)
 			continue;
 
-		sc->sc_sysctl_mib[i].counter +=
-	       	    ((uint64_t)val_hi << 32) | (uint64_t)val_lo;
+		val = ((uint64_t)val_hi << 32) | (uint64_t)val_lo;
+		sc->sc_sysctl_mib[i].counter += val;
+
+		switch (mvxpe_mib_list[i].ext) {
+		case MVXPE_MIBEXT_IF_OERRORS:
+			ifp->if_oerrors += val;
+			break;
+		case MVXPE_MIBEXT_IF_IERRORS:
+			ifp->if_ierrors += val;
+			break;
+		case MVXPE_MIBEXT_IF_COLLISIONS:
+			ifp->if_collisions += val;
+			break;
+		default:
+			break;
+		}
+
 	}
 }
 

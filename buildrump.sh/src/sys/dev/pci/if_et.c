@@ -1,4 +1,4 @@
-/*	$NetBSD: if_et.c,v 1.8 2014/03/29 19:28:24 christos Exp $	*/
+/*	$NetBSD: if_et.c,v 1.12 2016/06/10 13:27:14 ozaki-r Exp $	*/
 /*	$OpenBSD: if_et.c,v 1.11 2008/06/08 06:18:07 jsg Exp $	*/
 /*
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_et.c,v 1.8 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_et.c,v 1.12 2016/06/10 13:27:14 ozaki-r Exp $");
 
 #include "opt_inet.h"
 #include "vlan.h"
@@ -1754,12 +1754,12 @@ et_rxeof(struct et_softc *sc)
 			} else {
 				m->m_pkthdr.len = m->m_len = buflen -
 				    ETHER_CRC_LEN;
-				m->m_pkthdr.rcvif = ifp;
+				m_set_rcvif(m, ifp);
 
 				bpf_mtap(ifp, m);
 
 				ifp->if_ipackets++;
-				(*ifp->if_input)(ifp, m);
+				if_percpuq_enqueue(ifp->if_percpuq, m);
 			}
 		} else {
 			ifp->if_ierrors++;
@@ -1823,7 +1823,6 @@ et_encap(struct et_softc *sc, struct mbuf **m0)
 
 		MGETHDR(m_new, M_DONTWAIT, MT_DATA);
 		if (m_new == NULL) {
-			m_freem(m);
 			aprint_error_dev(sc->sc_dev, "can't defrag TX mbuf\n");
 			error = ENOBUFS;
 			goto back;
@@ -1833,7 +1832,6 @@ et_encap(struct et_softc *sc, struct mbuf **m0)
 		if (m->m_pkthdr.len > MHLEN) {
 			MCLGET(m_new, M_DONTWAIT);
 			if (!(m_new->m_flags & M_EXT)) {
-				m_freem(m);
 				m_freem(m_new);
 				error = ENOBUFS;
 			}
@@ -2055,11 +2053,6 @@ et_newbuf(struct et_rxbuf_data *rbd, int buf_idx, int init, int len0)
 	error = bus_dmamap_load_mbuf(sc->sc_dmat, sc->sc_mbuf_tmp_dmap, m,
 				     init ? BUS_DMA_WAITOK : BUS_DMA_NOWAIT);
 	if (error) {
-		if (!error) {
-			bus_dmamap_unload(sc->sc_dmat, sc->sc_mbuf_tmp_dmap);
-			error = EFBIG;
-			aprint_error_dev(sc->sc_dev, "too many segments?!\n");
-		}
 		m_freem(m);
 
 		/* XXX for debug */

@@ -1,4 +1,4 @@
-/*	$NetBSD: namespace.h,v 1.178 2015/05/01 14:17:56 christos Exp $	*/
+/*	$NetBSD: namespace.h,v 1.180 2016/04/03 00:19:42 christos Exp $	*/
 
 /*-
  * Copyright (c) 1997-2004 The NetBSD Foundation, Inc.
@@ -170,6 +170,7 @@
 #define a64l			_a64l
 #define adjtime			_adjtime
 #define alarm			_alarm
+#define allocaddrinfo		_allocaddrinfo
 #define alphasort		_alphasort
 #define arc4random		_arc4random
 #define arc4random_addrandom	_arc4random_addrandom
@@ -758,6 +759,7 @@
 #define wait			_wait
 #define wait3			_wait3
 #define wait4			_wait4
+#define waitid			_waitid
 #define waitpid			_waitpid
 #define wcscasecmp		_wcscasecmp
 #define wcscasecmp_l		_wcscasecmp_l

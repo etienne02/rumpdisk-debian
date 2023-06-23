@@ -1,4 +1,4 @@
-/*	$NetBSD: rumpdev_bus_space.c,v 1.5 2015/06/15 15:38:52 pooka Exp $	*/
+/*	$NetBSD: rumpdev_bus_space.c,v 1.8 2016/07/07 06:55:43 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2013 Antti Kantee.  All Rights Reserved.
@@ -76,7 +76,7 @@ bus_space_read_1(bus_space_tag_t bst, bus_space_handle_t bsh,
 	if (bst == 0) {
 #ifdef IOSPACE_SUPPORTED
 		unsigned short addr = bsh + offset;
-		__asm__ __volatile__("inb %1, %0" : "=a"(rv) : "d"(addr)); 
+		__asm__ __volatile__("inb %1, %0" : "=a"(rv) : "d"(addr));
 #else
 		panic("IO space not supported");
 #endif
@@ -96,7 +96,7 @@ bus_space_read_2(bus_space_tag_t bst, bus_space_handle_t bsh,
 	if (bst == 0) {
 #ifdef IOSPACE_SUPPORTED
 		unsigned short addr = bsh + offset;
-		__asm__ __volatile__("in %1, %0" : "=a"(rv) : "d"(addr)); 
+		__asm__ __volatile__("in %1, %0" : "=a"(rv) : "d"(addr));
 #else
 		panic("IO space not supported");
 #endif
@@ -116,7 +116,7 @@ bus_space_read_4(bus_space_tag_t bst, bus_space_handle_t bsh,
 	if (bst == 0) {
 #ifdef IOSPACE_SUPPORTED
 		unsigned short addr = bsh + offset;
-		__asm__ __volatile__("inl %1, %0" : "=a"(rv) : "d"(addr)); 
+		__asm__ __volatile__("inl %1, %0" : "=a"(rv) : "d"(addr));
 #else
 		panic("IO space not supported");
 #endif
@@ -134,7 +134,7 @@ bus_space_read_multi_1(bus_space_tag_t bst, bus_space_handle_t bsh,
 
 	while (count--) {
 		*datap++ = bus_space_read_1(bst, bsh, offset);
-		bus_space_barrier(bst, bst, offset, 1, BUS_SPACE_BARRIER_READ);
+		bus_space_barrier(bst, bsh, offset, 1, BUS_SPACE_BARRIER_READ);
 	}
 }
 
@@ -145,7 +145,7 @@ bus_space_read_multi_2(bus_space_tag_t bst, bus_space_handle_t bsh,
 
 	while (count--) {
 		*datap++ = bus_space_read_2(bst, bsh, offset);
-		bus_space_barrier(bst, bst, offset, 2, BUS_SPACE_BARRIER_READ);
+		bus_space_barrier(bst, bsh, offset, 2, BUS_SPACE_BARRIER_READ);
 	}
 }
 
@@ -156,7 +156,7 @@ bus_space_read_multi_4(bus_space_tag_t bst, bus_space_handle_t bsh,
 
 	while (count--) {
 		*datap++ = bus_space_read_4(bst, bsh, offset);
-		bus_space_barrier(bst, bst, offset, 4, BUS_SPACE_BARRIER_READ);
+		bus_space_barrier(bst, bsh, offset, 4, BUS_SPACE_BARRIER_READ);
 	}
 }
 
@@ -220,7 +220,7 @@ bus_space_write_multi_1(bus_space_tag_t bst, bus_space_handle_t bsh,
 		const uint8_t value = *datap++;
 
 		bus_space_write_1(bst, bsh, offset, value);
-		bus_space_barrier(bst, bst, offset, 1, BUS_SPACE_BARRIER_WRITE);
+		bus_space_barrier(bst, bsh, offset, 1, BUS_SPACE_BARRIER_WRITE);
 	}
 }
 
@@ -233,7 +233,7 @@ bus_space_write_multi_2(bus_space_tag_t bst, bus_space_handle_t bsh,
 		const uint16_t value = *datap++;
 
 		bus_space_write_2(bst, bsh, offset, value);
-		bus_space_barrier(bst, bst, offset, 2, BUS_SPACE_BARRIER_WRITE);
+		bus_space_barrier(bst, bsh, offset, 2, BUS_SPACE_BARRIER_WRITE);
 	}
 }
 
@@ -246,7 +246,7 @@ bus_space_write_multi_4(bus_space_tag_t bst, bus_space_handle_t bsh,
 		const uint32_t value = *datap++;
 
 		bus_space_write_4(bst, bsh, offset, value);
-		bus_space_barrier(bst, bst, offset, 4, BUS_SPACE_BARRIER_WRITE);
+		bus_space_barrier(bst, bsh, offset, 4, BUS_SPACE_BARRIER_WRITE);
 	}
 }
 
@@ -271,6 +271,9 @@ void
 bus_space_unmap(bus_space_tag_t bst, bus_space_handle_t bsh,
 	bus_size_t size)
 {
+
+	if (bst == 0)
+		return;
 
 	panic("%s: unimplemented", __func__);
 }

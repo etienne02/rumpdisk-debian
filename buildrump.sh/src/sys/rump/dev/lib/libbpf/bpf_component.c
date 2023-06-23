@@ -1,4 +1,4 @@
-/*	$NetBSD: bpf_component.c,v 1.1 2014/03/13 02:01:04 pooka Exp $	*/
+/*	$NetBSD: bpf_component.c,v 1.3 2016/07/19 02:47:45 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 2010 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bpf_component.c,v 1.1 2014/03/13 02:01:04 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bpf_component.c,v 1.3 2016/07/19 02:47:45 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -36,8 +36,8 @@ __KERNEL_RCSID(0, "$NetBSD: bpf_component.c,v 1.1 2014/03/13 02:01:04 pooka Exp 
 
 #include <net/bpf.h>
 
-#include "rump_private.h"
-#include "rump_vfs_private.h"
+#include <rump-sys/kern.h>
+#include <rump-sys/vfs.h>
 
 RUMP_COMPONENT(RUMP_COMPONENT_NET)
 {
@@ -50,4 +50,6 @@ RUMP_COMPONENT(RUMP_COMPONENT_NET)
 		panic("bpf devsw attach failed: %d", error);
 	if ((error = rump_vfs_makeonedevnode(S_IFCHR, "/dev/bpf", cmaj, 0)) !=0)
 		panic("cannot create bpf device nodes: %d", error);
+	if ((error = devsw_detach(NULL, &bpf_cdevsw)) != 0)
+		panic("cannot detach bpf devsw: %d", error);
 }

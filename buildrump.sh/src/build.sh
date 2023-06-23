@@ -1,5 +1,5 @@
 #! /usr/bin/env sh
-#	$NetBSD: build.sh,v 1.307 2015/05/06 17:31:49 wiz Exp $
+#	$NetBSD: build.sh,v 1.310 2016/06/03 00:00:01 kre Exp $
 #
 # Copyright (c) 2001-2011 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -506,7 +506,7 @@ initdefaults()
 	# XXX Except that doesn't work on Solaris. Or many Linuces.
 	#
 	unset PWD
-	TOP=$(/bin/pwd -P 2>/dev/null || /bin/pwd 2>/dev/null)
+	TOP=$( (exec pwd -P 2>/dev/null) || (exec pwd 2>/dev/null) )
 
 	# The user can set HOST_SH in the environment, or we try to
 	# guess an appropriate value.  Then we set several other
@@ -651,7 +651,7 @@ MACHINE=evbarm		MACHINE_ARCH=earmv7	ALIAS=evbearmv7-el
 MACHINE=evbarm		MACHINE_ARCH=earmv7eb	ALIAS=evbearmv7-eb
 MACHINE=evbarm		MACHINE_ARCH=earmv7hf	ALIAS=evbearmv7hf-el
 MACHINE=evbarm		MACHINE_ARCH=earmv7hfeb	ALIAS=evbearmv7hf-eb
-MACHINE=evbarm64	MACHINE_ARCH=aarch64	ALIAS=evbarm64-el
+MACHINE=evbarm64	MACHINE_ARCH=aarch64	ALIAS=evbarm64-el DEFAULT
 MACHINE=evbarm64	MACHINE_ARCH=aarch64eb	ALIAS=evbarm64-eb
 MACHINE=evbcf		MACHINE_ARCH=coldfire
 MACHINE=evbmips		MACHINE_ARCH=		NO_DEFAULT
@@ -1593,21 +1593,28 @@ rebuildmake()
 	fi
 
 	# Build bootstrap ${toolprefix}make if needed.
-	if ${do_rebuildmake}; then
-		statusmsg "Bootstrapping ${toolprefix}make"
-		${runcmd} cd "${tmpdir}"
-		${runcmd} env CC="${HOST_CC-cc}" CPPFLAGS="${HOST_CPPFLAGS}" \
-			CFLAGS="${HOST_CFLAGS--O}" LDFLAGS="${HOST_LDFLAGS}" \
-			${HOST_SH} "${TOP}/tools/make/configure" ||
-		    ( cp ${tmpdir}/config.log ${tmpdir}-config.log
-		      bomb "Configure of ${toolprefix}make failed, see ${tmpdir}-config.log for details" )
-		${runcmd} ${HOST_SH} buildmake.sh ||
-		    bomb "Build of ${toolprefix}make failed"
-		make="${tmpdir}/${toolprefix}make"
-		${runcmd} cd "${TOP}"
-		${runcmd} rm -f usr.bin/make/*.o usr.bin/make/lst.lib/*.o
-		done_rebuildmake=true
+	if ! ${do_rebuildmake}; then
+		return
 	fi
+
+	statusmsg "Bootstrapping ${toolprefix}make"
+	${runcmd} cd "${tmpdir}"
+	${runcmd} env \
+\
+CC="${HOST_CC-cc}" \
+CPPFLAGS="${HOST_CPPFLAGS} -D_PATH_DEFSYSPATH="'\"'${NETBSDSRCDIR}/share/mk'\"' \
+CFLAGS="${HOST_CFLAGS--O}" \
+LDFLAGS="${HOST_LDFLAGS}" \
+\
+	    ${HOST_SH} "${TOP}/tools/make/configure" ||
+	( cp ${tmpdir}/config.log ${tmpdir}-config.log
+	      bomb "Configure of ${toolprefix}make failed, see ${tmpdir}-config.log for details" )
+	${runcmd} ${HOST_SH} buildmake.sh ||
+	    bomb "Build of ${toolprefix}make failed"
+	make="${tmpdir}/${toolprefix}make"
+	${runcmd} cd "${TOP}"
+	${runcmd} rm -f usr.bin/make/*.o usr.bin/make/lst.lib/*.o
+	done_rebuildmake=true
 }
 
 # validatemakeparams --
@@ -1869,7 +1876,7 @@ createmakewrapper()
 	eval cat <<EOF ${makewrapout}
 #! ${HOST_SH}
 # Set proper variables to allow easy "make" building of a NetBSD subtree.
-# Generated from:  \$NetBSD: build.sh,v 1.307 2015/05/06 17:31:49 wiz Exp $
+# Generated from:  \$NetBSD: build.sh,v 1.310 2016/06/03 00:00:01 kre Exp $
 # with these arguments: ${_args}
 #
 

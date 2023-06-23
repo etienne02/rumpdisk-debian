@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_usrreq.c,v 1.208 2015/05/02 17:18:03 rtr Exp $	*/
+/*	$NetBSD: tcp_usrreq.c,v 1.212 2016/04/26 08:44:45 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -99,11 +99,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_usrreq.c,v 1.208 2015/05/02 17:18:03 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_usrreq.c,v 1.212 2016/04/26 08:44:45 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_tcp_debug.h"
 #include "opt_mbuftrace.h"
+#include "opt_tcp_space.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -122,7 +125,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_usrreq.c,v 1.208 2015/05/02 17:18:03 rtr Exp $")
 #include <sys/uidinfo.h>
 
 #include <net/if.h>
-#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -152,8 +154,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_usrreq.c,v 1.208 2015/05/02 17:18:03 rtr Exp $")
 #include <netinet/tcpip.h>
 #include <netinet/tcp_debug.h>
 #include <netinet/tcp_vtw.h>
-
-#include "opt_tcp_space.h"
 
 static int  
 tcp_debug_capture(struct tcpcb *tp, int req)  

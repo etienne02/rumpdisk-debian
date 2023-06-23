@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_subr.c,v 1.262 2015/05/19 17:33:43 kefren Exp $	*/
+/*	$NetBSD: tcp_subr.c,v 1.266 2016/06/10 13:27:16 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -91,13 +91,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_subr.c,v 1.262 2015/05/19 17:33:43 kefren Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_subr.c,v 1.266 2016/06/10 13:27:16 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_ipsec.h"
 #include "opt_tcp_compat_42.h"
 #include "opt_inet_csum.h"
 #include "opt_mbuftrace.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -850,7 +852,7 @@ tcp_respond(struct tcpcb *tp, struct mbuf *mtemplate, struct mbuf *m,
 		tlen += th->th_off << 2;
 	m->m_len = hlen + tlen;
 	m->m_pkthdr.len = hlen + tlen;
-	m->m_pkthdr.rcvif = NULL;
+	m_reset_rcvif(m);
 	th->th_flags = flags;
 	th->th_urp = 0;
 
@@ -1601,11 +1603,8 @@ tcp_ctlinput(int cmd, const struct sockaddr *sa, void *v)
 		 */
 		th = (struct tcphdr *)((char *)ip + (ip->ip_hl << 2));
 #ifdef INET6
-		memset(&src6, 0, sizeof(src6));
-		memset(&dst6, 0, sizeof(dst6));
-		src6.s6_addr16[5] = dst6.s6_addr16[5] = 0xffff;
-		memcpy(&src6.s6_addr32[3], &ip->ip_src, sizeof(struct in_addr));
-		memcpy(&dst6.s6_addr32[3], &ip->ip_dst, sizeof(struct in_addr));
+		in6_in_2_v4mapin6(&ip->ip_src, &src6);
+		in6_in_2_v4mapin6(&ip->ip_dst, &dst6);
 #endif
 		if ((inp = in_pcblookup_connect(&tcbtable, ip->ip_dst,
 						th->th_dport, ip->ip_src, th->th_sport, 0)) != NULL)
@@ -1750,9 +1749,7 @@ tcp_mtudisc_callback(struct in_addr faddr)
 
 	in_pcbnotifyall(&tcbtable, faddr, EMSGSIZE, tcp_mtudisc);
 #ifdef INET6
-	memset(&in6, 0, sizeof(in6));
-	in6.s6_addr16[5] = 0xffff;
-	memcpy(&in6.s6_addr32[3], &faddr, sizeof(struct in_addr));
+	in6_in_2_v4mapin6(&faddr, &in6);
 	tcp6_mtudisc_callback(&in6);
 #endif
 }
@@ -1766,41 +1763,43 @@ void
 tcp_mtudisc(struct inpcb *inp, int errno)
 {
 	struct tcpcb *tp = intotcpcb(inp);
-	struct rtentry *rt = in_pcbrtentry(inp);
+	struct rtentry *rt;
 
-	if (tp != 0) {
-		if (rt != 0) {
-			/*
-			 * If this was not a host route, remove and realloc.
-			 */
-			if ((rt->rt_flags & RTF_HOST) == 0) {
-				in_rtchange(inp, errno);
-				if ((rt = in_pcbrtentry(inp)) == 0)
-					return;
-			}
+	if (tp == NULL)
+		return;
 
-			/*
-			 * Slow start out of the error condition.  We
-			 * use the MTU because we know it's smaller
-			 * than the previously transmitted segment.
-			 *
-			 * Note: This is more conservative than the
-			 * suggestion in draft-floyd-incr-init-win-03.
-			 */
-			if (rt->rt_rmx.rmx_mtu != 0)
-				tp->snd_cwnd =
-				    TCP_INITIAL_WINDOW(tcp_init_win,
-				    rt->rt_rmx.rmx_mtu);
+	rt = in_pcbrtentry(inp);
+	if (rt != NULL) {
+		/*
+		 * If this was not a host route, remove and realloc.
+		 */
+		if ((rt->rt_flags & RTF_HOST) == 0) {
+			in_rtchange(inp, errno);
+			if ((rt = in_pcbrtentry(inp)) == NULL)
+				return;
 		}
 
 		/*
-		 * Resend unacknowledged packets.
+		 * Slow start out of the error condition.  We
+		 * use the MTU because we know it's smaller
+		 * than the previously transmitted segment.
+		 *
+		 * Note: This is more conservative than the
+		 * suggestion in draft-floyd-incr-init-win-03.
 		 */
-		tp->snd_nxt = tp->sack_newdata = tp->snd_una;
-		tcp_output(tp);
+		if (rt->rt_rmx.rmx_mtu != 0)
+			tp->snd_cwnd =
+			    TCP_INITIAL_WINDOW(tcp_init_win,
+			    rt->rt_rmx.rmx_mtu);
 	}
+
+	/*
+	 * Resend unacknowledged packets.
+	 */
+	tp->snd_nxt = tp->sack_newdata = tp->snd_una;
+	tcp_output(tp);
 }
-#endif
+#endif /* INET */
 
 #ifdef INET6
 /*

@@ -1,4 +1,4 @@
-/*	$NetBSD: mips_machdep.c,v 1.263 2015/04/29 08:32:00 hikaru Exp $	*/
+/*	$NetBSD: mips_machdep.c,v 1.273 2016/07/25 22:10:03 macallan Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -111,7 +111,7 @@
  */
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
-__KERNEL_RCSID(0, "$NetBSD: mips_machdep.c,v 1.263 2015/04/29 08:32:00 hikaru Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mips_machdep.c,v 1.273 2016/07/25 22:10:03 macallan Exp $");
 
 #define __INTR_PRIVATE
 #include "opt_cputype.h"
@@ -172,10 +172,10 @@ __KERNEL_RCSID(0, "$NetBSD: mips_machdep.c,v 1.263 2015/04/29 08:32:00 hikaru Ex
 
 #ifdef _LP64
 #define	_LOAD_V0_L_PRIVATE_A0	_MKINSN(OP_LD, _R_A0, _R_V0, 0, offsetof(lwp_t, l_private))
-#define	_MTC0_V0_USERLOCAL	_MKINSN(OP_COP0, OP_DMT, _R_V0, MIPS_COP_0_TLB_CONTEXT, 4)
+#define	_MTC0_V0_USERLOCAL	_MKINSN(OP_COP0, OP_DMT, _R_V0, MIPS_COP_0_TLB_CONTEXT, 2)
 #else
 #define	_LOAD_V0_L_PRIVATE_A0	_MKINSN(OP_LW, _R_A0, _R_V0, 0, offsetof(lwp_t, l_private))
-#define	_MTC0_V0_USERLOCAL	_MKINSN(OP_COP0, OP_MT, _R_V0, MIPS_COP_0_TLB_CONTEXT, 4)
+#define	_MTC0_V0_USERLOCAL	_MKINSN(OP_COP0, OP_MT, _R_V0, MIPS_COP_0_TLB_CONTEXT, 2)
 #endif
 #define	JR_RA			_MKINSN(OP_SPECIAL, _R_RA, 0, 0, OP_JR)
 
@@ -239,7 +239,6 @@ extern const mips_locore_jumpvec_t mips64_locore_vec;
 #endif
 
 #if defined(MIPS64R2)
-static void	mips64r2_vector_init(const struct splsw *);
 extern const struct locoresw mips64r2_locoresw;
 extern const mips_locore_jumpvec_t mips64r2_locore_vec;
 #endif
@@ -366,7 +365,7 @@ static const struct pridtab cputab[] = {
 	{ 0, MIPS_TX3900, MIPS_REV_TX3927, -1,	CPU_ARCH_MIPS1, 64,
 	  CPU_MIPS_NO_LLSC, 0, 0,		"Toshiba TX3927 CPU"	},
 	{ 0, MIPS_R5000, -1, -1,		CPU_ARCH_MIPS4, 48,
-	  CPU_MIPS_R4K_MMU | CPU_MIPS_DOUBLE_COUNT, 0, 0,			
+	  CPU_MIPS_R4K_MMU | CPU_MIPS_DOUBLE_COUNT, 0, 0,
 						"MIPS R5000 CPU"	},
 	{ 0, MIPS_RM5200, -1, -1,		CPU_ARCH_MIPS4, 48,
 	  CPU_MIPS_R4K_MMU | CPU_MIPS_CAUSE_IV | CPU_MIPS_DOUBLE_COUNT |
@@ -381,7 +380,7 @@ static const struct pridtab cputab[] = {
 	  MIPS_NOT_SUPP | CPU_MIPS_CAUSE_IV | CPU_MIPS_DOUBLE_COUNT |
 	  CPU_MIPS_USE_WAIT, 0, 0,		"QED RM7000 CPU"	},
 
-	/* 
+	/*
 	 * IDT RC32300 core is a 32 bit MIPS2 processor with
 	 * MIPS3/MIPS4 extensions. It has an R4000-style TLB,
 	 * while all registers are 32 bits and any 64 bit
@@ -416,7 +415,7 @@ static const struct pridtab cputab[] = {
 	  CPU_MIPS_R4K_MMU | CPU_MIPS_DOUBLE_COUNT, 0, 0,
 						"Toshiba TX4900 CPU"	},
 
-	/* 
+	/*
 	 * ICT Loongson2 is a MIPS64 CPU with a few quirks.  For some reason
 	 * the virtual aliases present with 4KB pages make the caches misbehave
 	 * so we make all accesses uncached.  With 16KB pages, no virtual
@@ -490,6 +489,13 @@ static const struct pridtab cputab[] = {
 	  MIPS_CP0FL_CONFIG | MIPS_CP0FL_CONFIG1 | MIPS_CP0FL_CONFIG2 |
 	  MIPS_CP0FL_CONFIG3 | MIPS_CP0FL_CONFIG6 | MIPS_CP0FL_CONFIG7,
 	  0, "1004K" },
+	{ MIPS_PRID_CID_MTI, MIPS_1074K, -1, -1,	-1, 0,
+	  MIPS32_FLAGS | CPU_MIPS_DOUBLE_COUNT,
+	  MIPS_CP0FL_USE |
+	  MIPS_CP0FL_EBASE | MIPS_CP0FL_USERLOCAL | MIPS_CP0FL_HWRENA |
+	  MIPS_CP0FL_CONFIG | MIPS_CP0FL_CONFIG1 | MIPS_CP0FL_CONFIG2 |
+	  MIPS_CP0FL_CONFIG3 | MIPS_CP0FL_CONFIG6 | MIPS_CP0FL_CONFIG7,
+	  0, "1074K" },
 
 	{ MIPS_PRID_CID_BROADCOM, MIPS_BCM3302, -1, -1, -1, 0,
 	  MIPS32_FLAGS | CPU_MIPS_DOUBLE_COUNT, 0, 0, "BCM3302"	},
@@ -643,7 +649,7 @@ static const struct pridtab cputab[] = {
 	{ MIPS_PRID_CID_CAVIUM, MIPS_CN50XX, -1, -1, -1, 0,
 	  MIPS64_FLAGS | CPU_MIPS_D_CACHE_COHERENT | CPU_MIPS_NO_LLADDR,
 	  MIPS_CP0FL_USE |
-	  MIPS_CP0FL_EBASE | MIPS_CP0FL_CONFIG |
+	  MIPS_CP0FL_EBASE | MIPS_CP0FL_CONFIG | MIPS_CP0FL_HWRENA |
 	  MIPS_CP0FL_CONFIG1 | MIPS_CP0FL_CONFIG2 | MIPS_CP0FL_CONFIG3,
 	  0,
 	  "CN50xx"		},
@@ -654,7 +660,8 @@ static const struct pridtab cputab[] = {
 
 	/* Ingenic XBurst */
 	{ MIPS_PRID_CID_INGENIC, MIPS_XBURST,  -1, -1,	-1, 0,
-	  MIPS32_FLAGS | CPU_MIPS_DOUBLE_COUNT, 0, 0, "XBurst"		},
+	  MIPS32_FLAGS | CPU_MIPS_D_CACHE_COHERENT | CPU_MIPS_DOUBLE_COUNT,
+	  0, 0, "XBurst"		},
 
 	{ 0, 0, 0,				0, 0, 0,
 	  0, 0, 0,				NULL			}
@@ -1005,7 +1012,7 @@ mips64_vector_init(const struct splsw *splsw)
 #endif /* MIPS64 */
 
 #if defined(MIPS64R2)
-static void
+void
 mips64r2_vector_init(const struct splsw *splsw)
 {
 	/* r4000 exception handler address */
@@ -1041,7 +1048,13 @@ mips64r2_vector_init(const struct splsw *splsw)
 		panic("startup: %s vector code too large",
 		    "interrupt exception");
 
-	memcpy((void *)MIPS_UTLB_MISS_EXC_VEC, mips64r2_tlb_miss,
+	const intptr_t ebase = (intptr_t)mipsNN_cp0_ebase_read();
+	const int cpunum = ebase & MIPS_EBASE_CPUNUM;
+
+	// This may need to be on CPUs other CPU0 so use EBASE to fetch
+	// the appropriate address for exception code.  EBASE also contains
+	// the cpunum so remove that.
+	memcpy((void *)(intptr_t)(ebase & ~MIPS_EBASE_CPUNUM), mips64r2_tlb_miss,
 	      mips64r2_intr_end - mips64r2_tlb_miss);
 
 	/*
@@ -1062,7 +1075,7 @@ mips64r2_vector_init(const struct splsw *splsw)
 	 * If this CPU doesn't have a COP0 USERLOCAL register, at the end
 	 * of cpu_switch resume overwrite the instructions which update it.
 	 */
-	if (!(cp0flags & MIPS_CP0FL_USERLOCAL)) {
+	if (!(cp0flags & MIPS_CP0FL_USERLOCAL) && cpunum == 0) {
 		extern uint32_t mips64r2_cpu_switch_resume[];
 		for (uint32_t *insnp = mips64r2_cpu_switch_resume;; insnp++) {
 			KASSERT(insnp[0] != JR_RA);
@@ -1078,7 +1091,8 @@ mips64r2_vector_init(const struct splsw *splsw)
 	/*
 	 * Copy locore-function vector.
 	 */
-	mips_locore_jumpvec = mips64r2_locore_vec;
+	if (cpunum == 0)
+		mips_locore_jumpvec = mips64r2_locore_vec;
 
 	mips_icache_sync_all();
 	mips_dcache_wbinv_all();
@@ -1167,11 +1181,9 @@ mips_vector_init(const struct splsw *splsw, bool multicpu_p)
 			case CPU_ARCH_MIPS32:
 				opts->mips_cpu_arch = CPU_ARCH_MIPS32R2;
 				break;
-#ifdef notyet
 			case CPU_ARCH_MIPS64:
 				opts->mips_cpu_arch = CPU_ARCH_MIPS64R2;
 				break;
-#endif
 			default:
 				printf("WARNING: MIPS32/64 arch %d revision %d "
 				    "unknown!\n", opts->mips_cpu_arch,
@@ -1225,12 +1237,12 @@ mips_vector_init(const struct splsw *splsw, bool multicpu_p)
 		cca = (opts->mips_cpu_flags & CPU_MIPS_CACHED_CCA_MASK) >>
 		    CPU_MIPS_CACHED_CCA_SHIFT;
 		opts->mips3_pg_cached = MIPS3_CCA_TO_PG(cca);
-#ifdef _LP64
+#ifndef __mips_o32
 		opts->mips3_xkphys_cached = MIPS_PHYS_TO_XKPHYS(cca, 0);
 #endif
 	} else {
 		opts->mips3_pg_cached = MIPS3_DEFAULT_PG_CACHED;
-#ifdef _LP64
+#ifndef __mips_o32
 		opts->mips3_xkphys_cached = MIPS3_DEFAULT_XKPHYS_CACHED;
 #endif
 	}
@@ -1307,7 +1319,7 @@ mips_vector_init(const struct splsw *splsw, bool multicpu_p)
 		mips3_vector_init(splsw);
 		mips_locoresw = mips3_locoresw;
 		break;
-	
+
 #endif /* MIPS3 */
 #if defined(MIPS32)
 	case CPU_ARCH_MIPS32:
@@ -1517,7 +1529,7 @@ cpu_identify(device_t dev)
 			    mci->mci_picache_line_size, waynames[mci->mci_picache_ways],
 			    opts->mips_num_tlb_entries);
 		else
-			aprint_normal_dev(dev, "%d TLB entries\n", 
+			aprint_normal_dev(dev, "%d TLB entries\n",
 			    opts->mips_num_tlb_entries);
 		if (mci->mci_pdcache_size)
 			aprint_normal_dev(dev, "%dKB/%dB %s %s Data cache\n",
@@ -1708,6 +1720,16 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 		       NULL, MIPS_HAS_LMMI, NULL, 0,
 		       CTL_MACHDEP, CPU_LMMI, CTL_EOL);
 #endif
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
+                       CTLTYPE_INT, "fpu_present", NULL,
+                       NULL,
+#ifdef NOFPU
+		       0,
+#else
+		       1,
+#endif
+		       NULL, 0, CTL_MACHDEP, CTL_CREATE, CTL_EOL);
 }
 
 /*
@@ -1804,8 +1826,7 @@ cpu_dump(void)
 		cpuhdrp->pg_frame  = MIPS1_PG_FRAME;
 		cpuhdrp->pg_v      = MIPS1_PG_V;
 	}
-	cpuhdrp->sysmappa   = MIPS_KSEG0_TO_PHYS(Sysmap);
-	cpuhdrp->sysmapsize = Sysmapsize;
+	cpuhdrp->sysmappa   = MIPS_KSEG0_TO_PHYS(curcpu()->ci_pmap_kern_segtab);
 	cpuhdrp->nmemsegs   = mem_cluster_cnt;
 
 	/*
@@ -2048,6 +2069,10 @@ mips_init_lwp0_uarea(void)
 
 	pcb->pcb_context.val[_L_SR] = MIPS_SR_INT_IE
 	    | (ipl_sr_map.sr_bits[IPL_SCHED] ^ MIPS_INT_MASK);
+#ifdef _mips_n32
+	pcb->pcb_context.val[_L_SR] |= MIPS_SR_KX | MIPS_SR_UX;
+	l->l_md.md_utf->tf_regs[_R_SR] = MIPS_SR_KX | MIPS_SR_UX;
+#endif
 #ifdef _LP64
 	pcb->pcb_context.val[_L_SR] |= MIPS_SR_KX | MIPS_SR_UX;
 	l->l_md.md_utf->tf_regs[_R_SR] = MIPS_SR_KX | MIPS_SR_UX;
@@ -2116,7 +2141,7 @@ mips_page_physload(vaddr_t vkernstart, vaddr_t vkernend,
 				/*
 				 * If this segment doesn't overlap the freelist
 				 * at all, skip it.
-				 */ 
+				 */
 				if (segstart >= flp[i].fl_end
 				    || segend <= flp[i].fl_start)
 					continue;
@@ -2194,12 +2219,12 @@ mips_page_physload(vaddr_t vkernstart, vaddr_t vkernend,
 					break;
 				}
 			}
-			
+
 			/*
 			 * Now we give this segment to uvm.
 			 */
 			printf("adding %#"PRIxPADDR" @ %#"PRIxPADDR" to freelist %d\n",
-			
+
 			    segend - segstart, segstart, freelist);
 			paddr_t first = atop(segstart);
 			paddr_t last = atop(segend);
@@ -2213,7 +2238,7 @@ mips_page_physload(vaddr_t vkernstart, vaddr_t vkernend,
 	}
 }
 
-/* 
+/*
  * Start a new LWP
  */
 void
@@ -2231,7 +2256,7 @@ startlwp(void *arg)
 }
 
 #ifdef COMPAT_NETBSD32
-/* 
+/*
  * Start a new LWP
  */
 void
@@ -2368,6 +2393,20 @@ mm_md_direct_mapped_phys(paddr_t pa, vaddr_t *vap)
 	return false;
 }
 
+bool
+mm_md_page_color(paddr_t pa, int *colorp)
+{
+	if (MIPS_CACHE_VIRTUAL_ALIAS) {
+		struct vm_page * const pg = PHYS_TO_VM_PAGE(pa);
+		KASSERT(pg != NULL);
+		struct vm_page_md * const mdpg = VM_PAGE_TO_MD(pg);
+		*colorp = atop(mdpg->mdpg_first.pv_va);
+		return !mips_cache_badalias(pa, mdpg->mdpg_first.pv_va);
+	}
+	*colorp = 0;
+	return true;
+}
+
 int
 mm_md_physacc(paddr_t pa, vm_prot_t prot)
 {
@@ -2384,7 +2423,7 @@ mm_md_kernacc(void *ptr, vm_prot_t prot, bool *handled)
 	if (v < MIPS_XKPHYS_START) {
 		return EFAULT;
 	}
-	if (MIPS_XKPHYS_P(v) && v > MIPS_PHYS_TO_XKPHYS_CACHED(mips_avail_end +
+	if (MIPS_XKPHYS_P(v) && v > MIPS_PHYS_TO_XKPHYS_CACHED(pmap_limits.avail_end +
 	    mips_round_page(MSGBUFSIZE))) {
 		return EFAULT;
 	}
@@ -2399,7 +2438,7 @@ mm_md_kernacc(void *ptr, vm_prot_t prot, bool *handled)
 	if (v < MIPS_KSEG0_START) {
 		return EFAULT;
 	}
-	if (v < MIPS_PHYS_TO_KSEG0(mips_avail_end +
+	if (v < MIPS_PHYS_TO_KSEG0(pmap_limits.avail_end +
 	    mips_round_page(MSGBUFSIZE))) {
 		*handled = true;
 		return 0;

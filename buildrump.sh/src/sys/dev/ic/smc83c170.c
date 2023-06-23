@@ -1,4 +1,4 @@
-/*	$NetBSD: smc83c170.c,v 1.81 2012/07/22 14:32:58 matt Exp $	*/
+/*	$NetBSD: smc83c170.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: smc83c170.c,v 1.81 2012/07/22 14:32:58 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: smc83c170.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $");
 
 
 #include <sys/param.h>
@@ -704,7 +704,7 @@ epic_intr(void *arg)
 				}
 			}
 
-			m->m_pkthdr.rcvif = ifp;
+			m_set_rcvif(m, ifp);
 			m->m_pkthdr.len = m->m_len = len;
 
 			/*
@@ -714,7 +714,7 @@ epic_intr(void *arg)
 			bpf_mtap(ifp, m);
 
 			/* Pass it on. */
-			(*ifp->if_input)(ifp, m);
+			if_percpuq_enqueue(ifp->if_percpuq, m);
 			ifp->if_ipackets++;
 		}
 

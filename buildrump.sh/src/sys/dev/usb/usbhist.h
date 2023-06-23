@@ -1,4 +1,4 @@
-/*	$NetBSD: usbhist.h,v 1.1 2014/09/12 16:40:38 skrll Exp $	*/
+/*	$NetBSD: usbhist.h,v 1.4 2016/04/23 10:15:32 skrll Exp $	*/
 
 /*
  * Copyright (c) 2012 Matthew R. Green
@@ -44,7 +44,7 @@
 
 #include <sys/kernhist.h>
 
-#ifdef USBHIST
+#ifdef USB_DEBUG
 
 extern int usbdebug;
 
@@ -52,8 +52,14 @@ extern int usbdebug;
 #define USBHIST_DEFINE(NAME)		KERNHIST_DEFINE(NAME)
 #define USBHIST_INIT(NAME,N)		KERNHIST_INIT(NAME,N)
 #define USBHIST_INIT_STATIC(NAME,BUF)	KERNHIST_INIT_STATIC(NAME,BUF)
+#define USBHIST_LINK_STATIC(NAME)	KERNHIST_LINK_STATIC(NAME)
 #define USBHIST_LOGN(NAME,N,FMT,A,B,C,D)	do {		\
 	if ((NAME) >= (N)) {					\
+		KERNHIST_LOG(usbhist,FMT,A,B,C,D);		\
+	}							\
+} while (0)
+#define USBHIST_LOGM(NAME,N,FMT,A,B,C,D)	do {		\
+	if ((NAME) & (N)) {					\
 		KERNHIST_LOG(usbhist,FMT,A,B,C,D);		\
 	}							\
 } while (0)
@@ -73,7 +79,9 @@ USBHIST_DECL(usbhist);
 #define USBHIST_DEFINE(NAME)
 #define USBHIST_INIT(NAME,N)
 #define USBHIST_INIT_STATIC(NAME,BUF)
+#define USBHIST_LINK_STATIC(NAME)
 #define USBHIST_LOGN(N,NAME,FMT,A,B,C,D)	do { } while(0)
+#define USBHIST_LOGM(N,NAME,FMT,A,B,C,D)	do { } while(0)
 #define USBHIST_LOG(NAME,FMT,A,B,C,D)		do { } while(0)
 #define USBHIST_CALLED(NAME)
 #define USBHIST_FUNC()

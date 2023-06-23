@@ -1,4 +1,33 @@
-/*	$NetBSD: strftime.c,v 1.33 2014/10/07 21:51:03 christos Exp $	*/
+/*	$NetBSD: strftime.c,v 1.36 2016/03/15 15:16:01 christos Exp $	*/
+
+/* Convert a broken-down time stamp to a string.  */
+
+/* Copyright 1989 The Regents of the University of California.
+   All rights reserved.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+   1. Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+   2. Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+   3. Neither the name of the University nor the names of its contributors
+      may be used to endorse or promote products derived from this software
+      without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS" AND
+   ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+   FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   SUCH DAMAGE.  */
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
@@ -6,7 +35,7 @@
 static char	elsieid[] = "@(#)strftime.c	7.64";
 static char	elsieid[] = "@(#)strftime.c	8.3";
 #else
-__RCSID("$NetBSD: strftime.c,v 1.33 2014/10/07 21:51:03 christos Exp $");
+__RCSID("$NetBSD: strftime.c,v 1.36 2016/03/15 15:16:01 christos Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -18,8 +47,7 @@ __RCSID("$NetBSD: strftime.c,v 1.33 2014/10/07 21:51:03 christos Exp $");
 #include "setlocale_local.h"
 
 /*
-** Based on the UCB version with the copyright notice and sccsid
-** appearing below.
+** Based on the UCB version with the copyright notice appearing above.
 **
 ** This is ANSIish only when "multibyte character == plain character".
 */
@@ -36,39 +64,6 @@ __RCSID("$NetBSD: strftime.c,v 1.33 2014/10/07 21:51:03 christos Exp $");
 #undef TM_ZONE
 #undef TM_GMTOFF
 #endif
-
-/*
-** Copyright (c) 1989, 1993
-**	The Regents of the University of California.  All rights reserved.
-**
-** Redistribution and use in source and binary forms, with or without
-** modification, are permitted provided that the following conditions
-** are met:
-** 1. Redistributions of source code must retain the above copyright
-**    notice, this list of conditions and the following disclaimer.
-** 2. Redistributions in binary form must reproduce the above copyright
-**    notice, this list of conditions and the following disclaimer in the
-**    documentation and/or other materials provided with the distribution.
-** 3. All advertising materials mentioning features or use of this software
-**    must display the following acknowledgement:
-**	This product includes software developed by the University of
-**	California, Berkeley and its contributors.
-** 4. Neither the name of the University nor the names of its contributors
-**    may be used to endorse or promote products derived from this software
-**    without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS" AND
-** ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-** IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-** ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
-** FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-** DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-** OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-** HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-** LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-** OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-** SUCH DAMAGE.
-*/
 
 #include "tzfile.h"
 #include "fcntl.h"
@@ -91,7 +86,9 @@ static char *	_fmt(const timezone_t, const char *, const struct tm *, char *,
 			const char *, int *, locale_t);
 static char *	_yconv(int, int, bool, bool, char *, const char *);
 
+#if !HAVE_POSIX_DECLS
 extern char *	tzname[];
+#endif
 
 #ifndef YEAR_2000_NAME
 #define YEAR_2000_NAME	"CHECK_STRFTIME_FORMATS_FOR_TWO_DIGIT_YEARS"
@@ -152,8 +149,8 @@ strftime_lz(const timezone_t sp, char *const s, const size_t maxsize,
 }
 
 static char *
-_fmt(const timezone_t sp, const char *format, const struct tm *const t,
-	char *pt, const char *const ptlim, int *warnp, locale_t loc)
+_fmt(const timezone_t sp, const char *format, const struct tm *t, char *pt,
+     const char *ptlim, int *warnp, locale_t loc)
 {
 	for ( ; *format; ++format) {
 		if (*format == '%') {
@@ -487,9 +484,7 @@ label:
 				continue;
 			case 'Z':
 #ifdef TM_ZONE
-				if (t->TM_ZONE != NULL)
-					pt = _add(t->TM_ZONE, pt, ptlim);
-				else
+				pt = _add(t->TM_ZONE, pt, ptlim);
 #endif /* defined TM_ZONE */
 				if (t->tm_isdst >= 0)
 					pt = _add((sp ?
@@ -610,8 +605,7 @@ label:
 }
 
 size_t
-strftime(char * const s, const size_t maxsize,
-    const char * const format, const struct tm * const	t)
+strftime(char *s, size_t maxsize, const char *format, const struct tm *t)
 {
 	tzset();
 	return strftime_z(NULL, s, maxsize, format, t);
@@ -626,8 +620,7 @@ strftime_l(char * __restrict s, size_t maxsize, const char * __restrict format,
 }
 
 static char *
-_conv(const int	n, const char *const format, char *const pt,
-    const char *const ptlim)
+_conv(int n, const char *format, char *pt, const char *ptlim)
 {
 	char	buf[INT_STRLEN_MAXIMUM(int) + 1];
 
@@ -636,7 +629,7 @@ _conv(const int	n, const char *const format, char *const pt,
 }
 
 static char *
-_add(const char *str, char *pt, const char *const ptlim)
+_add(const char *str, char *pt, const char *ptlim)
 {
 	while (pt < ptlim && (*pt = *str++) != '\0')
 		++pt;
@@ -653,7 +646,7 @@ _add(const char *str, char *pt, const char *const ptlim)
 
 static char *
 _yconv(int a, int b, bool convert_top, bool convert_yy,
-    char *pt, const char *const ptlim)
+    char *pt, const char * ptlim)
 {
 	int	lead;
 	int	trail;

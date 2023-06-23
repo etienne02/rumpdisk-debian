@@ -1,6 +1,6 @@
-/*	$NetBSD: lfs_inode.h,v 1.7 2014/05/26 19:12:43 ryoon Exp $	*/
+/*	$NetBSD: lfs_inode.h,v 1.16 2016/06/20 03:29:52 dholland Exp $	*/
 /*  from NetBSD: ulfs_inode.h,v 1.5 2013/06/06 00:51:50 dholland Exp  */
-/*  from NetBSD: inode.h,v 1.64 2012/11/19 00:36:21 jakllsch Exp  */
+/*  from NetBSD: inode.h,v 1.72 2016/06/03 15:36:03 christos Exp  */
 
 /*
  * Copyright (c) 1982, 1989, 1993
@@ -81,7 +81,7 @@ struct ulfs_lookup_results {
 	doff_t	  ulr_endoff;	/* End of useful stuff in directory. */
 	doff_t	  ulr_diroff;	/* Offset in dir, where we found last entry. */
 	doff_t	  ulr_offset;	/* Offset of free space in directory. */
-	u_int32_t ulr_reclen;	/* Size of found directory entry. */
+	uint32_t ulr_reclen;	/* Size of found directory entry. */
 };
 
 /* notyet XXX */
@@ -103,12 +103,11 @@ struct lfs_inode_ext;
  */
 struct inode {
 	struct genfs_node i_gnode;
-	LIST_ENTRY(inode) i_hash;/* Hash chain. */
 	TAILQ_ENTRY(inode) i_nextsnap; /* snapshot file list. */
 	struct	vnode *i_vnode;	/* Vnode associated with this inode. */
 	struct  ulfsmount *i_ump; /* Mount point associated with this inode. */
 	struct	vnode *i_devvp;	/* Vnode for block I/O. */
-	u_int32_t i_flag;	/* flags, see below */
+	uint32_t i_flag;	/* flags, see below */
 	dev_t	  i_dev;	/* Device associated with the inode. */
 	ino_t	  i_number;	/* The identity of the inode. */
 
@@ -138,67 +137,22 @@ struct inode {
 	 *
 	 * These fields are currently only used by LFS.
 	 */
-	u_int16_t i_mode;	/* IFMT, permissions; see below. */
+	uint16_t i_mode;	/* IFMT, permissions; see below. */
 	int16_t   i_nlink;	/* File link count. */
-	u_int64_t i_size;	/* File byte count. */
-	u_int32_t i_flags;	/* Status flags (chflags). */
+	uint64_t i_size;	/* File byte count. */
+	uint32_t i_flags;	/* Status flags (chflags). */
 	int32_t   i_gen;	/* Generation number. */
-	u_int32_t i_uid;	/* File owner. */
-	u_int32_t i_gid;	/* File group. */
-	u_int16_t i_omode;	/* Old mode, for ulfs_reclaim. */
+	uint32_t i_uid;		/* File owner. */
+	uint32_t i_gid;		/* File group. */
+	uint16_t i_omode;	/* Old mode, for ulfs_reclaim. */
 
 	struct dirhash *i_dirhash;	/* Hashing for large directories */
 
 	/*
 	 * The on-disk dinode itself.
 	 */
-	union {
-		struct	ulfs1_dinode *ffs1_din;	/* 128 bytes of the on-disk dinode. */
-		struct	ulfs2_dinode *ffs2_din;
-	} i_din;
+	union lfs_dinode *i_din;
 };
-
-#define	i_ffs1_atime		i_din.ffs1_din->di_atime
-#define	i_ffs1_atimensec	i_din.ffs1_din->di_atimensec
-#define	i_ffs1_blocks		i_din.ffs1_din->di_blocks
-#define	i_ffs1_ctime		i_din.ffs1_din->di_ctime
-#define	i_ffs1_ctimensec	i_din.ffs1_din->di_ctimensec
-#define	i_ffs1_db		i_din.ffs1_din->di_db
-#define	i_ffs1_flags		i_din.ffs1_din->di_flags
-#define	i_ffs1_gen		i_din.ffs1_din->di_gen
-#define	i_ffs1_gid		i_din.ffs1_din->di_gid
-#define	i_ffs1_ib		i_din.ffs1_din->di_ib
-#define	i_ffs1_mode		i_din.ffs1_din->di_mode
-#define	i_ffs1_mtime		i_din.ffs1_din->di_mtime
-#define	i_ffs1_mtimensec	i_din.ffs1_din->di_mtimensec
-#define	i_ffs1_nlink		i_din.ffs1_din->di_nlink
-#define	i_ffs1_rdev		i_din.ffs1_din->di_rdev
-#define	i_ffs1_size		i_din.ffs1_din->di_size
-#define	i_ffs1_uid		i_din.ffs1_din->di_uid
-
-#define	i_ffs2_atime		i_din.ffs2_din->di_atime
-#define	i_ffs2_atimensec	i_din.ffs2_din->di_atimensec
-#define	i_ffs2_birthtime	i_din.ffs2_din->di_birthtime
-#define	i_ffs2_birthnsec	i_din.ffs2_din->di_birthnsec
-#define	i_ffs2_blocks		i_din.ffs2_din->di_blocks
-#define	i_ffs2_blksize		i_din.ffs2_din->di_blksize
-#define	i_ffs2_ctime		i_din.ffs2_din->di_ctime
-#define	i_ffs2_ctimensec	i_din.ffs2_din->di_ctimensec
-#define	i_ffs2_db		i_din.ffs2_din->di_db
-#define	i_ffs2_flags		i_din.ffs2_din->di_flags
-#define	i_ffs2_gen		i_din.ffs2_din->di_gen
-#define	i_ffs2_gid		i_din.ffs2_din->di_gid
-#define	i_ffs2_ib		i_din.ffs2_din->di_ib
-#define	i_ffs2_mode		i_din.ffs2_din->di_mode
-#define	i_ffs2_mtime		i_din.ffs2_din->di_mtime
-#define	i_ffs2_mtimensec	i_din.ffs2_din->di_mtimensec
-#define	i_ffs2_nlink		i_din.ffs2_din->di_nlink
-#define	i_ffs2_rdev		i_din.ffs2_din->di_rdev
-#define	i_ffs2_size		i_din.ffs2_din->di_size
-#define	i_ffs2_uid		i_din.ffs2_din->di_uid
-#define	i_ffs2_kernflags	i_din.ffs2_din->di_kernflags
-#define	i_ffs2_extsize		i_din.ffs2_din->di_extsize
-#define	i_ffs2_extb		i_din.ffs2_din->di_extb
 
 /* These flags are kept in i_flag. */
 #define	IN_ACCESS	0x0001		/* Access time update request. */
@@ -221,7 +175,7 @@ struct inode {
  */
 struct lfs_inode_ext {
 	off_t	  lfs_osize;		/* size of file on disk */
-	u_int32_t lfs_effnblocks;  /* number of blocks when i/o completes */
+	uint64_t  lfs_effnblocks;  /* number of blocks when i/o completes */
 	size_t	  lfs_fragsize[ULFS_NDADDR]; /* size of on-disk direct blocks */
 	TAILQ_ENTRY(inode) lfs_dchain;  /* Dirop chain. */
 	TAILQ_ENTRY(inode) lfs_pchain;  /* Paging chain. */
@@ -230,7 +184,7 @@ struct lfs_inode_ext {
 #define LFSI_WRAPBLOCK    0x04
 #define LFSI_WRAPWAIT     0x08
 #define LFSI_BMAP         0x10
-	u_int32_t lfs_iflags;           /* Inode flags */
+	uint32_t lfs_iflags;		/* Inode flags */
 	daddr_t   lfs_hiblk;		/* Highest lbn held by inode */
 #ifdef _KERNEL
 	SPLAY_HEAD(lfs_splay, lbnentry) lfs_lbtree; /* Tree of balloc'd lbns */

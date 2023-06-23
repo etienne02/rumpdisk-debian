@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisata_core.c,v 1.53 2014/12/04 21:50:29 joerg Exp $	*/
+/*	$NetBSD: ahcisata_core.c,v 1.57 2016/06/03 10:34:03 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.53 2014/12/04 21:50:29 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.57 2016/06/03 10:34:03 jmcneill Exp $");
 
 #include <sys/types.h>
 #include <sys/malloc.h>
@@ -708,6 +708,10 @@ again:
 	if (drive > 0) {
 		KASSERT(sc->sc_ahci_cap & AHCI_CAP_SPM);
 	}
+
+	if (sc->sc_ahci_quirks & AHCI_QUIRK_SKIP_RESET)
+		goto skip_reset;
+
 	/* polled command, assume interrupts are disabled */
 	/* use slot 0 to send reset, the channel is idle */
 	cmd_h = &achp->ahcic_cmdh[0];
@@ -759,6 +763,8 @@ again:
 	default:
 		break;
 	}
+
+skip_reset:
 	/*
 	 * wait 31s for BSY to clear
 	 * This should not be needed, but some controllers clear the
@@ -822,7 +828,8 @@ ahci_reset_channel(struct ata_channel *chp, int flags)
 	/* clear port interrupt register */
 	AHCI_WRITE(sc, AHCI_P_IS(chp->ch_channel), 0xffffffff);
 	/* clear SErrors and start operations */
-	ahci_channel_start(sc, chp, flags, 1);
+	ahci_channel_start(sc, chp, flags,
+	    (sc->sc_ahci_cap & AHCI_CAP_CLO) ? 1 : 0);
 	/* wait 31s for BSY to clear */
 	for (i = 0; i <AHCI_RST_WAIT; i++) {
 		tfd = AHCI_READ(sc, AHCI_P_TFD(chp->ch_channel));
@@ -1708,11 +1715,13 @@ ahci_atapi_complete(struct ata_channel *chp, struct ata_xfer *xfer, int irq)
 	}
 
 	chp->ch_queue->active_xfer = NULL;
-	bus_dmamap_sync(sc->sc_dmat, achp->ahcic_datad[slot], 0,
-	    achp->ahcic_datad[slot]->dm_mapsize,
-	    (sc_xfer->xs_control & XS_CTL_DATA_IN) ? BUS_DMASYNC_POSTREAD :
-	    BUS_DMASYNC_POSTWRITE);
-	bus_dmamap_unload(sc->sc_dmat, achp->ahcic_datad[slot]);
+	if (xfer->c_bcount > 0) {
+		bus_dmamap_sync(sc->sc_dmat, achp->ahcic_datad[slot], 0,
+		    achp->ahcic_datad[slot]->dm_mapsize,
+		    (sc_xfer->xs_control & XS_CTL_DATA_IN) ?
+		    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_unload(sc->sc_dmat, achp->ahcic_datad[slot]);
+	}
 
 	if (chp->ch_drive[drive].drive_flags & ATA_DRIVE_WAITDRAIN) {
 		ahci_atapi_kill_xfer(chp, xfer, KILL_GONE);
@@ -1838,11 +1847,12 @@ ahci_atapi_probe_device(struct atapibus_softc *sc, int target)
 		sa.sa_inqbuf.type =  ATAPI_CFG_TYPE(id->atap_config);
 		sa.sa_inqbuf.removable = id->atap_config & ATAPI_CFG_REMOV ?
 		    T_REMOV : T_FIXED;
-		scsipi_strvis((u_char *)model, 40, id->atap_model, 40);
-		scsipi_strvis((u_char *)serial_number, 20, id->atap_serial,
-		    20);
-		scsipi_strvis((u_char *)firmware_revision, 8,
-		    id->atap_revision, 8);
+		strnvisx(model, sizeof(model), id->atap_model, 40,
+		    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+		strnvisx(serial_number, sizeof(serial_number), id->atap_serial,
+		    20, VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+		strnvisx(firmware_revision, sizeof(firmware_revision),
+		    id->atap_revision, 8, VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 		sa.sa_inqbuf.vendor = model;
 		sa.sa_inqbuf.product = serial_number;
 		sa.sa_inqbuf.revision = firmware_revision;

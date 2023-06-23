@@ -39,11 +39,13 @@ OBJECTS = \
 	$(OBJDIR)/osunixxf.o\
 	$(OBJDIR)/tbprint.o\
 	$(OBJDIR)/tbxfroot.o\
+	$(OBJDIR)/utascii.o\
 	$(OBJDIR)/utbuffer.o\
 	$(OBJDIR)/utdebug.o\
 	$(OBJDIR)/utexcep.o\
 	$(OBJDIR)/utglobal.o\
 	$(OBJDIR)/utmath.o\
+	$(OBJDIR)/utnonansi.o\
 	$(OBJDIR)/utprint.o\
 	$(OBJDIR)/utstring.o\
 	$(OBJDIR)/utxferror.o
@@ -51,11 +53,19 @@ OBJECTS = \
 #
 # Per-host interfaces
 #
+ifeq ($(HOST), _DragonFly)
+HOST_FAMILY = BSD
+endif
+
 ifeq ($(HOST), _FreeBSD)
 HOST_FAMILY = BSD
 endif
 
 ifeq ($(HOST), _NetBSD)
+HOST_FAMILY = BSD
+endif
+
+ifeq ($(HOST), _QNX)
 HOST_FAMILY = BSD
 endif
 

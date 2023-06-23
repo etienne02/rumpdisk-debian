@@ -1,4 +1,4 @@
-/*	$NetBSD: udp6_usrreq.c,v 1.120 2015/05/02 17:18:03 rtr Exp $	*/
+/*	$NetBSD: udp6_usrreq.c,v 1.124 2016/07/15 07:40:09 ozaki-r Exp $	*/
 /*	$KAME: udp6_usrreq.c,v 1.86 2001/05/27 17:33:00 itojun Exp $	*/
 
 /*
@@ -62,11 +62,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udp6_usrreq.c,v 1.120 2015/05/02 17:18:03 rtr Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udp6_usrreq.c,v 1.124 2016/07/15 07:40:09 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_inet_csum.h"
 #include "opt_ipsec.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
@@ -80,7 +82,6 @@ __KERNEL_RCSID(0, "$NetBSD: udp6_usrreq.c,v 1.120 2015/05/02 17:18:03 rtr Exp $"
 #include <sys/sysctl.h>
 
 #include <net/if.h>
-#include <net/route.h>
 #include <net/if_types.h>
 
 #include <netinet/in.h>
@@ -288,11 +289,11 @@ udp6_ctlinput(int cmd, const struct sockaddr *sa, void *d)
 		}
 
 		(void) in6_pcbnotify(&udbtable, sa, uh.uh_dport,
-		    (const struct sockaddr *)sa6_src, uh.uh_sport, cmd, cmdarg,
+		    sin6tocsa(sa6_src), uh.uh_sport, cmd, cmdarg,
 		    notify);
 	} else {
 		(void) in6_pcbnotify(&udbtable, sa, 0,
-		    (const struct sockaddr *)sa6_src, 0, cmd, cmdarg, notify);
+		    sin6tocsa(sa6_src), 0, cmd, cmdarg, notify);
 	}
 	return NULL;
 }
@@ -463,8 +464,7 @@ udp6_realinput(int af, struct sockaddr_in6 *src, struct sockaddr_in6 *dst,
 					continue;
 			}
 
-			udp6_sendup(m, off, (struct sockaddr *)src,
-				in6p->in6p_socket);
+			udp6_sendup(m, off, sin6tosa(src), in6p->in6p_socket);
 			rcvcnt++;
 
 			/*
@@ -492,7 +492,7 @@ udp6_realinput(int af, struct sockaddr_in6 *src, struct sockaddr_in6 *dst,
 				return rcvcnt;
 		}
 
-		udp6_sendup(m, off, (struct sockaddr *)src, in6p->in6p_socket);
+		udp6_sendup(m, off, sin6tosa(src), in6p->in6p_socket);
 		rcvcnt++;
 	}
 
@@ -518,7 +518,7 @@ udp6_input_checksum(struct mbuf *m, const struct udphdr *uh, int off, int len)
 	}
 
 	switch (m->m_pkthdr.csum_flags &
-	    ((m->m_pkthdr.rcvif->if_csum_flags_rx & M_CSUM_UDPv6) |
+	    ((m_get_rcvif_NOMPSAFE(m)->if_csum_flags_rx & M_CSUM_UDPv6) |
 	    M_CSUM_TCP_UDP_BAD | M_CSUM_DATA)) {
 	case M_CSUM_UDPv6|M_CSUM_TCP_UDP_BAD:
 		UDP_CSUM_COUNTER_INCR(&udp6_hwcsum_bad);

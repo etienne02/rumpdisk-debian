@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.202 2015/03/15 10:38:58 nakayama Exp $ */
+/*	$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.202 2015/03/15 10:38:58 nakayama Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.207 2015/12/16 08:01:19 jdc Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -93,7 +93,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.202 2015/03/15 10:38:58 nakayama Exp 
 #include <machine/bootinfo.h>
 #include <sparc64/sparc64/cache.h>
 #include <sparc64/sparc64/timerreg.h>
-#include <machine/mdesc.h>
 
 #include <dev/ata/atavar.h>
 #include <dev/pci/pcivar.h>
@@ -159,7 +158,8 @@ static	void get_bootpath_from_prom(void);
  * Kernel 4MB mappings.
  */
 struct tlb_entry *kernel_tlbs;
-int kernel_tlb_slots;
+int kernel_dtlb_slots;
+int kernel_itlb_slots;
 
 /* Global interrupt mappings for all device types.  Match against the OBP
  * 'device_type' property. 
@@ -355,7 +355,11 @@ die_old_boot_loader:
 		boothowto = bi_howto->boothowto;
 
 	LOOKUP_BOOTINFO(bi_count, BTINFO_DTLB_SLOTS);
-	kernel_tlb_slots = bi_count->count;
+	kernel_dtlb_slots = bi_count->count;
+	kernel_itlb_slots = kernel_dtlb_slots-1;
+	bi_count = lookup_bootinfo(BTINFO_ITLB_SLOTS);
+	if (bi_count)
+		kernel_itlb_slots = bi_count->count;
 	LOOKUP_BOOTINFO(bi_tlb, BTINFO_DTLB);
 	kernel_tlbs = &bi_tlb->tlb[0];
 
@@ -476,9 +480,6 @@ get_bootpath_from_prom(void)
 void
 cpu_configure(void)
 {
-	
-	if (CPU_ISSUN4V)
-		mdesc_init();
 	
 	bool userconf = (boothowto & RB_USERCONF) != 0;
 
@@ -838,7 +839,8 @@ dev_path_drive_match(device_t dev, int ctrlnode, int target,
 			snprintf(buf, sizeof(buf), "%s@w%016" PRIx64 ",%d",
 			    name, wwn, lun);
 		else if (ide_node)
-			snprintf(buf, sizeof(buf), "%s@0", name);
+			snprintf(buf, sizeof(buf), "%s@0",
+			    device_is_a(dev, "cd") ? "cdrom" : "disk");
 		else
 			snprintf(buf, sizeof(buf), "%s@%d,%d",
 			    name, target, lun);
@@ -1112,7 +1114,7 @@ noether:
 				}
 
 				of_enter_i2c_devs(props, busnode,
-				    sizeof(cell_t));
+				    sizeof(cell_t), 1);
 			}
 		}
 
@@ -1139,6 +1141,58 @@ noether:
 			prop_dictionary_set(props, "i2c-child-devices", cfg);
 			prop_object_release(cfg);
 			
+		}
+
+		/*
+		 * Add V210/V240 environmental sensors that are not in
+		 * the OFW tree.
+		 */
+		if (device_is_a(busdev, "pcfiic") &&
+		    (!strcmp(machine_model, "SUNW,Sun-Fire-V240") ||
+		    !strcmp(machine_model, "SUNW,Sun-Fire-V210"))) {
+			prop_dictionary_t props = device_properties(busdev);
+			prop_array_t cfg = NULL;
+			prop_dictionary_t sens;
+			prop_data_t data;
+			const char name_lm[] = "i2c-lm75";
+			const char name_adm[] = "i2c-adm1026";
+
+			DPRINTF(ACDB_PROBE, ("\nAdding sensors for %s ",
+			    machine_model));
+			cfg = prop_dictionary_get(props, "i2c-child-devices");
+ 			if (!cfg) {
+				cfg = prop_array_create();
+				prop_dictionary_set(props, "i2c-child-devices",
+				    cfg);
+				prop_dictionary_set_bool(props,
+				    "i2c-indirect-config", false);
+			}
+
+			/* ADM1026 at 0x2e */
+			sens = prop_dictionary_create();
+			prop_dictionary_set_uint32(sens, "addr", 0x2e);
+			prop_dictionary_set_uint64(sens, "cookie", 0);
+			prop_dictionary_set_cstring(sens, "name",
+			    "hardware-monitor");
+			data = prop_data_create_data(&name_adm[0],
+			    sizeof(name_adm));
+			prop_dictionary_set(sens, "compatible", data);
+			prop_object_release(data);
+			prop_array_add(cfg, sens);
+			prop_object_release(sens);
+
+			/* LM75 at 0x4e */
+			sens = prop_dictionary_create();
+			prop_dictionary_set_uint32(sens, "addr", 0x4e);
+			prop_dictionary_set_uint64(sens, "cookie", 0);
+			prop_dictionary_set_cstring(sens, "name",
+			    "temperature-sensor");
+			data = prop_data_create_data(&name_lm[0],
+			    sizeof(name_lm));
+			prop_dictionary_set(sens, "compatible", data);
+			prop_object_release(data);
+			prop_array_add(cfg, sens);
+			prop_object_release(sens);
 		}
 	}
 
@@ -1202,6 +1256,27 @@ noether:
 			    != 4) {
 				instance = OF_open(name);
 #endif
+	}
+
+	/* Hardware specific device properties */
+	if ((!strcmp(machine_model, "SUNW,Sun-Fire-V240") ||
+	    !strcmp(machine_model, "SUNW,Sun-Fire-V210"))) {
+		device_t busparent = device_parent(busdev);
+		prop_dictionary_t props = device_properties(dev);
+
+		if (busparent != NULL && device_is_a(busparent, "pcfiic") &&
+		    device_is_a(dev, "adm1026hm") && props != NULL) {
+			prop_dictionary_set_uint8(props, "fan_div2", 0x55);
+			prop_dictionary_set_bool(props, "multi_read", true);
+		}
+	}
+	if (!strcmp(machine_model, "SUNW,Sun-Fire-V440")) {
+		device_t busparent = device_parent(busdev);
+		prop_dictionary_t props = device_properties(dev);
+		if (busparent != NULL && device_is_a(busparent, "pcfiic") &&
+		    device_is_a(dev, "adm1026hm") && props != NULL) {
+			prop_dictionary_set_bool(props, "multi_read", true);
+		}
 	}
 }
 

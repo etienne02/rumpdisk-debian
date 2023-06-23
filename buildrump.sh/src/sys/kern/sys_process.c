@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_process.c,v 1.165 2014/11/24 02:34:04 christos Exp $	*/
+/*	$NetBSD: sys_process.c,v 1.169 2016/05/25 17:43:58 christos Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -118,15 +118,18 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_process.c,v 1.165 2014/11/24 02:34:04 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_process.c,v 1.169 2016/05/25 17:43:58 christos Exp $");
 
 #include "opt_ptrace.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/errno.h>
+#include <sys/exec.h>
+#include <sys/pax.h>
 #include <sys/ptrace.h>
 #include <sys/uio.h>
 #include <sys/ras.h>
@@ -148,6 +151,9 @@ __KERNEL_RCSID(0, "$NetBSD: sys_process.c,v 1.165 2014/11/24 02:34:04 christos E
 # endif
 
 static kauth_listener_t ptrace_listener;
+#ifdef PTRACE
+static int process_auxv_offset(struct proc *, struct uio *);
+#endif
 
 static int
 ptrace_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
@@ -531,6 +537,14 @@ sys_ptrace(struct lwp *l, const struct sys_ptrace_args *uap, register_t *retval)
 		error = copyin(SCARG(uap, addr), &piod, sizeof(piod));
 		if (error)
 			break;
+
+		iov.iov_base = piod.piod_addr;
+		iov.iov_len = piod.piod_len;
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = (off_t)(unsigned long)piod.piod_offs;
+		uio.uio_resid = piod.piod_len;
+
 		switch (piod.piod_op) {
 		case PIOD_READ_D:
 		case PIOD_READ_I:
@@ -546,6 +560,19 @@ sys_ptrace(struct lwp *l, const struct sys_ptrace_args *uap, register_t *retval)
 			}
 			uio.uio_rw = UIO_WRITE;
 			break;
+		case PIOD_READ_AUXV:
+			req = PT_READ_D;
+			uio.uio_rw = UIO_READ;
+			tmp = t->p_execsw->es_arglen * sizeof(char *);
+			if (uio.uio_offset > tmp)
+				return EIO;
+			if (uio.uio_resid > tmp - uio.uio_offset)
+				uio.uio_resid = tmp - uio.uio_offset;
+			piod.piod_len = iov.iov_len = uio.uio_resid;
+			error = process_auxv_offset(t, &uio);
+			if (error)
+				return error;
+			break;
 		default:
 			error = EINVAL;
 			break;
@@ -555,12 +582,6 @@ sys_ptrace(struct lwp *l, const struct sys_ptrace_args *uap, register_t *retval)
 		error = proc_vmspace_getref(l->l_proc, &vm);
 		if (error)
 			break;
-		iov.iov_base = piod.piod_addr;
-		iov.iov_len = piod.piod_len;
-		uio.uio_iov = &iov;
-		uio.uio_iovcnt = 1;
-		uio.uio_offset = (off_t)(unsigned long)piod.piod_offs;
-		uio.uio_resid = piod.piod_len;
 		uio.uio_vmspace = vm;
 
 		error = process_domem(l, lt, &uio);
@@ -721,7 +742,7 @@ sys_ptrace(struct lwp *l, const struct sys_ptrace_args *uap, register_t *retval)
 			 * signal, make all efforts to ensure that at
 			 * an LWP runs to see it.
 			 */
-			t->p_xstat = signo;
+			t->p_xsig = signo;
 			if (resume_all)
 				proc_unstop(t);
 			else
@@ -763,6 +784,7 @@ sys_ptrace(struct lwp *l, const struct sys_ptrace_args *uap, register_t *retval)
 				if (!mutex_tryenter(parent->p_lock)) {
 					mutex_exit(t->p_lock);
 					mutex_enter(parent->p_lock);
+					mutex_enter(t->p_lock);
 				}
 			} else if (parent->p_lock > t->p_lock) {
 				mutex_enter(parent->p_lock);
@@ -1098,7 +1120,7 @@ process_domem(struct lwp *curl /*tracer*/,
 	mutex_exit(&vm->vm_map.misc_lock);
 	if (error != 0)
 		return (error);
-	error = uvm_io(&vm->vm_map, uio);
+	error = uvm_io(&vm->vm_map, uio, pax_mprotect_prot(l));
 	uvmspace_free(vm);
 
 #ifdef PMAP_NEED_PROCWR
@@ -1126,7 +1148,7 @@ process_stoptrace(void)
 		return;
 	}
 
-	p->p_xstat = SIGTRAP;
+	p->p_xsig = SIGTRAP;
 	proc_stop(p, 1, SIGSTOP);
 	mutex_exit(proc_lock);
 
@@ -1138,3 +1160,31 @@ process_stoptrace(void)
 	mutex_exit(p->p_lock);
 }
 #endif	/* KTRACE || PTRACE */
+
+#ifdef PTRACE
+static int
+process_auxv_offset(struct proc *p, struct uio *uio)
+{
+	struct ps_strings pss;
+	int error;
+	off_t off = (off_t)p->p_psstrp;
+
+	if ((error = copyin_psstrings(p, &pss)) != 0)
+		return error;
+
+	if (pss.ps_envstr == NULL)
+		return EIO;
+
+	uio->uio_offset += (off_t)(vaddr_t)(pss.ps_envstr + pss.ps_nenvstr + 1);
+#ifdef __MACHINE_STACK_GROWS_UP
+	if (uio->uio_offset < off)
+		return EIO;
+#else
+	if (uio->uio_offset > off)
+		return EIO;
+	if ((uio->uio_offset + uio->uio_resid) > off)
+		uio->uio_resid = off - uio->uio_offset;
+#endif
+	return 0;
+}
+#endif

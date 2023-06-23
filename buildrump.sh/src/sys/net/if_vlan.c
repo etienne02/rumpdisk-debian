@@ -1,4 +1,4 @@
-/*	$NetBSD: if_vlan.c,v 1.81 2015/04/18 18:32:16 ozaki-r Exp $	*/
+/*	$NetBSD: if_vlan.c,v 1.90 2016/06/22 10:44:32 knakahara Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2001 The NetBSD Foundation, Inc.
@@ -78,7 +78,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_vlan.c,v 1.81 2015/04/18 18:32:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_vlan.c,v 1.90 2016/06/22 10:44:32 knakahara Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -110,6 +110,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_vlan.c,v 1.81 2015/04/18 18:32:16 ozaki-r Exp $")
 #ifdef INET6
 #include <netinet6/in6_ifattach.h>
 #endif
+
+#include "ioconf.h"
 
 struct vlan_mc_entry {
 	LIST_ENTRY(vlan_mc_entry)	mc_entries;
@@ -179,8 +181,6 @@ static int	vlan_ioctl(struct ifnet *, u_long, void *);
 static void	vlan_start(struct ifnet *);
 static void	vlan_unconfig(struct ifnet *);
 
-void		vlanattach(int);
-
 /* XXX This should be a hash table with the tag as the basis of the key. */
 static LIST_HEAD(, ifvlan) ifv_list;
 
@@ -240,8 +240,9 @@ vlan_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_ioctl = vlan_ioctl;
 	IFQ_SET_READY(&ifp->if_snd);
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	vlan_reset_linkname(ifp);
+	if_register(ifp);
 
 	return (0);
 }
@@ -284,37 +285,23 @@ vlan_config(struct ifvlan *ifv, struct ifnet *p)
 		ifv->ifv_encaplen = ETHER_VLAN_ENCAP_LEN;
 		ifv->ifv_mintu = ETHERMIN;
 
-		/*
-		 * If the parent supports the VLAN_MTU capability,
-		 * i.e. can Tx/Rx larger than ETHER_MAX_LEN frames,
-		 * enable it.
-		 */
-		if (ec->ec_nvlans++ == 0 &&
-		    (ec->ec_capabilities & ETHERCAP_VLAN_MTU) != 0) {
-			/*
-			 * Enable Tx/Rx of VLAN-sized frames.
-			 */
-			ec->ec_capenable |= ETHERCAP_VLAN_MTU;
-			if (p->if_flags & IFF_UP) {
-				error = if_flags_set(p, p->if_flags);
-				if (error) {
-					if (ec->ec_nvlans-- == 1)
-						ec->ec_capenable &=
-						    ~ETHERCAP_VLAN_MTU;
-					return (error);
-				}
+		if (ec->ec_nvlans == 0) {
+			if ((error = ether_enable_vlan_mtu(p)) >= 0) {
+				if (error)
+					return error;
+				ifv->ifv_mtufudge = 0;
+			} else {
+				/*
+				 * Fudge the MTU by the encapsulation size. This
+				 * makes us incompatible with strictly compliant
+				 * 802.1Q implementations, but allows us to use
+				 * the feature with other NetBSD
+				 * implementations, which might still be useful.
+				 */
+				ifv->ifv_mtufudge = ifv->ifv_encaplen;
 			}
-			ifv->ifv_mtufudge = 0;
-		} else if ((ec->ec_capabilities & ETHERCAP_VLAN_MTU) == 0) {
-			/*
-			 * Fudge the MTU by the encapsulation size.  This
-			 * makes us incompatible with strictly compliant
-			 * 802.1Q implementations, but allows us to use
-			 * the feature with other NetBSD implementations,
-			 * which might still be useful.
-			 */
-			ifv->ifv_mtufudge = ifv->ifv_encaplen;
 		}
+		ec->ec_nvlans++;
 
 		/*
 		 * If the parent interface can do hardware-assisted
@@ -386,16 +373,9 @@ vlan_unconfig(struct ifnet *ifp)
 	switch (p->if_type) {
 	case IFT_ETHER:
 	    {
-		struct ethercom *ec = (void *) p;
-
-		if (ec->ec_nvlans-- == 1) {
-			/*
-			 * Disable Tx/Rx of VLAN-sized frames.
-			 */
-			ec->ec_capenable &= ~ETHERCAP_VLAN_MTU;
-			if (p->if_flags & IFF_UP)
-				(void)if_flags_set(p, p->if_flags);
-		}
+		struct ethercom *ec = (void *)p;
+		if (--ec->ec_nvlans == 0)
+			(void)ether_disable_vlan_mtu(p);
 
 		ether_ifdetach(ifp);
 		/* Restore vlan_ioctl overwritten by ether_ifdetach */
@@ -706,7 +686,6 @@ vlan_start(struct ifnet *ifp)
 	struct ethercom *ec = (void *) ifv->ifv_p;
 	struct mbuf *m;
 	int error;
-	ALTQ_DECL(struct altq_pktattr pktattr;)
 
 #ifndef NET_MPSAFE
 	KASSERT(KERNEL_LOCKED_P());
@@ -721,6 +700,10 @@ vlan_start(struct ifnet *ifp)
 
 #ifdef ALTQ
 		/*
+		 * KERNEL_LOCK is required for ALTQ even if NET_MPSAFE if defined.
+		 */
+		KERNEL_LOCK(1, NULL);
+		/*
 		 * If ALTQ is enabled on the parent interface, do
 		 * classification; the queueing discipline might
 		 * not require classification, but might require
@@ -729,7 +712,7 @@ vlan_start(struct ifnet *ifp)
 		if (ALTQ_IS_ENABLED(&p->if_snd)) {
 			switch (p->if_type) {
 			case IFT_ETHER:
-				altq_etherclassify(&p->if_snd, m, &pktattr);
+				altq_etherclassify(&p->if_snd, m);
 				break;
 #ifdef DIAGNOSTIC
 			default:
@@ -737,6 +720,7 @@ vlan_start(struct ifnet *ifp)
 #endif
 			}
 		}
+		KERNEL_UNLOCK_ONE(NULL);
 #endif /* ALTQ */
 
 		bpf_mtap(ifp, m);
@@ -828,20 +812,16 @@ vlan_start(struct ifnet *ifp)
 		 * Send it, precisely as the parent's output routine
 		 * would have.  We are already running at splnet.
 		 */
-		IFQ_ENQUEUE(&p->if_snd, m, &pktattr, error);
-		if (error) {
-			/* mbuf is already freed */
-			ifp->if_oerrors++;
-			continue;
+		if ((p->if_flags & IFF_RUNNING) != 0) {
+			error = if_transmit_lock(p, m);
+			if (error) {
+				/* mbuf is already freed */
+				ifp->if_oerrors++;
+				continue;
+			}
 		}
 
 		ifp->if_opackets++;
-
-		p->if_obytes += m->m_pkthdr.len;
-		if (m->m_flags & M_MCAST)
-			p->if_omcasts++;
-		if ((p->if_flags & (IFF_RUNNING|IFF_OACTIVE)) == IFF_RUNNING)
-			(*p->if_start)(p);
 	}
 
 	ifp->if_flags &= ~IFF_OACTIVE;
@@ -922,11 +902,11 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 		m_adj(m, ifv->ifv_encaplen);
 	}
 
-	m->m_pkthdr.rcvif = &ifv->ifv_if;
+	m_set_rcvif(m, &ifv->ifv_if);
 	ifv->ifv_if.if_ipackets++;
 
 	bpf_mtap(&ifv->ifv_if, m);
 
 	m->m_flags &= ~M_PROMISC;
-	ifv->ifv_if.if_input(&ifv->ifv_if, m);
+	if_input(&ifv->ifv_if, m);
 }

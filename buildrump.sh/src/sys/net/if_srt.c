@@ -1,10 +1,12 @@
-/* $NetBSD: if_srt.c,v 1.19 2014/07/25 08:10:40 dholland Exp $ */
+/* $NetBSD: if_srt.c,v 1.22 2016/06/20 06:46:37 knakahara Exp $ */
 /* This file is in the public domain. */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_srt.c,v 1.19 2014/07/25 08:10:40 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_srt.c,v 1.22 2016/06/20 06:46:37 knakahara Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
+#endif
 
 #if !defined(INET) && !defined(INET6)
 #error "srt without INET/INET6?"
@@ -179,7 +181,7 @@ srt_if_output(
 	struct ifnet *ifp,
 	struct mbuf *m,
 	const struct sockaddr *to,
-	struct rtentry *rtp)
+	const struct rtentry *rtp)
 {
 	struct srt_softc *sc;
 	struct srt_rt *r;
@@ -230,7 +232,7 @@ srt_if_output(
 		return 0; /* XXX ENETDOWN? */
 	}
 	/* XXX is 0 the right last arg here? */
-	return (*r->u.dstifp->if_output)(r->u.dstifp,m,&r->dst.sa,0);
+	return if_output_lock(r->u.dstifp, r->u.dstifp, m, &r->dst.sa, 0);
 }
 
 static int

@@ -1,4 +1,4 @@
-/*	$NetBSD: mpt_netbsd.c,v 1.31 2014/09/28 11:27:00 jmcneill Exp $	*/
+/*	$NetBSD: mpt_netbsd.c,v 1.33 2016/05/02 19:18:29 christos Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpt_netbsd.c,v 1.31 2014/09/28 11:27:00 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpt_netbsd.c,v 1.33 2016/05/02 19:18:29 christos Exp $");
 
 #include "bio.h"
 
@@ -1270,8 +1270,16 @@ mpt_ctlop(mpt_softc_t *mpt, void *vmsg, uint32_t reply)
 		break;
 
 	case MPI_FUNCTION_EVENT_ACK:
+	    {
+		MSG_EVENT_ACK_REPLY *msg = vmsg;
+		int index = le32toh(msg->MsgContext) & ~0x80000000;
 		mpt_free_reply(mpt, (reply << 1));
+		if (index >= 0 && index < MPT_MAX_REQUESTS(mpt)) {
+			request_t *req = &mpt->request_pool[index];
+			mpt_free_request(mpt, req);
+		}
 		break;
+	    }
 
 	case MPI_FUNCTION_PORT_ENABLE:
 	    {
@@ -1849,12 +1857,15 @@ mpt_bio_ioctl_vol(mpt_softc_t *mpt, struct bioc_vol *bv)
 		memset(&inqbuf, 0, sizeof(inqbuf));
 		if (scsipi_inquire(periph, &inqbuf,
 		    XS_CTL_DISCOVERY | XS_CTL_SILENT) == 0) {
-			scsipi_strvis(vendor, sizeof(vendor),
-			    inqbuf.vendor, sizeof(inqbuf.vendor));
-			scsipi_strvis(product, sizeof(product),
-			    inqbuf.product, sizeof(inqbuf.product));
-			scsipi_strvis(revision, sizeof(revision),
-			    inqbuf.revision, sizeof(inqbuf.revision));
+			strnvisx(vendor, sizeof(vendor),
+			    inqbuf.vendor, sizeof(inqbuf.vendor),
+			    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+			strnvisx(product, sizeof(product),
+			    inqbuf.product, sizeof(inqbuf.product),
+			    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+			strnvisx(revision, sizeof(revision),
+			    inqbuf.revision, sizeof(inqbuf.revision),
+			    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 
 			snprintf(bv->bv_vendor, sizeof(bv->bv_vendor),
 			    "%s %s %s", vendor, product, revision);
@@ -1919,13 +1930,16 @@ mpt_bio_ioctl_disk_common(mpt_softc_t *mpt, struct bioc_disk *bd,
 	if (phys == NULL)
 		return;
 
-	scsipi_strvis(vendor_id, sizeof(vendor_id),
-	    phys->InquiryData.VendorID, sizeof(phys->InquiryData.VendorID));
-	scsipi_strvis(product_id, sizeof(product_id),
-	    phys->InquiryData.ProductID, sizeof(phys->InquiryData.ProductID));
-	scsipi_strvis(product_rev_level, sizeof(product_rev_level),
+	strnvisx(vendor_id, sizeof(vendor_id),
+	    phys->InquiryData.VendorID, sizeof(phys->InquiryData.VendorID),
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(product_id, sizeof(product_id),
+	    phys->InquiryData.ProductID, sizeof(phys->InquiryData.ProductID),
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(product_rev_level, sizeof(product_rev_level),
 	    phys->InquiryData.ProductRevLevel,
-	    sizeof(phys->InquiryData.ProductRevLevel));
+	    sizeof(phys->InquiryData.ProductRevLevel),
+	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 
 	snprintf(bd->bd_vendor, sizeof(bd->bd_vendor), "%s %s %s",
 	    vendor_id, product_id, product_rev_level);

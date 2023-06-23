@@ -1,14 +1,14 @@
-#	$NetBSD: files.i2c,v 1.65 2015/05/12 20:54:08 jmcneill Exp $
+#	$NetBSD: files.i2c,v 1.72 2016/07/03 11:40:58 kiyohara Exp $
 
 obsolete defflag	opt_i2cbus.h		I2C_SCAN
 define	i2cbus { }
 define	i2cexec
 
-device	iic { [addr = -1], [size = -1] }
+device	iic { [addr = -1], [size = -1] } : i2c_bitbang
 attach	iic at i2cbus
 file	dev/i2c/i2c.c				iic
 file	dev/i2c/i2c_exec.c			iic | i2cbus | i2cexec
-file	dev/i2c/i2c_subr.c			iic | i2cbus
+file	dev/i2c/i2c_subr.c			i2cbus
 defparam opt_i2c.h				I2C_MAX_ADDR
 
 # Common module for bit-bang'ing an I2C bus
@@ -176,6 +176,11 @@ device	admtemp: sysmon_envsys
 attach	admtemp at iic
 file	dev/i2c/adm1021.c		admtemp
 
+# ADM1026 hardware monitor
+device	adm1026hm: sysmon_envsys
+attach	adm1026hm at iic
+file	dev/i2c/adm1026.c		adm1026hm
+
 # SMSC LPC47M192 hardware monitor
 device	smscmon: sysmon_envsys
 attach	smscmon at iic
@@ -199,7 +204,7 @@ file	dev/i2c/tps65950.c		tps65950pm
 # TI TPS65217
 device	tps65217pmic: sysmon_envsys
 attach	tps65217pmic at iic
-file	dev/i2c/tps65217pmic.c 		tps65217pmic
+file	dev/i2c/tps65217pmic.c 		tps65217pmic	needs-flag
 
 # Microchip MCP980x
 device	mcp980x: sysmon_envsys
@@ -219,7 +224,7 @@ file    dev/i2c/mpl115a.c		mpl115a
 # AXP20x Power Management Unit
 device	axp20x: sysmon_envsys
 attach	axp20x at iic
-file	dev/i2c/axp20x.c			axp20x
+file	dev/i2c/axp20x.c			axp20x		needs-flag
 
 # AXP22x Power Management Unit
 device	axp22x: sysmon_envsys
@@ -250,3 +255,8 @@ file	dev/i2c/act8846.c			act8846pm	needs-flag
 device	titemp: sysmon_envsys
 attach	titemp at iic
 file	dev/i2c/titemp.c			titemp
+
+# AMS AS3722 Power Management IC
+device	as3722pmic: sysmon_wdog
+attach	as3722pmic at iic
+file	dev/i2c/as3722.c			as3722pmic	needs-flag

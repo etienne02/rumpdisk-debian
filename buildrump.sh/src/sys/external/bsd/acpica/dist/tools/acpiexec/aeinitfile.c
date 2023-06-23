@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2015, Intel Corp.
+ * Copyright (C) 2000 - 2016, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -58,8 +58,9 @@ AeDoOneOverride (
     ACPI_WALK_STATE         *WalkState);
 
 
-#define AE_FILE_BUFFER_SIZE  512
+#define AE_FILE_BUFFER_SIZE     512
 
+static char                 LineBuffer[AE_FILE_BUFFER_SIZE];
 static char                 NameBuffer[AE_FILE_BUFFER_SIZE];
 static char                 ValueBuffer[AE_FILE_BUFFER_SIZE];
 static FILE                 *InitFile;
@@ -127,15 +128,18 @@ AeDoObjectOverrides (
 
     ObjDesc = AcpiUtCreateIntegerObject (0);
     WalkState = AcpiDsCreateWalkState (0, NULL, NULL, NULL);
-
     NameBuffer[0] = '\\';
 
-     /* Read the entire file line-by-line */
+    /* Read the entire file line-by-line */
 
-    while (fscanf (InitFile, "%s %s\n",
-        ACPI_CAST_PTR (char, &NameBuffer[1]),
-        ACPI_CAST_PTR (char, &ValueBuffer)) == 2)
+    while (fgets (LineBuffer, AE_FILE_BUFFER_SIZE, InitFile) != NULL)
     {
+        if (sscanf (LineBuffer, "%s %s\n",
+                &NameBuffer[1], ValueBuffer) != 2)
+        {
+            goto CleanupAndExit;
+        }
+
         /* Add a root prefix if not present in the string */
 
         i = 0;
@@ -149,6 +153,7 @@ AeDoObjectOverrides (
 
     /* Cleanup */
 
+CleanupAndExit:
     fclose (InitFile);
     AcpiDsDeleteWalkState (WalkState);
     AcpiUtRemoveReference (ObjDesc);
@@ -197,10 +202,12 @@ AeDoOneOverride (
 
     /* Extract the 64-bit integer */
 
-    Status = AcpiUtStrtoul64 (ValueString, 0, &Value);
+    Status = AcpiUtStrtoul64 (ValueString, ACPI_ANY_BASE,
+        ACPI_MAX64_BYTE_WIDTH, &Value);
     if (ACPI_FAILURE (Status))
     {
-        AcpiOsPrintf ("%s\n", AcpiFormatException (Status));
+        AcpiOsPrintf ("%s %s\n", ValueString,
+            AcpiFormatException (Status));
         return;
     }
 

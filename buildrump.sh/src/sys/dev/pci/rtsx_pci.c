@@ -1,4 +1,4 @@
-/*	$NetBSD: rtsx_pci.c,v 1.3 2014/10/29 14:24:09 nonaka Exp $	*/
+/*	$NetBSD: rtsx_pci.c,v 1.6 2016/07/07 06:55:41 msaitoh Exp $	*/
 /*	$OpenBSD: rtsx_pci.c,v 1.7 2014/08/19 17:55:03 phessler Exp $	*/
 
 
@@ -20,7 +20,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtsx_pci.c,v 1.3 2014/10/29 14:24:09 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtsx_pci.c,v 1.6 2016/07/07 06:55:41 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -42,6 +42,8 @@ struct rtsx_pci_softc {
 	struct rtsx_softc sc;
 	pci_chipset_tag_t sc_pc;
 	void *sc_ih;
+
+	pci_intr_handle_t *sc_pihp;
 };
 
 static int rtsx_pci_match(device_t , cfdata_t, void *);
@@ -92,7 +94,6 @@ rtsx_pci_attach(device_t parent, device_t self, void *aux)
 	struct pci_attach_args *pa = (struct pci_attach_args *)aux;
 	pci_chipset_tag_t pc = pa->pa_pc;
 	pcitag_t tag = pa->pa_tag;
-	pci_intr_handle_t ih;
 	pcireg_t reg;
 	char const *intrstr;
 	bus_space_tag_t iot;
@@ -117,12 +118,13 @@ rtsx_pci_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	if (pci_intr_map(pa, &ih)) {
+	if (pci_intr_alloc(pa, &sc->sc_pihp, NULL, 0)) {
 		aprint_error_dev(self, "couldn't map interrupt\n");
 		return;
 	}
-	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_SDMMC, rtsx_intr, &sc->sc);
+	intrstr = pci_intr_string(pc, sc->sc_pihp[0], intrbuf, sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish(pc, sc->sc_pihp[0], IPL_SDMMC,
+	    rtsx_intr, &sc->sc);
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt\n");
 		return;
@@ -182,6 +184,7 @@ rtsx_pci_detach(device_t self, int flags)
 		return rv;
 
 	pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
+	pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
 
 	return 0;
 }

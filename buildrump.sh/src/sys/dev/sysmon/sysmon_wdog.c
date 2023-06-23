@@ -1,4 +1,4 @@
-/*	$NetBSD: sysmon_wdog.c,v 1.27 2015/04/25 23:40:09 pgoyette Exp $	*/
+/*	$NetBSD: sysmon_wdog.c,v 1.29 2015/12/14 01:08:47 pgoyette Exp $	*/
 
 /*-
  * Copyright (c) 2000 Zembu Labs, Inc.
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sysmon_wdog.c,v 1.27 2015/04/25 23:40:09 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sysmon_wdog.c,v 1.29 2015/12/14 01:08:47 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -81,7 +81,7 @@ static struct sysmon_opvec sysmon_wdog_opvec = {
         NULL, NULL, NULL
 };
 
-MODULE(MODULE_CLASS_MISC, sysmon_wdog, "sysmon");
+MODULE(MODULE_CLASS_DRIVER, sysmon_wdog, "sysmon");
 
 ONCE_DECL(once_wdog);
 
@@ -92,6 +92,7 @@ wdog_preinit(void)
 	mutex_init(&sysmon_wdog_list_mtx, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&sysmon_wdog_mtx, MUTEX_DEFAULT, IPL_SOFTCLOCK);
 	cv_init(&sysmon_wdog_cv, "wdogref");
+	callout_init(&sysmon_wdog_callout, 0);
 
 	return 0;
 }
@@ -109,7 +110,6 @@ sysmon_wdog_init(void)
 	sysmon_wdog_cphook = critpollhook_establish(sysmon_wdog_critpoll, NULL);
 	if (sysmon_wdog_cphook == NULL)
 		printf("WARNING: unable to register watchdog critpoll hook\n");
-	callout_init(&sysmon_wdog_callout, 0);
 
 	error = sysmon_attach_minor(SYSMON_MINOR_WDOG, &sysmon_wdog_opvec);
 

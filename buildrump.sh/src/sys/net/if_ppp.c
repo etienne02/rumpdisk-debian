@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ppp.c,v 1.147 2015/04/20 10:19:54 roy Exp $	*/
+/*	$NetBSD: if_ppp.c,v 1.152 2016/06/10 13:27:16 ozaki-r Exp $	*/
 /*	Id: if_ppp.c,v 1.6 1997/03/04 03:33:00 paulus Exp 	*/
 
 /*
@@ -102,13 +102,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ppp.c,v 1.147 2015/04/20 10:19:54 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ppp.c,v 1.152 2016/06/10 13:27:16 ozaki-r Exp $");
 
 #include "ppp.h"
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_gateway.h"
 #include "opt_ppp.h"
+#endif
 
 #ifdef INET
 #define VJC
@@ -164,6 +166,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_ppp.c,v 1.147 2015/04/20 10:19:54 roy Exp $");
 #define PACKETPTR	struct mbuf *
 #include <net/ppp-comp.h>
 #endif
+
+#include "ioconf.h"
 
 static int	pppsioctl(struct ifnet *, u_long, void *);
 static void	ppp_requeue(struct ppp_softc *);
@@ -224,7 +228,7 @@ static void ppp_compressor_rele(struct compressor *);
  * Called from boot code to establish ppp interfaces.
  */
 void
-pppattach(void)
+pppattach(int n __unused)
 {
 	extern struct linesw ppp_disc;
 
@@ -835,7 +839,7 @@ pppsioctl(struct ifnet *ifp, u_long cmd, void *data)
  */
 int
 pppoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
-    struct rtentry *rtp)
+    const struct rtentry *rtp)
 {
 	struct ppp_softc *sc = ifp->if_softc;
 	int protocol, address, control;
@@ -847,7 +851,6 @@ pppoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 	struct ifqueue *ifq;
 	enum NPmode mode;
 	int len;
-	ALTQ_DECL(struct altq_pktattr pktattr;)
 
 	    if (sc->sc_devp == NULL || (ifp->if_flags & IFF_RUNNING) == 0
 		|| ((ifp->if_flags & IFF_UP) == 0 && dst->sa_family != AF_UNSPEC)) {
@@ -855,7 +858,7 @@ pppoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 		    goto bad;
 	    }
 
-	IFQ_CLASSIFY(&ifp->if_snd, m0, dst->sa_family, &pktattr);
+	IFQ_CLASSIFY(&ifp->if_snd, m0, dst->sa_family);
 
 	/*
 	 * Compute PPP header.
@@ -987,8 +990,7 @@ pppoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 		sc->sc_npqtail = &m0->m_nextpkt;
 	} else {
 		ifq = (m0->m_flags & M_HIGHPRI) ? &sc->sc_fastq : NULL;
-		if ((error = ifq_enqueue2(&sc->sc_if, ifq, m0
-			    ALTQ_COMMA ALTQ_DECL(&pktattr))) != 0) {
+		if ((error = ifq_enqueue2(&sc->sc_if, ifq, m0)) != 0) {
 			splx(s);
 			sc->sc_if.if_oerrors++;
 			sc->sc_stats.ppp_oerrors++;
@@ -1041,8 +1043,7 @@ ppp_requeue(struct ppp_softc *sc)
 			*mpp = m->m_nextpkt;
 			m->m_nextpkt = NULL;
 			ifq = (m->m_flags & M_HIGHPRI) ? &sc->sc_fastq : NULL;
-			if ((error = ifq_enqueue2(&sc->sc_if, ifq, m ALTQ_COMMA
-				    ALTQ_DECL(NULL))) != 0) {
+			if ((error = ifq_enqueue2(&sc->sc_if, ifq, m)) != 0) {
 				sc->sc_if.if_oerrors++;
 				sc->sc_stats.ppp_oerrors++;
 			}
@@ -1599,7 +1600,7 @@ ppp_inproc(struct ppp_softc *sc, struct mbuf *m)
 		}
 	}
 	m->m_pkthdr.len = ilen;
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 
 	if ((proto & 0x8000) == 0) {
 #ifdef PPP_FILTER

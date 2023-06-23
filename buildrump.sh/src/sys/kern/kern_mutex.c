@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_mutex.c,v 1.61 2014/11/28 08:27:27 uebayasi Exp $	*/
+/*	$NetBSD: kern_mutex.c,v 1.63 2016/07/07 06:55:43 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -40,7 +40,7 @@
 #define	__MUTEX_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_mutex.c,v 1.61 2014/11/28 08:27:27 uebayasi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_mutex.c,v 1.63 2016/07/07 06:55:43 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -432,7 +432,7 @@ mutex_oncpu(uintptr_t owner)
  *
  *	Support routine for mutex_enter() that must handle all cases.  In
  *	the LOCKDEBUG case, mutex_enter() is always aliased here, even if
- *	fast-path stubs are available.  If an mutex_spin_enter() stub is
+ *	fast-path stubs are available.  If a mutex_spin_enter() stub is
  *	not available, then it is also aliased directly here.
  */
 void
@@ -479,7 +479,7 @@ mutex_vector_enter(kmutex_t *mtx)
 			if (panicstr != NULL)
 				break;
 			while (MUTEX_SPINBIT_LOCKED_P(mtx)) {
-				SPINLOCK_BACKOFF(count); 
+				SPINLOCK_BACKOFF(count);
 #ifdef LOCKDEBUG
 				if (SPINLOCK_SPINOUT(spins))
 					MUTEX_ABORT(mtx, "spinout");
@@ -904,7 +904,7 @@ mutex_spin_retry(kmutex_t *mtx)
 		if (panicstr != NULL)
 			break;
 		while (MUTEX_SPINBIT_LOCKED_P(mtx)) {
-			SPINLOCK_BACKOFF(count); 
+			SPINLOCK_BACKOFF(count);
 #ifdef LOCKDEBUG
 			if (SPINLOCK_SPINOUT(spins))
 				MUTEX_ABORT(mtx, "spinout");

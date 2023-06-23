@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs_llsc.S,v 1.2 2011/07/10 23:21:59 matt Exp $	*/
+/*	$NetBSD: lock_stubs_llsc.S,v 1.6 2016/07/27 09:32:35 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -36,7 +36,8 @@
 #include <sys/errno.h>
 
 #include <machine/asm.h>
-#include <machine/cpu.h>		/* MIPS_CURLWP */
+
+RCSID("$NetBSD: lock_stubs_llsc.S,v 1.6 2016/07/27 09:32:35 skrll Exp $")
 
 #include "assym.h"
 
@@ -45,8 +46,13 @@
 #endif
 
 #if defined(MULTIPROCESSOR)
+#if defined(__OCTEON__)
+#define	SYNC		sync 4
+#define	BDSYNC		sync 4
+#else
 #define	SYNC		sync
 #define	BDSYNC		sync
+#endif
 #else
 #define	SYNC		/* nothing */
 #define	BDSYNC		nop

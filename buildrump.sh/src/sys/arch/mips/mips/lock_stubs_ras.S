@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs_ras.S,v 1.4 2011/08/27 13:23:52 bouyer Exp $	*/
+/*	$NetBSD: lock_stubs_ras.S,v 1.7 2016/07/27 09:32:35 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -36,7 +36,8 @@
 #include <sys/errno.h>
 
 #include <machine/asm.h>
-#include <machine/cpu.h>
+
+RCSID("$NetBSD: lock_stubs_ras.S,v 1.7 2016/07/27 09:32:35 skrll Exp $")
 
 #include "assym.h"
 
@@ -72,7 +73,7 @@
  *   into each other.  Use objdump -d to check alignment after making
  *   changes.
  */
-#ifdef _LP64
+#ifndef __mips_o32
 	.set	mips3
 #else
 	.set	mips1

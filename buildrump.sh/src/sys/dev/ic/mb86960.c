@@ -1,4 +1,4 @@
-/*	$NetBSD: mb86960.c,v 1.81 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $	*/
 
 /*
  * All Rights Reserved, Copyright (C) Fujitsu Limited 1995
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.81 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $");
 
 /*
  * Device driver for Fujitsu MB86960A/MB86965A based Ethernet cards.
@@ -1286,7 +1286,7 @@ mb86960_get_packet(struct mb86960_softc *sc, u_int len)
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == 0)
 		return 0;
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 	m->m_pkthdr.len = len;
 
 	/* The following silliness is to make NFS happy. */
@@ -1336,7 +1336,7 @@ mb86960_get_packet(struct mb86960_softc *sc, u_int len)
 	 */
 	bpf_mtap(ifp, m);
 
-	(*ifp->if_input)(ifp, m);
+	if_percpuq_enqueue(ifp->if_percpuq, m);
 	return 1;
 }
 

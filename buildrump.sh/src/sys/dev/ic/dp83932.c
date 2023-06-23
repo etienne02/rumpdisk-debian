@@ -1,4 +1,4 @@
-/*	$NetBSD: dp83932.c,v 1.36 2013/10/25 21:29:28 martin Exp $	*/
+/*	$NetBSD: dp83932.c,v 1.38 2016/06/10 13:27:13 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dp83932.c,v 1.36 2013/10/25 21:29:28 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dp83932.c,v 1.38 2016/06/10 13:27:13 ozaki-r Exp $");
 
 
 #include <sys/param.h>
@@ -834,7 +834,7 @@ sonic_rxintr(struct sonic_softc *sc)
 		}
 
 		ifp->if_ipackets++;
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
 
 		/*
@@ -843,7 +843,7 @@ sonic_rxintr(struct sonic_softc *sc)
 		bpf_mtap(ifp, m);
 
 		/* Pass it on. */
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 
 	/* Update the receive pointer. */

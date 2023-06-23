@@ -1,4 +1,4 @@
-/*	$NetBSD: mainbus.c,v 1.100 2015/04/27 08:30:11 knakahara Exp $	*/
+/*	$NetBSD: mainbus.c,v 1.102 2016/06/21 11:33:32 nonaka Exp $	*/
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.100 2015/04/27 08:30:11 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.102 2016/06/21 11:33:32 nonaka Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -161,11 +161,15 @@ int mp_nintr;
 int mp_isa_bus = -1;            /* XXX */
 int mp_eisa_bus = -1;           /* XXX */
 
-#ifdef MPVERBOSE
+# ifdef MPVERBOSE
+#  if MPVERBOSE > 0
+int mp_verbose = MPVERBOSE;
+#  else
 int mp_verbose = 1;
-#else
+#  endif
+# else
 int mp_verbose = 0;
-#endif
+# endif
 #endif
 
 void
@@ -341,6 +345,8 @@ mainbus_rescan(device_t self, const char *ifattr, const int *locators)
 		    PCI_FLAGS_MRL_OKAY | PCI_FLAGS_MRM_OKAY |
 		    PCI_FLAGS_MWI_OKAY;
 		mba.mba_acpi.aa_ic = &x86_isa_chipset;
+		mba.mba_acpi.aa_dmat = &pci_bus_dma_tag;
+		mba.mba_acpi.aa_dmat64 = NULL;
 		sc->sc_acpi =
 		    config_found_ia(self, "acpibus", &mba.mba_acpi, 0);
 #if 0 /* XXXJRT not yet */

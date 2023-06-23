@@ -1,4 +1,4 @@
-/*	$NetBSD: i82557.c,v 1.143 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: i82557.c,v 1.145 2016/06/10 13:27:13 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2001, 2002 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82557.c,v 1.143 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82557.c,v 1.145 2016/06/10 13:27:13 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1448,7 +1448,7 @@ fxp_rxintr(struct fxp_softc *sc)
 			}
 		}
 
-		m->m_pkthdr.rcvif = ifp;
+		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
 
 		/*
@@ -1458,7 +1458,7 @@ fxp_rxintr(struct fxp_softc *sc)
 		bpf_mtap(ifp, m);
 
 		/* Pass it on. */
-		(*ifp->if_input)(ifp, m);
+		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
 }
 

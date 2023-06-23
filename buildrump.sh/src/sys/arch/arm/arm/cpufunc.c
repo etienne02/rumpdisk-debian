@@ -1,4 +1,4 @@
-/*	$NetBSD: cpufunc.c,v 1.154 2015/05/14 05:39:32 hsuenaga Exp $	*/
+/*	$NetBSD: cpufunc.c,v 1.161 2016/05/30 17:18:38 dholland Exp $	*/
 
 /*
  * arm7tdmi support code Copyright (c) 2001 John Fremlin
@@ -49,7 +49,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpufunc.c,v 1.154 2015/05/14 05:39:32 hsuenaga Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpufunc.c,v 1.161 2016/05/30 17:18:38 dholland Exp $");
 
 #include "opt_compat_netbsd.h"
 #include "opt_cpuoptions.h"
@@ -1380,6 +1380,10 @@ struct cpu_functions pj4bv7_cpufuncs = {
 	.cf_dcache_inv_range	= armv7_dcache_inv_range,
 	.cf_dcache_wb_range	= armv7_dcache_wb_range,
 
+	.cf_sdcache_wbinv_range	= (void *)cpufunc_nullop,
+	.cf_sdcache_inv_range	= (void *)cpufunc_nullop,
+	.cf_sdcache_wb_range	= (void *)cpufunc_nullop,
+
 	.cf_idcache_wbinv_all	= armv7_idcache_wbinv_all,
 	.cf_idcache_wbinv_range	= armv7_idcache_wbinv_range,
 
@@ -1490,17 +1494,16 @@ static int	arm_dcache_log2_linesize;
 static inline u_int
 get_cachesize_cp15(int cssr)
 {
-	u_int csid;
-
 #if defined(CPU_ARMV7)
 	__asm volatile(".arch\tarmv7a");
-	__asm volatile("mcr p15, 2, %0, c0, c0, 0" :: "r" (cssr));
-	__asm volatile("isb" ::: "memory");	/* sync to the new cssr */
+
+	armreg_csselr_write(cssr);
+	arm_isb();			 /* sync to the new cssr */
+
 #else
 	__asm volatile("mcr p15, 1, %0, c0, c0, 2" :: "r" (cssr) : "memory");
 #endif
-	__asm volatile("mrc p15, 1, %0, c0, c0, 0" : "=r" (csid));
-	return csid;
+	return armreg_ccsidr_read();
 }
 #endif
 
@@ -1561,8 +1564,7 @@ get_cachetype_cp15(void)
 	u_int ctype, isize, dsize;
 	u_int multiplier;
 
-	__asm volatile("mrc p15, 0, %0, c0, c0, 1"
-		: "=r" (ctype));
+	ctype = armreg_ctr_read();
 
 	/*
 	 * ...and thus spake the ARM ARM:
@@ -1571,7 +1573,7 @@ get_cachetype_cp15(void)
 	 * reserved ID register is encountered, the System Control
 	 * processor returns the value of the main ID register.
 	 */
-	if (ctype == cpu_id())
+	if (ctype == cpu_idnum())
 		goto out;
 
 #if (ARM_MMU_V6 + ARM_MMU_V7) > 0
@@ -1585,7 +1587,7 @@ get_cachetype_cp15(void)
 			arm_cache_prefer_mask = PAGE_SIZE;
 		}
 #ifdef CPU_CORTEX
-		if (CPU_ID_CORTEX_P(cpu_id())) {
+		if (CPU_ID_CORTEX_P(cpu_idnum())) {
 			arm_pcache.dcache_type = CACHE_TYPE_PIPT;
 		} else
 #endif
@@ -1728,7 +1730,7 @@ static void
 get_cachetype_table(void)
 {
 	int i;
-	uint32_t cpuid = cpu_id();
+	uint32_t cpuid = cpu_idnum();
 
 	for (i = 0; cachetab[i].ct_cpuid != 0; i++) {
 		if (cachetab[i].ct_cpuid == (cpuid & CPU_ID_CPU_MASK)) {
@@ -1925,7 +1927,7 @@ set_cpufuncs(void)
 	    cputype == CPU_ID_ARM1176JZS) {
 		cpufuncs = arm11_cpufuncs;
 #if defined(CPU_ARM1136)
-		if (cputype == CPU_ID_ARM1136JS &&
+		if (cputype == CPU_ID_ARM1136JS ||
 		    cputype == CPU_ID_ARM1136JSR1) {
 			cpufuncs = arm1136_cpufuncs;
 			if (cputype == CPU_ID_ARM1136JS)
@@ -2328,8 +2330,7 @@ early_abort_fixup(void *arg)
 			registers[base] += offset;
 			DFC_PRINTF(("r%d=%08x\n", base, registers[base]));
 		}
-	} else if ((fault_instruction & 0x0e000000) == 0x0c000000)
-		return ABORT_FIXUP_FAILED;
+	}
 
 	if ((frame->tf_spsr & PSR_MODE) == PSR_SVC32_MODE) {
 
@@ -2998,7 +2999,7 @@ arm11_setup(char *args)
 	__asm volatile ("mcr\tp15, 0, r0, c7, c7, 0" : : );
 
 	/* Allow detection code to find the VFP if it's fitted.  */
-	__asm volatile ("mcr\tp15, 0, %0, c1, c0, 2" : : "r" (0x0fffffff));
+	armreg_cpacr_write(0x0fffffff);
 
 	/* Set the control register */
 	curcpu()->ci_ctrl = cpuctrl;
@@ -3047,7 +3048,7 @@ arm11mpcore_setup(char *args)
 	__asm volatile ("mcr\tp15, 0, r0, c7, c7, 0" : : );
 
 	/* Allow detection code to find the VFP if it's fitted.  */
-	__asm volatile ("mcr\tp15, 0, %0, c1, c0, 2" : : "r" (0x0fffffff));
+	armreg_cpacr_write(0x0fffffff);
 
 	/* Set the control register */
 	curcpu()->ci_ctrl = cpu_control(cpuctrlmask, cpuctrl);
@@ -3182,7 +3183,7 @@ arm11x6_setup(char *args)
 	uint32_t sbz=0;
 	uint32_t cpuid;
 
-	cpuid = cpu_id();
+	cpuid = cpu_idnum();
 
 	cpuctrl =
 		CPU_CONTROL_MMU_ENABLE  |
@@ -3270,7 +3271,7 @@ arm11x6_setup(char *args)
 	__asm volatile ("mcr\tp15, 0, %0, c7, c7, 0" : : "r"(sbz));
 
 	/* Allow detection code to find the VFP if it's fitted.  */
-	__asm volatile ("mcr\tp15, 0, %0, c1, c0, 2" : : "r" (0x0fffffff));
+	armreg_cpacr_write(0x0fffffff);
 
 	/* Set the control register */
 	curcpu()->ci_ctrl = cpuctrl;
@@ -3588,15 +3589,13 @@ xscale_setup(char *args)
 	cpu_control(0xffffffff, cpuctrl);
 
 	/* Make sure write coalescing is turned on */
-	__asm volatile("mrc p15, 0, %0, c1, c0, 1"
-		: "=r" (auxctl));
+	auxctl = armreg_auxctl_read();
 #ifdef XSCALE_NO_COALESCE_WRITES
 	auxctl |= XSCALE_AUXCTL_K;
 #else
 	auxctl &= ~XSCALE_AUXCTL_K;
 #endif
-	__asm volatile("mcr p15, 0, %0, c1, c0, 1"
-		: : "r" (auxctl));
+	armreg_auxctl_write(auxctl);
 }
 #endif	/* CPU_XSCALE */
 

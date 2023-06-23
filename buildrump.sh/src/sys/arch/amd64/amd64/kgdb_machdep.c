@@ -1,4 +1,4 @@
-/*	$NetBSD: kgdb_machdep.c,v 1.8 2011/04/03 22:29:25 dyoung Exp $	*/
+/*	$NetBSD: kgdb_machdep.c,v 1.10 2015/11/22 13:41:24 maxv Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -56,7 +56,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kgdb_machdep.c,v 1.8 2011/04/03 22:29:25 dyoung Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kgdb_machdep.c,v 1.10 2015/11/22 13:41:24 maxv Exp $");
 
 #include "opt_ddb.h"
 
@@ -110,7 +110,7 @@ kgdb_entry_notice(int type, db_regs_t *regs)
  * Translate a trap number into a unix compatible signal value.
  * (gdb only understands unix signal numbers).
  */
-int 
+int
 kgdb_signal(int type)
 {
 	switch (type) {
@@ -159,7 +159,26 @@ void
 kgdb_getregs(db_regs_t *regs, kgdb_reg_t *gdb_regs)
 {
 
-	memcpy(gdb_regs, regs, sizeof *regs);
+	gdb_regs[ 0] = regs->tf_rax;
+	gdb_regs[ 1] = regs->tf_rbx;
+	gdb_regs[ 2] = regs->tf_rcx;
+	gdb_regs[ 3] = regs->tf_rdx;
+	gdb_regs[ 4] = regs->tf_rsi;
+	gdb_regs[ 5] = regs->tf_rdi;
+	gdb_regs[ 6] = regs->tf_rbp;
+	gdb_regs[ 7] = regs->tf_rsp;
+	gdb_regs[ 8] = regs->tf_r8;
+	gdb_regs[ 9] = regs->tf_r9;
+	gdb_regs[10] = regs->tf_r10;
+	gdb_regs[11] = regs->tf_r11;
+	gdb_regs[12] = regs->tf_r12;
+	gdb_regs[13] = regs->tf_r13;
+	gdb_regs[14] = regs->tf_r14;
+	gdb_regs[15] = regs->tf_r15;
+	gdb_regs[16] = regs->tf_rip;
+	gdb_regs[17] = regs->tf_rflags;
+	gdb_regs[18] = regs->tf_cs;
+	gdb_regs[19] = regs->tf_ss;
 }
 
 /*
@@ -169,8 +188,27 @@ void
 kgdb_setregs(db_regs_t *regs, kgdb_reg_t *gdb_regs)
 {
 
-	memcpy(regs, gdb_regs, sizeof *regs);
-}	
+	regs->tf_rax = gdb_regs[ 0];
+	regs->tf_rbx = gdb_regs[ 1];
+	regs->tf_rcx = gdb_regs[ 2];
+	regs->tf_rdx = gdb_regs[ 3];
+	regs->tf_rsi = gdb_regs[ 4];
+	regs->tf_rdi = gdb_regs[ 5];
+	regs->tf_rbp = gdb_regs[ 6];
+	regs->tf_rsp = gdb_regs[ 7];
+	regs->tf_r8  = gdb_regs[ 8];
+	regs->tf_r9  = gdb_regs[ 9];
+	regs->tf_r10 = gdb_regs[10];
+	regs->tf_r11 = gdb_regs[11];
+	regs->tf_r12 = gdb_regs[12];
+	regs->tf_r13 = gdb_regs[13];
+	regs->tf_r14 = gdb_regs[14];
+	regs->tf_r15 = gdb_regs[15];
+	regs->tf_rip = gdb_regs[16];
+	regs->tf_rflags = gdb_regs[17];
+	regs->tf_cs  = gdb_regs[18];
+	regs->tf_ss  = gdb_regs[19];
+}
 
 /*
  * Trap into kgdb to wait for debugger to connect,

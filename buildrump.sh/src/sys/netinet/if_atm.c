@@ -1,4 +1,4 @@
-/*      $NetBSD: if_atm.c,v 1.34 2014/11/10 18:52:51 maxv Exp $       */
+/*      $NetBSD: if_atm.c,v 1.38 2016/04/28 00:16:56 ozaki-r Exp $       */
 
 /*
  * Copyright (c) 1996 Charles D. Cranor and Washington University.
@@ -30,10 +30,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_atm.c,v 1.34 2014/11/10 18:52:51 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_atm.c,v 1.38 2016/04/28 00:16:56 ozaki-r Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_natm.h"
+#endif
 
 #if defined(INET) || defined(INET6)
 
@@ -90,10 +92,6 @@ atm_rtrequest(int req, struct rtentry *rt, const struct rt_addrinfo *info)
 
 	switch (req) {
 
-	case RTM_RESOLVE: /* resolve: only happens when cloning */
-		printf("atm_rtrequest: RTM_RESOLVE request detected?\n");
-		break;
-
 	case RTM_ADD:
 
 		/*
@@ -118,10 +116,6 @@ atm_rtrequest(int req, struct rtentry *rt, const struct rt_addrinfo *info)
 			break;
 		}
 
-		if ((rt->rt_flags & RTF_CLONING) != 0) {
-			printf("atm_rtrequest: cloning route detected?\n");
-			break;
-		}
 		if (gate->sa_family != AF_LINK ||
 		    gate->sa_len < sockaddr_dl_measure(namelen, addrlen)) {
 			log(LOG_DEBUG, "atm_rtrequest: bad gateway value\n");
@@ -149,7 +143,6 @@ atm_rtrequest(int req, struct rtentry *rt, const struct rt_addrinfo *info)
 		npcb->ipaddr.s_addr = sin->sin_addr.s_addr;
 		/* XXX: move npcb to llinfo when ATM ARP is ready */
 		rt->rt_llinfo = (void *) npcb;
-		rt->rt_flags |= RTF_LLINFO;
 #endif
 		/*
 		 * let the lower level know this circuit is active
@@ -171,7 +164,6 @@ failed:
 		if (npcb) {
 			npcb_free(npcb, NPCB_DESTROY);
 			rt->rt_llinfo = NULL;
-			rt->rt_flags &= ~RTF_LLINFO;
 		}
 #endif
 		rtrequest(RTM_DELETE, rt_getkey(rt), NULL,
@@ -180,18 +172,6 @@ failed:
 
 	case RTM_DELETE:
 
-#ifdef NATM
-		/*
-		 * tell native ATM we are done with this VC
-		 */
-
-		if (rt->rt_flags & RTF_LLINFO) {
-			npcb_free((struct natmpcb *)rt->rt_llinfo,
-								NPCB_DESTROY);
-			rt->rt_llinfo = NULL;
-			rt->rt_flags &= ~RTF_LLINFO;
-		}
-#endif
 		/*
 		 * tell the lower layer to disable this circuit
 		 */
@@ -221,25 +201,26 @@ failed:
  */
 
 int
-atmresolve(struct rtentry *rt, struct mbuf *m, const struct sockaddr *dst,
+atmresolve(const struct rtentry *rt0, struct mbuf *m, const struct sockaddr *dst,
     struct atm_pseudohdr *desten /* OUT */)
 {
 	const struct sockaddr_dl *sdl;
+	struct rtentry *rt = NULL;
 
 	if (m->m_flags & (M_BCAST|M_MCAST)) {
 		log(LOG_INFO, "atmresolve: BCAST/MCAST packet detected/dumped\n");
 		goto bad;
 	}
 
-	if (rt == NULL) {
+	if (rt0 == NULL) {
 		rt = RTALLOC1(dst, 0);
-		if (rt == NULL) goto bad; /* failed */
-		rt->rt_refcnt--;	/* don't keep LL references */
+		if (rt == NULL)
+			goto bad; /* failed */
 		if ((rt->rt_flags & RTF_GATEWAY) != 0 ||
-			(rt->rt_flags & RTF_LLINFO) == 0 ||
-			/* XXX: are we using LLINFO? */
-			rt->rt_gateway->sa_family != AF_LINK) {
-				goto bad;
+		    /* XXX: are we using LLINFO? */
+		    rt->rt_gateway->sa_family != AF_LINK) {
+			rtfree(rt);
+			goto bad;
 		}
 	}
 
@@ -250,18 +231,22 @@ atmresolve(struct rtentry *rt, struct mbuf *m, const struct sockaddr *dst,
 	 * ATM ARP [c.f. if_ether.c]).
 	 */
 
-	sdl = satocsdl(rt->rt_gateway);
+	sdl = satocsdl((rt ? rt : rt0)->rt_gateway);
 
 	/*
 	 * Check the address family and length is valid, the address
 	 * is resolved; otherwise, try to resolve.
 	 */
 
-
 	if (sdl->sdl_family == AF_LINK && sdl->sdl_alen == sizeof(*desten)) {
 		memcpy(desten, CLLADDR(sdl), sdl->sdl_alen);
+		if (rt != NULL)
+			rtfree(rt);
 		return (1);	/* ok, go for it! */
 	}
+
+	if (rt != NULL)
+		rtfree(rt);
 
 	/*
 	 * we got an entry, but it doesn't have valid link address

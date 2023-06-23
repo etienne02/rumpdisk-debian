@@ -1,4 +1,4 @@
-/*	$NetBSD: hash.c,v 1.33 2013/12/01 00:22:48 christos Exp $	*/
+/*	$NetBSD: hash.c,v 1.38 2015/11/18 18:22:42 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993, 1994
@@ -37,7 +37,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: hash.c,v 1.33 2013/12/01 00:22:48 christos Exp $");
+__RCSID("$NetBSD: hash.c,v 1.38 2015/11/18 18:22:42 christos Exp $");
 
 #include "namespace.h"
 #include <sys/param.h>
@@ -585,7 +585,7 @@ hash_access(HTAB *hashp, ACTION action, DBT *key, DBT *val)
 	hash_accesses++;
 #endif
 
-	off = hashp->BSIZE;
+	off = HASH_BSIZE(hashp);
 	size = key->size;
 	kp = (char *)key->data;
 	rbufp = __get_buf(hashp, __call_hash(hashp, kp, (int)size), NULL, 0);
@@ -617,7 +617,7 @@ hash_access(HTAB *hashp, ACTION action, DBT *key, DBT *val)
 			bp = (uint16_t *)(void *)rbufp->page;
 			n = *bp++;
 			ndx = 1;
-			off = hashp->BSIZE;
+			off = HASH_BSIZE(hashp);
 		} else if (bp[1] < REAL_KEY) {
 			if ((ndx =
 			    __find_bigpair(hashp, rbufp, ndx, kp, (int)size)) > 0)
@@ -640,7 +640,7 @@ hash_access(HTAB *hashp, ACTION action, DBT *key, DBT *val)
 				bp = (uint16_t *)(void *)rbufp->page;
 				n = *bp++;
 				ndx = 1;
-				off = hashp->BSIZE;
+				off = HASH_BSIZE(hashp);
 			} else {
 				save_bufp->flags &= ~BUF_PIN;
 				return (ERROR);
@@ -690,6 +690,27 @@ found:
 	case HASH_DELETE:
 		if (__delpair(hashp, rbufp, ndx))
 			return (ERROR);
+		/*
+		 * Our index lags 2 behind on the same page when we are
+		 * deleting the element pointed to by the index; otherwise
+		 * deleting randomly from an iterated hash produces undefined
+		 * results.
+		 */
+		if (ndx != hashp->cndx - 2 || rbufp != hashp->cpage)
+			break;
+
+		if (hashp->cndx > 1) {
+			/* Move back one element */
+			hashp->cndx -= 2;
+		} else {
+			/*
+			 * Move back one page, and indicate to go to the last
+			 * element of the previous page by setting cndx to -1
+			 */
+			hashp->cbucket--;
+			hashp->cpage = NULL;
+			hashp->cndx = -1;
+		}
 		break;
 	default:
 		abort();
@@ -720,11 +741,12 @@ hash_seq(const DB *dbp, DBT *key, DBT *data, uint32_t flag)
 		hashp->cpage = NULL;
 	}
 
+next_bucket:
 	for (bp = NULL; !bp || !bp[0]; ) {
 		if (!(bufp = hashp->cpage)) {
 			for (bucket = hashp->cbucket;
 			    bucket <= (uint32_t)hashp->MAX_BUCKET;
-			    bucket++, hashp->cndx = 1) {
+			    bucket++) {
 				bufp = __get_buf(hashp, bucket, NULL, 0);
 				if (!bufp)
 					return (ERROR);
@@ -738,8 +760,27 @@ hash_seq(const DB *dbp, DBT *key, DBT *data, uint32_t flag)
 				hashp->cbucket = -1;
 				return (ABNORMAL);
 			}
-		} else
-			bp = (uint16_t *)(void *)hashp->cpage->page;
+			if (hashp->cndx == -1) {
+				/* move to the last element of the page */
+				hashp->cndx = 1;
+				while (bp[hashp->cndx - 1] != 0)
+					hashp->cndx += 2;
+			} else {
+				/* start on the first element */
+				hashp->cndx = 1;
+			}
+		} else {
+			bp = (uint16_t *)(void *)bufp->page;
+			if (flag == R_NEXT || flag == 0) {
+				if (hashp->cndx > bp[0]) {
+					hashp->cpage = NULL;
+					hashp->cbucket++;
+					hashp->cndx = 1;
+					goto next_bucket;
+				}
+			}
+		}
+
 
 		_DIAGASSERT(bp != NULL);
 		_DIAGASSERT(bufp != NULL);
@@ -761,20 +802,15 @@ hash_seq(const DB *dbp, DBT *key, DBT *data, uint32_t flag)
 	if (bp[ndx + 1] < REAL_KEY) {
 		if (__big_keydata(hashp, bufp, key, data, 1))
 			return (ERROR);
+		hashp->cndx = 1;
 	} else {
 		if (hashp->cpage == NULL)
 			return (ERROR);
 		key->data = (uint8_t *)hashp->cpage->page + bp[ndx];
-		key->size = (ndx > 1 ? bp[ndx - 1] : hashp->BSIZE) - bp[ndx];
+		key->size = (ndx > 1 ? bp[ndx - 1] : HASH_BSIZE(hashp)) - bp[ndx];
 		data->data = (uint8_t *)hashp->cpage->page + bp[ndx + 1];
 		data->size = bp[ndx] - bp[ndx + 1];
-		ndx += 2;
-		if (ndx > bp[0]) {
-			hashp->cpage = NULL;
-			hashp->cbucket++;
-			hashp->cndx = 1;
-		} else
-			hashp->cndx = ndx;
+		hashp->cndx += 2;
 	}
 	return (SUCCESS);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_faith.c,v 1.50 2014/07/29 01:35:44 ozaki-r Exp $	*/
+/*	$NetBSD: if_faith.c,v 1.53 2016/06/10 13:27:16 ozaki-r Exp $	*/
 /*	$KAME: if_faith.c,v 1.21 2001/02/20 07:59:26 itojun Exp $	*/
 
 /*
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.50 2014/07/29 01:35:44 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.53 2016/06/10 13:27:16 ozaki-r Exp $");
 
 #include "opt_inet.h"
 
@@ -82,13 +82,13 @@ __KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.50 2014/07/29 01:35:44 ozaki-r Exp $"
 
 #include <net/net_osdep.h>
 
+#include "ioconf.h"
+
 static int	faithioctl(struct ifnet *, u_long, void *);
 static int	faithoutput(struct ifnet *, struct mbuf *,
-		            const struct sockaddr *, struct rtentry *);
+		            const struct sockaddr *, const struct rtentry *);
 static void	faithrtrequest(int, struct rtentry *,
 		               const struct rt_addrinfo *);
-
-void	faithattach(int);
 
 static int	faith_clone_create(struct if_clone *, int);
 static int	faith_clone_destroy(struct ifnet *);
@@ -143,7 +143,7 @@ faith_clone_destroy(struct ifnet *ifp)
 
 static int
 faithoutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
-    struct rtentry *rt)
+    const struct rtentry *rt)
 {
 	pktqueue_t *pktq;
 	size_t pktlen;
@@ -187,7 +187,7 @@ faithoutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 
 	/* XXX do we need more sanity checks? */
 	KASSERT(pktq != NULL);
-	m->m_pkthdr.rcvif = ifp;
+	m_set_rcvif(m, ifp);
 
 	s = splnet();
 	if (__predict_true(pktq_enqueue(pktq, m, 0))) {

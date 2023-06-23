@@ -1,4 +1,4 @@
-/*	$NetBSD: agp_i810.c,v 1.118 2015/04/05 12:55:20 riastradh Exp $	*/
+/*	$NetBSD: agp_i810.c,v 1.122 2016/05/01 04:22:50 nonaka Exp $	*/
 
 /*-
  * Copyright (c) 2000 Doug Rabson
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: agp_i810.c,v 1.118 2015/04/05 12:55:20 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: agp_i810.c,v 1.122 2016/05/01 04:22:50 nonaka Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -68,13 +68,14 @@ struct agp_softc *agp_i810_sc = NULL;
 #define READ4(off)	bus_space_read_4(isc->bst, isc->bsh, off)
 #define WRITE4(off,v)	bus_space_write_4(isc->bst, isc->bsh, off, v)
 
-#define CHIP_I810 0	/* i810/i815 */
-#define CHIP_I830 1	/* 830M/845G */
-#define CHIP_I855 2	/* 852GM/855GM/865G */
-#define CHIP_I915 3	/* 915G/915GM/945G/945GM/945GME */
-#define CHIP_I965 4	/* 965Q/965PM */
-#define CHIP_G33  5	/* G33/Q33/Q35 */
-#define CHIP_G4X  6	/* G45/Q45 */
+#define CHIP_I810	0	/* i810/i815 */
+#define CHIP_I830	1	/* 830M/845G */
+#define CHIP_I855	2	/* 852GM/855GM/865G */
+#define CHIP_I915	3	/* 915G/915GM/945G/945GM/945GME */
+#define CHIP_I965	4	/* 965Q/965PM */
+#define CHIP_G33	5	/* G33/Q33/Q35 */
+#define CHIP_G4X	6	/* G45/Q45 */
+#define CHIP_PINEVIEW	7	/* Pineview */
 
 /* XXX hack, see below */
 static bus_addr_t agp_i810_vga_regbase;
@@ -145,6 +146,7 @@ agp_i810_write_gtt_entry(struct agp_i810_softc *isc, off_t off,
 		/* 965+ can do 36-bit addressing, add in the extra bits. */
 		if (isc->chiptype == CHIP_I965 ||
 		    isc->chiptype == CHIP_G33 ||
+		    isc->chiptype == CHIP_PINEVIEW ||
 		    isc->chiptype == CHIP_G4X) {
 			if (((uintmax_t)addr >> 36) != 0)
 				return EINVAL;
@@ -216,6 +218,7 @@ agp_i810_chipset_flush(struct agp_i810_softc *isc)
 	case CHIP_I915:
 	case CHIP_I965:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 	case CHIP_G4X:
 		bus_space_write_4(isc->flush_bst, isc->flush_bsh, 0, 1);
 		break;
@@ -365,8 +368,6 @@ agp_i810_attach(device_t parent, device_t self, void *aux)
 	case PCI_PRODUCT_INTEL_82945GM_IGD_1:
 	case PCI_PRODUCT_INTEL_82945GME_IGD:
 	case PCI_PRODUCT_INTEL_E7221_IGD:
-	case PCI_PRODUCT_INTEL_PINEVIEW_IGD:
-	case PCI_PRODUCT_INTEL_PINEVIEW_M_IGD:
 		isc->chiptype = CHIP_I915;
 		aprint_normal(": i915-family chipset\n");
 		break;
@@ -392,6 +393,11 @@ agp_i810_attach(device_t parent, device_t self, void *aux)
 		isc->chiptype = CHIP_G33;
 		aprint_normal(": G33-family chipset\n");
 		break;
+	case PCI_PRODUCT_INTEL_PINEVIEW_IGD:
+	case PCI_PRODUCT_INTEL_PINEVIEW_M_IGD:
+		isc->chiptype = CHIP_PINEVIEW;
+		aprint_normal(": Pineview chipset\n");
+		break;
 	case PCI_PRODUCT_INTEL_82GM45_IGD:
 	case PCI_PRODUCT_INTEL_82GM45_IGD_1:
 	case PCI_PRODUCT_INTEL_82IGD_E_IGD:
@@ -407,46 +413,92 @@ agp_i810_attach(device_t parent, device_t self, void *aux)
 	}
 	aprint_naive("\n");
 
-	mmadr_type = PCI_MAPREG_TYPE_MEM;
+	/* Discriminate on the chipset to choose the relevant BARs.  */
 	switch (isc->chiptype) {
 	case CHIP_I915:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 		apbase = AGP_I915_GMADR;
 		mmadr_bar = AGP_I915_MMADR;
-		isc->size = 512*1024;
 		gtt_bar = AGP_I915_GTTADR;
 		gtt_off = ~(bus_size_t)0; /* XXXGCC */
 		break;
 	case CHIP_I965:
 		apbase = AGP_I965_GMADR;
 		mmadr_bar = AGP_I965_MMADR;
-		mmadr_type |= PCI_MAPREG_MEM_TYPE_64BIT;
-		if (pci_mapreg_info(isc->vga_pa.pa_pc, isc->vga_pa.pa_tag,
-			AGP_I965_MMADR, mmadr_type, NULL, &isc->size, NULL))
-			isc->size = 512*1024; /* XXX */
 		gtt_bar = 0;
 		gtt_off = AGP_I965_GTT;
 		break;
 	case CHIP_G4X:
 		apbase = AGP_I965_GMADR;
 		mmadr_bar = AGP_I965_MMADR;
-		mmadr_type |= PCI_MAPREG_MEM_TYPE_64BIT;
-		if (pci_mapreg_info(isc->vga_pa.pa_pc, isc->vga_pa.pa_tag,
-			AGP_I965_MMADR, mmadr_type, NULL, &isc->size, NULL))
-			isc->size = 512*1024; /* XXX */
 		gtt_bar = 0;
 		gtt_off = AGP_G4X_GTT;
 		break;
 	default:
 		apbase = AGP_I810_GMADR;
 		mmadr_bar = AGP_I810_MMADR;
-		if (pci_mapreg_info(isc->vga_pa.pa_pc, isc->vga_pa.pa_tag,
-			AGP_I810_MMADR, mmadr_type, NULL, &isc->size, NULL))
-			isc->size = 512*1024; /* XXX */
 		gtt_bar = 0;
 		gtt_off = AGP_I810_GTT;
 		break;
 	}
+
+	/*
+	 * Ensure the MMIO BAR is, in fact, a memory BAR.
+	 *
+	 * XXX This is required because we use pa_memt below.  It is
+	 * not a priori clear to me there is any other reason to
+	 * require this.
+	 */
+	mmadr_type = pci_mapreg_type(isc->vga_pa.pa_pc, isc->vga_pa.pa_tag,
+	    mmadr_bar);
+	if (PCI_MAPREG_TYPE(mmadr_type) != PCI_MAPREG_TYPE_MEM) {
+		aprint_error_dev(self, "non-memory device MMIO registers\n");
+		error = ENXIO;
+		goto fail1;
+	}
+
+	/*
+	 * Determine the size of the MMIO registers.
+	 *
+	 * XXX The size of the MMIO registers we use is statically
+	 * determined, as a function of the chipset, by the driver's
+	 * implementation.
+	 *
+	 * On some chipsets, the GTT is part of the MMIO register BAR.
+	 * We would like to map the GTT separately, so that we can map
+	 * it prefetchable, which we can't do with the MMIO registers.
+	 * Consequently, we would especially like to map a fixed size
+	 * of MMIO registers, not just whatever size the BAR says.
+	 *
+	 * However, old drm assumes that the combined GTT/MMIO register
+	 * space is a single bus space mapping, so mapping them
+	 * separately breaks that.  Once we rip out old drm, we can
+	 * replace the pci_mapreg_info call by the chipset switch.
+	 */
+#if notyet
+	switch (isc->chiptype) {
+	case CHIP_I810:
+	case CHIP_I830:
+	case CHIP_I855:
+	case CHIP_I915:
+	case CHIP_I965:
+	case CHIP_G33:
+	case CHIP_PINEVIEW:
+	case CHIP_G4X:
+		isc->size = 512*1024;
+		break;
+	case CHIP_SANDYBRIDGE:
+	case CHIP_IVYBRIDGE:
+	case CHIP_HASWELL:
+		isc->size = 2*1024*1024;
+		break;
+	}
+#else
+	if (pci_mapreg_info(isc->vga_pa.pa_pc, isc->vga_pa.pa_tag,
+		mmadr_bar, mmadr_type, NULL, &isc->size, NULL))
+		isc->size = 512*1024;
+#endif	/* notyet */
 
 	/* Map (or, rather, find the address and size of) the aperture.  */
 	if (isc->chiptype == CHIP_I965 || isc->chiptype == CHIP_G4X)
@@ -487,6 +539,7 @@ agp_i810_attach(device_t parent, device_t self, void *aux)
 	case CHIP_I915:
 	case CHIP_I965:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 	case CHIP_G4X:
 		error = agp_i810_setup_chipset_flush_page(sc);
 		if (error) {
@@ -589,6 +642,7 @@ fail3:	switch (isc->chiptype) {
 	case CHIP_I915:
 	case CHIP_I965:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 	case CHIP_G4X:
 		agp_i810_teardown_chipset_flush_page(sc);
 		break;
@@ -823,6 +877,7 @@ agp_i810_init(struct agp_softc *sc)
 		WRITE4(AGP_I810_PGTBL_CTL, isc->pgtblctl);
 	} else if (isc->chiptype == CHIP_I855 || isc->chiptype == CHIP_I915 ||
 		   isc->chiptype == CHIP_I965 || isc->chiptype == CHIP_G33 ||
+		   isc->chiptype == CHIP_PINEVIEW ||
 		   isc->chiptype == CHIP_G4X) {
 		pcireg_t reg;
 		u_int32_t gtt_size, stolen;	/* XXX kilobytes */
@@ -873,6 +928,18 @@ agp_i810_init(struct agp_softc *sc)
 				break;
 			case AGP_G33_PGTBL_SIZE_2M:
 				gtt_size = 2048;
+				break;
+			default:
+				aprint_error_dev(sc->as_dev,
+				    "bad PGTBL size\n");
+				error = ENXIO;
+				goto fail0;
+			}
+			break;
+		case CHIP_PINEVIEW:
+			switch (gcc1 & AGP_PINEVIEW_PGTBL_SIZE_MASK) {
+			case AGP_PINEVIEW_PGTBL_SIZE_1M:
+				gtt_size = 1024;
 				break;
 			default:
 				aprint_error_dev(sc->as_dev,
@@ -969,6 +1036,7 @@ agp_i810_init(struct agp_softc *sc)
 			if (isc->chiptype != CHIP_I915 &&
 			    isc->chiptype != CHIP_I965 &&
 			    isc->chiptype != CHIP_G33 &&
+			    isc->chiptype != CHIP_PINEVIEW &&
 			    isc->chiptype != CHIP_G4X)
 				stolen = 0;
 			break;
@@ -976,6 +1044,7 @@ agp_i810_init(struct agp_softc *sc)
 		case AGP_G33_GCC1_GMS_STOLEN_256M:
 			if (isc->chiptype != CHIP_I965 &&
 			    isc->chiptype != CHIP_G33 &&
+			    isc->chiptype != CHIP_PINEVIEW &&
 			    isc->chiptype != CHIP_G4X)
 				stolen = 0;
 			break;
@@ -1045,6 +1114,7 @@ agp_i810_detach(struct agp_softc *sc)
 	case CHIP_I915:
 	case CHIP_I965:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 	case CHIP_G4X:
 		agp_i810_teardown_chipset_flush_page(sc);
 		break;
@@ -1103,6 +1173,7 @@ agp_i810_get_aperture(struct agp_softc *sc)
 		break;
 	case CHIP_I915:
 	case CHIP_G33:
+	case CHIP_PINEVIEW:
 	case CHIP_G4X:
 		size = sc->as_apsize;
 		break;

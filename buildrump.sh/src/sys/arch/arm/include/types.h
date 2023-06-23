@@ -1,4 +1,4 @@
-/*	$NetBSD: types.h,v 1.29 2014/09/13 17:41:03 matt Exp $	*/
+/*	$NetBSD: types.h,v 1.32 2016/01/23 22:31:19 christos Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -44,8 +44,7 @@ typedef struct label_t {	/* Used by setjmp & longjmp */
 } label_t;
 #endif
          
-/* NB: This should probably be if defined(_KERNEL) */
-#if defined(_NETBSD_SOURCE)
+#if defined(_KERNEL) || defined(_KMEMUSER) || defined(_KERNTYPES) || defined(_STANDALONE)
 typedef unsigned long	paddr_t;
 typedef unsigned long	psize_t;
 typedef unsigned long	vaddr_t;
@@ -56,7 +55,6 @@ typedef unsigned long	vsize_t;
 #define	PRIxVADDR	"lx"
 #define	PRIxVSIZE	"lx"
 #define	PRIuVSIZE	"lu"
-#endif
 
 typedef int		register_t, register32_t;
 #define	PRIxREGISTER	"x"
@@ -65,16 +63,18 @@ typedef unsigned long	pmc_evid_t;
 #define PMC_INVALID_EVID	(-1)
 typedef unsigned long	pmc_ctr_t;
 typedef unsigned short	tlb_asid_t;
+#endif
 
 /*
  * This should have always been an 8-bit type, but since it's been exposed
  * to user-space, we don't want ABI breakage there.
  */
 #if defined(_KERNEL)
-typedef volatile unsigned char	__cpu_simple_lock_t;
+typedef unsigned char	__cpu_simple_lock_nv_t;
 #else
-typedef	volatile int		__cpu_simple_lock_t;
+typedef	int		__cpu_simple_lock_nv_t;
 #endif /* _KERNEL */
+typedef	int		__register_t;
 
 #define	__SIMPLELOCK_LOCKED	1
 #define	__SIMPLELOCK_UNLOCKED	0

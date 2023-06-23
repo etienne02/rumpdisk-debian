@@ -1,9 +1,10 @@
-#	$NetBSD: Makefile,v 1.9 2015/05/09 12:03:10 pooka Exp $
+#	$NetBSD: Makefile,v 1.11 2016/01/26 23:12:17 pooka Exp $
 #
 
 .PATH:	${.CURDIR}/../../../../compat/linux/common
 
 LIB=	rumpkern_sys_linux
+COMMENT=Linux system call translation
 
 SRCS=	linux_blkio.c linux_cdrom.c linux_errno.c linux_fdio.c		\
 	linux_file.c linux_hdio.c linux_ioctl.c linux_ipc.c linux_misc.c\
@@ -15,7 +16,6 @@ SRCS+=	linux_rump.c
 SRCS+=	sys_linux_component.c
 
 # XXX
-CPPFLAGS+= -I${RUMPTOP}/librump/rumpkern
 CPPFLAGS+= -DINET6
 
 SYS_P=rump_linux_sys
