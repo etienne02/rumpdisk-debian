@@ -1,4 +1,4 @@
-/*	$NetBSD: dwc2_hcd.c,v 1.19 2016/02/24 22:17:54 skrll Exp $	*/
+/*	$NetBSD: dwc2_hcd.c,v 1.25 2021/01/11 17:00:18 skrll Exp $	*/
 
 /*
  * hcd.c - DesignWare HS OTG Controller host-mode routines
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dwc2_hcd.c,v 1.19 2016/02/24 22:17:54 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dwc2_hcd.c,v 1.25 2021/01/11 17:00:18 skrll Exp $");
 
 #include <sys/types.h>
 #include <sys/kmem.h>
@@ -115,6 +115,10 @@ static void dwc2_dump_channel_info(struct dwc2_hsotg *hsotg,
 	dev_dbg(hsotg->dev, "    qh: %p\n", chan->qh);
 	dev_dbg(hsotg->dev, "  NP inactive sched:\n");
 	list_for_each_entry(qh, &hsotg->non_periodic_sched_inactive,
+			    qh_list_entry)
+		dev_dbg(hsotg->dev, "    %p\n", qh);
+	dev_dbg(hsotg->dev, "  NP waiting sched:\n");
+	list_for_each_entry(qh, &hsotg->non_periodic_sched_waiting,
 			    qh_list_entry)
 		dev_dbg(hsotg->dev, "    %p\n", qh);
 	dev_dbg(hsotg->dev, "  NP active sched:\n");
@@ -194,6 +198,7 @@ static void dwc2_qh_list_free(struct dwc2_hsotg *hsotg,
 static void dwc2_kill_all_urbs(struct dwc2_hsotg *hsotg)
 {
 	dwc2_kill_urbs_in_qh_list(hsotg, &hsotg->non_periodic_sched_inactive);
+	dwc2_kill_urbs_in_qh_list(hsotg, &hsotg->non_periodic_sched_waiting);
 	dwc2_kill_urbs_in_qh_list(hsotg, &hsotg->non_periodic_sched_active);
 	dwc2_kill_urbs_in_qh_list(hsotg, &hsotg->periodic_sched_inactive);
 	dwc2_kill_urbs_in_qh_list(hsotg, &hsotg->periodic_sched_ready);
@@ -727,8 +732,8 @@ static int dwc2_hc_setup_align_buf(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh,
 
 		qh->dw_align_buf = NULL;
 		qh->dw_align_buf_dma = 0;
-		err = usb_allocmem(&hsotg->hsotg_sc->sc_bus, buf_size, buf_size,
-				   &qh->dw_align_buf_usbdma);
+		err = usb_allocmem(&hsotg->hsotg_sc->sc_bus, buf_size, 0,
+		    USBMALLOC_COHERENT, &qh->dw_align_buf_usbdma);
 		if (!err) {
 			usb_dma_t *ud = &qh->dw_align_buf_usbdma;
 
@@ -1902,8 +1907,14 @@ dwc2_hcd_urb_alloc(struct dwc2_hsotg *hsotg, int iso_desc_count,
 	struct dwc2_hcd_urb *urb;
 	u32 size = sizeof(*urb) + iso_desc_count *
 		   sizeof(struct dwc2_hcd_iso_packet_desc);
+	int kmem_flag;
 
-	urb = kmem_zalloc(size, mem_flags);
+	if ((mem_flags & __GFP_WAIT) == __GFP_WAIT)
+		kmem_flag = KM_SLEEP;
+	else
+		kmem_flag = KM_NOSLEEP;
+
+	urb = kmem_zalloc(size, kmem_flag);
 	if (urb)
 		urb->packet_count = iso_desc_count;
 	return urb;
@@ -2215,6 +2226,7 @@ static void dwc2_hcd_free(struct dwc2_hsotg *hsotg)
 
 	/* Free memory for QH/QTD lists */
 	dwc2_qh_list_free(hsotg, &hsotg->non_periodic_sched_inactive);
+	dwc2_qh_list_free(hsotg, &hsotg->non_periodic_sched_waiting);
 	dwc2_qh_list_free(hsotg, &hsotg->non_periodic_sched_active);
 	dwc2_qh_list_free(hsotg, &hsotg->periodic_sched_inactive);
 	dwc2_qh_list_free(hsotg, &hsotg->periodic_sched_ready);
@@ -2337,6 +2349,7 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 
 	/* Initialize the non-periodic schedule */
 	INIT_LIST_HEAD(&hsotg->non_periodic_sched_inactive);
+	INIT_LIST_HEAD(&hsotg->non_periodic_sched_waiting);
 	INIT_LIST_HEAD(&hsotg->non_periodic_sched_active);
 
 	/* Initialize the periodic schedule */
@@ -2378,10 +2391,10 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 	 */
 	hsotg->status_buf = NULL;
 	if (hsotg->core_params->dma_enable > 0) {
-		retval = usb_allocmem(&hsotg->hsotg_sc->sc_bus,
-				      DWC2_HCD_STATUS_BUF_SIZE, 0,
-				      &hsotg->status_buf_usbdma);
-		if (!retval) {
+		int error = usb_allocmem(&hsotg->hsotg_sc->sc_bus,
+		    DWC2_HCD_STATUS_BUF_SIZE, 0, USBMALLOC_COHERENT,
+		    &hsotg->status_buf_usbdma);
+		if (!error) {
 			hsotg->status_buf = KERNADDR(&hsotg->status_buf_usbdma, 0);
 			hsotg->status_buf_dma = DMAADDR(&hsotg->status_buf_usbdma, 0);
 		}
@@ -2389,6 +2402,7 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 		hsotg->status_buf = kmem_zalloc(DWC2_HCD_STATUS_BUF_SIZE,
 					  KM_SLEEP);
 
+	/* retval is already -ENOMEM */
 	if (!hsotg->status_buf)
 		goto error3;
 
@@ -2411,13 +2425,16 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 error3:
 	dwc2_hcd_release(hsotg);
 error2:
-	kmem_free(hsotg->core_params, sizeof(*hsotg->core_params));
+	if (hsotg->core_params != NULL)
+		kmem_free(hsotg->core_params, sizeof(*hsotg->core_params));
 
 #ifdef CONFIG_USB_DWC2_TRACK_MISSED_SOFS
-	kmem_free(hsotg->last_frame_num_array,
-	      sizeof(*hsotg->last_frame_num_array) * FRAME_NUM_ARRAY_SIZE);
-	kmem_free(hsotg->frame_num_array,
-		  sizeof(*hsotg->frame_num_array) * FRAME_NUM_ARRAY_SIZE);
+	if (hsotg->last_frame_num_array != NULL)
+		kmem_free(hsotg->last_frame_num_array,
+		      sizeof(*hsotg->last_frame_num_array) * FRAME_NUM_ARRAY_SIZE);
+	if (hsotg->frame_num_array != NULL)
+		kmem_free(hsotg->frame_num_array,
+			  sizeof(*hsotg->frame_num_array) * FRAME_NUM_ARRAY_SIZE);
 #endif
 
 	dev_err(hsotg->dev, "%s() FAILED, returning %d\n", __func__, retval);
@@ -2447,7 +2464,7 @@ void dwc2_hcd_remove(struct dwc2_hsotg *hsotg)
 	dwc2_hcd_release(hsotg);
 
 #ifdef CONFIG_USB_DWC2_TRACK_MISSED_SOFS
-	kfree(hsotg->last_frame_num_array);
-	kfree(hsotg->frame_num_array);
+	kmem_free(hsotg->last_frame_num_array, sizeof(*hsotg->last_frame_num_array) * FRAME_NUM_ARRAY_SIZE);
+	kmem_free(hsotg->frame_num_array, sizeof(*hsotg->frame_num_array) * FRAME_NUM_ARRAY_SIZE);
 #endif
 }

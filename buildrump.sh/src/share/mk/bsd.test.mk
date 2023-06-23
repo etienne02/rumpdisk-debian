@@ -1,4 +1,4 @@
-# $NetBSD: bsd.test.mk,v 1.24 2013/02/23 22:01:51 jmmv Exp $
+# $NetBSD: bsd.test.mk,v 1.26 2019/01/21 21:11:54 christos Exp $
 #
 
 .include <bsd.init.mk>
@@ -7,6 +7,9 @@ _TESTS:=	# empty
 
 .if defined(TESTS_SUBDIRS)
 SUBDIR+=	${TESTS_SUBDIRS}
+.endif
+.if defined(TESTS_SUBDIR_INSTALL_ONLY)
+SUBDIR+=	${TESTS_SUBDIR_INSTALL_ONLY}
 .endif
 
 .include <bsd.subdir.mk>
@@ -49,7 +52,7 @@ ${_T}: ${TESTS_SH_SRC_${_T}}
 	echo '#! /usr/bin/atf-sh' >${.TARGET}.tmp
 	cat ${.ALLSRC} >>${.TARGET}.tmp
 	chmod +x ${.TARGET}.tmp
-	mv ${.TARGET}.tmp ${.TARGET}
+	${MV} ${.TARGET}.tmp ${.TARGET}
 .  endfor
 .endif
 
@@ -88,7 +91,7 @@ Atffile: Makefile
 	do \
 	    echo "tp: $${tp}"; \
 	done; } >Atffile.tmp
-	@mv Atffile.tmp Atffile
+	@${MV} Atffile.tmp Atffile
 .  endif
 .endif
 
@@ -123,7 +126,7 @@ Kyuafile: Makefile
 	        done; \
 	    fi; \
 	} >Kyuafile.tmp
-	@mv Kyuafile.tmp Kyuafile
+	@${MV} Kyuafile.tmp Kyuafile
 .  endif
 .endif
 

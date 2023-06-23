@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_cpu_tstate.c,v 1.32 2013/11/20 13:39:59 jruoho Exp $ */
+/* $NetBSD: acpi_cpu_tstate.c,v 1.34 2020/12/07 10:57:41 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2010 Jukka Ruohonen <jruohonen@iki.fi>
@@ -27,11 +27,12 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_cpu_tstate.c,v 1.32 2013/11/20 13:39:59 jruoho Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_cpu_tstate.c,v 1.34 2020/12/07 10:57:41 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/kmem.h>
 #include <sys/xcall.h>
+#include <sys/cpu.h>
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
@@ -390,6 +391,15 @@ acpicpu_tstate_ptc(struct acpicpu_softc *sc)
 
 		switch (reg[i]->reg_spaceid) {
 
+		case ACPI_ADR_SPACE_SYSTEM_MEMORY:
+
+			if (reg[i]->reg_addr == 0) {
+				rv = AE_AML_ILLEGAL_ADDRESS;
+				goto out;
+			}
+
+			break;
+
 		case ACPI_ADR_SPACE_SYSTEM_IO:
 
 			if (reg[i]->reg_addr == 0) {
@@ -397,6 +407,7 @@ acpicpu_tstate_ptc(struct acpicpu_softc *sc)
 				goto out;
 			}
 
+#if defined(__i386__) || defined(__x86_64__)
 			/*
 			 * Check that the values match the IA32 clock
 			 * modulation MSR, where the bit 0 is reserved,
@@ -412,6 +423,7 @@ acpicpu_tstate_ptc(struct acpicpu_softc *sc)
 				rv = AE_AML_BAD_RESOURCE_VALUE;
 				goto out;
 			}
+#endif
 
 			break;
 
@@ -564,10 +576,6 @@ acpicpu_tstate_fadt(struct acpicpu_softc *sc)
 		kmem_free(sc->sc_tstate, sc->sc_tstate_count * size);
 
 	sc->sc_tstate = kmem_zalloc(count * size, KM_SLEEP);
-
-	if (sc->sc_tstate == NULL)
-		return ENOMEM;
-
 	sc->sc_tstate_count = count;
 
 	/*
@@ -653,8 +661,6 @@ acpicpu_tstate_get(struct cpu_info *ci, uint32_t *percent)
 	struct acpicpu_tstate *ts = NULL;
 	struct acpicpu_softc *sc;
 	uint32_t i, val = 0;
-	uint8_t offset;
-	uint64_t addr;
 	int rv;
 
 	sc = acpicpu_sc[ci->ci_acpiid];
@@ -696,13 +702,9 @@ acpicpu_tstate_get(struct cpu_info *ci, uint32_t *percent)
 		break;
 
 	case ACPI_ADR_SPACE_SYSTEM_IO:
+	case ACPI_ADR_SPACE_SYSTEM_MEMORY:
 
-		addr   = sc->sc_tstate_status.reg_addr;
-		offset = sc->sc_tstate_status.reg_bitoffset;
-
-		(void)AcpiOsReadPort(addr, &val, 8);
-
-		val = (val >> offset) & 0x0F;
+		val = acpicpu_readreg(&sc->sc_tstate_status);
 
 		for (i = 0; i < sc->sc_tstate_count; i++) {
 
@@ -761,8 +763,6 @@ acpicpu_tstate_set_xcall(void *arg1, void *arg2)
 	struct cpu_info *ci = curcpu();
 	struct acpicpu_softc *sc;
 	uint32_t i, percent, val;
-	uint8_t offset;
-	uint64_t addr;
 	int rv;
 
 	percent = *(uint32_t *)arg1;
@@ -820,18 +820,9 @@ acpicpu_tstate_set_xcall(void *arg1, void *arg2)
 		break;
 
 	case ACPI_ADR_SPACE_SYSTEM_IO:
+	case ACPI_ADR_SPACE_SYSTEM_MEMORY:
 
-		addr   = sc->sc_tstate_control.reg_addr;
-		offset = sc->sc_tstate_control.reg_bitoffset;
-
-		val = (ts->ts_control & 0x0F) << offset;
-
-		if (ts->ts_percent != 100 && (val & __BIT(4)) == 0) {
-			rv = EINVAL;
-			goto fail;
-		}
-
-		(void)AcpiOsWritePort(addr, val, 8);
+		acpicpu_writereg(&sc->sc_tstate_control, ts->ts_control);
 
 		/*
 		 * If the status field is zero, the transition is
@@ -841,14 +832,9 @@ acpicpu_tstate_set_xcall(void *arg1, void *arg2)
 		if (ts->ts_status == 0)
 			break;
 
-		addr   = sc->sc_tstate_status.reg_addr;
-		offset = sc->sc_tstate_status.reg_bitoffset;
+		for (i = 0; i < ACPICPU_T_STATE_RETRY; i++) {
 
-		for (i = val = 0; i < ACPICPU_T_STATE_RETRY; i++) {
-
-			(void)AcpiOsReadPort(addr, &val, 8);
-
-			val = (val >> offset) & 0x0F;
+			val = acpicpu_readreg(&sc->sc_tstate_status);
 
 			if (val == ts->ts_status)
 				break;

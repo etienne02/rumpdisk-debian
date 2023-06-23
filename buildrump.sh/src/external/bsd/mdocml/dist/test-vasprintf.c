@@ -1,4 +1,4 @@
-/*	Id: test-vasprintf.c,v 1.3 2015/10/06 18:32:20 schwarze Exp 	*/
+/*	Id: test-vasprintf.c,v 1.5 2018/08/15 02:15:52 schwarze Exp 	*/
 /*
  * Copyright (c) 2015 Ingo Schwarze <schwarze@openbsd.org>
  *
@@ -15,15 +15,14 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if defined(__linux__) || defined(__MINT__)
-#define _GNU_SOURCE /* vasprintf() */
-#endif
-
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-int
+static int	 testfunc(char **, const char *, ...);
+
+
+static int
 testfunc(char **ret, const char *format, ...)
 {
 	va_list	 ap;

@@ -1,4 +1,4 @@
-/*	$NetBSD: pte.h,v 1.23 2016/07/11 16:15:35 matt Exp $	*/
+/*	$NetBSD: pte.h,v 1.27 2020/08/22 15:34:51 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@
  */
 
 #ifndef  __MIPS_PTE_H__
-#define  __MIPS_PTE_H__
+#define	 __MIPS_PTE_H__
 
 #include <mips/mips1_pte.h>
 #include <mips/mips3_pte.h>
@@ -53,9 +53,9 @@
 
 #ifndef _LOCORE
 #ifndef __BSD_PTENTRY_T__
-#define __BSD_PTENTRY_T__
+#define	__BSD_PTENTRY_T__
 typedef uint32_t pt_entry_t;
-#define PRIxPTE		PRIx32
+#define	PRIxPTE		PRIx32
 #endif
 
 /*
@@ -256,7 +256,7 @@ mips_paddr_to_tlbpfn(paddr_t pa)
 #endif /* ! _LOCORE */
 
 #if defined(_KERNEL) && !defined(_LOCORE)
-#define MIPS_MMU(X)	(MIPS_HAS_R4K_MMU ? MIPS3_##X : MIPS1_##X)
+#define	MIPS_MMU(X)	(MIPS_HAS_R4K_MMU ? MIPS3_##X : MIPS1_##X)
 static inline bool
 pte_valid_p(pt_entry_t pte)
 {
@@ -306,16 +306,10 @@ pte_readonly_p(pt_entry_t pte)
 }
 
 static inline bool
-pte_zero_p(pt_entry_t pte)
-{
-	return pte == 0;
-}
-
-static inline bool
 pte_cached_p(pt_entry_t pte)
 {
 	if (MIPS_HAS_R4K_MMU) {
-		return MIPS3_PG_TO_CCA(pte) == mips_options.mips3_pg_cached;
+		return MIPS3_PG_TO_CCA(pte) == MIPS3_PG_TO_CCA(mips_options.mips3_pg_cached);
 	} else {
 		return (pte & MIPS1_PG_N) == 0;
 	}
@@ -359,6 +353,12 @@ pte_cached_change(pt_entry_t pte, bool cached)
 		pte |= (cached ? MIPS3_PG_CACHED : MIPS3_PG_UNCACHED);
 	}
 	return pte;
+}
+
+static inline void
+pte_set(pt_entry_t *ptep, pt_entry_t pte)
+{
+	*ptep = pte;
 }
 
 #ifdef __PMAP_PRIVATE

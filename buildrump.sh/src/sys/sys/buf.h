@@ -1,4 +1,4 @@
-/*     $NetBSD: buf.h,v 1.125 2016/01/11 08:40:52 martin Exp $ */
+/*     $NetBSD: buf.h,v 1.134 2020/07/31 04:07:30 chs Exp $ */
 
 /*-
  * Copyright (c) 1999, 2000, 2007, 2008 The NetBSD Foundation, Inc.
@@ -137,6 +137,7 @@ struct buf {
 						      (volume relative) */
 	struct proc		*b_proc;	/* b: proc if BB_PHYS */
 	void			*b_saveaddr;	/* b: saved b_data for physio */
+	struct cpu_info		*b_ci;		/* b: originating CPU */
 
 	/*
 	 * b: private data for owner.
@@ -148,12 +149,11 @@ struct buf {
 	off_t	b_dcookie;		/* NFS: Offset cookie if dir block */
 
 	kcondvar_t		b_busy;		/* c: threads waiting on buf */
-	u_int			b_refcnt;	/* c: refcount for b_busy */
 	void			*b_unused;	/*  : unused */
 	LIST_ENTRY(buf)		b_hash;		/* c: hash chain */
 	LIST_ENTRY(buf)		b_vnbufs;	/* c: associated vnode */
 	TAILQ_ENTRY(buf)	b_freelist;	/* c: position if not active */
-	LIST_ENTRY(buf)		b_wapbllist;	/* c: transaction buffer list */
+	TAILQ_ENTRY(buf)	b_wapbllist;	/* c: transaction buffer list */
 	daddr_t			b_lblkno;	/* c: logical block number */
 	int			b_freelistindex;/* c: free list index (BQ_) */
 	u_int			b_cflags;	/* c: BC_* flags */
@@ -198,15 +198,20 @@ struct buf {
 #define	B_RAW		0x00080000	/* Set by physio for raw transfers. */
 #define	B_READ		0x00100000	/* Read buffer. */
 #define	B_DEVPRIVATE	0x02000000	/* Device driver private flag. */
+#define	B_MEDIA_FUA	0x08000000	/* Set Force Unit Access for media. */
+#define	B_MEDIA_DPO	0x10000000	/* Set Disable Page Out for media. */
 
 #define BUF_FLAGBITS \
     "\20\1AGE\3ASYNC\4BAD\5BUSY\10DELWRI" \
     "\12DONE\13COWDONE\15GATHERED\16INVAL\17LOCKED\20NOCACHE" \
-    "\23PHYS\24RAW\25READ\32DEVPRIVATE\33VFLUSH"
+    "\23PHYS\24RAW\25READ\32DEVPRIVATE\33VFLUSH\34MEDIA_FUA\35MEDIA_DPO"
 
 /* Avoid weird code due to B_WRITE being a "pseudo flag" */
 #define BUF_ISREAD(bp)	(((bp)->b_flags & B_READ) == B_READ)
 #define BUF_ISWRITE(bp)	(((bp)->b_flags & B_READ) == B_WRITE)
+
+/* Media flags, to be passed for nested I/O */
+#define B_MEDIA_FLAGS	(B_MEDIA_FUA|B_MEDIA_DPO)
 
 /*
  * This structure describes a clustered I/O.  It is stored in the b_saveaddr
@@ -252,26 +257,6 @@ do {									\
 #define	BPRIO_TIMENONCRITICAL	0
 #define	BPRIO_DEFAULT		BPRIO_TIMELIMITED
 
-extern	u_int nbuf;		/* The number of buffer headers */
-
-/*
- * Definitions for the buffer free lists.
- */
-#define	BQUEUES		4		/* number of free buffer queues */
-
-#define	BQ_LOCKED	0		/* super-blocks &c */
-#define	BQ_LRU		1		/* lru, useful buffers */
-#define	BQ_AGE		2		/* rubbish */
-#define	BQ_EMPTY	3		/* buffer headers with no memory */
-
-struct bqueue {
-	TAILQ_HEAD(, buf) bq_queue;
-	uint64_t bq_bytes;
-	buf_t *bq_marker;
-};
-
-extern struct bqueue bufqueues[BQUEUES];
-
 __BEGIN_DECLS
 /*
  * bufferio(9) ops
@@ -302,6 +287,7 @@ buf_t	*incore(struct vnode *, daddr_t);
 int	allocbuf(buf_t *, int, int);
 void	brelsel(buf_t *, int);
 void	brelse(buf_t *, int);
+void	binvalbuf(struct vnode *, daddr_t);
 
 /*
  * So-far indeterminate ops that might belong to either
@@ -314,7 +300,6 @@ void	minphys(buf_t *);
 void	brelvp(buf_t *);
 void	reassignbuf(buf_t *, struct vnode *);
 void	bgetvp(struct vnode *, buf_t *);
-int	buf_syncwait(void);
 u_long	buf_memcalc(void);
 int	buf_drain(int);
 int	buf_setvalimit(vsize_t);
@@ -325,7 +310,9 @@ void	vfs_buf_print(buf_t *, int, void (*)(const char *, ...)
 void	buf_init(buf_t *);
 void	buf_destroy(buf_t *);
 int	bbusy(buf_t *, bool, int, kmutex_t *);
+u_int	buf_nbuf(void);
 
+void	biohist_init(void);
 
 __END_DECLS
 #endif /* _KERNEL */

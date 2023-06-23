@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -45,6 +45,7 @@
 #include "accommon.h"
 #include "amlcode.h"
 #include "acdisasm.h"
+#include "acconvert.h"
 
 #ifdef ACPI_ASL_COMPILER
 #include <acnamesp.h>
@@ -150,7 +151,7 @@ AcpiDmDecodeAttribute (
         AcpiOsPrintf ("AttribQuick");
         break;
 
-    case AML_FIELD_ATTRIB_SEND_RCV:
+    case AML_FIELD_ATTRIB_SEND_RECEIVE:
 
         AcpiOsPrintf ("AttribSendReceive");
         break;
@@ -170,17 +171,17 @@ AcpiDmDecodeAttribute (
         AcpiOsPrintf ("AttribBlock");
         break;
 
-    case AML_FIELD_ATTRIB_MULTIBYTE:
+    case AML_FIELD_ATTRIB_BYTES:
 
         AcpiOsPrintf ("AttribBytes");
         break;
 
-    case AML_FIELD_ATTRIB_WORD_CALL:
+    case AML_FIELD_ATTRIB_PROCESS_CALL:
 
         AcpiOsPrintf ("AttribProcessCall");
         break;
 
-    case AML_FIELD_ATTRIB_BLOCK_CALL:
+    case AML_FIELD_ATTRIB_BLOCK_PROCESS_CALL:
 
         AcpiOsPrintf ("AttribBlockProcessCall");
         break;
@@ -190,7 +191,7 @@ AcpiDmDecodeAttribute (
         AcpiOsPrintf ("AttribRawBytes");
         break;
 
-    case AML_FIELD_ATTRIB_RAW_PROCESS:
+    case AML_FIELD_ATTRIB_RAW_PROCESS_BYTES:
 
         AcpiOsPrintf ("AttribRawProcessBytes");
         break;
@@ -250,6 +251,7 @@ AcpiDmCommaIfListMember (
 
     if (!Op->Common.Next)
     {
+        ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
         return (FALSE);
     }
 
@@ -259,6 +261,7 @@ AcpiDmCommaIfListMember (
 
         if (Op->Common.Next->Common.DisasmFlags & ACPI_PARSEOP_IGNORE)
         {
+            ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
             return (FALSE);
         }
 
@@ -275,6 +278,7 @@ AcpiDmCommaIfListMember (
              */
             if (!Op->Common.Next->Common.Next)
             {
+                ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
                 return (FALSE);
             }
         }
@@ -282,6 +286,7 @@ AcpiDmCommaIfListMember (
         if ((Op->Common.DisasmFlags & ACPI_PARSEOP_PARAMETER_LIST) &&
             (!(Op->Common.Next->Common.DisasmFlags & ACPI_PARSEOP_PARAMETER_LIST)))
         {
+            ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
             return (FALSE);
         }
 
@@ -290,6 +295,7 @@ AcpiDmCommaIfListMember (
         if (!Op->Common.OperatorSymbol)
         {
             AcpiOsPrintf (", ");
+            ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
         }
 
         return (TRUE);
@@ -299,6 +305,8 @@ AcpiDmCommaIfListMember (
              (Op->Common.Next->Common.DisasmFlags & ACPI_PARSEOP_PARAMETER_LIST))
     {
         AcpiOsPrintf (", ");
+        ASL_CV_PRINT_ONE_COMMENT (Op, AMLCOMMENT_INLINE, NULL, 0);
+
         return (TRUE);
     }
 

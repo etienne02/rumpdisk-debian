@@ -42,12 +42,47 @@
 #ifndef _ARM_CPUFUNC_H_
 #define _ARM_CPUFUNC_H_
 
+#ifdef _ARM_ARCH_7
+/*
+ * Options for DMB and DSB:
+ *	oshld	Outer Shareable, load
+ *	oshst	Outer Shareable, store
+ *	osh	Outer Shareable, all
+ *	nshld	Non-shareable, load
+ *	nshst	Non-shareable, store
+ *	nsh	Non-shareable, all
+ *	ishld	Inner Shareable, load
+ *	ishst	Inner Shareable, store
+ *	ish	Inner Shareable, all
+ *	ld	Full system, load
+ *	st	Full system, store
+ *	sy	Full system, all
+ */
+#define	dsb(opt)	__asm __volatile("dsb " __STRING(opt) : : : "memory")
+#define	dmb(opt)	__asm __volatile("dmb " __STRING(opt) : : : "memory")
+#define	isb()		__asm __volatile("isb" : : : "memory")
+#define	sev()		__asm __volatile("sev" : : : "memory")
+
+#else
+
+#define dsb(opt)	\
+	__asm __volatile("mcr p15, 0, %0, c7, c10, 4" :: "r" (0) : "memory")
+#define dmb(opt)	\
+	__asm __volatile("mcr p15, 0, %0, c7, c10, 5" :: "r" (0) : "memory")
+#define isb()		\
+	__asm __volatile("mcr p15, 0, %0, c7, c5, 4" :: "r" (0) : "memory")
+#define sev()		__nothing
+
+#endif
+
+#ifdef __arm__
+
 #ifdef _KERNEL
 
 #include <sys/types.h>
+
 #include <arm/armreg.h>
 #include <arm/cpuconf.h>
-#include <arm/armreg.h>
 #include <arm/cpufunc_proto.h>
 
 struct cpu_functions {
@@ -245,7 +280,6 @@ u_int	cpufunc_faultaddress	(void);
 /*
  * Macros for manipulating CPU interrupts
  */
-#ifdef __PROG32
 static __inline uint32_t __set_cpsr_c(uint32_t bic, uint32_t eor) __attribute__((__unused__));
 static __inline uint32_t disable_interrupts(uint32_t mask) __attribute__((__unused__));
 static __inline uint32_t enable_interrupts(uint32_t mask) __attribute__((__unused__));
@@ -319,6 +353,10 @@ enable_interrupts(uint32_t mask)
 #define restore_interrupts(old_cpsr)					\
 	(__set_cpsr_c((I32_bit | F32_bit), (old_cpsr) & (I32_bit | F32_bit)))
 
+#define	ENABLE_INTERRUPT()		cpsie(I32_bit)
+#define	DISABLE_INTERRUPT()		cpsid(I32_bit)
+#define	DISABLE_INTERRUPT_SAVE()	cpsid(I32_bit)
+
 static inline void cpsie(register_t psw) __attribute__((__unused__));
 static inline register_t cpsid(register_t psw) __attribute__((__unused__));
 
@@ -355,33 +393,15 @@ cpsid(register_t psw)
 	case I32_bit|F32_bit:	__asm("cpsid\tif"); break;
 	}
 	return oldpsw;
-#else 
+#else
 	return disable_interrupts(psw);
 #endif
 }
 
-#else /* ! __PROG32 */
-#define	disable_interrupts(mask)					\
-	(set_r15((mask) & (R15_IRQ_DISABLE | R15_FIQ_DISABLE),		\
-		 (mask) & (R15_IRQ_DISABLE | R15_FIQ_DISABLE)))
 
-#define	enable_interrupts(mask)						\
-	(set_r15((mask) & (R15_IRQ_DISABLE | R15_FIQ_DISABLE), 0))
-
-#define	restore_interrupts(old_r15)					\
-	(set_r15((R15_IRQ_DISABLE | R15_FIQ_DISABLE),			\
-		 (old_r15) & (R15_IRQ_DISABLE | R15_FIQ_DISABLE)))
-#endif /* __PROG32 */
-
-#ifdef __PROG32
 /* Functions to manipulate the CPSR. */
 u_int	SetCPSR(u_int, u_int);
 u_int	GetCPSR(void);
-#else
-/* Functions to manipulate the processor control bits in r15. */
-u_int	set_r15(u_int, u_int);
-u_int	get_r15(void);
-#endif /* __PROG32 */
 
 
 /*
@@ -427,6 +447,9 @@ extern u_int arm_dcache_align_mask;
 
 extern struct arm_cache_info arm_pcache;
 extern struct arm_cache_info arm_scache;
+
+extern uint32_t cpu_ttb;
+
 #endif	/* _KERNEL */
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
@@ -435,6 +458,10 @@ extern struct arm_cache_info arm_scache;
  */
 
 int get_pc_str_offset	(void);
+
+bool cpu_gtmr_exists_p(void);
+u_int cpu_clusterid(void);
+bool cpu_earlydevice_va_p(void);
 
 /*
  * Functions to manipulate cpu r13
@@ -445,6 +472,12 @@ void set_stackptr	(u_int, u_int);
 u_int get_stackptr	(u_int);
 
 #endif /* _KERNEL || _KMEMUSER */
+
+#elif defined(__aarch64__)
+
+#include <aarch64/cpufunc.h>
+
+#endif /* __arm__/__aarch64__ */
 
 #endif	/* _ARM_CPUFUNC_H_ */
 

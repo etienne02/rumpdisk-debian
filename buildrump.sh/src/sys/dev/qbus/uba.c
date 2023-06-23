@@ -1,4 +1,4 @@
-/*	$NetBSD: uba.c,v 1.79 2010/11/13 13:52:10 uebayasi Exp $	   */
+/*	$NetBSD: uba.c,v 1.83 2021/08/07 16:19:15 thorpej Exp $	   */
 /*
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * All rights reserved.
@@ -44,13 +44,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -69,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uba.c,v 1.79 2010/11/13 13:52:10 uebayasi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uba.c,v 1.83 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/time.h>
@@ -144,9 +137,7 @@ uba_reset_establish(void (*reset)(device_t), device_t dev)
 	struct uba_softc *uh = device_private(device_parent(dev));
 	struct uba_reset *ur;
 
-	ur = malloc(sizeof(struct uba_reset), M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (ur == NULL)
-		panic("uba_reset_establish");
+	ur = malloc(sizeof(struct uba_reset), M_DEVBUF, M_WAITOK|M_ZERO);
 	ur->ur_dev = dev;
 	ur->ur_reset = reset;
 
@@ -275,7 +266,8 @@ uba_attach(struct uba_softc *sc, paddr_t iopagephys)
 	/*
 	 * Now start searching for devices.
 	 */
-	config_search_ia(ubasearch, sc->uh_dev, "uba", NULL);
+	config_search(sc->uh_dev, NULL,
+	    CFARGS(.search = ubasearch));
 
 	if (sc->uh_afterscan)
 		(*sc->uh_afterscan)(sc);
@@ -303,7 +295,7 @@ ubasearch(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 		goto forgetit;
 
 	scb_vecref(0, 0); /* Clear vector ref */
-	i = config_match(parent, cf, &ua);
+	i = config_probe(parent, cf, &ua);
 
 	if (sc->uh_errchk)
 		if ((*sc->uh_errchk)(sc))
@@ -324,7 +316,7 @@ ubasearch(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 
 	sc->uh_used[ubdevreg(csr)] = 1;
 
-	config_attach(parent, cf, &ua, ubaprint);
+	config_attach(parent, cf, &ua, ubaprint, CFARGS_NONE);
 	return 0;
 
 fail:

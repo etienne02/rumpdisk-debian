@@ -1,4 +1,4 @@
-/* $NetBSD: idle_machdep.S,v 1.1 2014/08/10 05:47:37 matt Exp $ */
+/* $NetBSD: idle_machdep.S,v 1.10 2021/08/30 22:28:50 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,48 +29,94 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_arm_intr_impl.h"
+#include "opt_ddb.h"
+#include "opt_gprof.h"
 #include <aarch64/asm.h>
+#include <aarch64/locore.h>
 #include "assym.h"
 
-RCSID("$NetBSD: idle_machdep.S,v 1.1 2014/08/10 05:47:37 matt Exp $");
+RCSID("$NetBSD: idle_machdep.S,v 1.10 2021/08/30 22:28:50 jmcneill Exp $");
+
+#ifdef ARM_INTR_IMPL
+#include ARM_INTR_IMPL
+#else
+#error ARM_INTR_IMPL not defined
+#endif
+
+#ifndef ARM_IRQ_HANDLER
+#error ARM_IRQ_HANDLER not defined
+#endif
+
 
 ENTRY(cpu_idle)
-	sub	sp, sp, #TF_SIZE		// allocate trapfame
-	str	x28, [sp, #TF_X28]
-	str	x30, [sp, #TF_X30]
-	msr	daifset, #DAIF_I|DAIF_F		// disable interrupts
+#ifdef LAZY_CPUIDLE
+
+	/*
+	 * hardware interrupt -> trap handler -> interrupt handler
+	 */
+	dsb sy
 	wfi
 
-	mrs	x1, tpidr_el1			// get curcpu()
-	ldr	w28, [x1, #CI_INTR_DEPTH]
-	add	w2, w28, #1
-	str	w2, [x1, #CI_INTR_DEPTH]
-	ldr	x3, [x1, #CI_CC_NINTR]
-	add	x3, x3, #1
-	str	x3, [x1, #CI_CC_NINTR]
+#else /* LAZY_CPUIDLE */
 
-	mov	x0, sp				// get pointer to trapframe
-	mov	x4, #SPSR_M_EL1T		// what our spsr should be
-	str	x2, [sp, #TF_SPSR]
-
-	bl	armgic_irq_handler		// process irq
-
-	mrs	x1, tpidr_el1			// get curcpu()
-	str	w28, [x1, #CI_INTR_DEPTH]	// restore intr depth
-
-	ldr	x28, [sp, #TF_X28]		// restore registers
-	ldr	x30, [sp, #TF_X30]		// restore registers
-	add	sp, sp, #TF_SIZE		// pop trapframe
-
-	msr	daifclr, #DAIF_I|DAIF_F		// enable interrupts
-
-	ldr	w3, [x1, #CI_SOFTINTS]		// Get pending softint mask
-#if 0
-	// CPL should be 0
-	ldr	w2, [x1, #CI_CPL]		// Get current priority level
-	lsr	w3, w3, w2			// shift mask by cpl
+	/*
+	 * hardware interrupt -> interrupt handler
+	 */
+	sub	sp, sp, #TF_SIZE		/* allocate trapframe */
+	str	x28, [sp, #TF_X28]		/* save x28 */
+	stp	x29, x30, [sp, #TF_X29]		/* save x29,x30 */
+#ifdef DDB
+	add	x29, sp, #TF_X29		/* link frame for backtrace */
 #endif
-	cbnz	w3, _C_LABEL(dosoftints)	// tailcall dosoftints(void)
+
+	/* fill the minimum required trapframe */
+	mov	x2, #SPSR_M_EL1H		/* what our spsr should be */
+	str	x2, [sp, #TF_SPSR]
+	adr	x0, 1f
+	str	x0, [sp, #TF_PC]		/* CLKF_PC refer to tf_pc */
+
+	/*
+	 * "idle/N" lwp is allocated on a per-CPU basis,
+	 * curcpu() always return the same, and there is no need to
+	 * consider KPREEMPT. safe even with interrupt enabled.
+	 */
+	mrs	x1, tpidr_el1			/* get curlwp */
+	ldr	x28, [x1, #L_CPU]		/* get curcpu */
+
+	mov	w2, #1
+	mov	x0, sp				/* get pointer to trapframe */
+
+	DISABLE_INTERRUPT
+	/*
+	 * assert(ci->ci_intr_depth == 0),
+	 * therefore, ci->ci_intr_depth++ would be definitely 1.
+	 */
+	str	w2, [x28, #CI_INTR_DEPTH]	/* ci->ci_intr_depth = 1 */
+
+	dsb sy
+	wfi
+	bl	ARM_IRQ_HANDLER			/* irqhandler(trapframe) */
+1:
+	/* x28 is curcpu() */
+	str	wzr, [x28, #CI_INTR_DEPTH]	/* ci->ci_intr_depth = 0 */
+
+#if defined(__HAVE_FAST_SOFTINTS) && !defined(__HAVE_PIC_FAST_SOFTINTS)
+	ldr	w3, [x28, #CI_SOFTINTS]		/* Get pending softint mask */
+	/* CPL should be 0 */
+	ldr	w2, [x28, #CI_CPL]		/* Get current priority level */
+	lsr	w3, w3, w2			/* shift mask by cpl */
+	cbz	w3, 1f
+	bl	_C_LABEL(dosoftints)		/* dosoftints() */
+1:
+#endif /* __HAVE_FAST_SOFTINTS && !__HAVE_PIC_FAST_SOFTINTS */
+
+	ldr	x28, [sp, #TF_X28]		/* restore x28 */
+	ldp	x29, x30, [sp, #TF_X29]		/* restore x29,x30 */
+	add	sp, sp, #TF_SIZE		/* pop trapframe */
+
+	ENABLE_INTERRUPT
+#endif /* LAZY_CPUIDLE */
 
 	ret
 END(cpu_idle)

@@ -1,4 +1,4 @@
-/*	$NetBSD: disklabel.h,v 1.119 2015/12/08 20:36:15 christos Exp $	*/
+/*	$NetBSD: disklabel.h,v 1.125 2021/05/17 08:50:36 mrg Exp $	*/
 
 /*
  * Copyright (c) 1987, 1988, 1993
@@ -116,6 +116,40 @@ struct	partition {		/* the partition table */
 #define	p_cpg	__partition_u1.cpg
 #define	p_sgs	__partition_u1.sgs
 };
+
+/*
+ * We'd rather have disklabel be the same size on 32 and 64 bit systems
+ * but it really isn't. In revision 108 matt@ tried to do that by adding
+ * un_d_pad as a uint64_t. This was really smart because the net effect
+ * was to grow the struct by 4 bytes on most LP32 machines and make it
+ * the same as LP64 without changing the layout (which is a nono because
+ * it is stored on existing disks). The easy way would have been to add
+ * padding at the end, but that would have been confusing (although that
+ * is what actually happens), because the partitions structure is supposed
+ * to be variable size and putting a padding uint32_t would be weird.
+ * Unfornately mips32 and i386 align uint64_t standalone at an 8 byte
+ * boundary, but in structures at a 4 byte boundary so matt's
+ * change did not affect them.
+ *
+ * We also prefer to have the structure 4 byte aligned so that the
+ * subr_disk_mbr.c code that scans for label does not trigger ubsan
+ * when comparing magic (without making the code ugly). To do this
+ * we can unexpose the d_boot{0,1} pointers in the kernel (so that
+ * LP64 systems can become 4 byte aligned) and at the same time
+ * remove the un_d_pad member and add padding at the end. The d_boot{0,1}
+ * fields are only used in userland in getdiskbyname(3), filled with
+ * the names of the primary and secondary bootstrap from /etc/disktab.
+ *
+ * While this is a way forward, it is not clear that it is the best
+ * way forward. The ubsan warning is incorrect and the code
+ * will always work since d_magic is always 4 byte aligned even
+ * when structure disklabel is not 8 byte aligned, so what we do
+ * now is ignore it. Another way would be to do offset arithmetic
+ * on the pointer and use it as a char *. That would not prevent
+ * other misaligned accesses in the future. Finally one could
+ * copy the unaligned structure to an aligned one, but that eats
+ * up space on the stack.
+ */
 struct disklabel {
 	uint32_t d_magic;		/* the magic number */
 	uint16_t d_type;		/* drive type */
@@ -361,7 +395,11 @@ x(SYSVBFS, 25, "SysVBFS",    NULL,  "sysvbfs")/* System V boot file system */ \
 x(EFS,     26, "EFS",        NULL,   "efs")   /* SGI's Extent Filesystem */ \
 x(NILFS,   27, "NiLFS",      NULL,   "nilfs") /* NTT's NiLFS(2) */ \
 x(CGD,     28, "cgd",	     NULL,   NULL)    /* Cryptographic disk */ \
-x(MINIXFS3,29, "MINIX FSv3", NULL,   NULL)    /* MINIX file system v3 */
+x(MINIXFS3,29, "MINIX FSv3", NULL,   NULL)    /* MINIX file system v3 */ \
+x(VMKCORE, 30, "VMware vmkcore", NULL, NULL)  /* VMware vmkcore */ \
+x(VMFS,    31, "VMware VMFS", NULL,  NULL)    /* VMware VMFS */ \
+x(VMWRESV, 32, "VMware Reserved", NULL, NULL) /* VMware reserved */ \
+x(ZFS,     33, "ZFS",        NULL,   NULL)    /* ZFS */
 
 
 #ifndef _LOCORE
@@ -460,8 +498,6 @@ int disk_read_sectors(void (*)(struct buf *), const struct disklabel *,
     struct buf *, unsigned int, int);
 void	 diskerr(const struct buf *, const char *, const char *, int,
 	    int, const struct disklabel *);
-u_int	 dkcksum(struct disklabel *);
-u_int	 dkcksum_sized(struct disklabel *, size_t);
 int	 setdisklabel(struct disklabel *, struct disklabel *, u_long,
 	    struct cpu_disklabel *);
 const char *readdisklabel(dev_t, void (*)(struct buf *),

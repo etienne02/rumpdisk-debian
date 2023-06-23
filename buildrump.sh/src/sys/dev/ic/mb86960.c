@@ -1,4 +1,4 @@
-/*	$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: mb86960.c,v 1.96 2021/07/31 14:36:33 andvar Exp $	*/
 
 /*
  * All Rights Reserved, Copyright (C) Fujitsu Limited 1995
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.96 2021/07/31 14:36:33 andvar Exp $");
 
 /*
  * Device driver for Fujitsu MB86960A/MB86965A based Ethernet cards.
@@ -58,12 +58,14 @@ __KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $")
 #include <sys/syslog.h>
 #include <sys/device.h>
 #include <sys/rndsource.h>
+#include <sys/bus.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_media.h>
 #include <net/if_ether.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -72,12 +74,6 @@ __KERNEL_RCSID(0, "$NetBSD: mb86960.c,v 1.83 2016/06/10 13:27:13 ozaki-r Exp $")
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
-
-#include <sys/bus.h>
 
 #include <dev/ic/mb86960reg.h>
 #include <dev/ic/mb86960var.h>
@@ -191,8 +187,7 @@ mb86960_config(struct mb86960_softc *sc, int *media, int nmedia, int defmedia)
 	ifp->if_start = mb86960_start;
 	ifp->if_ioctl = mb86960_ioctl;
 	ifp->if_watchdog = mb86960_watchdog;
-	ifp->if_flags =
-	    IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS | IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	IFQ_SET_READY(&ifp->if_snd);
 
 #if FE_DEBUG >= 3
@@ -234,6 +229,7 @@ mb86960_config(struct mb86960_softc *sc, int *media, int nmedia, int defmedia)
 	}
 
 	/* Initialize media goo. */
+	sc->sc_ec.ec_ifmedia = &sc->sc_media;
 	ifmedia_init(&sc->sc_media, 0, mb86960_mediachange,
 	    mb86960_mediastatus);
 	if (media != NULL) {
@@ -241,12 +237,13 @@ mb86960_config(struct mb86960_softc *sc, int *media, int nmedia, int defmedia)
 			ifmedia_add(&sc->sc_media, media[i], 0, NULL);
 		ifmedia_set(&sc->sc_media, defmedia);
 	} else {
-		ifmedia_add(&sc->sc_media, IFM_ETHER|IFM_MANUAL, 0, NULL);
-		ifmedia_set(&sc->sc_media, IFM_ETHER|IFM_MANUAL);
+		ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_MANUAL, 0, NULL);
+		ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_MANUAL);
 	}
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, sc->sc_enaddr);
 
 	rnd_attach_source(&sc->rnd_source, device_xname(sc->sc_dev),
@@ -430,7 +427,7 @@ mb86960_watchdog(struct ifnet *ifp)
 #endif
 
 	/* Record how many packets are lost by this accident. */
-	sc->sc_ec.ec_if.if_oerrors += sc->txb_sched + sc->txb_count;
+	if_statadd(ifp, if_oerrors, sc->txb_sched + sc->txb_count);
 
 	mb86960_reset(sc);
 }
@@ -585,7 +582,7 @@ mb86960_init(struct mb86960_softc *sc)
 	ifp->if_flags |= IFF_RUNNING;
 
 	/*
-	 * At this point, the interface is runnung properly,
+	 * At this point, the interface is running properly,
 	 * except that it receives *no* packets.  we then call
 	 * mb86960_setmode() to tell the chip what packets to be
 	 * received, based on the if_flags and multicast group
@@ -699,7 +696,7 @@ mb86960_start(struct ifnet *ifp)
 	/*
 	 * Stop accepting more transmission packets temporarily, when
 	 * a filter change request is delayed.  Updating the MARs on
-	 * 86960 flushes the transmisstion buffer, so it is delayed
+	 * 86960 flushes the transmission buffer, so it is delayed
 	 * until all buffered transmission packets have been sent
 	 * out.
 	 */
@@ -750,7 +747,7 @@ mb86960_start(struct ifnet *ifp)
 		}
 
 		/* Tap off here if there is a BPF listener. */
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		/*
 		 * Copy the mbuf chain into the transmission buffer.
@@ -821,9 +818,11 @@ mb86960_tint(struct mb86960_softc *sc, uint8_t tstat)
 		/*
 		 * Update statistics.
 		 */
-		ifp->if_collisions += 16;
-		ifp->if_oerrors++;
-		ifp->if_opackets += sc->txb_sched - left;
+		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
+		if_statadd_ref(nsr, if_collisions, 16);
+		if_statinc_ref(nsr, if_oerrors);
+		if_statadd_ref(nsr, if_opackets, sc->txb_sched - left);
+		IF_STAT_PUTREF(ifp);
 
 		/*
 		 * Collision statistics has been updated.
@@ -861,7 +860,7 @@ mb86960_tint(struct mb86960_softc *sc, uint8_t tstat)
 		 * 86960 has a design flow on collision count on multiple
 		 * packet transmission.  When we send two or more packets
 		 * with one start command (that's what we do when the
-		 * transmission queue is clauded), 86960 informs us number
+		 * transmission queue is crowded), 86960 informs us number
 		 * of collisions occurred on the last packet on the
 		 * transmission only.  Number of collisions on previous
 		 * packets are lost.  I have told that the fact is clearly
@@ -892,7 +891,7 @@ mb86960_tint(struct mb86960_softc *sc, uint8_t tstat)
 				col = 1;
 			} else
 				col >>= FE_D4_COL_SHIFT;
-			ifp->if_collisions += col;
+			if_statadd(ifp, if_collisions, col);
 #if FE_DEBUG >= 4
 			log(LOG_WARNING, "%s: %d collision%s (%d)\n",
 			    device_xname(sc->sc_dev), col, col == 1 ? "" : "s",
@@ -904,7 +903,7 @@ mb86960_tint(struct mb86960_softc *sc, uint8_t tstat)
 		 * Update total number of successfully
 		 * transmitted packets.
 		 */
-		ifp->if_opackets += sc->txb_sched;
+		if_statadd(ifp, if_opackets, sc->txb_sched);
 		sc->txb_sched = 0;
 	}
 
@@ -951,7 +950,7 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 		log(LOG_WARNING, "%s: receive error: %s\n",
 		    device_xname(sc->sc_dev), sbuf);
 #endif
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 	}
 
 	/*
@@ -959,7 +958,7 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 	 * We just loop checking the flag to pull out all received
 	 * packets.
 	 *
-	 * We limit the number of iterrations to avoid infinite loop.
+	 * We limit the number of iterations to avoid infinite loop.
 	 * It can be caused by a very slow CPU (some broken
 	 * peripheral may insert incredible number of wait cycles)
 	 * or, worse, by a broken MB86960 chip.
@@ -991,7 +990,7 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 		 */
 		if ((status & FE_RXSTAT_GOODPKT) == 0) {
 			if ((ifp->if_flags & IFF_PROMISC) == 0) {
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				mb86960_droppacket(sc);
 				continue;
 			}
@@ -1025,7 +1024,7 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 			    device_xname(sc->sc_dev),
 			    len < ETHER_HDR_LEN ? "partial" : "big", len);
 #endif
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			mb86960_droppacket(sc);
 			continue;
 		}
@@ -1054,7 +1053,7 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 			    "%s: out of mbufs; dropping packet (%u bytes)\n",
 			    device_xname(sc->sc_dev), len);
 #endif
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			mb86960_droppacket(sc);
 
 			/*
@@ -1064,9 +1063,6 @@ mb86960_rint(struct mb86960_softc *sc, uint8_t rstat)
 			 */
 			return;
 		}
-
-		/* Successfully received a packet.  Update stat. */
-		ifp->if_ipackets++;
 	}
 }
 
@@ -1143,7 +1139,7 @@ mb86960_intr(void *arg)
 		 * receive operation priority.
 		 */
 		if ((ifp->if_flags & IFF_OACTIVE) == 0)
-			mb86960_start(ifp);
+			if_schedule_deferred_start(ifp);
 
 		if (rstat != 0 || tstat != 0)
 			rnd_add_uint32(&sc->rnd_source, rstat + tstat);
@@ -1166,7 +1162,6 @@ mb86960_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
 	struct mb86960_softc *sc = ifp->if_softc;
 	struct ifaddr *ifa = (struct ifaddr *)data;
-	struct ifreq *ifr = (struct ifreq *)data;
 	int s, error = 0;
 
 #if FE_DEBUG >= 3
@@ -1197,7 +1192,7 @@ mb86960_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		if ((error = ifioctl_common(ifp, cmd, data)) != 0)
 			break;
 		/* XXX re-use ether_ioctl() */
-		switch (ifp->if_flags & (IFF_UP|IFF_RUNNING)) {
+		switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 		case IFF_RUNNING:
 			/*
 			 * If interface is marked down and it is running, then
@@ -1216,7 +1211,7 @@ mb86960_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 				break;
 			mb86960_init(sc);
 			break;
-		case IFF_UP|IFF_RUNNING:
+		case IFF_UP | IFF_RUNNING:
 			/*
 			 * Reset the interface to pick up changes in any other
 			 * flags that affect hardware registers.
@@ -1253,11 +1248,6 @@ mb86960_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 				mb86960_setmode(sc);
 			error = 0;
 		}
-		break;
-
-	case SIOCGIFMEDIA:
-	case SIOCSIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr, &sc->sc_media, cmd);
 		break;
 
 	default:
@@ -1330,12 +1320,6 @@ mb86960_get_packet(struct mb86960_softc *sc, u_int len)
 		bus_space_read_multi_stream_2(bst, bsh, FE_BMPR8,
 		    mtod(m, uint16_t *), (len + 1) >> 1);
 
-	/*
-	 * Check if there's a BPF listener on this interface.  If so, hand off
-	 * the raw packet to bpf.
-	 */
-	bpf_mtap(ifp, m);
-
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 	return 1;
 }
@@ -1383,7 +1367,7 @@ mb86960_write_mbufs(struct mb86960_softc *sc, struct mbuf *m)
 
 	/* We need to use m->m_pkthdr.len, so require the header */
 	if ((m->m_flags & M_PKTHDR) == 0)
-	  	panic("mb86960_write_mbufs: no header mbuf");
+		panic("mb86960_write_mbufs: no header mbuf");
 
 #if FE_DEBUG >= 2
 	/* First, count up the total number of bytes to copy. */
@@ -1409,7 +1393,7 @@ mb86960_write_mbufs(struct mb86960_softc *sc, struct mbuf *m)
 		log(LOG_ERR, "%s: got a %s packet (%u bytes) to send\n",
 		    device_xname(sc->sc_dev),
 		    totlen < ETHER_HDR_LEN ? "partial" : "big", totlen);
-		sc->sc_ec.ec_if.if_oerrors++;
+		if_statinc(&sc->sc_ec.ec_if, if_oerrors);
 		return;
 	}
 #endif
@@ -1422,7 +1406,7 @@ mb86960_write_mbufs(struct mb86960_softc *sc, struct mbuf *m)
 	 * packet in the transmission buffer, we can skip the
 	 * padding process.  It may gain performance slightly.  FIXME.
 	 */
-	len = max(totlen, (ETHER_MIN_LEN - ETHER_CRC_LEN));
+	len = uimax(totlen, (ETHER_MIN_LEN - ETHER_CRC_LEN));
 	if (sc->sc_flags & FE_FLAGS_SBW_BYTE) {
 		bus_space_write_1(bst, bsh, FE_BMPR8, len);
 		bus_space_write_1(bst, bsh, FE_BMPR8, len >> 8);
@@ -1438,7 +1422,7 @@ mb86960_write_mbufs(struct mb86960_softc *sc, struct mbuf *m)
 	 * if the chip is set in SBW_WORD mode.
 	 */
 	sc->txb_free -= FE_TXLEN_SIZE +
-	    max(totlen, (ETHER_MIN_LEN - ETHER_CRC_LEN));
+	    uimax(totlen, (ETHER_MIN_LEN - ETHER_CRC_LEN));
 	sc->txb_count++;
 
 #if FE_DELAYED_PADDING
@@ -1504,8 +1488,8 @@ mb86960_write_mbufs(struct mb86960_softc *sc, struct mbuf *m)
 					 */
 					leftover = len & 1;
 					len &= ~1;
-					bus_space_write_multi_stream_2(bst, bsh,
-					    FE_BMPR8, (uint16_t *)data,
+					bus_space_write_multi_stream_2(bst,
+					    bsh, FE_BMPR8, (uint16_t *)data,
 					    len >> 1);
 					data += len;
 					if (leftover)
@@ -1564,6 +1548,7 @@ mb86960_getmcaf(struct ethercom *ec, uint8_t *af)
 		goto allmulti;
 
 	memset(af, 0, FE_FILTER_LEN);
+	ETHER_LOCK(ec);
 	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi,
@@ -1576,6 +1561,7 @@ mb86960_getmcaf(struct ethercom *ec, uint8_t *af)
 			 * ranges is for IP multicast routing, for which the
 			 * range is big enough to require all bits set.)
 			 */
+			ETHER_UNLOCK(ec);
 			goto allmulti;
 		}
 
@@ -1589,6 +1575,7 @@ mb86960_getmcaf(struct ethercom *ec, uint8_t *af)
 
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 	ifp->if_flags &= ~IFF_ALLMULTI;
 	return;
 
@@ -1673,7 +1660,7 @@ mb86960_setmode(struct mb86960_softc *sc)
 	 * DLC trashes all packets in both transmission and receive
 	 * buffers when stopped.
 	 *
-	 * ... Are the above sentenses correct?  I have to check the
+	 * ... Are the above sentences correct?  I have to check the
 	 *     manual of the MB86960A.  FIXME.
 	 *
 	 * To reduce the packet lossage, we delay the filter update
@@ -1702,7 +1689,7 @@ mb86960_setmode(struct mb86960_softc *sc)
 /*
  * Load a new multicast address filter into MARs.
  *
- * The caller must have splnet'ed befor mb86960_loadmar.
+ * The caller must have splnet'ed before mb86960_loadmar.
  * This function starts the DLC upon return.  So it can be called only
  * when the chip is working, i.e., from the driver's point of view, when
  * a device is RUNNING.  (I mistook the point in previous versions.)
@@ -1812,14 +1799,14 @@ mb86960_detach(struct mb86960_softc *sc)
 	if ((sc->sc_stat & FE_STAT_ATTACHED) == 0)
 		return 0;
 
-	/* Delete all media. */
-	ifmedia_delete_instance(&sc->sc_media, IFM_INST_ANY);
-
 	/* Unhook the entropy source. */
 	rnd_detach_source(&sc->rnd_source);
 
 	ether_ifdetach(ifp);
 	if_detach(ifp);
+
+	/* Delete all media. */
+	ifmedia_fini(&sc->sc_media);
 
 	mb86960_disable(sc);
 	return 0;
@@ -1875,7 +1862,7 @@ mb86965_read_eeprom(bus_space_tag_t iot, bus_space_handle_t ioh, uint8_t *data)
 			bus_space_write_1(iot, ioh,
 			    FE_BMPR16, FE_B16_SELECT);
 		}
-		data[addr * 2]     = val >> 8;
+		data[addr * 2]	   = val >> 8;
 		data[addr * 2 + 1] = val & 0xff;
 	}
 
@@ -1962,4 +1949,3 @@ mb86960_dump(int level, struct mb86960_softc *sc)
 	bus_space_write_1(bst, bsh, FE_DLCR7, save_dlcr7);
 }
 #endif
-

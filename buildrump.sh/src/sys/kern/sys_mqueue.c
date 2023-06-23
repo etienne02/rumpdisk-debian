@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_mqueue.c,v 1.39 2015/06/29 15:44:45 christos Exp $	*/
+/*	$NetBSD: sys_mqueue.c,v 1.48 2020/05/23 23:42:43 ad Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Mindaugas Rasiukevicius <rmind at NetBSD org>
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_mqueue.c,v 1.39 2015/06/29 15:44:45 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_mqueue.c,v 1.48 2020/05/23 23:42:43 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -79,18 +79,17 @@ static u_int			mq_max_maxmsg = 16 * 32;
 static pool_cache_t		mqmsg_cache	__read_mostly;
 static kmutex_t			mqlist_lock	__cacheline_aligned;
 static LIST_HEAD(, mqueue)	mqueue_head	__cacheline_aligned;
-static struct sysctllog *	mqsysctl_log;
 
 static kauth_listener_t		mq_listener;
 
 static int	mqueue_sysinit(void);
 static int	mqueue_sysfini(bool);
-static int	mqueue_sysctl_init(void);
 static int	mq_poll_fop(file_t *, int);
 static int	mq_stat_fop(file_t *, struct stat *);
 static int	mq_close_fop(file_t *);
 
 static const struct fileops mqops = {
+	.fo_name = "mq",
 	.fo_read = fbadop_read,
 	.fo_write = fbadop_write,
 	.fo_ioctl = fbadop_ioctl,
@@ -150,15 +149,7 @@ mqueue_sysinit(void)
 	mutex_init(&mqlist_lock, MUTEX_DEFAULT, IPL_NONE);
 	LIST_INIT(&mqueue_head);
 
-	error = mqueue_sysctl_init();
-	if (error) {
-		(void)mqueue_sysfini(false);
-		return error;
-	}
 	error = syscall_establish(NULL, mqueue_syscalls);
-	if (error) {
-		(void)mqueue_sysfini(false);
-	}
 	mq_listener = kauth_listen_scope(KAUTH_SCOPE_SYSTEM,
 	    mq_listener_cb, NULL);
 	return error;
@@ -186,9 +177,6 @@ mqueue_sysfini(bool interface)
 			return EBUSY;
 		}
 	}
-
-	if (mqsysctl_log != NULL)
-		sysctl_teardown(&mqsysctl_log);
 
 	kauth_unlisten_scope(mq_listener);
 
@@ -405,17 +393,17 @@ mq_close_fop(file_t *fp)
 static int
 mqueue_access(mqueue_t *mq, int access, kauth_cred_t cred)
 {
-	mode_t acc_mode = 0;
+	accmode_t accmode = 0;
 
 	/* Note the difference between VREAD/VWRITE and FREAD/FWRITE. */
 	if (access & FREAD) {
-		acc_mode |= VREAD;
+		accmode |= VREAD;
 	}
 	if (access & FWRITE) {
-		acc_mode |= VWRITE;
+		accmode |= VWRITE;
 	}
-	if (genfs_can_access(VNON, mq->mq_mode, mq->mq_euid,
-	    mq->mq_egid, acc_mode, cred)) {
+	if (genfs_can_access(NULL, cred, mq->mq_euid, mq->mq_egid,
+	    mq->mq_mode, NULL, accmode)) {
 		return EACCES;
 	}
 	return 0;
@@ -429,11 +417,6 @@ mqueue_create(lwp_t *l, char *name, struct mq_attr *attr, mode_t mode,
 	struct cwdinfo *cwdi = p->p_cwdi;
 	mqueue_t *mq;
 	u_int i;
-
-	/* Pre-check the limit. */
-	if (p->p_mqueue_cnt >= mq_open_max) {
-		return EMFILE;
-	}
 
 	/* Empty name is invalid. */
 	if (name[0] == '\0') {
@@ -515,6 +498,14 @@ mq_handle_open(struct lwp *l, const char *u_name, int oflag, mode_t mode,
 		kmem_free(name, MQ_NAMELEN);
 		return error;
 	}
+
+	/* Account and check for the limit. */
+	if (atomic_inc_uint_nv(&p->p_mqueue_cnt) > mq_open_max) {
+		atomic_dec_uint(&p->p_mqueue_cnt);
+		error = EMFILE;
+		goto err;
+	}
+
 	fp->f_type = DTYPE_MQUEUE;
 	fp->f_flag = FFLAGS(oflag) & (FREAD | FWRITE);
 	fp->f_ops = &mqops;
@@ -558,14 +549,6 @@ mq_handle_open(struct lwp *l, const char *u_name, int oflag, mode_t mode,
 			mutex_exit(&mqlist_lock);
 			KASSERT(mq_new == NULL);
 			error = ENOENT;
-			goto err;
-		}
-
-		/* Account and check for the limit. */
-		if (atomic_inc_uint_nv(&p->p_mqueue_cnt) > mq_open_max) {
-			mutex_exit(&mqlist_lock);
-			atomic_dec_uint(&p->p_mqueue_cnt);
-			error = EMFILE;
 			goto err;
 		}
 
@@ -617,6 +600,9 @@ sys_mq_open(struct lwp *l, const struct sys_mq_open_args *uap,
 	} */
 	struct mq_attr *attr = NULL, a;
 	int error;
+
+	if ((SCARG(uap, oflag) & O_EXEC) != 0)
+		return EINVAL;
 
 	if ((SCARG(uap, oflag) & O_CREAT) != 0 && SCARG(uap, attr) != NULL) {
 		error = copyin(SCARG(uap, attr), &a, sizeof(a));
@@ -708,7 +694,7 @@ mq_recv1(mqd_t mqdes, void *msg_ptr, size_t msg_len, u_int *msg_prio,
 	/* Unmark the bit, if last message. */
 	if (__predict_true(idx) && TAILQ_EMPTY(&mq->mq_head[idx])) {
 		KASSERT((MQ_PQSIZE - idx) == msg->msg_prio);
-		mq->mq_bitmap &= ~(1 << --idx);
+		mq->mq_bitmap &= ~(1U << --idx);
 	}
 
 	/* Decrement the counter and signal waiter, if any */
@@ -811,6 +797,8 @@ mq_send1(mqd_t mqdes, const char *msg_ptr, size_t msg_len, u_int msg_prio,
 		return EINVAL;
 
 	/* Allocate a new message */
+	if (msg_len > mq_max_msgsize)
+		return EMSGSIZE;
 	size = sizeof(struct mq_msg) + msg_len;
 	if (size > mq_max_msgsize)
 		return EMSGSIZE;
@@ -877,7 +865,7 @@ mq_send1(mqd_t mqdes, const char *msg_ptr, size_t msg_len, u_int msg_prio,
 
 		KASSERT(idx != MQ_PQRESQ);
 		TAILQ_INSERT_TAIL(&mq->mq_head[idx], msg, msg_queue);
-		mq->mq_bitmap |= (1 << --idx);
+		mq->mq_bitmap |= (1U << --idx);
 	} else {
 		mqueue_linear_insert(mq, msg);
 	}
@@ -910,9 +898,9 @@ error:
 		mqueue_freemsg(msg, size);
 	} else if (notify) {
 		/* Send the notify, if needed */
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		kpsignal(notify, &ksi, NULL);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 	return error;
 }
@@ -1147,14 +1135,11 @@ err:
 /*
  * System control nodes.
  */
-static int
-mqueue_sysctl_init(void)
+SYSCTL_SETUP(mqueue_sysctl_init, "mqueue systl")
 {
 	const struct sysctlnode *node = NULL;
 
-	mqsysctl_log = NULL;
-
-	sysctl_createv(&mqsysctl_log, 0, NULL, NULL,
+	sysctl_createv(clog, 0, NULL, NULL,
 		CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
 		CTLTYPE_INT, "posix_msg",
 		SYSCTL_DESCR("Version of IEEE Std 1003.1 and its "
@@ -1162,7 +1147,7 @@ mqueue_sysctl_init(void)
 			     "system attempts to conform"),
 		NULL, _POSIX_MESSAGE_PASSING, NULL, 0,
 		CTL_KERN, CTL_CREATE, CTL_EOL);
-	sysctl_createv(&mqsysctl_log, 0, NULL, &node,
+	sysctl_createv(clog, 0, NULL, &node,
 		CTLFLAG_PERMANENT,
 		CTLTYPE_NODE, "mqueue",
 		SYSCTL_DESCR("Message queue options"),
@@ -1170,41 +1155,41 @@ mqueue_sysctl_init(void)
 		CTL_KERN, CTL_CREATE, CTL_EOL);
 
 	if (node == NULL)
-		return ENXIO;
+		return;
 
-	sysctl_createv(&mqsysctl_log, 0, &node, NULL,
+	sysctl_createv(clog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_INT, "mq_open_max",
 		SYSCTL_DESCR("Maximal number of message queue descriptors "
 			     "that process could open"),
 		NULL, 0, &mq_open_max, 0,
 		CTL_CREATE, CTL_EOL);
-	sysctl_createv(&mqsysctl_log, 0, &node, NULL,
+	sysctl_createv(clog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_INT, "mq_prio_max",
 		SYSCTL_DESCR("Maximal priority of the message"),
 		NULL, 0, &mq_prio_max, 0,
 		CTL_CREATE, CTL_EOL);
-	sysctl_createv(&mqsysctl_log, 0, &node, NULL,
+	sysctl_createv(clog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_INT, "mq_max_msgsize",
 		SYSCTL_DESCR("Maximal allowed size of the message"),
 		NULL, 0, &mq_max_msgsize, 0,
 		CTL_CREATE, CTL_EOL);
-	sysctl_createv(&mqsysctl_log, 0, &node, NULL,
+	sysctl_createv(clog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_INT, "mq_def_maxmsg",
 		SYSCTL_DESCR("Default maximal message count"),
 		NULL, 0, &mq_def_maxmsg, 0,
 		CTL_CREATE, CTL_EOL);
-	sysctl_createv(&mqsysctl_log, 0, &node, NULL,
+	sysctl_createv(clog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_INT, "mq_max_maxmsg",
 		SYSCTL_DESCR("Maximal allowed message count"),
 		NULL, 0, &mq_max_maxmsg, 0,
 		CTL_CREATE, CTL_EOL);
 
-	return 0;
+	return;
 }
 
 /*

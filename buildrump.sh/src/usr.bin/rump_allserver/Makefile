@@ -1,11 +1,10 @@
-#	$NetBSD: Makefile,v 1.8 2016/01/23 21:22:49 christos Exp $
+#	$NetBSD: Makefile,v 1.14 2021/07/07 11:51:45 martin Exp $
 #
 
 PROG=	rump_allserver
 MLINKS+=rump_allserver.1 rump_server.1
 
 RUMPTOP=${.CURDIR}/../../sys/rump
-CPPFLAGS+=	-D_KERNTYPES
 
 .include "${RUMPTOP}/dev/Makefile.rumpdevcomp"
 .include "${RUMPTOP}/fs/Makefile.rumpfscomp"
@@ -13,6 +12,10 @@ CPPFLAGS+=	-D_KERNTYPES
 .include "${RUMPTOP}/net/Makefile.rumpnetcomp"
 
 LDADD+=	${RUMPDEVLDADD} ${RUMPFSLDADD} ${RUMPKERNLDADD} ${RUMPNETLDADD}
-LDADD+= -lrumpdev -lrumpvfs -lrumpnet -lrump -lrumpuser -lpthread
+LDADD+= -lrumpdev -lrumpnet -lrumpvfs -lrump -lrumpvfs -lrumpvfs_nofifofs -lrump -lrumpuser -lpthread
+
+.if ${RUMP_SANITIZE:Uno} != "no"
+LDADD+=	-fsanitize=${RUMP_SANITIZE}
+.endif
 
 .include <bsd.prog.mk>

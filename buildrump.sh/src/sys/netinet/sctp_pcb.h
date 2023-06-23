@@ -1,5 +1,5 @@
 /*	$KAME: sctp_pcb.h,v 1.21 2005/07/16 01:18:47 suz Exp $	*/
-/*	$NetBSD: sctp_pcb.h,v 1.1 2015/10/13 21:28:35 rjs Exp $ */
+/*	$NetBSD: sctp_pcb.h,v 1.4 2021/08/09 20:49:10 andvar Exp $ */
 
 #ifndef __SCTP_PCB_H__
 #define __SCTP_PCB_H__
@@ -250,11 +250,6 @@ struct sctp_pcb {
 	uint16_t pre_open_stream_count;
 	uint16_t max_open_streams_intome;
 
-	/* random number generator */
-	uint32_t random_counter;
-	uint8_t random_numbers[SCTP_SIGNATURE_ALOC_SIZE];
-	uint8_t random_store[SCTP_SIGNATURE_ALOC_SIZE];
-
 	/*
 	 * This timer is kept running per endpoint.  When it fires it
 	 * will change the secret key.  The default is once a hour
@@ -265,7 +260,6 @@ struct sctp_pcb {
 	int auto_close_time;
 	uint32_t initial_sequence_debug;
 	uint32_t adaption_layer_indicator;
-	char store_at;
 	uint8_t max_burst;
 	char current_secret_number;
 	char last_secret_number;
@@ -289,7 +283,7 @@ struct sctp_socket_q_list {
 struct sctp_inpcb {
 	/*
 	 * put an inpcb in front of it all, kind of a waste but we need
-	 * to for compatability with all the other stuff.
+	 * to for compatibility with all the other stuff.
 	 */
 	union {
 		struct inpcb inp;
@@ -447,7 +441,7 @@ void SCTP_INP_INFO_WLOCK(void);
 
 /* The INP locks we will use for locking an SCTP endpoint, so for
  * example if we want to change something at the endpoint level for
- * example random_store or cookie secrets we lock the INP level.
+ * example cookie secrets we lock the INP level.
  */
 #define SCTP_INP_LOCK_INIT(_inp) \
 	mtx_init(&(_inp)->inp_mtx, "sctp", "inp", MTX_DEF | MTX_DUPOK)
@@ -556,7 +550,7 @@ void SCTP_INP_WLOCK(struct sctp_inpcb *);
 
 /* The INP locks we will use for locking an SCTP endpoint, so for
  * example if we want to change something at the endpoint level for
- * example random_store or cookie secrets we lock the INP level.
+ * example cookie secrets we lock the INP level.
  */
 #define SCTP_INP_LOCK_INIT(_inp) \
 	mutex_init(&(_inp)->inp_mtx, MUTEX_DEFAULT, IPL_NET)
@@ -754,7 +748,7 @@ int
 sctp_initiate_iterator(asoc_func af, uint32_t, uint32_t, void *, uint32_t,
 		       end_func ef, struct sctp_inpcb *);
 
-extern void in6_sin6_2_sin (struct sockaddr_in *,
+void in6_sin6_2_sin (struct sockaddr_in *,
                             struct sockaddr_in6 *sin6);
 
 #endif /* _KERNEL */

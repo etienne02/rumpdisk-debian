@@ -1,4 +1,4 @@
-/*	$NetBSD: mvmebus.c,v 1.19 2012/10/27 17:18:27 chs Exp $	*/
+/*	$NetBSD: mvmebus.c,v 1.24 2021/08/07 16:19:13 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2002 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mvmebus.c,v 1.19 2012/10/27 17:18:27 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mvmebus.c,v 1.24 2021/08/07 16:19:13 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -80,7 +80,7 @@ const char *mvmebus_irq_name[] = {
 	"vmeirq4", "vmeirq5", "vmeirq6", "vmeirq7"
 };
 
-extern phys_ram_seg_t mem_clusters[0];
+extern phys_ram_seg_t mem_clusters[];
 extern int mem_cluster_cnt;
 
 
@@ -236,7 +236,7 @@ mvmebus_attach(struct mvmebus_softc *sc)
 	vaa.va_bdt = &sc->sc_mvmedmat;
 	vaa.va_slaveconfig = NULL;
 
-	config_found(sc->sc_dev, &vaa, 0);
+	config_found(sc->sc_dev, &vaa, 0, CFARGS_NONE);
 }
 
 int
@@ -275,10 +275,7 @@ mvmebus_map(void *vsc, vme_addr_t vmeaddr, vme_size_t len, vme_am_t am, vme_data
 		return (rv);
 
 	/* Allocate space for the resource tag */
-	if ((mr = malloc(sizeof(*mr), M_DEVBUF, M_NOWAIT)) == NULL) {
-		bus_space_unmap(sc->sc_bust, *handle, len);
-		return (ENOMEM);
-	}
+	mr = malloc(sizeof(*mr), M_DEVBUF, M_WAITOK);
 
 	/* Record the range's details */
 	mr->mr_am = am;
@@ -736,7 +733,7 @@ mvmebus_dmamem_alloc(void *vsc, vme_size_t len, vme_am_t am, vme_datasize_t data
 	 * Set up the constraints so we can allocate physical memory which
 	 * is visible in the requested address space
 	 */
-	low = max(vr->vr_locstart, avail_start);
+	low = uimax(vr->vr_locstart, avail_start);
 	high = vr->vr_locstart + (vr->vr_vmeend - vr->vr_vmestart) + 1;
 	bound = (bus_size_t) vr->vr_mask + 1;
 

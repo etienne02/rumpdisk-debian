@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.70 2015/03/29 09:47:48 matt Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.78 2021/03/28 10:29:05 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -44,23 +44,19 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.70 2015/03/29 09:47:48 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.78 2021/03/28 10:29:05 skrll Exp $");
 
 #include "opt_armfpe.h"
-#include "opt_pmap_debug.h"
-#include "opt_perfctrs.h"
 #include "opt_cputypes.h"
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/proc.h>
-#include <sys/malloc.h>
-#include <sys/vnode.h>
-#include <sys/cpu.h>
+
 #include <sys/buf.h>
-#include <sys/pmc.h>
+#include <sys/cpu.h>
 #include <sys/exec.h>
-#include <sys/syslog.h>
+#include <sys/proc.h>
+#include <sys/systm.h>
+#include <sys/vnode.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -84,15 +80,6 @@ void lwp_trampoline(void);
 void
 cpu_proc_fork(struct proc *p1, struct proc *p2)
 {
-
-#if defined(PERFCTRS)
-	if (PMC_ENABLED(p1))
-		pmc_md_fork(p1, p2);
-	else {
-		p2->p_md.pmc_enabled = 0;
-		p2->p_md.pmc_state = NULL;
-	}
-#endif
 	/*
 	 * Copy machine arch string (it's small so just memcpy it).
 	 */
@@ -121,10 +108,9 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	const struct pcb * const pcb1 = lwp_getpcb(l1);
 	struct pcb * const pcb2 = lwp_getpcb(l2);
 
-#ifdef PMAP_DEBUG
-	if (pmap_debug_level > 0)
-		printf("cpu_lwp_fork: %p %p %p %p\n", l1, l2, curlwp, &lwp0);
-#endif	/* PMAP_DEBUG */
+#ifdef XXXDEBUG
+	printf("cpu_lwp_fork: %p %p %p %p\n", l1, l2, curlwp, &lwp0);
+#endif	/* DEBUG */
 
 	/* Copy the pcb */
 	*pcb2 = *pcb1;
@@ -150,14 +136,12 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	    (USPACE_SVC_STACK_TOP - USPACE_SVC_STACK_BOTTOM));
 #endif	/* STACKCHECKS */
 
-#ifdef PMAP_DEBUG
-	if (pmap_debug_level > 0) {
-		printf("l1: pcb=%p pid=%d pmap=%p\n",
-		    pcb1, l1->l_lid, l1->l_proc->p_vmspace->vm_map.pmap);
-		printf("l2: pcb=%p pid=%d pmap=%p\n",
-		    pcb2, l2->l_lid, l2->l_proc->p_vmspace->vm_map.pmap);
-	}
-#endif	/* PMAP_DEBUG */
+#ifdef XXXDEBUG
+	printf("l1: pcb=%p pid=%d pmap=%p\n",
+	    pcb1, l1->l_lid, l1->l_proc->p_vmspace->vm_map.pmap);
+	printf("l2: pcb=%p pid=%d pmap=%p\n",
+	    pcb2, l2->l_lid, l2->l_proc->p_vmspace->vm_map.pmap);
+#endif	/* DEBUG */
 
 	struct trapframe *tf = (struct trapframe *)pcb2->pcb_ksp - 1;
 	lwp_settrapframe(l2, tf);
@@ -222,11 +206,10 @@ vmapbuf(struct buf *bp, vsize_t len)
 
 	KASSERT(pm != pmap_kernel());
 
-#ifdef PMAP_DEBUG
-	if (pmap_debug_level > 0)
-		printf("vmapbuf: bp=%08x buf=%08x len=%08x\n", (u_int)bp,
-		    (u_int)bp->b_data, (u_int)len);
-#endif	/* PMAP_DEBUG */
+#ifdef XXXDEBUG
+	printf("vmapbuf: bp=%08x buf=%08x len=%08x\n", (u_int)bp,
+	    (u_int)bp->b_data, (u_int)len);
+#endif	/* XXXDEBUG */
 
 	if ((bp->b_flags & B_PHYS) == 0)
 		panic("vmapbuf");
@@ -240,13 +223,13 @@ vmapbuf(struct buf *bp, vsize_t len)
 	bp->b_data = (void *)(taddr + off);
 
 	/*
-	 * The region is locked, so we expect that pmap_pte() will return
-	 * non-NULL.
+	 * The region is locked, so we expect that pmap_extract() will return
+	 * true.
 	 */
 	while (len) {
 		(void) pmap_extract(pm, faddr, &fpa);
-		pmap_kenter_pa(taddr, fpa, VM_PROT_READ|VM_PROT_WRITE,
-		    PMAP_WIRED);
+		pmap_enter(pmap_kernel(), taddr, fpa, VM_PROT_READ|VM_PROT_WRITE,
+		    VM_PROT_READ|VM_PROT_WRITE|PMAP_WIRED);
 		faddr += PAGE_SIZE;
 		taddr += PAGE_SIZE;
 		len -= PAGE_SIZE;
@@ -264,11 +247,10 @@ vunmapbuf(struct buf *bp, vsize_t len)
 {
 	vaddr_t addr, off;
 
-#ifdef PMAP_DEBUG
-	if (pmap_debug_level > 0)
-		printf("vunmapbuf: bp=%08x buf=%08x len=%08x\n",
-		    (u_int)bp, (u_int)bp->b_data, (u_int)len);
-#endif	/* PMAP_DEBUG */
+#ifdef XXXDEBUG
+	printf("vunmapbuf: bp=%08x buf=%08x len=%08x\n",
+	    (u_int)bp, (u_int)bp->b_data, (u_int)len);
+#endif	/* XXXDEBUG */
 
 	if ((bp->b_flags & B_PHYS) == 0)
 		panic("vunmapbuf");
@@ -281,11 +263,99 @@ vunmapbuf(struct buf *bp, vsize_t len)
 	off = (vaddr_t)bp->b_data - addr;
 	len = round_page(off + len);
 
-	pmap_kremove(addr, len);
+	pmap_remove(pmap_kernel(), addr, addr + len);
 	pmap_update(pmap_kernel());
 	uvm_km_free(phys_map, addr, len, UVM_KMF_VAONLY);
 	bp->b_data = bp->b_saveaddr;
 	bp->b_saveaddr = 0;
+}
+
+void
+ktext_write(void *to, const void *from, size_t size)
+{
+	struct pmap *pmap = pmap_kernel();
+	pd_entry_t *pde, oldpde, tmppde;
+	pt_entry_t *pte, oldpte, tmppte;
+	vaddr_t pgva;
+	size_t limit, savesize;
+	const char *src;
+	char *dst;
+
+	/* XXX: gcc */
+	oldpte = 0;
+
+	if ((savesize = size) == 0)
+		return;
+
+	dst = (char *) to;
+	src = (const char *) from;
+
+	do {
+		/* Get the PDE of the current VA. */
+		if (pmap_get_pde_pte(pmap, (vaddr_t) dst, &pde, &pte) == false)
+			goto no_mapping;
+		switch ((oldpde = *pde) & L1_TYPE_MASK) {
+		case L1_TYPE_S:
+			pgva = (vaddr_t)dst & L1_S_FRAME;
+			limit = L1_S_SIZE - ((vaddr_t)dst & L1_S_OFFSET);
+
+			tmppde = l1pte_set_writable(oldpde);
+			*pde = tmppde;
+			PTE_SYNC(pde);
+			break;
+
+		case L1_TYPE_C:
+			pgva = (vaddr_t)dst & L2_S_FRAME;
+			limit = L2_S_SIZE - ((vaddr_t)dst & L2_S_OFFSET);
+
+			if (pte == NULL)
+				goto no_mapping;
+			oldpte = *pte;
+			tmppte = l2pte_set_writable(oldpte);
+			*pte = tmppte;
+			PTE_SYNC(pte);
+			break;
+
+		default:
+		no_mapping:
+			printf(" address 0x%08lx not a valid page\n",
+			    (vaddr_t) dst);
+			return;
+		}
+		cpu_tlb_flushD_SE(pgva);
+		cpu_cpwait();
+
+		if (limit > size)
+			limit = size;
+		size -= limit;
+
+		/*
+		 * Page is now writable.  Do as much access as we
+		 * can in this page.
+		 */
+		for (; limit > 0; limit--)
+			*dst++ = *src++;
+
+		/*
+		 * Restore old mapping permissions.
+		 */
+		switch (oldpde & L1_TYPE_MASK) {
+		case L1_TYPE_S:
+			*pde = oldpde;
+			PTE_SYNC(pde);
+			break;
+
+		case L1_TYPE_C:
+			*pte = oldpte;
+			PTE_SYNC(pte);
+			break;
+		}
+		cpu_tlb_flushD_SE(pgva);
+		cpu_cpwait();
+	} while (size != 0);
+
+	/* Sync the I-cache. */
+	cpu_icache_sync_range((vaddr_t)to, savesize);
 }
 
 /* End of vm_machdep.c */

@@ -1,4 +1,4 @@
-/*	$NetBSD: i8259.c,v 1.16 2013/11/06 20:19:03 mrg Exp $	*/
+/*	$NetBSD: i8259.c,v 1.25 2020/04/25 15:26:18 bouyer Exp $	*/
 
 /*
  * Copyright 2002 (c) Wasabi Systems, Inc.
@@ -70,9 +70,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i8259.c,v 1.16 2013/11/06 20:19:03 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i8259.c,v 1.25 2020/04/25 15:26:18 bouyer Exp $");
 
-#include <sys/param.h> 
+#include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
@@ -83,7 +83,7 @@ __KERNEL_RCSID(0, "$NetBSD: i8259.c,v 1.16 2013/11/06 20:19:03 mrg Exp $");
 #include <dev/ic/i8259reg.h>
 
 #include <machine/pio.h>
-#include <machine/cpufunc.h>  
+#include <machine/cpufunc.h>
 #include <machine/cpu.h>
 #include <machine/pic.h>
 #include <machine/i8259.h>
@@ -116,8 +116,11 @@ struct pic i8259_pic = {
 	.pic_hwunmask = i8259_hwunmask,
 	.pic_addroute = i8259_setup,
 	.pic_delroute = i8259_setup,
-	.pic_level_stubs = i8259_stubs,
-	.pic_edge_stubs = i8259_stubs,
+	.pic_level_stubs = legacy_stubs,
+	.pic_edge_stubs = legacy_stubs,
+	.pic_intr_get_devname = x86_intr_get_devname,
+	.pic_intr_get_assigned = x86_intr_get_assigned,
+	.pic_intr_get_count = x86_intr_get_count,
 };
 
 void
@@ -163,7 +166,7 @@ i8259_default_setup(void)
 		/* reset; program device, level-triggered, four bytes */
 		outb(IO_ICU2 + PIC_ICW1, ICW1_SELECT | ICW1_LTIM | ICW1_IC4);
 	else
-#endif	
+#endif
 		/* reset; program device, four bytes */
 		outb(IO_ICU2 + PIC_ICW1, ICW1_SELECT | ICW1_IC4);
 
@@ -233,7 +236,8 @@ i8259_reinit_irqs(void)
 {
 	int irqs, irq;
 	struct cpu_info *ci = &cpu_info_primary;
-	const size_t array_len = MIN(__arraycount(ci->ci_isources),
+	const size_t array_count = __arraycount(ci->ci_isources);
+	const size_t array_len = MIN(array_count,
 				     NUM_LEGACY_IRQS);
 
 	irqs = 0;

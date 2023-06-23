@@ -1,4 +1,4 @@
-/*	$NetBSD: namespace.h,v 1.180 2016/04/03 00:19:42 christos Exp $	*/
+/*	$NetBSD: namespace.h,v 1.201 2021/07/04 16:18:50 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1997-2004 The NetBSD Foundation, Inc.
@@ -30,8 +30,8 @@
 #define _NAMESPACE_H_
 
 #include <sys/cdefs.h>
+#include <ssp/ssp.h>
 
-#ifndef __lint__
 #define aio_suspend	_aio_suspend
 #define brk		_brk
 #define catclose	_catclose
@@ -60,6 +60,7 @@
 #define sbrk		_sbrk
 #define strerror_l	_strerror_l
 #define strerror_r	_strerror_r
+#define strerror_r_ss	_strerror_r_ss
 #define strlcat		_strlcat
 #define strlcpy		_strlcpy
 #define strtod_l	_strtod_l
@@ -93,6 +94,18 @@
 #define warn		_warn
 #define warnc		_warnc
 #define warnx		_warnx
+
+/*
+ * namespace protection for libc functions that are used internally
+ * in libc and should be not overriden by applications. To do this,
+ * this header renames them to a name that starts with an "_" so that
+ * libc uses the "_" flavor internally (and this name is not part of
+ * the application namespace), and then a weak alias is added to the
+ * "_" name next to the function definition so that the function is
+ * exposed again.
+ *
+ * See src/lib/libc/README for more details.
+ */
 
 #ifdef __weak_alias
 #define MD2Data			_MD2Data
@@ -151,6 +164,19 @@
 #define SHA256_Init		_SHA256_Init
 #define SHA256_Transform	_SHA256_Transform
 #define SHA256_Update		_SHA256_Update
+#define SHA3_224_Init		_SHA3_224_Init
+#define SHA3_224_Update		_SHA3_224_Update
+#define SHA3_224_Final		_SHA3_224_Final
+#define SHA3_256_Init		_SHA3_256_Init
+#define SHA3_256_Update		_SHA3_256_Update
+#define SHA3_256_Final		_SHA3_256_Final
+#define SHA3_384_Init		_SHA3_284_Init
+#define SHA3_384_Update		_SHA3_284_Update
+#define SHA3_384_Final		_SHA3_284_Final
+#define SHA3_512_Init		_SHA3_512_Init
+#define SHA3_512_Update		_SHA3_512_Update
+#define SHA3_512_Final		_SHA3_512_Final
+#define	SHA3_Selftest		_SHA3_Selftest
 #define SHA384_Data		_SHA384_Data
 #define SHA384_End		_SHA384_End
 #define SHA384_FileChunk	_SHA384_FileChunk
@@ -167,6 +193,12 @@
 #define SHA512_Init		_SHA512_Init
 #define SHA512_Transform	_SHA512_Transform
 #define SHA512_Update		_SHA512_Update
+#define	SHAKE128_Init		_SHAKE128_Init
+#define	SHAKE128_Update		_SHAKE128_Update
+#define	SHAKE128_Final		_SHAKE128_Final
+#define	SHAKE256_Init		_SHAKE256_Init
+#define	SHAKE256_Update		_SHAKE256_Update
+#define	SHAKE256_Final		_SHAKE256_Final
 #define a64l			_a64l
 #define adjtime			_adjtime
 #define alarm			_alarm
@@ -292,7 +324,6 @@
 #define fdopen			_fdopen
 #define fgetln			_fgetln
 #define fgetwln			_fgetwln
-#define fhstatvfs		_fhstatvfs
 #define flockfile		_flockfile
 #define ftrylockfile		_ftrylockfile
 #define funlockfile		_funlockfile
@@ -312,7 +343,6 @@
 #define freeifaddrs		_freeifaddrs
 #define freelocale		_freelocale
 #define fscanf_l		_fscanf_l
-#define fstatvfs		_fstatvfs
 #define ftok			_ftok
 #define ftruncate		_ftruncate
 #define fts_children		_fts_children
@@ -490,6 +520,7 @@
 #define mpool_filter		_mpool_filter
 #define mpool_get		_mpool_get
 #define mpool_new		_mpool_new
+#define mpool_newf		_mpool_newf
 #define mpool_open		_mpool_open
 #define mpool_put		_mpool_put
 #define mpool_sync		_mpool_sync
@@ -521,6 +552,7 @@
 #define pmap_rmtcall		_pmap_rmtcall
 #define pmap_set		_pmap_set
 #define pmap_unset		_pmap_unset
+#define paccept			_paccept
 #define pollts			_pollts
 #define popen			_popen
 #define posix2time		_posix2time
@@ -623,7 +655,7 @@
 #define sl_free			_sl_free
 #define sl_init			_sl_init
 #define sleep			_sleep
-#ifndef snprintf
+#if __SSP_FORTIFY_LEVEL == 0 && !defined(snprintf)
 #define snprintf		_snprintf
 #endif
 #define snprintf_l		_snprintf_l
@@ -633,7 +665,6 @@
 #define srand48			_srand48
 #define srandom			_srandom
 #define sscanf_l		_sscanf_l
-#define statvfs(a, b)		_statvfs(a, b)
 #define strcasecmp		_strcasecmp
 #define strcoll_l		_strcoll_l
 #define strdup			_strdup
@@ -691,6 +722,7 @@
 #define sysctlbyname		_sysctlbyname
 #define sysctlgetmibinfo	_sysctlgetmibinfo
 #define sysctlnametomib		_sysctlnametomib
+#define syscall			_syscall
 #define syslog			_syslog
 #define syslog_r		_syslog_r
 #define syslog_ss		_syslog_ss
@@ -733,7 +765,7 @@
 #define vasprintf		_vasprintf
 #define vasprintf_l		_vasprintf_l
 #define	vdprintf		_vdprintf
-#ifndef vsnprintf
+#if __SSP_FORTIFY_LEVEL == 0 && !defined(vsnprintf)
 #define vsnprintf		_vsnprintf
 #endif
 #define vdprintf_l		_vdprintf_l
@@ -884,6 +916,7 @@
 #define yperr_string		_yperr_string
 #define ypprot_err		_ypprot_err
 #define yp_setbindtries		_yp_setbindtries
+#define dl_iterate_phdr		__dl_iterate_phdr
 #define dlopen			__dlopen
 #define dlclose			__dlclose
 #define dlsym			__dlsym
@@ -927,6 +960,5 @@
 
 #define __learn_tree		___learn_tree
 #endif /* __weak_alias */
-#endif /* !__lint__ */
 
 #endif /* _NAMESPACE_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: process_machdep.c,v 1.85 2014/02/19 21:23:01 dsl Exp $	*/
+/*	$NetBSD: process_machdep.c,v 1.96 2020/10/19 17:47:37 christos Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000, 2001, 2008 The NetBSD Foundation, Inc.
@@ -44,18 +44,42 @@
  *	registers or privileged bits in the PSL.
  *	The process is stopped at the time write_regs is called.
  *
+ * process_read_fpregs(proc, regs, sz)
+ *	Get the current user-visible register set from the process
+ *	and copy it into the regs structure (<machine/reg.h>).
+ *	The process is stopped at the time read_fpregs is called.
+ *
+ * process_write_fpregs(proc, regs, sz)
+ *	Update the current register set from the passed in regs
+ *	structure.  Take care to avoid clobbering special CPU
+ *	registers or privileged bits in the PSL.
+ *	The process is stopped at the time write_fpregs is called.
+ *
+ * process_read_dbregs(proc, regs)
+ *	Get the current user-visible register set from the process
+ *	and copy it into the regs structure (<machine/reg.h>).
+ *	The process is stopped at the time read_dbregs is called.
+ *
+ * process_write_dbregs(proc, regs)
+ *	Update the current register set from the passed in regs
+ *	structure.  Take care to avoid clobbering special CPU
+ *	registers or privileged bits in the PSL.
+ *	The process is stopped at the time write_dbregs is called.
+ *
  * process_sstep(proc)
  *	Arrange for the process to trap after executing a single instruction.
  *
  * process_set_pc(proc)
  *	Set the process's program counter.
+ *
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: process_machdep.c,v 1.85 2014/02/19 21:23:01 dsl Exp $");
+__KERNEL_RCSID(0, "$NetBSD: process_machdep.c,v 1.96 2020/10/19 17:47:37 christos Exp $");
 
-#include "opt_vm86.h"
+#ifdef _KERNEL_OPT
 #include "opt_ptrace.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -71,11 +95,8 @@ __KERNEL_RCSID(0, "$NetBSD: process_machdep.c,v 1.85 2014/02/19 21:23:01 dsl Exp
 #include <machine/reg.h>
 #include <machine/segments.h>
 
+#include <x86/dbregs.h>
 #include <x86/fpu.h>
-
-#ifdef VM86
-#include <machine/vm86.h>
-#endif
 
 static inline struct trapframe *
 process_frame(struct lwp *l)
@@ -89,22 +110,12 @@ process_read_regs(struct lwp *l, struct reg *regs)
 {
 	struct trapframe *tf = process_frame(l);
 
-#ifdef VM86
-	if (tf->tf_eflags & PSL_VM) {
-		regs->r_gs = tf->tf_vm86_gs;
-		regs->r_fs = tf->tf_vm86_fs;
-		regs->r_es = tf->tf_vm86_es;
-		regs->r_ds = tf->tf_vm86_ds;
-		regs->r_eflags = get_vflags(l);
-	} else
-#endif
-	{
-		regs->r_gs = tf->tf_gs & 0xffff;
-		regs->r_fs = tf->tf_fs & 0xffff;
-		regs->r_es = tf->tf_es & 0xffff;
-		regs->r_ds = tf->tf_ds & 0xffff;
-		regs->r_eflags = tf->tf_eflags;
-	}
+	regs->r_gs = tf->tf_gs & 0xffff;
+	regs->r_fs = tf->tf_fs & 0xffff;
+	regs->r_es = tf->tf_es & 0xffff;
+	regs->r_ds = tf->tf_ds & 0xffff;
+	regs->r_eflags = tf->tf_eflags;
+
 	regs->r_edi = tf->tf_edi;
 	regs->r_esi = tf->tf_esi;
 	regs->r_ebp = tf->tf_ebp;
@@ -129,47 +140,34 @@ process_read_fpregs(struct lwp *l, struct fpreg *regs, size_t *sz)
 	return 0;
 }
 
-#ifdef PTRACE
+int
+process_read_dbregs(struct lwp *l, struct dbreg *regs, size_t *sz)
+{
+
+	x86_dbregs_read(l, regs);
+
+	return 0;
+}
+
+#ifdef PTRACE_HOOKS
 int
 process_write_regs(struct lwp *l, const struct reg *regs)
 {
 	struct trapframe *tf = process_frame(l);
 
-#ifdef VM86
-	if (regs->r_eflags & PSL_VM) {
-		void syscall_vm86(struct trapframe *);
+	/*
+	 * Check for security violations.
+	 */
+	if (((regs->r_eflags ^ tf->tf_eflags) & PSL_USERSTATIC) != 0 ||
+	    !USERMODE(regs->r_cs))
+		return (EINVAL);
 
-		tf->tf_vm86_gs = regs->r_gs;
-		tf->tf_vm86_fs = regs->r_fs;
-		tf->tf_vm86_es = regs->r_es;
-		tf->tf_vm86_ds = regs->r_ds;
-		set_vflags(l, regs->r_eflags);
-		/*
-		 * Make sure that attempts at system calls from vm86
-		 * mode die horribly.
-		 */
-		l->l_proc->p_md.md_syscall = syscall_vm86;
-	} else
-#endif
-	{
-		/*
-		 * Check for security violations.
-		 */
-		if (((regs->r_eflags ^ tf->tf_eflags) & PSL_USERSTATIC) != 0 ||
-		    !USERMODE(regs->r_cs, regs->r_eflags))
-			return (EINVAL);
+	tf->tf_gs = regs->r_gs;
+	tf->tf_fs = regs->r_fs;
+	tf->tf_es = regs->r_es;
+	tf->tf_ds = regs->r_ds;
+	tf->tf_eflags = regs->r_eflags;
 
-		tf->tf_gs = regs->r_gs;
-		tf->tf_fs = regs->r_fs;
-		tf->tf_es = regs->r_es;
-		tf->tf_ds = regs->r_ds;
-#ifdef VM86
-		/* Restore normal syscall handler */
-		if (tf->tf_eflags & PSL_VM)
-			(*l->l_proc->p_emul->e_syscall_intern)(l->l_proc);
-#endif
-		tf->tf_eflags = regs->r_eflags;
-	}
 	tf->tf_edi = regs->r_edi;
 	tf->tf_esi = regs->r_esi;
 	tf->tf_ebp = regs->r_ebp;
@@ -194,6 +192,22 @@ process_write_fpregs(struct lwp *l, const struct fpreg *regs, size_t sz)
 	return 0;
 }
 
+int
+process_write_dbregs(struct lwp *l, const struct dbreg *regs, size_t sz)
+{
+	int error;
+
+	/*
+	 * Check for security violations.
+	 */
+	error = x86_dbregs_validate(regs);
+	if (error != 0)                                                                                                               
+		return error;
+
+	x86_dbregs_write(l, regs);
+
+	return 0;
+}
 
 int
 process_sstep(struct lwp *l, int sstep)
@@ -220,12 +234,33 @@ process_set_pc(struct lwp *l, void *addr)
 
 #ifdef __HAVE_PTRACE_MACHDEP
 static int
+process_machdep_read_xstate(struct lwp *l, struct xstate *regs)
+{
+	return process_read_xstate(l, regs);
+}
+
+static int
 process_machdep_read_xmmregs(struct lwp *l, struct xmmregs *regs)
 {
 
 	__CTASSERT(sizeof *regs == sizeof (struct fxsave));
 	process_read_fpregs_xmm(l, (struct fxsave *)regs);
 	return 0;
+}
+
+static int
+process_machdep_write_xstate(struct lwp *l, const struct xstate *regs)
+{
+	int error;
+
+	/*
+	 * Check for security violations.
+	 */
+	error = process_verify_xstate(regs);
+	if (error != 0)
+		return error;
+
+	return process_write_xstate(l, regs);
 }
 
 static int
@@ -240,7 +275,7 @@ process_machdep_write_xmmregs(struct lwp *l, struct xmmregs *regs)
 int
 ptrace_machdep_dorequest(
     struct lwp *l,
-    struct lwp *lt,
+    struct lwp **lt,
     int req,
     void *addr,
     int data
@@ -248,43 +283,74 @@ ptrace_machdep_dorequest(
 {
 	struct uio uio;
 	struct iovec iov;
+	struct iovec user_iov;
+	struct vmspace *vm;
+	int error;
 	int write = 0;
 
 	switch (req) {
 	case PT_SETXMMREGS:
 		write = 1;
 
+		/* FALLTHROUGH */
 	case PT_GETXMMREGS:
 		/* write = 0 done above. */
-		if (!process_machdep_validxmmregs(lt->l_proc))
+		if ((error = ptrace_update_lwp((*lt)->l_proc, lt, data)) != 0)
+			return error;
+		if (!process_machdep_validxmmregs((*lt)->l_proc))
 			return (EINVAL);
-		else {
-			struct vmspace *vm;
-			int error;
-
-			error = proc_vmspace_getref(l->l_proc, &vm);
-			if (error) {
-				return error;
-			}
-			iov.iov_base = addr;
-			iov.iov_len = sizeof(struct xmmregs);
-			uio.uio_iov = &iov;
-			uio.uio_iovcnt = 1;
-			uio.uio_offset = 0;
-			uio.uio_resid = sizeof(struct xmmregs);
-			uio.uio_rw = write ? UIO_WRITE : UIO_READ;
-			uio.uio_vmspace = vm;
-			error = process_machdep_doxmmregs(l, lt, &uio);
-			uvmspace_free(vm);
+		error = proc_vmspace_getref(l->l_proc, &vm);
+		if (error) {
 			return error;
 		}
+		iov.iov_base = addr;
+		iov.iov_len = sizeof(struct xmmregs);
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = 0;
+		uio.uio_resid = sizeof(struct xmmregs);
+		uio.uio_rw = write ? UIO_WRITE : UIO_READ;
+		uio.uio_vmspace = vm;
+		error = process_machdep_doxmmregs(l, *lt, &uio);
+		uvmspace_free(vm);
+		return error;
+
+	case PT_SETXSTATE:
+		write = 1;
+
+		/* FALLTHROUGH */
+	case PT_GETXSTATE:
+		/* write = 0 done above. */
+		if ((error = ptrace_update_lwp((*lt)->l_proc, lt, data)) != 0)
+			return error;
+		if (!process_machdep_validxstate((*lt)->l_proc))
+			return EINVAL;
+		if ((error = copyin(addr, &user_iov, sizeof(user_iov))) != 0)
+			return error;
+		error = proc_vmspace_getref(l->l_proc, &vm);
+		if (error) {
+			return error;
+		}
+		iov.iov_base = user_iov.iov_base;
+		iov.iov_len = user_iov.iov_len;
+		if (iov.iov_len > sizeof(struct xstate))
+			iov.iov_len = sizeof(struct xstate);
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = 0;
+		uio.uio_resid = iov.iov_len;
+		uio.uio_rw = write ? UIO_WRITE : UIO_READ;
+		uio.uio_vmspace = vm;
+		error = process_machdep_doxstate(l, *lt, &uio);
+		uvmspace_free(vm);
+		return error;
 	}
 
 #ifdef DIAGNOSTIC
 	panic("ptrace_machdep: impossible");
 #endif
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -335,5 +401,47 @@ process_machdep_validxmmregs(struct proc *p)
 
 	return (i386_use_fxsave);
 }
+
+int
+process_machdep_doxstate(struct lwp *curl, struct lwp *l, struct uio *uio)
+	/* curl:		 tracer */
+	/* l:			 traced */
+{
+	int error;
+	struct xstate r;
+	char *kv;
+	ssize_t kl;
+
+	memset(&r, 0, sizeof(r));
+	kl = MIN(uio->uio_iov->iov_len, sizeof(r));
+	kv = (char *) &r;
+
+	kv += uio->uio_offset;
+	kl -= uio->uio_offset;
+	if (kl > uio->uio_resid)
+		kl = uio->uio_resid;
+
+	if (kl < 0)
+		error = EINVAL;
+	else
+		error = process_machdep_read_xstate(l, &r);
+	if (error == 0)
+		error = uiomove(kv, kl, uio);
+	if (error == 0 && uio->uio_rw == UIO_WRITE)
+		error = process_machdep_write_xstate(l, &r);
+
+	uio->uio_offset = 0;
+	return error;
+}
+
+int
+process_machdep_validxstate(struct proc *p)
+{
+
+	if (p->p_flag & PK_SYSTEM)
+		return 0;
+
+	return 1;
+}
 #endif /* __HAVE_PTRACE_MACHDEP */
-#endif /* PTRACE */
+#endif /* PTRACE_HOOKS */

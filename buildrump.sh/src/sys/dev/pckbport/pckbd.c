@@ -1,4 +1,4 @@
-/* $NetBSD: pckbd.c,v 1.32 2015/07/16 15:01:04 prlw1 Exp $ */
+/* $NetBSD: pckbd.c,v 1.36 2021/08/07 16:19:15 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 2009 The NetBSD Foundation, Inc.
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pckbd.c,v 1.32 2015/07/16 15:01:04 prlw1 Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pckbd.c,v 1.36 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -409,7 +409,7 @@ pckbdattach(device_t parent, device_t self, void *aux)
 	 * Attach the wskbd, saving a handle to it.
 	 * XXX XXX XXX
 	 */
-	sc->sc_wskbddev = config_found_ia(self, "wskbddev", &a, wskbddevprint);
+	sc->sc_wskbddev = config_found(self, &a, wskbddevprint, CFARGS_NONE);
 }
 
 int
@@ -1010,6 +1010,7 @@ pckbd_ioctl(void *v, u_long cmd, void *data, int flag,
 	case WSKBDIO_GETLEDS:
 		*(int *)data = pckbd_led_decode(sc->sc_ledstate);
 		return 0;
+#if 0
 	case WSKBDIO_COMPLEXBELL:
 #define d ((struct wskbd_bell_data *)data)
 		/*
@@ -1019,6 +1020,7 @@ pckbd_ioctl(void *v, u_long cmd, void *data, int flag,
 		pckbd_bell(d->pitch, d->period, d->volume, 0);
 #undef d
 		return 0;
+#endif
 #ifdef WSDISPLAY_COMPAT_RAWKBD
 	case WSKBDIO_SETMODE:
 		sc->rawkbd = (*(int *)data == WSKBD_RAW);
@@ -1092,8 +1094,11 @@ pckbd_cngetc(void *v, u_int *type, int *data)
 
 	for (;;) {
 		val = pckbport_poll_data(t->t_kbctag, t->t_kbcslot);
-		if (val == -1)
-			continue;
+		if (val == -1) {
+			*type = 0;
+			*data = 0;
+			return;
+		}
 
 		val = pckbd_scancode_translate(t, val);
 		if (val == 0)

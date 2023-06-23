@@ -1,4 +1,4 @@
-/*	$NetBSD: tty_43.c,v 1.30 2014/05/22 16:31:19 dholland Exp $	*/
+/*	$NetBSD: tty_43.c,v 1.39 2020/10/10 15:59:41 christos Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -62,7 +62,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tty_43.c,v 1.30 2014/05/22 16:31:19 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tty_43.c,v 1.39 2020/10/10 15:59:41 christos Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -74,7 +78,12 @@ __KERNEL_RCSID(0, "$NetBSD: tty_43.c,v 1.30 2014/05/22 16:31:19 dholland Exp $")
 #include <sys/file.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
+#include <sys/compat_stub.h>
+#include <sys/module_hook.h>
 #include <sys/ioctl_compat.h>
+
+#include <compat/common/compat_mod.h>
+#include <compat/sys/ttycom.h>
 
 int ttydebug = 0;
 
@@ -108,11 +117,11 @@ static const int compatspcodes[] = {
 static int ttcompatgetflags(struct tty *);
 static void ttcompatsetflags(struct tty *, struct termios *);
 static void ttcompatsetlflags(struct tty *, struct termios *);
-int	ttcompat(struct tty *, u_long, void *, int, struct lwp *);
 
 /*ARGSUSED*/
 int
-ttcompat(struct tty *tp, u_long com, void *data, int flag, struct lwp *l)
+compat_43_ttioctl(struct tty *tp, u_long com, void *data, int flag,
+    struct lwp *l)
 {
 
 	switch (com) {
@@ -211,20 +220,24 @@ ttcompat(struct tty *tp, u_long com, void *data, int flag, struct lwp *l)
 	case TIOCLBIC:
 	case TIOCLSET: {
 		struct termios term;
-		int flags;
+		int argbits, flags;
+
+		argbits = *(int *)data;
+		if (argbits < 0)
+			return EINVAL;
 
 		mutex_spin_enter(&tty_lock);
 		term = tp->t_termios;
 		flags = ttcompatgetflags(tp);
 		switch (com) {
 		case TIOCLSET:
-			tp->t_flags = (flags&0xffff) | (*(int *)data<<16);
+			tp->t_flags = (flags & 0xffff) | (argbits << 16);
 			break;
 		case TIOCLBIS:
-			tp->t_flags = flags | (*(int *)data<<16);
+			tp->t_flags = flags | (argbits << 16);
 			break;
 		case TIOCLBIC:
-			tp->t_flags = flags & ~(*(int *)data<<16);
+			tp->t_flags = flags & ~(argbits << 16);
 			break;
 		}
 		ttcompatsetlflags(tp, &term);
@@ -241,8 +254,8 @@ ttcompat(struct tty *tp, u_long com, void *data, int flag, struct lwp *l)
 
 	case OTIOCGETD:
 		mutex_spin_enter(&tty_lock);
-		*(int *)data = (tp->t_linesw == NULL) ?
-		    2 /* XXX old NTTYDISC */ : tp->t_linesw->l_no;
+		*(int *)data = (tp->t_linesw == NULL || tp->t_linesw->l_no == 0)
+		    ? 2 /* XXX old NTTYDISC */ : tp->t_linesw->l_no;
 		mutex_spin_exit(&tty_lock);
 		break;
 
@@ -262,20 +275,6 @@ ttcompat(struct tty *tp, u_long com, void *data, int flag, struct lwp *l)
 		mutex_spin_enter(&tty_lock);
 		SET(tp->t_cflag, HUPCL);
 		mutex_spin_exit(&tty_lock);
-		break;
-
-	case TIOCGSID:
-		mutex_enter(proc_lock);
-		if (tp->t_session == NULL) {
-			mutex_exit(proc_lock);
-			return ENOTTY;
-		}
-		if (tp->t_session->s_leader == NULL) {
-			mutex_exit(proc_lock);
-			return ENOTTY;
-		}
-		*(int *) data =  tp->t_session->s_leader->p_pid;
-		mutex_exit(proc_lock);
 		break;
 
 	default:
@@ -504,4 +503,18 @@ ttcompatsetlflags(struct tty *tp, struct termios *t)
 	t->c_oflag = oflag;
 	t->c_lflag = lflag;
 	t->c_cflag = cflag;
+}
+
+int
+kern_tty_43_init(void)
+{
+	MODULE_HOOK_SET(tty_ttioctl_43_hook, compat_43_ttioctl);
+	return 0;
+}
+
+int
+kern_tty_43_fini(void)
+{
+	MODULE_HOOK_UNSET(tty_ttioctl_43_hook);
+	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: promlib.h,v 1.24 2010/01/21 11:40:01 martin Exp $ */
+/*	$NetBSD: promlib.h,v 1.26 2021/05/10 13:59:30 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -40,6 +40,8 @@
 #ifdef _KERNEL_OPT
 #include "opt_multiprocessor.h"
 #endif
+
+#include <sys/device.h>			/* for devhandle_t */
 
 #include <machine/idprom.h>
 #include <machine/bsd_openprom.h>
@@ -110,6 +112,9 @@ struct promops {
 
 	int	(*po_finddevice)(const char *);
 
+	/* devhandle_t interface */
+	devhandle_t (*po_node_to_devhandle)(int);
+	int	(*po_devhandle_to_node)(devhandle_t);
 };
 
 extern struct promops	promops;
@@ -137,6 +142,7 @@ void	prom_init(void);	/* To setup promops */
 /* Utility routines */
 int	prom_getprop(int, const char *, size_t, int *, void *);
 int	prom_getpropint(int, const char *, int);
+uint64_t prom_getpropuint64(int, const char *, uint64_t);
 char	*prom_getpropstring(int, const char *);
 char	*prom_getpropstringA(int, const char *, char *, size_t);
 void	prom_printf(const char *, ...);
@@ -210,6 +216,9 @@ void	prom_boot(char *)	__attribute__((__noreturn__));
 #define nextsibling(node)	prom_nextsibling(node)
 #define prom_getproplen(node,name)	prom_proplen(node, name)
 
+/* devhandle_t interface */
+#define	prom_node_to_devhandle(n)  ((*promops.po_node_to_devhandle)(n))
+#define	prom_devhandle_to_node(dh) ((*promops.po_devhandle_to_node)(dh))
 
 /* MP stuff - not currently used */
 #define prom_cpustart(m,a,c,pc)	((*promops.po_cpustart)(m,a,c,pc))
@@ -218,5 +227,10 @@ void	prom_boot(char *)	__attribute__((__noreturn__));
 #define prom_cpuresume(m)	((*promops.po_cpuresume)(m))
 
 extern void	*romp;		/* PROM-supplied argument (see locore) */
+
+#ifdef _KERNEL
+#define	OBP_DEVICE_CALL_REGISTER(_n_, _c_)				\
+	DEVICE_CALL_REGISTER(obp_device_calls, _n_, _c_)
+#endif /* _KERNEL */
 
 #endif /* _SPARC_PROMLIB_H_ */

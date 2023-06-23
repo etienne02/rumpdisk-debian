@@ -1,4 +1,4 @@
-/*	$NetBSD: lock.h,v 1.31 2008/04/28 20:23:36 martin Exp $ */
+/*	$NetBSD: lock.h,v 1.33 2019/11/29 20:06:34 riastradh Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2006 The NetBSD Foundation, Inc.
@@ -72,13 +72,13 @@ extern void __cpu_simple_lock(__cpu_simple_lock_t *);
 #endif
 
 static __inline int
-__SIMPLELOCK_LOCKED_P(__cpu_simple_lock_t *__ptr)
+__SIMPLELOCK_LOCKED_P(const __cpu_simple_lock_t *__ptr)
 {
 	return *__ptr == __SIMPLELOCK_LOCKED;
 }
 
 static __inline int
-__SIMPLELOCK_UNLOCKED_P(__cpu_simple_lock_t *__ptr)
+__SIMPLELOCK_UNLOCKED_P(const __cpu_simple_lock_t *__ptr)
 {
 	return *__ptr == __SIMPLELOCK_UNLOCKED;
 }
@@ -139,47 +139,5 @@ __cpu_simple_unlock(__cpu_simple_lock_t *alp)
 	__insn_barrier();
 	*alp = __SIMPLELOCK_UNLOCKED;
 }
-
-#if defined(__sparc_v9__)
-static __inline void
-mb_read(void)
-{
-	__asm __volatile("membar #LoadLoad" : : : "memory");
-}
-
-static __inline void
-mb_write(void)
-{
-	__asm __volatile("" : : : "memory");
-}
-
-static __inline void
-mb_memory(void)
-{
-	__asm __volatile("membar #MemIssue" : : : "memory");
-}
-#else	/* __sparc_v9__ */
-static __inline void
-mb_read(void)
-{
-	static volatile int junk;
-	__asm volatile("st %%g0,[%0]"
-	    :
-	    : "r" (&junk)
-	    : "memory");
-}
-
-static __inline void
-mb_write(void)
-{
-	__insn_barrier();
-}
-
-static __inline void
-mb_memory(void)
-{
-	mb_read();
-}
-#endif	/* __sparc_v9__ */
 
 #endif /* _MACHINE_LOCK_H */

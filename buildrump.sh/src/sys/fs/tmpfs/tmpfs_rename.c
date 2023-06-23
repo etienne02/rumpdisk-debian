@@ -1,4 +1,4 @@
-/*	$NetBSD: tmpfs_rename.c,v 1.8 2015/07/06 10:24:59 wiz Exp $	*/
+/*	$NetBSD: tmpfs_rename.c,v 1.10 2019/12/03 04:59:05 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tmpfs_rename.c,v 1.8 2015/07/06 10:24:59 wiz Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tmpfs_rename.c,v 1.10 2019/12/03 04:59:05 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/errno.h>
@@ -282,7 +282,7 @@ tmpfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 	KASSERT(tcnp != NULL);
 	KASSERT(tdep != NULL);
 	KASSERT(fdep != tdep);
-	KASSERT((*fdep) != (*tdep));
+	KASSERT((tvp == NULL) || (*fdep) != (*tdep));
 	KASSERT((*fdep) != NULL);
 	KASSERT((*fdep)->td_node == VP_TO_TMPFS_NODE(fvp));
 	KASSERT((tvp == NULL) || ((*tdep) != NULL));
@@ -425,7 +425,7 @@ tmpfs_gro_lookup(struct mount *mp, struct vnode *dvp,
 {
 	struct tmpfs_dirent *dirent, **dep_ret = de_ret;
 	struct vnode *vp;
-	int error __diagused;
+	int error;
 
 	(void)mp;
 	KASSERT(mp != NULL);
@@ -443,11 +443,6 @@ tmpfs_gro_lookup(struct mount *mp, struct vnode *dvp,
 	if (error)
 		return error;
 	KASSERT(vp != NULL);
-
-	/*
-	 * XXX Once namei is fixed, we can change the genfs_rename
-	 * protocol so that we have to lock vp here.
-	 */
 
 	*dep_ret = dirent;
 	*vp_ret = vp;

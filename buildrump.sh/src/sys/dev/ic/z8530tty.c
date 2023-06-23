@@ -1,4 +1,4 @@
-/*	$NetBSD: z8530tty.c,v 1.131 2014/11/15 19:18:18 christos Exp $	*/
+/*	$NetBSD: z8530tty.c,v 1.134 2019/11/10 21:16:35 chs Exp $	*/
 
 /*-
  * Copyright (c) 1993, 1994, 1995, 1996, 1997, 1998, 1999
@@ -137,7 +137,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: z8530tty.c,v 1.131 2014/11/15 19:18:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: z8530tty.c,v 1.134 2019/11/10 21:16:35 chs Exp $");
 
 #include "opt_kgdb.h"
 #include "opt_ntp.h"
@@ -408,12 +408,7 @@ zstty_attach(device_t parent, device_t self, void *aux)
 	tty_attach(tp);
 
 	zst->zst_tty = tp;
-	zst->zst_rbuf = malloc(zstty_rbuf_size << 1, M_DEVBUF, M_NOWAIT);
-	if (zst->zst_rbuf == NULL) {
-		aprint_error_dev(zst->zst_dev,
-		    "unable to allocate ring buffer\n");
-		return;
-	}
+	zst->zst_rbuf = malloc(zstty_rbuf_size << 1, M_DEVBUF, M_WAITOK);
 	zst->zst_ebuf = zst->zst_rbuf + (zstty_rbuf_size << 1);
 	/* Disable the high water mark. */
 	zst->zst_r_hiwat = 0;
@@ -560,6 +555,13 @@ zsopen(dev_t dev, int flags, int mode, struct lwp *l)
 	if (tp == NULL)
 		return (EBUSY);
 
+	/*
+	 * If the device is exclusively for kernel use, deny userland
+	 * open.
+	 */
+	if (ISSET(tp->t_state, TS_KERN_ONLY))
+		return (EBUSY);
+
 	if (kauth_authorize_device_tty(l->l_cred, KAUTH_DEVICE_TTY_OPEN, tp))
 		return (EBUSY);
 
@@ -622,7 +624,9 @@ zsopen(dev_t dev, int flags, int mode, struct lwp *l)
 
 		/* Make sure zsparam will see changes. */
 		tp->t_ospeed = 0;
+		mutex_spin_exit(&tty_lock);
 		(void) zsparam(tp, &t);
+		mutex_spin_enter(&tty_lock);
 
 		/*
 		 * Note: zsparam has done: cflag, ispeed, ospeed
@@ -1665,9 +1669,7 @@ zstty_stsoft(struct zstty_softc *zst, struct tty *tp)
 		/*
 		 * Inform the tty layer that carrier detect changed.
 		 */
-		mutex_spin_exit(&tty_lock);
 		(void) (*tp->t_linesw->l_modem)(tp, ISSET(rr0, ZSRR0_DCD));
-		mutex_spin_enter(&tty_lock);
 	}
 
 	if (ISSET(delta, cs->cs_rr0_cts)) {

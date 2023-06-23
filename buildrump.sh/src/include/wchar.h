@@ -1,4 +1,4 @@
-/*	$NetBSD: wchar.h,v 1.41 2014/10/13 00:47:03 christos Exp $	*/
+/*	$NetBSD: wchar.h,v 1.44 2020/03/20 01:08:42 joerg Exp $	*/
 
 /*-
  * Copyright (c)1999 Citrus Project,
@@ -116,6 +116,7 @@ size_t	wcslen(const wchar_t *);
 wchar_t	*wcsncat(wchar_t * __restrict, const wchar_t * __restrict, size_t);
 int	wcsncmp(const wchar_t *, const wchar_t *, size_t);
 wchar_t	*wcsncpy(wchar_t * __restrict , const wchar_t * __restrict, size_t);
+size_t	wcsnlen(const wchar_t *, size_t);
 wchar_t	*wcspbrk(const wchar_t *, const wchar_t *);
 wchar_t	*wcsrchr(const wchar_t *, wchar_t);
 size_t	wcsrtombs(char * __restrict, const wchar_t ** __restrict, size_t,
@@ -132,21 +133,27 @@ wchar_t	*wmemcpy(wchar_t * __restrict, const wchar_t * __restrict, size_t);
 wchar_t	*wmemmove(wchar_t *, const wchar_t *, size_t);
 wchar_t	*wmemset(wchar_t *, wchar_t, size_t);
 
+#if defined(_NETBSD_SOURCE)
 size_t	wcslcat(wchar_t *, const wchar_t *, size_t);
 size_t	wcslcpy(wchar_t *, const wchar_t *, size_t);
-int	wcswidth(const wchar_t *, size_t);
-int	wctob(wint_t);
-int	wcwidth(wchar_t);
+#endif
 
+#if defined(_NETBSD_SOURCE) || \
+    (_POSIX_C_SOURCE - 0 >= 200112L) || (_XOPEN_SOURCE - 0) >= 600
+int	wcswidth(const wchar_t *, size_t);
+int	wcwidth(wchar_t);
+#endif
+
+int	wctob(wint_t);
 unsigned long int wcstoul(const wchar_t * __restrict,
 	wchar_t ** __restrict, int);
 long int wcstol(const wchar_t * __restrict,
 	wchar_t ** __restrict, int);
 double wcstod(const wchar_t * __restrict, wchar_t ** __restrict);
 
-#if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) > 199901L || \
-    defined(_NETBSD_SOURCE) || \
-	(_POSIX_C_SOURCE - 0) >= 200112L || (_XOPEN_SOURCE - 0) >= 600
+#if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) >= 199901L || \
+    (__cplusplus - 0) >= 201103L || defined(_NETBSD_SOURCE) || \
+    (_POSIX_C_SOURCE - 0) >= 200112L || (_XOPEN_SOURCE - 0) >= 600
 float wcstof(const wchar_t * __restrict, wchar_t ** __restrict);
 long double wcstold(const wchar_t * __restrict, wchar_t ** __restrict);
 
@@ -187,8 +194,8 @@ int vwprintf(const wchar_t * __restrict, __va_list);
 int wprintf(const wchar_t * __restrict, ...);
 int wscanf(const wchar_t * __restrict, ...);
 #if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) > 199901L || \
-    defined(_NETBSD_SOURCE) || \
-	(_POSIX_C_SOURCE - 0) >= 200112L || (_XOPEN_SOURCE - 0) >= 600
+    (__cplusplus - 0) >= 201103L || defined(_NETBSD_SOURCE) || \
+    (_POSIX_C_SOURCE - 0) >= 200112L || (_XOPEN_SOURCE - 0) >= 600
 int vfwscanf(FILE * __restrict, const wchar_t * __restrict, __va_list);
 int vswscanf(const wchar_t * __restrict, const wchar_t * __restrict,
     __va_list);

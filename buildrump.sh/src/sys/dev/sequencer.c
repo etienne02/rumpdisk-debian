@@ -1,4 +1,4 @@
-/*	$NetBSD: sequencer.c,v 1.64 2015/08/20 14:40:17 christos Exp $	*/
+/*	$NetBSD: sequencer.c,v 1.73 2020/12/19 01:18:58 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -55,9 +55,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sequencer.c,v 1.64 2015/08/20 14:40:17 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sequencer.c,v 1.73 2020/12/19 01:18:58 thorpej Exp $");
 
+#ifdef _KERNEL_OPT
 #include "sequencer.h"
+#include "midi.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/ioctl.h>
@@ -80,12 +83,31 @@ __KERNEL_RCSID(0, "$NetBSD: sequencer.c,v 1.64 2015/08/20 14:40:17 christos Exp 
 #include <sys/pcq.h>
 #include <sys/vnode.h>
 #include <sys/kauth.h>
+#include <sys/module.h>
 
 #include <dev/midi_if.h>
 #include <dev/midivar.h>
 #include <dev/sequencervar.h>
 
 #include "ioconf.h"
+
+/*
+ * XXX Kludge.  This module uses midi_cd, and depends on the `midi'
+ * module, but there's no obvious way to get midi_cd declared in
+ * ioconf.h without actually pulling MIDI into the module in
+ * sys/modules/sequencer/sequencer.ioconf.  Please fix me!
+ *
+ * XXX XXX XXX Apparently sequencer.ioconf doesn't actually make the
+ * sequencer cdev!  Did this ever work?
+ *
+ * XXX XXX XXX Apparently there are even some kernels that include a
+ * sequencer pseudo-device but exclude any midi device.  How do they
+ * even link??
+ */
+extern struct cfdriver midi_cd;
+#ifdef _MODULE
+extern struct cfdriver sequencer_cd;
+#endif
 
 #define ADDTIMEVAL(a, b) ( \
 	(a)->tv_sec += (b)->tv_sec, \
@@ -192,12 +214,6 @@ static struct sequencer_softc *
 sequencercreate(int unit)
 {
 	struct sequencer_softc *sc = kmem_zalloc(sizeof(*sc), KM_SLEEP);
-	if (sc == NULL) {
-#ifdef DIAGNOSTIC
-		printf("%s: out of memory\n", __func__);
-#endif
-		return NULL;
-	}
 	sc->sc_unit = unit;
 	callout_init(&sc->sc_callout, CALLOUT_MPSAFE);
 	sc->sih = softint_establish(SOFTINT_NET | SOFTINT_MPSAFE,
@@ -357,8 +373,6 @@ sequenceropen(dev_t dev, int flags, int ifmt, struct lwp *l)
 
 	/* Only now redirect input from MIDI devices. */
 	for (mdno = 0; mdno < sc->nmidi; mdno++) {
-		extern struct cfdriver midi_cd;
-
 		msc = device_lookup_private(&midi_cd, sc->devs[mdno]->unit);
 		if (msc) {
 			mutex_enter(msc->lock);
@@ -412,10 +426,10 @@ seq_timeout(void *addr)
 	cv_broadcast(&sc->wchan);
 	selnotify(&sc->wsel, 0, NOTE_SUBMIT);
 	if ((pid = sc->async) != 0) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		if ((p = proc_find(pid)) != NULL)
 			psignal(p, SIGIO);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 	mutex_exit(&sc->lock);
 }
@@ -455,8 +469,6 @@ sequencerclose(dev_t dev, int flags, int ifmt, struct lwp *l)
 	}
 	/* Bin input from MIDI devices. */
 	for (unit = 0; unit < sc->nmidi; unit++) {
-		extern struct cfdriver midi_cd;
-
 		msc = device_lookup_private(&midi_cd, unit);
 		if (msc) {
 			mutex_enter(msc->lock);
@@ -506,10 +518,10 @@ seq_input_event(struct sequencer_softc *sc, seq_event_t *cmd)
 	if (sc->async != 0) {
 		proc_t *p;
 
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		if ((p = proc_find(sc->async)) != NULL)
 			psignal(p, SIGIO);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 	return 0;
 }
@@ -889,7 +901,7 @@ filt_sequencerrdetach(struct knote *kn)
 	struct sequencer_softc *sc = kn->kn_hook;
 
 	mutex_enter(&sc->lock);
-	SLIST_REMOVE(&sc->rsel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->rsel, kn);
 	mutex_exit(&sc->lock);
 }
 
@@ -914,8 +926,12 @@ filt_sequencerread(struct knote *kn, long hint)
 	return rv;
 }
 
-static const struct filterops sequencerread_filtops =
-	{ 1, NULL, filt_sequencerrdetach, filt_sequencerread };
+static const struct filterops sequencerread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_sequencerrdetach,
+	.f_event = filt_sequencerread,
+};
 
 static void
 filt_sequencerwdetach(struct knote *kn)
@@ -923,7 +939,7 @@ filt_sequencerwdetach(struct knote *kn)
 	struct sequencer_softc *sc = kn->kn_hook;
 
 	mutex_enter(&sc->lock);
-	SLIST_REMOVE(&sc->wsel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->wsel, kn);
 	mutex_exit(&sc->lock);
 }
 
@@ -948,25 +964,29 @@ filt_sequencerwrite(struct knote *kn, long hint)
 	return rv;
 }
 
-static const struct filterops sequencerwrite_filtops =
-	{ 1, NULL, filt_sequencerwdetach, filt_sequencerwrite };
+static const struct filterops sequencerwrite_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_sequencerwdetach,
+	.f_event = filt_sequencerwrite,
+};
 
 static int
 sequencerkqfilter(dev_t dev, struct knote *kn)
 {
 	struct sequencer_softc *sc;
-	struct klist *klist;
+	struct selinfo *sip;
 	if ((sc = sequencerget(SEQUENCERUNIT(dev))) == NULL)
 		return ENXIO;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &sc->rsel.sel_klist;
+		sip = &sc->rsel;
 		kn->kn_fop = &sequencerread_filtops;
 		break;
 
 	case EVFILT_WRITE:
-		klist = &sc->wsel.sel_klist;
+		sip = &sc->wsel;
 		kn->kn_fop = &sequencerwrite_filtops;
 		break;
 
@@ -977,7 +997,7 @@ sequencerkqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = sc;
 
 	mutex_enter(&sc->lock);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(sip, kn);
 	mutex_exit(&sc->lock);
 
 	return (0);
@@ -1270,7 +1290,7 @@ seq_do_fullsize(struct sequencer_softc *sc, seq_event_t *b, struct uio *uio)
 		return EINVAL;
 	}
 #endif
-	memcpy(&sysex, b, sizeof sysex);
+	memcpy(&sysex, b, sizeof(*b));
 	dev = sysex.device_no;
 	if (/* dev < 0 || */ dev >= sc->nmidi)
 		return (ENXIO);
@@ -1401,7 +1421,6 @@ midiseq_in(struct midi_dev *md, u_char *msg, int len)
 static struct midi_dev *
 midiseq_open(int unit, int flags)
 {
-	extern struct cfdriver midi_cd;
 	int error;
 	struct midi_dev *md;
 	struct midi_softc *sc;
@@ -1609,7 +1628,6 @@ midiseq_loadpatch(struct midi_dev *md,
 	return error;
 }
 
-#include "midi.h"
 #if NMIDI == 0
 static dev_type_open(midiopen);
 static dev_type_close(midiclose);
@@ -1667,3 +1685,49 @@ midi_writebytes(int unit, u_char *bf, int cc)
 	return (ENXIO);
 }
 #endif /* NMIDI == 0 */
+
+#ifdef _MODULE
+#include "ioconf.c"
+
+devmajor_t sequencer_bmajor = -1, sequencer_cmajor = -1;
+#endif
+
+MODULE(MODULE_CLASS_DRIVER, sequencer, "midi");
+
+static int
+sequencer_modcmd(modcmd_t cmd, void *arg)
+{
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = devsw_attach(sequencer_cd.cd_name,
+		    NULL, &sequencer_bmajor,
+		    &sequencer_cdevsw, &sequencer_cmajor);
+		if (error)
+			break;
+
+		error = config_init_component(cfdriver_ioconf_sequencer,
+		    cfattach_ioconf_sequencer, cfdata_ioconf_sequencer);
+		if (error) {
+			devsw_detach(NULL, &sequencer_cdevsw);
+		}
+		break;
+	case MODULE_CMD_FINI:
+		devsw_detach(NULL, &sequencer_cdevsw);
+		error = config_fini_component(cfdriver_ioconf_sequencer,
+		   cfattach_ioconf_sequencer, cfdata_ioconf_sequencer);
+		if (error)
+			devsw_attach(sequencer_cd.cd_name,
+			    NULL, &sequencer_bmajor,
+			    &sequencer_cdevsw, &sequencer_cmajor);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+
+	return error;
+}

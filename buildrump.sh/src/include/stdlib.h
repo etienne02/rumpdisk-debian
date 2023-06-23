@@ -1,4 +1,4 @@
-/*	$NetBSD: stdlib.h,v 1.117 2016/07/01 22:42:01 christos Exp $	*/
+/*	$NetBSD: stdlib.h,v 1.123 2021/07/03 14:07:13 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -95,7 +95,7 @@ extern size_t __mb_cur_max;
 __BEGIN_DECLS
 __dead	 void _Exit(int);
 __dead	 void abort(void);
-__pure	 int abs(int);
+__constfunc	int abs(int);
 int	 atexit(void (*)(void));
 double	 atof(const char *);
 int	 atoi(const char *);
@@ -111,7 +111,7 @@ div_t	 div(int, int);
 __dead	 void exit(int);
 void	 free(void *);
 __aconst char *getenv(const char *);
-__pure long
+__constfunc long
 	 labs(long);
 ldiv_t	 ldiv(long, long);
 void	*malloc(size_t);
@@ -190,8 +190,6 @@ int	 mkostemp(char *, int);
 int	 mkostemps(char *, int, int);
 #endif
 
-char	*mkdtemp(char *);
-int	 mkstemp(char *);
 char	*mktemp(char *)
 #ifdef __MKTEMP_OK__
 	__RENAME(_mktemp)
@@ -254,6 +252,20 @@ int	 posix_memalign(void **, size_t, size_t);
 #endif
 
 /*
+ * The Open Group Base Specifications, Issue 7; IEEE Std 1003.1-2008 (POSIX)
+ *   or
+ * X/Open Portability Guide >= Issue 4 Version 2
+ */
+#if (_POSIX_C_SOURCE - 0) >= 200809L || \
+    (defined(_XOPEN_SOURCE) && defined(_XOPEN_SOURCE_EXTENDED)) || \
+    (_XOPEN_SOURCE - 0) >= 500 || defined(_NETBSD_SOURCE)
+char	*mkdtemp(char *);
+int	 mkstemp(char *);
+
+int	 getsubopt(char **, char * const *, char **);
+#endif
+
+/*
  * Implementation-defined extensions
  */
 #if defined(_NETBSD_SOURCE)
@@ -270,7 +282,7 @@ uint32_t arc4random(void);
 void	 arc4random_stir(void);
 void	 arc4random_buf(void *, size_t);
 uint32_t arc4random_uniform(uint32_t);
-void	 arc4random_addrandom(u_char *, int);
+void	 arc4random_addrandom(unsigned char *, int);
 char	*getbsize(int *, long *);
 char	*cgetcap(char *, const char *, int);
 int	 cgetclose(void);

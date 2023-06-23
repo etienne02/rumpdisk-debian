@@ -1,4 +1,4 @@
-/*	$NetBSD: agp.c,v 1.83 2014/07/25 08:10:38 dholland Exp $	*/
+/*	$NetBSD: agp.c,v 1.87 2019/11/10 21:16:36 chs Exp $	*/
 
 /*-
  * Copyright (c) 2000 Doug Rabson
@@ -65,7 +65,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: agp.c,v 1.83 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: agp.c,v 1.87 2019/11/10 21:16:36 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -312,7 +312,7 @@ agpmatch(device_t parent, cfdata_t match, void *aux)
 	return (1);
 }
 
-static const int agp_max[][2] = {
+static const u_int agp_max[][2] = {
 	{0,	0},
 	{32,	4},
 	{64,	28},
@@ -332,7 +332,8 @@ agpattach(device_t parent, device_t self, void *aux)
 	struct pci_attach_args *pa = &apa->apa_pci_args;
 	struct agp_softc *sc = device_private(self);
 	const struct agp_product *ap;
-	int memsize, i, ret;
+	int ret;
+	u_int memsize, i;
 
 	ap = agp_lookup(pa);
 	KASSERT(ap != NULL);
@@ -407,9 +408,7 @@ agp_alloc_gatt(struct agp_softc *sc)
 	void *virtual;
 	int dummyseg;
 
-	gatt = malloc(sizeof(struct agp_gatt), M_AGP, M_NOWAIT);
-	if (!gatt)
-		return NULL;
+	gatt = malloc(sizeof(struct agp_gatt), M_AGP, M_WAITOK);
 	gatt->ag_entries = entries;
 
 	if (agp_alloc_dmamem(sc->as_dmat, entries * sizeof(u_int32_t),
@@ -471,9 +470,9 @@ agp_generic_enable(struct agp_softc *sc, u_int32_t mode)
 	}
 
 	tstatus = pci_conf_read(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_STATUS);
+	    sc->as_capoff + PCI_AGP_STATUS);
 	mstatus = pci_conf_read(pa.pa_pc, pa.pa_tag,
-	    capoff + AGP_STATUS);
+	    capoff + PCI_AGP_STATUS);
 
 	if (AGP_MODE_GET_MODE_3(mode) &&
 	    AGP_MODE_GET_MODE_3(tstatus) &&
@@ -492,9 +491,9 @@ agp_generic_enable_v2(struct agp_softc *sc, const struct pci_attach_args *pa,
 	int rq, sba, fw, rate;
 
 	tstatus = pci_conf_read(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_STATUS);
+	    sc->as_capoff + PCI_AGP_STATUS);
 	mstatus = pci_conf_read(pa->pa_pc, pa->pa_tag,
-	    capoff + AGP_STATUS);
+	    capoff + PCI_AGP_STATUS);
 
 	/* Set RQ to the min of mode, tstatus and mstatus */
 	rq = AGP_MODE_GET_RQ(mode);
@@ -531,8 +530,9 @@ agp_generic_enable_v2(struct agp_softc *sc, const struct pci_attach_args *pa,
 	command = AGP_MODE_SET_RATE(command, rate);
 	command = AGP_MODE_SET_AGP(command, 1);
 	pci_conf_write(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_COMMAND, command);
-	pci_conf_write(pa->pa_pc, pa->pa_tag, capoff + AGP_COMMAND, command);
+	    sc->as_capoff + PCI_AGP_COMMAND, command);
+	pci_conf_write(pa->pa_pc, pa->pa_tag, capoff + PCI_AGP_COMMAND,
+		       command);
 
 	return 0;
 }
@@ -546,9 +546,9 @@ agp_generic_enable_v3(struct agp_softc *sc, const struct pci_attach_args *pa,
 	int rq, sba, fw, rate, arqsz, cal;
 
 	tstatus = pci_conf_read(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_STATUS);
+	    sc->as_capoff + PCI_AGP_STATUS);
 	mstatus = pci_conf_read(pa->pa_pc, pa->pa_tag,
-	    capoff + AGP_STATUS);
+	    capoff + PCI_AGP_STATUS);
 
 	/* Set RQ to the min of mode, tstatus and mstatus */
 	rq = AGP_MODE_GET_RQ(mode);
@@ -598,8 +598,9 @@ agp_generic_enable_v3(struct agp_softc *sc, const struct pci_attach_args *pa,
 	command = AGP_MODE_SET_RATE(command, rate);
 	command = AGP_MODE_SET_AGP(command, 1);
 	pci_conf_write(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_COMMAND, command);
-	pci_conf_write(pa->pa_pc, pa->pa_tag, capoff + AGP_COMMAND, command);
+	    sc->as_capoff + PCI_AGP_COMMAND, command);
+	pci_conf_write(pa->pa_pc, pa->pa_tag, capoff + PCI_AGP_COMMAND,
+		       command);
 
 	return 0;
 }
@@ -895,7 +896,7 @@ agp_info_user(struct agp_softc *sc, agp_info *info)
 	info->bridge_id = sc->as_id;
 	if (sc->as_capoff != 0)
 		info->agp_mode = pci_conf_read(sc->as_pc, sc->as_tag,
-					       sc->as_capoff + AGP_STATUS);
+					       sc->as_capoff + PCI_AGP_STATUS);
 	else
 		info->agp_mode = 0; /* i810 doesn't have real AGP */
 	info->aper_base = sc->as_apaddr;
@@ -1148,11 +1149,12 @@ agp_get_info(void *devcookie, struct agp_info *info)
 	struct agp_softc *sc = devcookie;
 
 	info->ai_mode = pci_conf_read(sc->as_pc, sc->as_tag,
-	    sc->as_capoff + AGP_STATUS);
+	    sc->as_capoff + PCI_AGP_STATUS);
 	info->ai_aperture_base = sc->as_apaddr;
 	info->ai_aperture_size = sc->as_apsize;	/* XXXfvdl inconsistent */
 	info->ai_memory_allowed = sc->as_maxmem;
 	info->ai_memory_used = sc->as_allocated;
+	info->ai_devid = sc->as_id;
 }
 
 int

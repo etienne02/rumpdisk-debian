@@ -1,4 +1,4 @@
-/*	$NetBSD: gpib.c,v 1.23 2016/07/11 11:31:50 msaitoh Exp $	*/
+/*	$NetBSD: gpib.c,v 1.26 2021/08/07 16:19:10 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gpib.c,v 1.23 2016/07/11 11:31:50 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gpib.c,v 1.26 2021/08/07 16:19:10 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -140,13 +140,14 @@ gpibattach(device_t parent, device_t self, void *aux)
 	for (address=0; address<GPIB_NDEVS; address++) {
 		ga.ga_ic = sc->sc_ic;
 		ga.ga_address = address;
-		(void) config_search_ia(gpibsubmatch1, sc->sc_dev, "gpib",
-		    &ga);
+		config_search(sc->sc_dev, &ga,
+		    CFARGS(.search = gpibsubmatch1));
 	}
 
 	/* attach the wild-carded devices - probably protocol busses */
 	ga.ga_ic = sc->sc_ic;
-	(void) config_search_ia(gpibsubmatch2, sc->sc_dev, "gpib", &ga);
+	config_search(sc->sc_dev, &ga,
+	    CFARGS(.search = gpibsubmatch2));
 }
 
 int
@@ -161,10 +162,10 @@ gpibsubmatch1(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 	if (cf->cf_loc[GPIBCF_ADDRESS] == sc->sc_myaddr)
 		return (0);
 
-	if (config_match(parent, cf, ga) > 0) {
+	if (config_probe(parent, cf, ga)) {
 		if (gpib_alloc(sc, ga->ga_address))
 			return (0);
-		config_attach(parent, cf, ga, gpibprint);
+		config_attach(parent, cf, ga, gpibprint, CFARGS_NONE);
 		return (0);
 	}
 	return (0);
@@ -179,8 +180,8 @@ gpibsubmatch2(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 		return (0);
 
 	ga->ga_address = GPIBCF_ADDRESS_DEFAULT;
-	if (config_match(parent, cf, ga) > 0) {
-		config_attach(parent, cf, ga, gpibdevprint);
+	if (config_probe(parent, cf, ga)) {
+		config_attach(parent, cf, ga, gpibdevprint, CFARGS_NONE);
 		return (0);
 	}
 	return (0);
@@ -229,12 +230,7 @@ _gpibregister(struct gpib_softc *sc, int slave, gpib_callback_t callback,
     void *arg, gpib_handle_t *hdl)
 {
 
-	*hdl = malloc(sizeof(struct gpibqueue), M_DEVBUF, M_NOWAIT);
-	if (*hdl == NULL) {
-		DPRINTF(DBG_FAIL, ("_gpibregister: can't allocate queue\n"));
-		return (1);
-	}
-
+	*hdl = malloc(sizeof(struct gpibqueue), M_DEVBUF, M_WAITOK);
 	(*hdl)->hq_slave = slave;
 	(*hdl)->hq_callback = callback;
 	(*hdl)->hq_softc = arg;

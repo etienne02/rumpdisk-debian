@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -97,6 +97,8 @@ typedef struct acpi_walk_state
     ACPI_PARSE_STATE                ParserState;        /* Current state of parser */
     UINT32                          PrevArgTypes;
     UINT32                          ArgCount;           /* push for fixed or var args */
+    UINT16                          MethodNestingDepth;
+    UINT8                           MethodIsNested;
 
     struct acpi_namespace_node      Arguments[ACPI_METHOD_NUM_ARGS];        /* Control method arguments */
     struct acpi_namespace_node      LocalVariables[ACPI_METHOD_NUM_LOCALS]; /* Control method locals */
@@ -111,7 +113,8 @@ typedef struct acpi_walk_state
     struct acpi_namespace_node      *MethodCallNode;    /* Called method Node*/
     ACPI_PARSE_OBJECT               *MethodCallOp;      /* MethodCall Op if running a method */
     union acpi_operand_object       *MethodDesc;        /* Method descriptor if running a method */
-    struct acpi_namespace_node      *MethodNode;        /* Method node if running a method. */
+    struct acpi_namespace_node      *MethodNode;        /* Method node if running a method */
+    char                            *MethodPathname;    /* Full pathname of running method */
     ACPI_PARSE_OBJECT               *Op;                /* Current parser op */
     const ACPI_OPCODE_INFO          *OpInfo;            /* Info on current opcode */
     ACPI_PARSE_OBJECT               *Origin;            /* Start of walk [Obsolete] */
@@ -216,9 +219,9 @@ typedef struct acpi_evaluate_info
     UINT32                          ReturnFlags;        /* Used for return value analysis */
     UINT32                          ReturnBtype;        /* Bitmapped type of the returned object */
     UINT16                          ParamCount;         /* Count of the input argument list */
+    UINT16                          NodeFlags;          /* Same as Node->Flags */
     UINT8                           PassNumber;         /* Parser pass number */
     UINT8                           ReturnObjectType;   /* Object type of the returned object */
-    UINT8                           NodeFlags;          /* Same as Node->Flags */
     UINT8                           Flags;              /* General flags */
 
 } ACPI_EVALUATE_INFO;
@@ -244,6 +247,19 @@ typedef struct acpi_device_walk_info
     UINT32                          Num_INI;
 
 } ACPI_DEVICE_WALK_INFO;
+
+
+/* Info used by Acpi  AcpiDbDisplayFields */
+
+typedef struct acpi_region_walk_info
+{
+    UINT32                          DebugLevel;
+    UINT32                          Count;
+    ACPI_OWNER_ID                   OwnerId;
+    UINT8                           DisplayType;
+    UINT32                          AddressSpaceId;
+
+} ACPI_REGION_WALK_INFO;
 
 
 /* TBD: [Restructure] Merge with struct above */

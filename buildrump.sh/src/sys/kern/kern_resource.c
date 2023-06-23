@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_resource.c,v 1.175 2016/07/13 09:52:00 njoly Exp $	*/
+/*	$NetBSD: kern_resource.c,v 1.187 2020/05/23 23:42:43 ad Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1991, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_resource.c,v 1.175 2016/07/13 09:52:00 njoly Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_resource.c,v 1.187 2020/05/23 23:42:43 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -99,7 +99,7 @@ resource_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	case KAUTH_PROCESS_RLIMIT: {
 		enum kauth_process_req req;
 
-		req = (enum kauth_process_req)(unsigned long)arg1;
+		req = (enum kauth_process_req)(uintptr_t)arg1;
 
 		switch (req) {
 		case KAUTH_REQ_PROCESS_RLIMIT_GET:
@@ -168,7 +168,7 @@ sys_getpriority(struct lwp *l, const struct sys_getpriority_args *uap,
 	id_t who = SCARG(uap, who);
 	int low = NZERO + PRIO_MAX + 1;
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	switch (SCARG(uap, which)) {
 	case PRIO_PROCESS:
 		p = who ? proc_find(who) : curp;
@@ -203,10 +203,10 @@ sys_getpriority(struct lwp *l, const struct sys_getpriority_args *uap,
 		break;
 
 	default:
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		return EINVAL;
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	if (low == NZERO + PRIO_MAX + 1) {
 		return ESRCH;
@@ -228,7 +228,7 @@ sys_setpriority(struct lwp *l, const struct sys_setpriority_args *uap,
 	id_t who = SCARG(uap, who);
 	int found = 0, error = 0;
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	switch (SCARG(uap, which)) {
 	case PRIO_PROCESS:
 		p = who ? proc_find(who) : curp;
@@ -275,10 +275,10 @@ sys_setpriority(struct lwp *l, const struct sys_setpriority_args *uap,
 		break;
 
 	default:
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		return EINVAL;
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	return (found == 0) ? ESRCH : error;
 }
@@ -388,8 +388,8 @@ dosetrlimit(struct lwp *l, struct proc *p, int which, struct rlimit *limp)
 		 * moment it would try to access anything on its current stack.
 		 * This conforms to SUSv2.
 		 */
-		if (limp->rlim_cur < p->p_vmspace->vm_ssize * PAGE_SIZE ||
-		    limp->rlim_max < p->p_vmspace->vm_ssize * PAGE_SIZE) {
+		if (btoc(limp->rlim_cur) < p->p_vmspace->vm_ssize ||
+		    btoc(limp->rlim_max) < p->p_vmspace->vm_ssize) {
 			return EINVAL;
 		}
 
@@ -488,7 +488,7 @@ void
 calcru(struct proc *p, struct timeval *up, struct timeval *sp,
     struct timeval *ip, struct timeval *rp)
 {
-	uint64_t u, st, ut, it, tot;
+	uint64_t u, st, ut, it, tot, dt;
 	struct lwp *l;
 	struct bintime tm;
 	struct timeval tv;
@@ -506,7 +506,8 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp,
 	LIST_FOREACH(l, &p->p_lwps, l_sibling) {
 		lwp_lock(l);
 		bintime_add(&tm, &l->l_rtime);
-		if ((l->l_pflag & LP_RUNNING) != 0) {
+		if ((l->l_pflag & LP_RUNNING) != 0 &&
+		    (l->l_pflag & (LP_INTR | LP_TIMEINTR)) != LP_INTR) {
 			struct bintime diff;
 			/*
 			 * Adjust for the current time slice.  This is
@@ -516,6 +517,7 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp,
 			 * error.
 			 */
 			binuptime(&diff);
+			membar_consumer(); /* for softint_dispatch() */
 			bintime_sub(&diff, &l->l_stime);
 			bintime_add(&tm, &diff);
 		}
@@ -533,16 +535,43 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp,
 		st = (u * st) / tot;
 		ut = (u * ut) / tot;
 	}
+
+	/*
+	 * Try to avoid lying to the users (too much)
+	 *
+	 * Of course, user/sys time are based on sampling (ie: statistics)
+	 * so that would be impossible, but convincing the mark
+	 * that we have used less ?time this call than we had
+	 * last time, is beyond reasonable...  (the con fails!)
+	 *
+	 * Note that since actual used time cannot decrease, either
+	 * utime or stime (or both) must be greater now than last time
+	 * (or both the same) - if one seems to have decreased, hold
+	 * it constant and steal the necessary bump from the other
+	 * which must have increased.
+	 */
+	if (p->p_xutime > ut) {
+		dt = p->p_xutime - ut;
+		st -= uimin(dt, st);
+		ut = p->p_xutime;
+	} else if (p->p_xstime > st) {
+		dt = p->p_xstime - st;
+		ut -= uimin(dt, ut);
+		st = p->p_xstime;
+	}
+
 	if (sp != NULL) {
+		p->p_xstime = st;
 		sp->tv_sec = st / 1000000;
 		sp->tv_usec = st % 1000000;
 	}
 	if (up != NULL) {
+		p->p_xutime = ut;
 		up->tv_sec = ut / 1000000;
 		up->tv_usec = ut % 1000000;
 	}
 	if (ip != NULL) {
-		if (it != 0)
+		if (it != 0)		/* it != 0 --> tot != 0 */
 			it = (u * it) / tot;
 		ip->tv_sec = it / 1000000;
 		ip->tv_usec = it % 1000000;
@@ -577,6 +606,7 @@ getrusage1(struct proc *p, int who, struct rusage *ru) {
 	switch (who) {
 	case RUSAGE_SELF:
 		mutex_enter(p->p_lock);
+		ruspace(p);
 		memcpy(ru, &p->p_stats->p_ru, sizeof(*ru));
 		calcru(p, &ru->ru_utime, &ru->ru_stime, NULL, NULL);
 		rulwps(p, ru);
@@ -592,6 +622,23 @@ getrusage1(struct proc *p, int who, struct rusage *ru) {
 	}
 
 	return 0;
+}
+
+void
+ruspace(struct proc *p)
+{
+	struct vmspace *vm = p->p_vmspace;
+	struct rusage *ru = &p->p_stats->p_ru;
+
+	ru->ru_ixrss = vm->vm_tsize << (PAGE_SHIFT - 10);
+	ru->ru_idrss = vm->vm_dsize << (PAGE_SHIFT - 10);
+	ru->ru_isrss = vm->vm_ssize << (PAGE_SHIFT - 10);
+#ifdef __HAVE_NO_PMAP_STATS
+	/* We don't keep track of the max so we get the current */
+	ru->ru_maxrss = vm_resident_count(vm) << (PAGE_SHIFT - 10);
+#else
+	ru->ru_maxrss = vm->vm_rssmax << (PAGE_SHIFT - 10);
+#endif
 }
 
 void
@@ -797,18 +844,61 @@ sysctl_proc_findproc(lwp_t *l, pid_t pid, proc_t **p2)
 	if (pid == PROC_CURPROC) {
 		p = l->l_proc;
 	} else {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		p = proc_find(pid);
 		if (p == NULL) {
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 			return ESRCH;
 		}
 	}
 	error = rw_tryenter(&p->p_reflock, RW_READER) ? 0 : EBUSY;
 	if (pid != PROC_CURPROC) {
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 	*p2 = p;
+	return error;
+}
+
+/*
+ * sysctl_proc_paxflags: helper routine to get process's paxctl flags
+ */
+static int
+sysctl_proc_paxflags(SYSCTLFN_ARGS)
+{
+	struct proc *p;
+	struct sysctlnode node;
+	int paxflags;
+	int error;
+
+	/* First, validate the request. */
+	if (namelen != 0 || name[-1] != PROC_PID_PAXFLAGS)
+		return EINVAL;
+
+	/* Find the process.  Hold a reference (p_reflock), if found. */
+	error = sysctl_proc_findproc(l, (pid_t)name[-2], &p);
+	if (error)
+		return error;
+
+	/* XXX-elad */
+	error = kauth_authorize_process(l->l_cred, KAUTH_PROCESS_CANSEE, p,
+	    KAUTH_ARG(KAUTH_REQ_PROCESS_CANSEE_ENTRY), NULL, NULL);
+	if (error) {
+		rw_exit(&p->p_reflock);
+		return error;
+	}
+
+	/* Retrieve the limits. */
+	node = *rnode;
+	paxflags = p->p_pax;
+	node.sysctl_data = &paxflags;
+
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+
+	/* If attempting to write new value, it's an error */
+	if (error == 0 && newp != NULL)
+		error = EACCES;
+
+	rw_exit(&p->p_reflock);
 	return error;
 }
 
@@ -1046,6 +1136,13 @@ sysctl_proc_setup(void)
 		       SYSCTL_DESCR("Per-process settings"),
 		       NULL, 0, NULL, 0,
 		       CTL_PROC, PROC_CURPROC, CTL_EOL);
+
+	sysctl_createv(&proc_sysctllog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_READONLY,
+		       CTLTYPE_INT, "paxflags",
+		       SYSCTL_DESCR("Process PAX control flags"),
+		       sysctl_proc_paxflags, 0, NULL, 0,
+		       CTL_PROC, PROC_CURPROC, PROC_PID_PAXFLAGS, CTL_EOL);
 
 	sysctl_createv(&proc_sysctllog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE|CTLFLAG_ANYWRITE,

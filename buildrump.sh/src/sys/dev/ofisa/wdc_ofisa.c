@@ -1,4 +1,4 @@
-/*	$NetBSD: wdc_ofisa.c,v 1.33 2012/07/31 15:50:35 bouyer Exp $	*/
+/*	$NetBSD: wdc_ofisa.c,v 1.40 2021/01/27 03:10:21 thorpej Exp $	*/
 
 /*
  * Copyright 1997, 1998
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wdc_ofisa.c,v 1.33 2012/07/31 15:50:35 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wdc_ofisa.c,v 1.40 2021/01/27 03:10:21 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -61,7 +61,6 @@ struct wdc_ofisa_softc {
 	struct wdc_softc sc_wdcdev;
 	struct ata_channel *sc_chanlist[1];
 	struct ata_channel sc_channel;
-	struct ata_queue sc_chqueue;
 	struct wdc_regs wdc_regs;
 	void	*sc_ih;
 };
@@ -72,15 +71,18 @@ static void wdc_ofisa_attach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(wdc_ofisa, sizeof(struct wdc_ofisa_softc),
     wdc_ofisa_probe, wdc_ofisa_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "pnpPNP,600" },
+	DEVICE_COMPAT_EOL
+};
+
 static int
 wdc_ofisa_probe(device_t parent, cfdata_t cf, void *aux)
 {
 	struct ofisa_attach_args *aa = aux;
-	static const char *const compatible_strings[] = { "pnpPNP,600", NULL };
-	int rv = 0;
+	int rv;
 
-	if (of_compatible(aa->oba.oba_phandle, compatible_strings) != -1)
-		rv = 5;
+	rv = of_compatible_match(aa->oba.oba_phandle, compat_data) ? 5 : 0;
 #ifdef _WDC_OFISA_MD_MATCH
 	if (!rv)
 		rv = wdc_ofisa_md_match(parent, cf, aux);
@@ -161,9 +163,8 @@ wdc_ofisa_attach(device_t parent, device_t self, void *aux)
 	sc->sc_wdcdev.wdc_maxdrives = 2;
 	sc->sc_channel.ch_channel = 0;
 	sc->sc_channel.ch_atac = &sc->sc_wdcdev.sc_atac;
-	sc->sc_channel.ch_queue = &sc->sc_chqueue;
 
-	wdc_init_shadow_regs(&sc->sc_channel);
+	wdc_init_shadow_regs(wdr);
 
 	wdcattach(&sc->sc_channel);
 

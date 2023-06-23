@@ -1,4 +1,4 @@
-/*	$NetBSD: zx.c,v 1.41 2016/04/21 18:10:57 macallan Exp $	*/
+/*	$NetBSD: zx.c,v 1.47 2021/08/07 16:19:15 thorpej Exp $	*/
 
 /*
  *  Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zx.c,v 1.41 2016/04/21 18:10:57 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zx.c,v 1.47 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -283,7 +283,7 @@ zx_attach(device_t parent, device_t self, void *args)
 	if (sa->sa_nintr != 0)
 		bus_intr_establish(bt, sa->sa_pri, IPL_NONE, zx_intr, sc);
 
-	sc->sc_cmap = malloc(768, M_DEVBUF, M_NOWAIT);
+	sc->sc_cmap = malloc(768, M_DEVBUF, M_WAITOK);
 	zx_reset(sc);
 
 	sc->sc_width = fb->fb_type.fb_width;
@@ -336,7 +336,7 @@ zx_attach(device_t parent, device_t self, void *args)
 	aa.console = isconsole;
 	aa.accessops = &zx_accessops;
 	aa.accesscookie = &sc->vd;
-	config_found(sc->sc_dv, &aa, wsemuldisplaydevprint);
+	config_found(sc->sc_dv, &aa, wsemuldisplaydevprint, CFARGS_NONE);
 	fb_attach(&sc->sc_fb, isconsole);
 }
 
@@ -475,16 +475,24 @@ zxioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 			if (cu->cmap.index > 2 ||
 			    cu->cmap.count > 2 - cu->cmap.index)
 				return (EINVAL);
-			for (i = 0; i < cu->cmap.count; i++) {
-				if ((v = fubyte(&cu->cmap.red[i])) < 0)
-					return (EFAULT);
-				sc->sc_curcmap[i + cu->cmap.index + 0] = v;
-				if ((v = fubyte(&cu->cmap.green[i])) < 0)
-					return (EFAULT);
-				sc->sc_curcmap[i + cu->cmap.index + 2] = v;
-				if ((v = fubyte(&cu->cmap.blue[i])) < 0)
-					return (EFAULT);
-				sc->sc_curcmap[i + cu->cmap.index + 4] = v;
+
+			uint8_t red[2], green[2], blue[2];
+			const u_int cnt = cu->cmap.count;
+
+			if (cnt &&
+			    ((error = copyin(cu->cmap.red,   red,   cnt)) ||
+			     (error = copyin(cu->cmap.green, green, cnt)) ||
+			     (error = copyin(cu->cmap.blue,  blue,  cnt)))) {
+				return error;
+			}
+
+			for (i = 0; i < cnt; i++) {
+				sc->sc_curcmap[i + cu->cmap.index + 0] =
+				    red[i];
+				sc->sc_curcmap[i + cu->cmap.index + 2] =
+				    green[i];
+				sc->sc_curcmap[i + cu->cmap.index + 4] =
+				    blue[i];
 			}
 			zx_cursor_color(sc);
 		}
@@ -678,13 +686,13 @@ zx_cursor_move(struct zx_softc *sc)
 	y = sc->sc_curpos.y - sc->sc_curhot.y;
 
 	if (x < 0) {
-		sx = min(-x, 32);
+		sx = uimin(-x, 32);
 		x = 0;
 	} else
 		sx = 0;
 
 	if (y < 0) {
-		sy = min(-y, 32);
+		sy = uimin(-y, 32);
 		y = 0;
 	} else
 		sy = 0;
@@ -763,7 +771,7 @@ zx_cursor_color(struct zx_softc *sc)
 
 	tmp = sc->sc_curcmap[1] | (sc->sc_curcmap[3] << 8) |
 	    (sc->sc_curcmap[5] << 16);
-	bus_space_write_4(sc->sc_bt, sc->sc_bhzcu, zcu_data, sc->sc_curcmap[1]);
+	bus_space_write_4(sc->sc_bt, sc->sc_bhzcu, zcu_data, tmp);
 
 	bus_space_write_4(sc->sc_bt, sc->sc_bhzcu, zcu_misc,
 	    bus_space_read_4(sc->sc_bt, sc->sc_bhzcu, zcu_misc) | 0x03);

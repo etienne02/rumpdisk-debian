@@ -1,4 +1,4 @@
-/*	$NetBSD: union.h,v 1.28 2015/02/16 10:22:00 hannken Exp $	*/
+/*	$NetBSD: union.h,v 1.30 2020/08/18 09:44:07 hannken Exp $	*/
 
 /*
  * Copyright (c) 1994 The Regents of the University of California.
@@ -130,6 +130,7 @@ struct union_node {
 	char			*un_path;	/* v: saved component name */
 	int			un_openl;	/* v: # of opens on lowervp */
 	unsigned int		un_cflags;	/* c: cache flags */
+	bool			un_hooknode;	/* :: from union_readdirhook */
 	struct vnode		**un_dircache;	/* v: cached union stack */
 	off_t			un_uppersz;	/* l: size of upper object */
 	off_t			un_lowersz;	/* l: size of lower object */
@@ -158,8 +159,6 @@ extern int union_cn_close(struct vnode *, int, kauth_cred_t,
     struct lwp *);
 extern void union_removed_upper(struct union_node *un);
 extern struct vnode *union_lowervp(struct vnode *);
-extern void union_newlower(struct union_node *, struct vnode *);
-extern void union_newupper(struct union_node *, struct vnode *);
 extern void union_newsize(struct vnode *, off_t, off_t);
 int union_readdirhook(struct vnode **, struct file *, struct lwp *);
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: usbdi.h,v 1.91 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: usbdi.h,v 1.103 2021/06/13 14:48:10 riastradh Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/usbdi.h,v 1.18 1999/11/17 22:33:49 n_hibma Exp $	*/
 
 /*
@@ -139,8 +139,13 @@ usbd_status usbd_sync_transfer(struct usbd_xfer *);
 usbd_status usbd_sync_transfer_sig(struct usbd_xfer *);
 
 usbd_status usbd_do_request(struct usbd_device *, usb_device_request_t *, void *);
+usbd_status usbd_request_async(struct usbd_device *, struct usbd_xfer *,
+    usb_device_request_t *, void *, usbd_callback);
 usbd_status usbd_do_request_flags(struct usbd_device *, usb_device_request_t *,
     void *, uint16_t, int *, uint32_t);
+usbd_status usbd_do_request_len(struct usbd_device *dev,
+    usb_device_request_t *req, size_t len, void *data, uint16_t flags,
+    int *actlen, uint32_t timeout);
 
 usb_interface_descriptor_t *
     usbd_get_interface_descriptor(struct usbd_interface *);
@@ -156,10 +161,6 @@ usbd_status usbd_get_interface(struct usbd_interface *, uint8_t *);
 int usbd_get_no_alts(usb_config_descriptor_t *, int);
 
 void usbd_fill_deviceinfo(struct usbd_device *, struct usb_device_info *, int);
-#ifdef COMPAT_30
-void usbd_fill_deviceinfo_old(struct usbd_device *, struct usb_device_info_old *,
-    int);
-#endif
 int usbd_get_interface_altindex(struct usbd_interface *);
 
 usb_interface_descriptor_t *usbd_find_idesc(usb_config_descriptor_t *,
@@ -187,13 +188,10 @@ int usbd_ratecheck(struct timeval *);
 usbd_status usbd_get_string(struct usbd_device *, int, char *);
 usbd_status usbd_get_string0(struct usbd_device *, int, char *, int);
 
-/* An iterator for descriptors. */
-typedef struct {
-	const uByte *cur;
-	const uByte *end;
-} usbd_desc_iter_t;
-void usb_desc_iter_init(struct usbd_device *, usbd_desc_iter_t *);
-const usb_descriptor_t *usb_desc_iter_next(usbd_desc_iter_t *);
+/* For use by HCI drivers, not USB device drivers */
+void usbd_xfer_schedule_timeout(struct usbd_xfer *);
+bool usbd_xfer_trycomplete(struct usbd_xfer *);
+void usbd_xfer_abort(struct usbd_xfer *);
 
 /* Used to clear endpoint stalls from the softint */
 void usbd_clear_endpoint_stall_task(void *);
@@ -218,8 +216,13 @@ struct usb_task {
 #define	USB_TASKQ_MPSAFE	0x80
 
 void usb_add_task(struct usbd_device *, struct usb_task *, int);
-void usb_rem_task(struct usbd_device *, struct usb_task *);
+bool usb_rem_task(struct usbd_device *, struct usb_task *);
+bool usb_rem_task_wait(struct usbd_device *, struct usb_task *, int,
+    kmutex_t *);
+bool usb_task_pending(struct usbd_device *, struct usb_task *);
 #define usb_init_task(t, f, a, fl) ((t)->fun = (f), (t)->arg = (a), (t)->queue = USB_NUM_TASKQS, (t)->flags = (fl))
+
+bool usb_in_event_thread(device_t);
 
 struct usb_devno {
 	uint16_t ud_vendor;
@@ -230,6 +233,12 @@ const struct usb_devno *usb_match_device(const struct usb_devno *,
 #define usb_lookup(tbl, vendor, product) \
 	usb_match_device((const struct usb_devno *)(tbl), sizeof(tbl) / sizeof((tbl)[0]), sizeof((tbl)[0]), (vendor), (product))
 #define	USB_PRODUCT_ANY		0xffff
+
+/* compat callbacks */
+void usbd_devinfo_vp(struct usbd_device *, char *, size_t, char *, size_t,
+    int, int);
+int usbd_printBCD(char *, size_t, int);
+
 
 /* NetBSD attachment information */
 
@@ -295,10 +304,11 @@ struct usbif_attach_arg {
  *
  * Eventually, IPL_USB can/should be changed
  */
-#define splusb splsoftnet
-#define splhardusb splvm
-#define IPL_SOFTUSB IPL_SOFTNET
 #define IPL_USB IPL_VM
-#define SOFTINT_USB SOFTINT_NET
+#define splhardusb splvm
+
+#define SOFTINT_USB SOFTINT_SERIAL
+#define IPL_SOFTUSB IPL_SOFTSERIAL
+#define splusb splsoftserial
 
 #endif /* _USBDI_H_ */

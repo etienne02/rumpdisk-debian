@@ -1,4 +1,4 @@
-/*	$NetBSD: kernel.h,v 1.8 2015/08/20 21:41:12 skrll Exp $	*/
+/*	$NetBSD: kernel.h,v 1.26 2020/10/19 11:49:56 jmcneill Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,17 +36,42 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/endian.h>
 
 #include <lib/libkern/libkern.h>
 
+#include <asm/byteorder.h>
+#include <asm/div64.h>
+
+#include <linux/bitops.h>
+#include <linux/log2.h>
+#include <linux/printk.h>
+#include <linux/slab.h>
+
+#define U16_MAX UINT16_MAX
+#define U32_MAX UINT32_MAX
+#define U64_MAX UINT64_MAX
+
 #define	oops_in_progress	(panicstr != NULL)
 
+#if BYTE_ORDER == BIG_ENDIAN
+#define	__BIG_ENDIAN		_BIG_ENDIAN
+#else
+#define	__LITTLE_ENDIAN		_LITTLE_ENDIAN
+#endif
+
 #define	IS_ENABLED(option)	(option)
+#define	IS_BUILTIN(option)	(1) /* Probably... */
 
 #define	__printf	__printflike
 #define	__user
-#define	__must_check	/* __attribute__((warn_unused_result)), if GCC */
+#if __GNUC_PREREQ__(4,0)	/* not sure when but this will work */
+#define	__must_check	__attribute__((warn_unused_result))
+#else
+#define	__must_check	/* nothing */
+#endif
 #define	__always_unused	__unused
+#define	noinline	__noinline
 
 #define	barrier()	__insn_barrier()
 #define	likely(X)	__predict_true(X)
@@ -59,11 +84,17 @@
 #define	uninitialized_var(x)	x = 0
 
 /* XXX These will multiply evaluate their arguments.  */
+#define	min(X, Y)	MIN(X, Y)
+#define	max(X, Y)	MAX(X, Y)
+
 #define	max_t(T, X, Y)	MAX(X, Y)
 #define	min_t(T, X, Y)	MIN(X, Y)
 
 #define	clamp_t(T, X, MIN, MAX)	min_t(T, max_t(T, X, MIN), MAX)
 #define	clamp(X, MN, MX)	MIN(MAX(X, MN), MX)
+
+#define	min3(X, Y, Z)	MIN(X, MIN(Y, Z))
+#define	max3(X, Y, Z)	MAX(X, MAX(Y, Z))
 
 /*
  * Rounding to nearest.
@@ -71,6 +102,8 @@
 #define	DIV_ROUND_CLOSEST(N, D)						\
 	((0 < (N)) ? (((N) + ((D) / 2)) / (D))				\
 	    : (((N) - ((D) / 2)) / (D)))
+
+#define	DIV_ROUND_CLOSEST_ULL(N, D)	(((N) + (D)/2)/(D))
 
 /*
  * Rounding to what may or may not be powers of two.
@@ -111,13 +144,19 @@
 	}								\
 } while (0)
 
-static inline int64_t
+#define	ACCESS_ONCE(X) ({						      \
+	typeof(X) __access_once_tmp = (X);				      \
+	__insn_barrier();						      \
+	__access_once_tmp;						      \
+})
+
+static __inline int64_t
 abs64(int64_t x)
 {
 	return (x < 0? (-x) : x);
 }
 
-static inline uintmax_t
+static __inline uintmax_t
 mult_frac(uintmax_t x, uintmax_t multiplier, uintmax_t divisor)
 {
 	uintmax_t q = (x / divisor);
@@ -128,7 +167,7 @@ mult_frac(uintmax_t x, uintmax_t multiplier, uintmax_t divisor)
 
 static int panic_timeout __unused = 0;
 
-static inline int
+static __inline int __printflike(3, 0)
 vscnprintf(char *buf, size_t size, const char *fmt, va_list va)
 {
 	int ret;
@@ -138,13 +177,13 @@ vscnprintf(char *buf, size_t size, const char *fmt, va_list va)
 		return ret;
 	if (__predict_false(size == 0))
 		return 0;
-	if (__predict_false(size <= ret))
+	if (__predict_false(size <= (size_t)ret))
 		return (size - 1);
 
 	return ret;
 }
 
-static inline int
+static __inline int __printflike(3, 4)
 scnprintf(char *buf, size_t size, const char *fmt, ...)
 {
 	va_list va;
@@ -157,7 +196,7 @@ scnprintf(char *buf, size_t size, const char *fmt, ...)
 	return ret;
 }
 
-static inline int
+static __inline int
 kstrtol(const char *s, unsigned base, long *vp)
 {
 	long long v;
@@ -167,6 +206,50 @@ kstrtol(const char *s, unsigned base, long *vp)
 		return -ERANGE;
 	*vp = v;
 	return 0;
+}
+
+static inline long
+simple_strtol(const char *s, char **endp, unsigned base)
+{
+	long v;
+
+	*endp = NULL;		/* paranoia */
+	v = strtoll(s, endp, base);
+	if (v < LONG_MIN || LONG_MAX < v)
+		return 0;
+	return v;
+}
+
+static __inline char * __printflike(2, 0)
+kvasprintf(gfp_t gfp, const char *fmt, va_list va)
+{
+	va_list tva;
+	char *str;
+	int len, len1 __diagused;
+
+	va_copy(tva, va);
+	len = vsnprintf(NULL, 0, fmt, tva);
+	va_end(tva);
+	str = kmalloc(len + 1, gfp);
+	if (str == NULL)
+		return NULL;
+	len1 = vsnprintf(str, len + 1, fmt, va);
+	KASSERT(len1 == len);
+
+	return str;
+}
+
+static __inline char * __printflike(2, 3)
+kasprintf(gfp_t gfp, const char *fmt, ...)
+{
+	va_list va;
+	char *str;
+
+	va_start(va, fmt);
+	str = kvasprintf(gfp, fmt, va);
+	va_end(va);
+
+	return str;
 }
 
 #endif  /* _LINUX_KERNEL_H_ */

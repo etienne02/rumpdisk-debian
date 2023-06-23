@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.186 2016/01/24 22:49:08 christos Exp $
+#	$NetBSD: Makefile,v 1.211 2021/05/27 08:41:35 cjep Exp $
 
 .include <bsd.own.mk>
 .include <bsd.endian.mk>
@@ -25,26 +25,25 @@
 TOOLS_BUILDRUMP?=no
 
 .if ${TOOLCHAIN_MISSING} == "no"
-. if defined(HAVE_GCC) && ${HAVE_GCC} > 0
-TOOLCHAIN_BITS= gmake .WAIT
+. if (defined(HAVE_GCC) && ${HAVE_GCC} > 0) || \
+     (defined(HAVE_GDB) && ${HAVE_GDB} > 0 && ${MKCROSSGDB:Uno} != "no")
+TOOLCHAIN_BITS+= gmake .WAIT
 TOOLCHAIN_BITS+= gmp .WAIT
 TOOLCHAIN_BITS+= mpfr .WAIT
 TOOLCHAIN_BITS+= mpc .WAIT
 . endif
-.endif
 
-.if ${TOOLCHAIN_MISSING} == "no"
 TOOLCHAIN_BITS+= binutils .WAIT
-.endif
 
-.if defined(HAVE_GCC) && ${HAVE_GCC} > 0
-. if ${TOOLCHAIN_MISSING} == "no"
+. if defined(HAVE_GCC) && ${HAVE_GCC} > 0
 TOOLCHAIN_BITS+= gcc
-.  if ${MKCROSSGDB:Uno} != "no" || make(obj)
-TOOLCHAIN_BITS+= gdb
-.  endif
-TOOLCHAIN_BITS+= .WAIT
 . endif
+
+. if defined(HAVE_GDB) && ${HAVE_GDB} > 0 && ${MKCROSSGDB:Uno} != "no"
+TOOLCHAIN_BITS+= gdb
+. endif
+
+TOOLCHAIN_BITS+= .WAIT
 .endif
 
 .if defined(HAVE_PCC)
@@ -53,9 +52,7 @@ TOOLCHAIN_BITS+= pcc
 . endif
 .endif
 
-.if ${TOOLCHAIN_MISSING} == "no"
-# XXX Eventually, we want to be able to build dbsym and mdsetimage
-# XXX if EXTERNAL_TOOLCHAIN is set.
+.if ${TOOLCHAIN_MISSING} == "no" || defined(EXTERNAL_TOOLCHAIN)
 TOOLCHAIN_BITS+= dbsym mdsetimage
 .endif
 
@@ -83,18 +80,22 @@ LINT_BITS= lint lint2
 # XXX .ORDER does not work when multiple targets are passed on the
 # make command line without "-j", so use dependencies in addition to .ORDER.
 #
-.ORDER: dependall-host-mkdep dependall-compat dependall-binstall
+.ORDER: dependall-host-mkdep dependall-compat dependall-binstall \
+	dependall-date
 .if make(dependall-host-mkdep) && make(dependall-compat)
 dependall-compat: dependall-host-mkdep
 .endif
 .if make(dependall-compat) && make(dependall-binstall)
 dependall-binstall: dependall-compat
 .endif
+.if make(dependall-date)
+dependall-date: dependall-host-mkdep dependall-compat
+.endif
 
 # Dependencies in SUBDIR below ordered to maximize parallel ability.
 # See above for special treatment for host-mkdep, compat, and binstall.
 #
-SUBDIR=	host-mkdep compat binstall \
+SUBDIR=	host-mkdep compat binstall date \
 	.WAIT mktemp .WAIT sed .WAIT genassym
 .if ${TOOLS_BUILDRUMP} == "no"
 SUBDIR+= cap_mkdb crunchgen ctags gencat hexdump \
@@ -103,11 +104,11 @@ SUBDIR+= cap_mkdb crunchgen ctags gencat hexdump \
 .endif
 
 SUBDIR+= cat rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
-
 .if ${TOOLS_BUILDRUMP} == "no"
+SUBDIR+= xz-include .WAIT grep xz-lib pax .WAIT libprop
+
 SUBDIR += .WAIT texinfo \
 	.WAIT tic \
-	.WAIT pax \
 	.WAIT ${TOOLCHAIN_BITS} \
 	${DTRACE_BITS} \
 		asn1_compile cksum compile_et db \
@@ -121,21 +122,25 @@ SUBDIR += .WAIT texinfo \
 		pwd_mkdb strfile sunlabel vgrind zic
 .endif
 SUBDIR+= stat .WAIT config
+.if ${TOOLS_BUILDRUMP} == "no"
+SUBDIR+= xz-bin
+.endif
 
-.if ${MKLLVM} != "no"
+.if ${MKLLVM} != "no" || ${MKLLVMRT} != "no"
 SUBDIR+= \
 	llvm .WAIT \
-	llvm-lib/libLLVMSupport llvm-lib/libLLVMTableGen .WAIT \
-	llvm-tblgen llvm-clang-tblgen .WAIT \
-	llvm-include .WAIT \
+	llvm-lib/libLLVMDemangle llvm-lib/libLLVMSupport llvm-lib/libLLVMTableGen .WAIT \
+	llvm-tblgen
+.endif
+.if ${MKLLVM} != "no"
+SUBDIR+= \
+	llvm-clang-tblgen
+.endif
+.if ${MKLLVM} != "no" && !defined(EXTERNAL_TOOLCHAIN)
+SUBDIR+= \
+	.WAIT llvm-include .WAIT \
 	llvm-lib .WAIT \
 	llvm-clang
-. if ${MKLLD} != "no"
-SUBDIR+=	llvm-lld
-. endif
-. if ${MKMCLINKER} != "no"
-SUBDIR+=	llvm-mcld
-. endif
 .endif
 
 .if ${MKMAN} != "no" || ${MKDOC} != "no" || ${MKHTML} != "no"
@@ -171,12 +176,15 @@ SUBDIR+=	macppc-fixcoff
 SUBDIR+=	powerpc-mkbootimage
 .endif
 
-.if ${MACHINE_ARCH} == "m68k"
+.if ${MACHINE_CPU} == "arm"
+SUBDIR+=	arm-elf2aout
+.endif
+
+.if ${MACHINE_CPU} == "m68k"
 SUBDIR+=	m68k-elf2aout
 .endif
 
-.if (${MACHINE_ARCH} == "mipsel" || ${MACHINE_ARCH} == "mipseb" || \
-     ${MACHINE_ARCH} == "mips64el" || ${MACHINE_ARCH} == "mips64eb")
+.if !empty(MACHINE_ARCH:Mmips*)
 SUBDIR+=	mips-elf2ecoff
 .endif
 
@@ -208,8 +216,15 @@ SUBDIR+=	elftosb
 .endif
 
 .if ${MACHINE} == "evbarm" || ${MACHINE} == "evbmips" || \
-    ${MACHINE} == "evbppc" || ${MACHINE} == "sandpoint"
+    ${MACHINE} == "evbppc" || ${MACHINE} == "evbsh3" || \
+    ${MACHINE} == "sandpoint"
 SUBDIR+=	mkubootimage
+SUBDIR+=	libfdt .WAIT
+SUBDIR+=	dtc
+.endif
+
+.if ${MACHINE} == "mvme68k"
+SUBDIR+=	mvme68k-wrtvid
 .endif
 
 .if ${MKX11} != "no"
@@ -219,7 +234,7 @@ SUBDIR+=	makekeys
 
 SUBDIR+= cvslatest
 
-.endif # TOOLCHAIN_BUILDRUMP
+.endif # TOOLS_BUILDRUMP != no
 
 check_MKTOOLS: .PHONY .NOTMAIN
 .if ${MKTOOLS:Uyes} == "no"

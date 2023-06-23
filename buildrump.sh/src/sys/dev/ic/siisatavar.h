@@ -1,4 +1,4 @@
-/* $NetBSD: siisatavar.h,v 1.6 2010/07/26 15:41:33 jakllsch Exp $ */
+/* $NetBSD: siisatavar.h,v 1.9 2018/10/24 19:38:00 jdolecek Exp $ */
 
 /* from ahcisatavar.h */
 
@@ -99,8 +99,6 @@ struct siisata_softc {
 		bus_addr_t sch_bus_prb[SIISATA_MAX_SLOTS];
 
 		bus_dmamap_t sch_datad[SIISATA_MAX_SLOTS];
-
-		uint32_t sch_active_slots;
 	} sc_channels[SIISATA_MAX_PORTS];
 };
 
@@ -114,10 +112,9 @@ struct siisata_softc {
 #define SIISATA_PRB_SYNC(sc, schp, slot, op) bus_dmamap_sync((sc)->sc_dmat, \
     (schp)->sch_prbd, slot * SIISATA_CMD_SIZE, SIISATA_CMD_SIZE, (op))
 
-#define SIISATA_NON_NCQ_SLOT 27
-
 void siisata_attach(struct siisata_softc *);
 int siisata_detach(struct siisata_softc *, int);
+void siisata_childdetached(struct siisata_softc *, device_t);
 void siisata_resume(struct siisata_softc *);
 int siisata_intr(void *);
 

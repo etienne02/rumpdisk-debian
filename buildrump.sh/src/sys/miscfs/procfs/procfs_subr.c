@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs_subr.c,v 1.106 2014/11/10 18:46:34 maxv Exp $	*/
+/*	$NetBSD: procfs_subr.c,v 1.116 2020/05/23 23:42:43 ad Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -102,18 +102,20 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_subr.c,v 1.106 2014/11/10 18:46:34 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_subr.c,v 1.116 2020/05/23 23:42:43 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
+#include <sys/fstrans.h>
 #include <sys/vnode.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kauth.h>
+#include <sys/sysctl.h>
 
 #include <miscfs/procfs/procfs.h>
 
@@ -150,7 +152,8 @@ procfs_rw(void *v)
 	if (uio->uio_offset < 0)
 		return EINVAL;
 
-	if ((error = procfs_proc_lock(pfs->pfs_pid, &p, ESRCH)) != 0)
+	if ((error =
+	     procfs_proc_lock(vp->v_mount, pfs->pfs_pid, &p, ESRCH)) != 0)
 		return error;
 
 	curl = curlwp;
@@ -200,16 +203,16 @@ procfs_rw(void *v)
 		error = procfs_dofpregs(curl, l, pfs, uio);
 		break;
 
-	case PFSctl:
-		error = procfs_doctl(curl, l, pfs, uio);
-		break;
-
 	case PFSstatus:
 		error = procfs_dostatus(curl, l, pfs, uio);
 		break;
 
 	case PFSstat:
 		error = procfs_do_pid_stat(curl, l, pfs, uio);
+		break;
+
+	case PFSlimit:
+		error = procfs_dolimit(curl, p, pfs, uio);
 		break;
 
 	case PFSmap:
@@ -225,7 +228,11 @@ procfs_rw(void *v)
 		break;
 
 	case PFScmdline:
-		error = procfs_docmdline(curl, p, pfs, uio);
+		error = procfs_doprocargs(curl, p, pfs, uio, KERN_PROC_ARGV);
+		break;
+
+	case PFSenviron:
+		error = procfs_doprocargs(curl, p, pfs, uio, KERN_PROC_ENV);
 		break;
 
 	case PFSmeminfo:
@@ -272,6 +279,10 @@ procfs_rw(void *v)
 		error = procfs_doversion(curl, p, pfs, uio);
 		break;
 
+	case PFSauxv:
+		error = procfs_doauxv(curl, p, pfs, uio);
+		break;
+
 #ifdef __HAVE_PROCFS_MACHDEP
 	PROCFS_MACHDEP_NODETYPE_CASES
 		error = procfs_machdep_rw(curl, l, pfs, uio);
@@ -307,7 +318,7 @@ procfs_rw(void *v)
 int
 vfs_getuserstr(struct uio *uio, char *bf, int *buflenp)
 {
-	int xlen;
+	size_t xlen;
 	int error;
 
 	if (uio->uio_offset != 0)
@@ -351,7 +362,11 @@ static bool
 procfs_revoke_selector(void *arg, struct vnode *vp)
 {
 	struct proc *p = arg;
-	struct pfsnode *pfs = VTOPFS(vp);
+	struct pfsnode *pfs;
+
+	KASSERT(mutex_owned(vp->v_interlock));
+
+	pfs = VTOPFS(vp);
 
 	return (pfs != NULL && pfs->pfs_pid == p->p_pid);
 }
@@ -359,6 +374,8 @@ procfs_revoke_selector(void *arg, struct vnode *vp)
 void
 procfs_revoke_vnodes(struct proc *p, void *arg)
 {
+	int error;
+	bool suspended;
 	struct vnode *vp;
 	struct vnode_iterator *marker;
 	struct mount *mp = (struct mount *)arg;
@@ -366,33 +383,66 @@ procfs_revoke_vnodes(struct proc *p, void *arg)
 	if (!(p->p_flag & PK_SUGID))
 		return;
 
+	suspended = false;
 	vfs_vnode_iterator_init(mp, &marker);
 
 	while ((vp = vfs_vnode_iterator_next(marker,
 	    procfs_revoke_selector, p)) != NULL) {
-		VOP_REVOKE(vp, REVOKEALL);
-		vrele(vp);
+		if (vrecycle(vp))
+			continue;
+		/* Vnode is busy, we have to suspend the mount for vgone(). */
+		while (! suspended) {
+			error = vfs_suspend(mp, 0);
+			if (error == 0) {
+				suspended = true;
+			} else if (error != EINTR && error != ERESTART) {
+				KASSERT(error == EOPNOTSUPP);
+				break;
+			}
+		}
+		vgone(vp);
 	}
+
+	if (suspended)
+		vfs_resume(mp);
 
 	vfs_vnode_iterator_destroy(marker);
 }
 
+bool
+procfs_use_linux_compat(struct mount *mp)
+{
+	const int flags = VFSTOPROC(mp)->pmnt_flags;
+
+	return (flags & PROCFSMNT_LINUXCOMPAT) ? true : false;
+}
+
+struct proc *
+procfs_proc_find(struct mount *mp, pid_t pid)
+{
+
+	KASSERT(mutex_owned(&proc_lock));
+	return procfs_use_linux_compat(mp) ? proc_find_lwpid(pid)
+					   : proc_find(pid);
+}
+
 int
-procfs_proc_lock(int pid, struct proc **bunghole, int notfound)
+procfs_proc_lock(struct mount *mp, int pid, struct proc **bunghole,
+		 int notfound)
 {
 	struct proc *tp;
 	int error = 0;
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 
 	if (pid == 0)
 		tp = &proc0;
-	else if ((tp = proc_find(pid)) == NULL)
+	else if ((tp = procfs_proc_find(mp, pid)) == NULL)
 		error = notfound;
 	if (tp != NULL && !rw_tryenter(&tp->p_reflock, RW_READER))
 		error = EBUSY;
 
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	*bunghole = tp;
 	return error;

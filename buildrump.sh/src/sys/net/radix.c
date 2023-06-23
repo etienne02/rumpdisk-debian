@@ -1,4 +1,4 @@
-/*	$NetBSD: radix.c,v 1.45 2015/08/24 22:21:26 pooka Exp $	*/
+/*	$NetBSD: radix.c,v 1.49 2020/10/18 13:07:31 gson Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1993
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radix.c,v 1.45 2015/08/24 22:21:26 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radix.c,v 1.49 2020/10/18 13:07:31 gson Exp $");
 
 #ifndef _NET_RADIX_H_
 #include <sys/param.h>
@@ -221,12 +221,12 @@ rn_satisfies_leaf(
 	const char *cp2 = leaf->rn_key;
 	const char *cp3 = leaf->rn_mask;
 	const char *cplim;
-	int length = min(*(const u_char *)cp, *(const u_char *)cp2);
+	int length = uimin(*(const u_char *)cp, *(const u_char *)cp2);
 
 	if (cp3 == 0)
 		cp3 = rn_ones;
 	else
-		length = min(length, *(const u_char *)cp3);
+		length = uimin(length, *(const u_char *)cp3);
 	cplim = cp + length; cp3 += skip; cp2 += skip;
 	for (cp += skip; cp < cplim; cp++, cp2++, cp3++)
 		if ((*cp ^ *cp2) & *cp3)
@@ -327,7 +327,7 @@ on1:
 					if (rn_b <= m->rm_b)
 						return m->rm_leaf;
 				} else {
-					off = min(t->rn_off, matched_off);
+					off = uimin(t->rn_off, matched_off);
 					x = rn_search_m(v, t, m->rm_mask);
 					while (x && x->rn_mask != m->rm_mask)
 						x = x->rn_dupedkey;
@@ -1005,6 +1005,37 @@ rn_walktree(
 	/* NOTREACHED */
 }
 
+struct radix_node *
+rn_search_matched(struct radix_node_head *h,
+    int (*matcher)(struct radix_node *, void *), void *w)
+{
+	bool matched;
+	struct radix_node *base, *next, *rn;
+	/*
+	 * This gets complicated because we may delete the node
+	 * while applying the function f to it, so we need to calculate
+	 * the successor node in advance.
+	 */
+	rn = rn_walkfirst(h->rnh_treetop, NULL, NULL);
+	for (;;) {
+		base = rn;
+		next = rn_walknext(rn, NULL, NULL);
+		/* Process leaves */
+		while ((rn = base) != NULL) {
+			base = rn->rn_dupedkey;
+			if (!(rn->rn_flags & RNF_ROOT)) {
+				matched = (*matcher)(rn, w);
+				if (matched)
+					return rn;
+			}
+		}
+		rn = next;
+		if (rn->rn_flags & RNF_ROOT)
+			return NULL;
+	}
+	/* NOTREACHED */
+}
+
 struct delayinit {
 	void **head;
 	int off;
@@ -1022,7 +1053,8 @@ rn_delayedinit(void **head, int off)
 {
 	struct delayinit *di;
 
-	KASSERT(radix_initialized == 0);
+	if (radix_initialized)
+		return;
 
 	di = kmem_alloc(sizeof(*di), KM_SLEEP);
 	di->head = head;
@@ -1087,8 +1119,10 @@ rn_init(void)
 	}
 #endif
 	if (max_keylen == 0) {
+#ifndef _KERNEL
 		log(LOG_ERR,
 		    "rn_init: radix functions require max_keylen be set\n");
+#endif
 		return;
 	}
 

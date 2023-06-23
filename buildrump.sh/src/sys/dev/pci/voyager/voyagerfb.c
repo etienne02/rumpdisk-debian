@@ -1,4 +1,4 @@
-/*	$NetBSD: voyagerfb.c,v 1.28 2016/01/13 15:56:05 macallan Exp $	*/
+/*	$NetBSD: voyagerfb.c,v 1.33 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2009, 2011 Michael Lorenz
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: voyagerfb.c,v 1.28 2016/01/13 15:56:05 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: voyagerfb.c,v 1.33 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -287,7 +287,8 @@ voyagerfb_attach(device_t parent, device_t self, void *aux)
 		0, 0,
 		NULL,
 		8, 16,
-		WSSCREEN_WSCOLORS | WSSCREEN_HILIT,
+		WSSCREEN_WSCOLORS | WSSCREEN_HILIT | WSSCREEN_UNDERLINE |
+		WSSCREEN_RESIZE,
 		NULL
 	};
 	sc->sc_screens[0] = &sc->sc_defaultscreen_descr;
@@ -298,6 +299,8 @@ voyagerfb_attach(device_t parent, device_t self, void *aux)
 	vcons_init(&sc->vd, sc, &sc->sc_defaultscreen_descr,
 	    &voyagerfb_accessops);
 	sc->vd.init_screen = voyagerfb_init_screen;
+	sc->vd.show_screen_cookie = &sc->sc_gc;
+	sc->vd.show_screen_cb = glyphcache_adapt;
 
 	/* backlight control */
 	voyagerfb_setup_backlight(sc);
@@ -325,7 +328,8 @@ voyagerfb_attach(device_t parent, device_t self, void *aux)
 			(*ri->ri_ops.allocattr)(ri, 0, 0, 0, &defattr);
 	}
 	glyphcache_init(&sc->sc_gc, sc->sc_height,
-			(sc->sc_fbsize / sc->sc_stride) - sc->sc_height,
+			((sc->sc_fbsize - 16 * 64) / sc->sc_stride) - 
+			    sc->sc_height,
 			sc->sc_width,
 			ri->ri_font->fontwidth,
 			ri->ri_font->fontheight,
@@ -359,7 +363,8 @@ voyagerfb_attach(device_t parent, device_t self, void *aux)
 	aa.accessops = &voyagerfb_accessops;
 	aa.accesscookie = &sc->vd;
 
-	config_found(sc->sc_dev, &aa, wsemuldisplaydevprint);
+	config_found(sc->sc_dev, &aa, wsemuldisplaydevprint,
+	    CFARGS(.iattr = "wsemuldisplaydev"));
 }
 
 static int
@@ -586,7 +591,7 @@ voyagerfb_init_screen(void *cookie, struct vcons_screen *scr,
 	if (sc->sc_depth == 8) {
 		ri->ri_flg |= RI_8BIT_IS_RGB;
 #ifdef VOYAGERFB_ANTIALIAS
-		ri->ri_flg |= RI_ENABLE_ALPHA;
+		ri->ri_flg |= RI_ENABLE_ALPHA | RI_PREFER_ALPHA;
 #endif
 	}
 	if (sc->sc_depth == 32) {
@@ -602,8 +607,11 @@ voyagerfb_init_screen(void *cookie, struct vcons_screen *scr,
 		ri->ri_bpos = 0;
 	}
 
+	scr->scr_flags |= VCONS_LOADFONT;
+
 	rasops_init(ri, 0, 0);
-	ri->ri_caps = WSSCREEN_WSCOLORS;
+	ri->ri_caps = WSSCREEN_WSCOLORS | WSSCREEN_HILIT | WSSCREEN_UNDERLINE |
+		      WSSCREEN_RESIZE;
 
 	rasops_reconfig(ri, sc->sc_height / ri->ri_font->fontheight,
 		    sc->sc_width / ri->ri_font->fontwidth);
@@ -774,7 +782,7 @@ voyagerfb_init(struct voyagerfb_softc *sc)
 	    reg);
 
 	/* put the cursor at the end of video memory */
-	sc->sc_cursor_addr = 16 * 1024 * 1024 - 16 * 64;	/* XXX */
+	sc->sc_cursor_addr = sc->sc_fbsize - 16 * 64;	/* XXX */
 	DPRINTF("%s: %08x\n", __func__, sc->sc_cursor_addr); 
 	sc->sc_cursor = (uint32_t *)((uint8_t *)bus_space_vaddr(sc->sc_memt,
 			 sc->sc_fbh) + sc->sc_cursor_addr);

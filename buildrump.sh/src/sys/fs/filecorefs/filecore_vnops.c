@@ -1,4 +1,4 @@
-/*	$NetBSD: filecore_vnops.c,v 1.44 2015/04/20 23:03:08 riastradh Exp $	*/
+/*	$NetBSD: filecore_vnops.c,v 1.49 2021/07/18 23:57:14 dholland Exp $	*/
 
 /*-
  * Copyright (c) 1994 The Regents of the University of California.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: filecore_vnops.c,v 1.44 2015/04/20 23:03:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: filecore_vnops.c,v 1.49 2021/07/18 23:57:14 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -122,14 +122,14 @@ filecore_check_possible(struct vnode *vp, struct filecore_node *ip,
  */
 static int
 filecore_check_permitted(struct vnode *vp, struct filecore_node *ip,
-    mode_t mode, kauth_cred_t cred)
+    accmode_t accmode, kauth_cred_t cred)
 {
 	struct filecore_mnt *fcmp = ip->i_mnt;
 
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(mode,
+	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
 	    vp->v_type, filecore_mode(ip)), vp, NULL,
-	    genfs_can_access(vp->v_type, filecore_mode(ip), fcmp->fc_uid,
-	    fcmp->fc_gid, mode, cred));
+	    genfs_can_access(vp, cred, fcmp->fc_uid, fcmp->fc_gid,
+	    filecore_mode(ip), NULL, accmode));
 }
 
 int
@@ -137,18 +137,18 @@ filecore_access(void *v)
 {
 	struct vop_access_args /* {
 		struct vnode *a_vp;
-		int  a_mode;
+		accmode_t  a_accmode;
 		kauth_cred_t a_cred;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct filecore_node *ip = VTOI(vp);
 	int error;
 
-	error = filecore_check_possible(vp, ip, ap->a_mode);
+	error = filecore_check_possible(vp, ip, ap->a_accmode);
 	if (error)
 		return error;
 
-	error = filecore_check_permitted(vp, ip, ap->a_mode, ap->a_cred);
+	error = filecore_check_permitted(vp, ip, ap->a_accmode, ap->a_cred);
 
 	return error;
 }
@@ -230,7 +230,7 @@ filecore_read(void *v)
 				break;
 			}
 			error = ubc_uiomove(&vp->v_uobj, uio, bytelen, advice,
-			    UBC_READ | UBC_PARTIALOK | UBC_UNMAP_FLAG(vp));
+			    UBC_READ | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 			if (error) {
 				break;
 			}
@@ -525,28 +525,10 @@ filecore_pathconf(void *v)
 		*ap->a_retval = 32;
 		return (0);
 	default:
-		return (EINVAL);
+		return genfs_pathconf(ap);
 	}
 	/* NOTREACHED */
 }
-
-/*
- * Global vfs data structures for isofs
- */
-#define	filecore_create	genfs_eopnotsupp
-#define	filecore_mknod	genfs_eopnotsupp
-#define	filecore_write	genfs_eopnotsupp
-#define	filecore_setattr	genfs_eopnotsupp
-#define	filecore_fcntl	genfs_fcntl
-#define	filecore_ioctl	genfs_enoioctl
-#define	filecore_fsync	genfs_nullop
-#define	filecore_remove	genfs_eopnotsupp
-#define	filecore_rename	genfs_eopnotsupp
-#define	filecore_mkdir	genfs_eopnotsupp
-#define	filecore_rmdir	genfs_eopnotsupp
-#define	filecore_advlock	genfs_eopnotsupp
-#define	filecore_bwrite	genfs_eopnotsupp
-#define filecore_revoke	genfs_revoke
 
 /*
  * Global vfs data structures for filecore
@@ -554,35 +536,37 @@ filecore_pathconf(void *v)
 int (**filecore_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc filecore_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, filecore_lookup },		/* lookup */
-	{ &vop_create_desc, filecore_create },		/* create */
-	{ &vop_mknod_desc, filecore_mknod },		/* mknod */
-	{ &vop_open_desc, filecore_open },		/* open */
-	{ &vop_close_desc, filecore_close },		/* close */
+	{ &vop_create_desc, genfs_eopnotsupp },		/* create */
+	{ &vop_mknod_desc, genfs_eopnotsupp },		/* mknod */
+	{ &vop_open_desc, genfs_nullop },		/* open */
+	{ &vop_close_desc, genfs_nullop },		/* close */
 	{ &vop_access_desc, filecore_access },		/* access */
+	{ &vop_accessx_desc, genfs_accessx },		/* accessx */
 	{ &vop_getattr_desc, filecore_getattr },	/* getattr */
-	{ &vop_setattr_desc, filecore_setattr },	/* setattr */
+	{ &vop_setattr_desc, genfs_eopnotsupp },	/* setattr */
 	{ &vop_read_desc, filecore_read },		/* read */
-	{ &vop_write_desc, filecore_write },		/* write */
+	{ &vop_write_desc, genfs_eopnotsupp },		/* write */
 	{ &vop_fallocate_desc, genfs_eopnotsupp },	/* fallocate */
 	{ &vop_fdiscard_desc, genfs_eopnotsupp },	/* fdiscard */
-	{ &vop_fcntl_desc, filecore_fcntl },		/* fcntl */
-	{ &vop_ioctl_desc, filecore_ioctl },		/* ioctl */
-	{ &vop_poll_desc, filecore_poll },		/* poll */
+	{ &vop_fcntl_desc, genfs_fcntl },		/* fcntl */
+	{ &vop_ioctl_desc, genfs_enoioctl },		/* ioctl */
+	{ &vop_poll_desc, genfs_poll },			/* poll */
 	{ &vop_kqfilter_desc, genfs_kqfilter },		/* kqfilter */
-	{ &vop_revoke_desc, filecore_revoke },		/* revoke */
-	{ &vop_mmap_desc, filecore_mmap },		/* mmap */
-	{ &vop_fsync_desc, filecore_fsync },		/* fsync */
-	{ &vop_seek_desc, filecore_seek },		/* seek */
-	{ &vop_remove_desc, filecore_remove },		/* remove */
+	{ &vop_revoke_desc, genfs_revoke },		/* revoke */
+	{ &vop_mmap_desc, genfs_mmap },			/* mmap */
+	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
+	{ &vop_seek_desc, genfs_seek },			/* seek */
+	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
 	{ &vop_link_desc, filecore_link },		/* link */
-	{ &vop_rename_desc, filecore_rename },		/* rename */
-	{ &vop_mkdir_desc, filecore_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, filecore_rmdir },		/* rmdir */
+	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
+	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
+	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
 	{ &vop_symlink_desc, filecore_symlink },	/* symlink */
 	{ &vop_readdir_desc, filecore_readdir },      	/* readdir */
 	{ &vop_readlink_desc, filecore_readlink },	/* readlink */
-	{ &vop_abortop_desc, filecore_abortop },       	/* abortop */
+	{ &vop_abortop_desc, genfs_abortop },       	/* abortop */
 	{ &vop_inactive_desc, filecore_inactive },	/* inactive */
 	{ &vop_reclaim_desc, filecore_reclaim },       	/* reclaim */
 	{ &vop_lock_desc, genfs_lock },			/* lock */
@@ -592,7 +576,7 @@ const struct vnodeopv_entry_desc filecore_vnodeop_entries[] = {
 	{ &vop_print_desc, filecore_print },		/* print */
 	{ &vop_islocked_desc, genfs_islocked },		/* islocked */
 	{ &vop_pathconf_desc, filecore_pathconf },	/* pathconf */
-	{ &vop_advlock_desc, filecore_advlock },       	/* advlock */
+	{ &vop_advlock_desc, genfs_eopnotsupp },       	/* advlock */
 	{ &vop_bwrite_desc, vn_bwrite },		/* bwrite */
 	{ &vop_getpages_desc, genfs_getpages },		/* getpages */
 	{ &vop_putpages_desc, genfs_putpages },		/* putpages */

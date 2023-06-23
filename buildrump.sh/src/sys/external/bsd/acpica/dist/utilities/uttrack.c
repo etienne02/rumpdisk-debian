@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -107,15 +107,13 @@ AcpiUtCreateList (
     ACPI_MEMORY_LIST        *Cache;
 
 
-    Cache = AcpiOsAllocate (sizeof (ACPI_MEMORY_LIST));
+    Cache = AcpiOsAllocateZeroed (sizeof (ACPI_MEMORY_LIST));
     if (!Cache)
     {
         return (AE_NO_MEMORY);
     }
 
-    memset (Cache, 0, sizeof (ACPI_MEMORY_LIST));
-
-    Cache->ListName = __UNCONST(ListName);
+    Cache->ListName = ListName;
     Cache->ObjectSize = ObjectSize;
 
     *ReturnCache = Cache;
@@ -451,8 +449,7 @@ AcpiUtTrackAllocation (
     Allocation->Component = Component;
     Allocation->Line = Line;
 
-    strncpy (Allocation->Module, Module, ACPI_MAX_MODULE_NAME);
-    Allocation->Module[ACPI_MAX_MODULE_NAME-1] = 0;
+    AcpiUtSafeStrncpy (Allocation->Module, Module, ACPI_MAX_MODULE_NAME);
 
     if (!Element)
     {
@@ -670,6 +667,11 @@ AcpiUtDumpAllocations (
         return_VOID;
     }
 
+    if (!AcpiGbl_GlobalList)
+    {
+        goto Exit;
+    }
+
     Element = AcpiGbl_GlobalList->ListHead;
     while (Element)
     {
@@ -681,7 +683,7 @@ AcpiUtDumpAllocations (
 
             if (Element->Size < sizeof (ACPI_COMMON_DESCRIPTOR))
             {
-                AcpiOsPrintf ("%p Length 0x%04X %9.9s-%u "
+                AcpiOsPrintf ("%p Length 0x%04X %9.9s-%4.4u "
                     "[Not a Descriptor - too small]\n",
                     Descriptor, Element->Size, Element->Module,
                     Element->Line);
@@ -693,9 +695,18 @@ AcpiUtDumpAllocations (
                 if (ACPI_GET_DESCRIPTOR_TYPE (Descriptor) !=
                     ACPI_DESC_TYPE_CACHED)
                 {
-                    AcpiOsPrintf ("%p Length 0x%04X %9.9s-%u [%s] ",
+                    AcpiOsPrintf ("%p Length 0x%04X %9.9s-%4.4u [%s] ",
                         Descriptor, Element->Size, Element->Module,
                         Element->Line, AcpiUtGetDescriptorName (Descriptor));
+
+                    /* Optional object hex dump */
+
+                    if (AcpiGbl_VerboseLeakDump)
+                    {
+                        AcpiOsPrintf ("\n");
+                        AcpiUtDumpBuffer ((UINT8 *) Descriptor, Element->Size,
+                            DB_BYTE_DISPLAY, 0);
+                    }
 
                     /* Validate the descriptor type using Type field and length */
 
@@ -745,7 +756,7 @@ AcpiUtDumpAllocations (
 
                     case ACPI_DESC_TYPE_PARSER:
 
-                        AcpiOsPrintf ("AmlOpcode 0x%04hX\n",
+                        AcpiOsPrintf ("AmlOpcode 0x%04X\n",
                             Descriptor->Op.Asl.AmlOpcode);
                         break;
 
@@ -769,6 +780,7 @@ AcpiUtDumpAllocations (
         Element = Element->Next;
     }
 
+Exit:
     (void) AcpiUtReleaseMutex (ACPI_MTX_MEMORY);
 
     /* Print summary */
@@ -779,7 +791,7 @@ AcpiUtDumpAllocations (
     }
     else
     {
-        ACPI_ERROR ((AE_INFO, "%u(0x%X) Outstanding allocations",
+        ACPI_ERROR ((AE_INFO, "%u (0x%X) Outstanding cache allocations",
             NumOutstanding, NumOutstanding));
     }
 

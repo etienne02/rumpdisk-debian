@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rumpdev,v 1.12 2015/10/19 16:16:38 pooka Exp $
+#	$NetBSD: Makefile.rumpdev,v 1.14 2021/06/29 21:03:36 pgoyette Exp $
 #
 
 LIB=	rumpdev
@@ -8,16 +8,14 @@ COMMENT=Rump kernel device faction
 	${RUMPTOP}/../kern					\
 	${RUMPTOP}/../dev
 
-IOCONFDIR:=	${.PARSEDIR}
-IOCONF=		MAINBUS.ioconf
-
-SRCS=	rump_dev.c autoconf.c
+SRCS=	rump_dev.c
 
 # sys/kern
-SRCS+=	kern_pmf.c subr_autoconf.c
+SRCS+=	kern_pmf.c
 
 # sys/dev
 SRCS+=	dev_verbose.c
+COPTS.dev_verbose.c+= -Wno-error=format-nonliteral
 
 CPPFLAGS+=	-I${RUMPTOP}/librump/rumpkern
 

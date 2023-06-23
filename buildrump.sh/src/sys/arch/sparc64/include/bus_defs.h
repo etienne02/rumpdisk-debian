@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_defs.h,v 1.3 2016/07/07 06:55:38 msaitoh Exp $	*/
+/*	$NetBSD: bus_defs.h,v 1.5 2019/09/23 16:17:58 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2001 The NetBSD Foundation, Inc.
@@ -107,6 +107,10 @@ typedef enum bus_type	bus_type_t;
 typedef uint64_t	bus_addr_t;
 typedef uint64_t	bus_size_t;
 
+#define PRIxBUSADDR	PRIx64
+#define PRIxBUSSIZE	PRIx64
+#define PRIuBUSSIZE	PRIu64
+
 /*
  * XXXX -- convert prom virtual address to bus_space_handle_t
  */
@@ -171,6 +175,7 @@ struct sparc_bus_space_tag {
 #define	BUS_SPACE_MAP_BUS2		0x0200
 #define	BUS_SPACE_MAP_BUS3		0x0400
 #define	BUS_SPACE_MAP_BUS4		0x0800
+#define BUS_SPACE_MAP_LITTLE		0x1000
 /* sparc uses this, it's not supposed to do anything on sparc64 */
 #define BUS_SPACE_MAP_LARGE		0
 

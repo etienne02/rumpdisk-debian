@@ -1,4 +1,4 @@
-/*	$NetBSD: nand.c,v 1.23 2013/10/20 17:13:18 christos Exp $	*/
+/*	$NetBSD: nand.c,v 1.29 2021/08/07 16:19:13 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2010 Department of Software Engineering,
@@ -34,7 +34,7 @@
 /* Common driver for NAND chips implementing the ONFI 2.2 specification */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nand.c,v 1.23 2013/10/20 17:13:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nand.c,v 1.29 2021/08/07 16:19:13 thorpej Exp $");
 
 #include "locators.h"
 
@@ -63,6 +63,7 @@ int nand_print(void *, const char *);
 
 static int nand_search(device_t, cfdata_t, const int *, void *);
 static void nand_address_row(device_t, size_t);
+static inline uint8_t nand_get_status(device_t);
 static void nand_address_column(device_t, size_t, size_t);
 static int nand_fill_chip_structure(device_t, struct nand_chip *);
 static int nand_scan_media(device_t, struct nand_chip *);
@@ -87,7 +88,6 @@ struct flash_interface nand_flash_if = {
 	.submit = nand_flash_submit
 };
 
-#ifdef NAND_VERBOSE
 const struct nand_manufacturer nand_mfrs[] = {
 	{ NAND_MFR_AMD,		"AMD" },
 	{ NAND_MFR_FUJITSU,	"Fujitsu" },
@@ -115,7 +115,6 @@ nand_midtoname(int id)
 
 	return nand_mfrs[i].name;
 }
-#endif
 
 /* ARGSUSED */
 int
@@ -173,7 +172,8 @@ nand_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Attach all our devices
 	 */
-	config_search_ia(nand_search, self, NULL, NULL);
+	config_search(self, NULL,
+	    CFARGS(.search = nand_search));
 
 	return;
 error:
@@ -189,8 +189,12 @@ nand_search(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 	struct nand_chip *chip = &sc->sc_chip;
 	struct flash_attach_args faa;
 
+	if (cf->cf_loc[FLASHBUSCF_DYNAMIC] != 0)
+		return 0;
+
 	faa.flash_if = &nand_flash_if;
 
+	faa.partinfo.part_name = NULL;
 	faa.partinfo.part_offset = cf->cf_loc[FLASHBUSCF_OFFSET];
 
 	if (cf->cf_loc[FLASHBUSCF_SIZE] == 0) {
@@ -205,8 +209,9 @@ nand_search(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 	else
 		faa.partinfo.part_flags = 0;
 
-	if (config_match(parent, cf, &faa)) {
-		if (config_attach(parent, cf, &faa, nand_print) != NULL) {
+	if (config_probe(parent, cf, &faa)) {
+		if (config_attach(parent, cf, &faa, nand_print,
+				  CFARGS_NONE) != NULL) {
 			return 0;
 		} else {
 			return 1;
@@ -214,6 +219,16 @@ nand_search(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 	}
 
 	return 1;
+}
+
+void
+nand_attach_mtdparts(device_t parent, const char *mtd_id, const char *cmdline)
+{
+	struct nand_softc *sc = device_private(parent);
+	struct nand_chip *chip = &sc->sc_chip;
+
+	flash_attach_mtdparts(&nand_flash_if, parent, chip->nc_size,
+	    mtd_id, cmdline);
 }
 
 int
@@ -271,7 +286,8 @@ nand_attach_mi(struct nand_interface *nand_if, device_t parent)
 	}
 
 	arg.naa_nand_if = nand_if;
-	return config_found_ia(parent, "nandbus", &arg, nand_print);
+	return config_found(parent, &arg, nand_print,
+	    CFARGS(.iattr = "nandbus"));
 }
 
 /* default everything to reasonable values, to ease future api changes */
@@ -334,6 +350,8 @@ nand_fill_chip_structure_legacy(device_t self, struct nand_chip *chip)
 		return nand_read_parameters_micron(self, chip);
 	case NAND_MFR_SAMSUNG:
 		return nand_read_parameters_samsung(self, chip);
+	case NAND_MFR_TOSHIBA:
+		return nand_read_parameters_toshiba(self, chip);
 	default:
 		return 1;
 	}
@@ -354,6 +372,7 @@ nand_scan_media(device_t self, struct nand_chip *chip)
 
 	nand_select(self, true);
 	nand_command(self, ONFI_RESET);
+	KASSERT(nand_get_status(self) & ONFI_STATUS_RDY);
 	nand_select(self, false);
 
 	/* check if the device implements the ONFI standard */
@@ -365,6 +384,12 @@ nand_scan_media(device_t self, struct nand_chip *chip)
 	nand_read_1(self, &onfi_signature[2]);
 	nand_read_1(self, &onfi_signature[3]);
 	nand_select(self, false);
+
+#ifdef NAND_DEBUG
+	device_printf(self, "signature: %02x %02x %02x %02x\n",
+	    onfi_signature[0], onfi_signature[1],
+	    onfi_signature[2], onfi_signature[3]);
+#endif
 
 	if (onfi_signature[0] != 'O' || onfi_signature[1] != 'N' ||
 	    onfi_signature[2] != 'F' || onfi_signature[3] != 'I') {
@@ -393,13 +418,11 @@ nand_scan_media(device_t self, struct nand_chip *chip)
 		}
 	}
 
-#ifdef NAND_VERBOSE
 	aprint_normal_dev(self,
 	    "manufacturer id: 0x%.2x (%s), device id: 0x%.2x\n",
 	    chip->nc_manf_id,
 	    nand_midtoname(chip->nc_manf_id),
 	    chip->nc_dev_id);
-#endif
 
 	aprint_normal_dev(self,
 	    "page size: %" PRIu32 " bytes, spare size: %" PRIu32 " bytes, "
@@ -638,7 +661,7 @@ nand_get_status(device_t self)
 static bool
 nand_check_wp(device_t self)
 {
-	if (nand_get_status(self) & 0x80)
+	if (nand_get_status(self) & ONFI_STATUS_WP)
 		return false;
 	else
 		return true;

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_tlp_pci.c,v 1.124 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: if_tlp_pci.c,v 1.130 2021/05/08 00:27:02 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2002 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_tlp_pci.c,v 1.124 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_tlp_pci.c,v 1.130 2021/05/08 00:27:02 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -111,69 +111,89 @@ CFATTACH_DECL3_NEW(tlp_pci, sizeof(struct tulip_pci_softc),
     tlp_pci_match, tlp_pci_attach, tlp_pci_detach, NULL, NULL, NULL,
     DVF_DETACH_SHUTDOWN);
 
-static const struct tulip_pci_product {
-	uint32_t	tpp_vendor;	/* PCI vendor ID */
-	uint32_t	tpp_product;	/* PCI product ID */
-	tulip_chip_t	tpp_chip;	/* base Tulip chip type */
-} tlp_pci_products[] = {
-	{ PCI_VENDOR_DEC,		PCI_PRODUCT_DEC_21040,
-	  TULIP_CHIP_21040 },
-	{ PCI_VENDOR_DEC,		PCI_PRODUCT_DEC_21041,
-	  TULIP_CHIP_21041 },
-	{ PCI_VENDOR_DEC,		PCI_PRODUCT_DEC_21140,
-	  TULIP_CHIP_21140 },
-	{ PCI_VENDOR_DEC,		PCI_PRODUCT_DEC_21142,
-	  TULIP_CHIP_21142 },
+static const struct device_compatible_entry compat_data[] = {
+	{ .id = PCI_ID_CODE(PCI_VENDOR_DEC, PCI_PRODUCT_DEC_21040),
+	  .value = TULIP_CHIP_21040 },
 
-	{ PCI_VENDOR_LITEON,		PCI_PRODUCT_LITEON_82C168,
-	  TULIP_CHIP_82C168 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_DEC, PCI_PRODUCT_DEC_21041),
+	  .value = TULIP_CHIP_21041 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_DEC, PCI_PRODUCT_DEC_21140),
+	  .value = TULIP_CHIP_21140 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_DEC, PCI_PRODUCT_DEC_21142),
+	  .value = TULIP_CHIP_21142 },
+
+
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_LITEON, PCI_PRODUCT_LITEON_82C168),
+	  .value = TULIP_CHIP_82C168 },
 
 	/*
 	 * Note: This is like a MX98725 with Wake-On-LAN and a
 	 * 128-bit multicast hash table.
 	 */
-	{ PCI_VENDOR_LITEON,		PCI_PRODUCT_LITEON_82C115,
-	  TULIP_CHIP_82C115 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_LITEON, PCI_PRODUCT_LITEON_82C115),
+	  .value = TULIP_CHIP_82C115 },
 
-	{ PCI_VENDOR_MACRONIX,		PCI_PRODUCT_MACRONIX_MX98713,
-	  TULIP_CHIP_MX98713 },
-	{ PCI_VENDOR_MACRONIX,		PCI_PRODUCT_MACRONIX_MX987x5,
-	  TULIP_CHIP_MX98715 },
 
-	{ PCI_VENDOR_COMPEX,		PCI_PRODUCT_COMPEX_RL100TX,
-	  TULIP_CHIP_MX98713 },
 
-	{ PCI_VENDOR_WINBOND,		PCI_PRODUCT_WINBOND_W89C840F,
-	  TULIP_CHIP_WB89C840F },
-	{ PCI_VENDOR_COMPEX,		PCI_PRODUCT_COMPEX_RL100ATX,
-	  TULIP_CHIP_WB89C840F },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_MACRONIX, PCI_PRODUCT_MACRONIX_MX98713),
+	  .value = TULIP_CHIP_MX98713 },
 
-	{ PCI_VENDOR_DAVICOM,		PCI_PRODUCT_DAVICOM_DM9102,
-	  TULIP_CHIP_DM9102 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_MACRONIX, PCI_PRODUCT_MACRONIX_MX987x5),
+	  .value = TULIP_CHIP_MX98715 },
 
-	{ PCI_VENDOR_ADMTEK,		PCI_PRODUCT_ADMTEK_AL981,
-	  TULIP_CHIP_AL981 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_COMPEX, PCI_PRODUCT_COMPEX_RL100TX),
+	  .value = TULIP_CHIP_MX98713 },
 
-	{ PCI_VENDOR_ADMTEK,		PCI_PRODUCT_ADMTEK_AN983,
-	  TULIP_CHIP_AN985 },
-	{ PCI_VENDOR_ADMTEK,		PCI_PRODUCT_ADMTEK_ADM9511,
-	  TULIP_CHIP_AN985 },
-	{ PCI_VENDOR_ADMTEK,		PCI_PRODUCT_ADMTEK_ADM9513,
-	  TULIP_CHIP_AN985 },
-	{ PCI_VENDOR_ACCTON,		PCI_PRODUCT_ACCTON_EN2242,
-	  TULIP_CHIP_AN985 },
 
-	{ PCI_VENDOR_3COM,		PCI_PRODUCT_3COM_3C910SOHOB,
-	  TULIP_CHIP_AN985 },
 
-	{ PCI_VENDOR_ASIX,		PCI_PRODUCT_ASIX_AX88140A,
-	  TULIP_CHIP_AX88140 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_WINBOND, PCI_PRODUCT_WINBOND_W89C840F),
+	  .value = TULIP_CHIP_WB89C840F },
 
-	{ PCI_VENDOR_CONEXANT,		PCI_PRODUCT_CONEXANT_LANFINITY,
-	  TULIP_CHIP_RS7112 },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_COMPEX, PCI_PRODUCT_COMPEX_RL100ATX),
+	  .value = TULIP_CHIP_WB89C840F },
 
-	{ 0,				0,
-	  TULIP_CHIP_INVALID },
+
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_DAVICOM, PCI_PRODUCT_DAVICOM_DM9102),
+	  .value = TULIP_CHIP_DM9102 },
+
+
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ADMTEK, PCI_PRODUCT_ADMTEK_AL981),
+	  .value = TULIP_CHIP_AL981 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ADMTEK, PCI_PRODUCT_ADMTEK_AN983),
+	  .value = TULIP_CHIP_AN985 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ADMTEK, PCI_PRODUCT_ADMTEK_ADM9511),
+	  .value = TULIP_CHIP_AN985 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ADMTEK, PCI_PRODUCT_ADMTEK_ADM9513),
+	  .value = TULIP_CHIP_AN985 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ACCTON, PCI_PRODUCT_ACCTON_EN2242),
+	  .value = TULIP_CHIP_AN985 },
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_3COM, PCI_PRODUCT_3COM_3C910SOHOB),
+	  .value = TULIP_CHIP_AN985 },
+
+
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_ASIX, PCI_PRODUCT_ASIX_AX88140A),
+	  .value = TULIP_CHIP_AX88140 },
+
+
+
+	{ .id = PCI_ID_CODE(PCI_VENDOR_CONEXANT,
+		PCI_PRODUCT_CONEXANT_LANFINITY),
+	  .value = TULIP_CHIP_RS7112 },
+
+
+
+	PCI_COMPAT_EOL
 };
 
 struct tlp_pci_quirks {
@@ -260,25 +280,6 @@ static const struct tlp_pci_quirks tlp_pci_21142_quirks[] = {
 
 static int	tlp_pci_shared_intr(void *);
 
-static const struct tulip_pci_product *
-tlp_pci_lookup(const struct pci_attach_args *pa)
-{
-	const struct tulip_pci_product *tpp;
-
-	/* Don't match lmc cards */
-	if (PCI_VENDOR(pci_conf_read(pa->pa_pc, pa->pa_tag,
-	    PCI_SUBSYS_ID_REG)) == PCI_VENDOR_LMC)
-		return NULL;
-
-	for (tpp = tlp_pci_products; tpp->tpp_chip != TULIP_CHIP_INVALID;
-	    tpp++) {
-		if (PCI_VENDOR(pa->pa_id) == tpp->tpp_vendor &&
-		    PCI_PRODUCT(pa->pa_id) == tpp->tpp_product)
-			return tpp;
-	}
-	return NULL;
-}
-
 static void
 tlp_pci_get_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr,
     const struct tlp_pci_quirks *tpq)
@@ -332,9 +333,15 @@ tlp_pci_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pci_attach_args *pa = aux;
 
-	if (tlp_pci_lookup(pa) != NULL)
+	if (pci_compatible_match(pa, compat_data)) {
+		/* Don't match lmc cards */
+		const pcireg_t subsys = pci_conf_read(pa->pa_pc, pa->pa_tag,
+		    PCI_SUBSYS_ID_REG);
+		if (PCI_VENDOR(subsys) == PCI_VENDOR_LMC) {
+			return 0;
+		}
 		return 10;	/* beat if_de.c */
-
+	}
 	return 0;
 }
 
@@ -350,7 +357,7 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 	bus_space_tag_t iot, memt;
 	bus_space_handle_t ioh, memh;
 	int ioh_valid, memh_valid, i, j;
-	const struct tulip_pci_product *tpp;
+	const struct device_compatible_entry *dce;
 	prop_data_t ea;
 	uint8_t enaddr[ETHER_ADDR_LEN];
 	uint32_t val = 0;
@@ -366,12 +373,9 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 
 	LIST_INIT(&psc->sc_intrslaves);
 
-	tpp = tlp_pci_lookup(pa);
-	if (tpp == NULL) {
-		printf("\n");
-		panic("tlp_pci_attach: impossible");
-	}
-	sc->sc_chip = tpp->tpp_chip;
+	dce = pci_compatible_lookup(pa, compat_data);
+	KASSERT(dce != NULL);
+	sc->sc_chip = (tulip_chip_t)dce->value;
 
 	/*
 	 * By default, Tulip registers are 8 bytes long (4 bytes
@@ -509,9 +513,9 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 		 * Clear the "sleep mode" bit in the CFDA register.
 		 */
 		reg = pci_conf_read(pc, pa->pa_tag, TULIP_PCI_CFDA);
-		if (reg & (CFDA_SLEEP|CFDA_SNOOZE))
+		if (reg & (CFDA_SLEEP | CFDA_SNOOZE))
 			pci_conf_write(pc, pa->pa_tag, TULIP_PCI_CFDA,
-			    reg & ~(CFDA_SLEEP|CFDA_SNOOZE));
+			    reg & ~(CFDA_SLEEP | CFDA_SNOOZE));
 		break;
 
 	default:
@@ -534,7 +538,7 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 	    PCI_MAPREG_TYPE_IO, 0,
 	    &iot, &ioh, NULL, &iosize) == 0);
 	memh_valid = (pci_mapreg_map(pa, TULIP_PCI_MMBA,
-	    PCI_MAPREG_TYPE_MEM|PCI_MAPREG_MEM_TYPE_32BIT, 0,
+	    PCI_MAPREG_TYPE_MEM | PCI_MAPREG_MEM_TYPE_32BIT, 0,
 	    &memt, &memh, NULL, &memsize) == 0);
 	if (memh_valid) {
 		sc->sc_st = memt;
@@ -588,7 +592,7 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 	switch (sc->sc_chip) {
 	case TULIP_CHIP_21040:
 		sc->sc_srom_addrbits = 6;
-		sc->sc_srom = malloc(TULIP_ROM_SIZE(6), M_DEVBUF, M_NOWAIT);
+		sc->sc_srom = malloc(TULIP_ROM_SIZE(6), M_DEVBUF, M_WAITOK);
 		TULIP_WRITE(sc, CSR_MIIROM, MIIROM_SROMCS);
 		for (i = 0; i < TULIP_ROM_SIZE(6); i++) {
 			for (j = 0; j < 10000; j++) {
@@ -604,7 +608,7 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 	case TULIP_CHIP_82C169:
 	    {
 		sc->sc_srom_addrbits = 2;
-		sc->sc_srom = malloc(TULIP_ROM_SIZE(2), M_DEVBUF, M_NOWAIT);
+		sc->sc_srom = malloc(TULIP_ROM_SIZE(2), M_DEVBUF, M_WAITOK);
 
 		/*
 		 * The Lite-On PNIC stores the Ethernet address in
@@ -647,19 +651,20 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 			KASSERT(prop_object_type(ea) == PROP_TYPE_DATA);
 			KASSERT(prop_data_size(ea) == ETHER_ADDR_LEN);
 
-			memcpy(enaddr, prop_data_data_nocopy(ea),
+			memcpy(enaddr, prop_data_value(ea),
 			       ETHER_ADDR_LEN);
 
 			sc->sc_srom_addrbits = 6;
 			sc->sc_srom = malloc(TULIP_ROM_SIZE(6), M_DEVBUF,
-			    M_NOWAIT|M_ZERO);
+			    M_WAITOK | M_ZERO);
 			memcpy(sc->sc_srom, enaddr, sizeof(enaddr));
 			if (tlp_srom_debug) {
 				aprint_normal("SROM CONTENTS:");
 				for (i = 0; i < TULIP_ROM_SIZE(6); i++) {
 					if ((i % 8) == 0)
 						aprint_normal("\n\t");
-					aprint_normal("0x%02x ", sc->sc_srom[i]);
+					aprint_normal("0x%02x ",
+					    sc->sc_srom[i]);
 				}
 				aprint_normal("\n");
 			}
@@ -935,7 +940,7 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 			if (eaddrprop != NULL
 			    && prop_data_size(eaddrprop) == ETHER_ADDR_LEN)
 				memcpy(enaddr,
-				    prop_data_data_nocopy(eaddrprop),
+				    prop_data_value(eaddrprop),
 				    ETHER_ADDR_LEN);
 			else
 				memcpy(enaddr, &sc->sc_srom[20],
@@ -1011,9 +1016,9 @@ tlp_pci_attach(device_t parent, device_t self, void *aux)
 			goto fail;
 		}
 		intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-		psc->sc_ih = pci_intr_establish(pc, ih, IPL_NET,
+		psc->sc_ih = pci_intr_establish_xname(pc, ih, IPL_NET,
 		    (psc->sc_flags & TULIP_PCI_SHAREDINTR) ?
-		    tlp_pci_shared_intr : tlp_intr, sc);
+		    tlp_pci_shared_intr : tlp_intr, sc, device_xname(self));
 		if (psc->sc_ih == NULL) {
 			aprint_error_dev(self, "unable to establish interrupt");
 			if (intrstr != NULL)
@@ -1274,7 +1279,7 @@ tlp_pci_cogent_21040_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr)
 {
 
 	strcpy(psc->sc_tulip.sc_name, "Cogent multi-port");
-	psc->sc_flags |= TULIP_PCI_SHAREDINTR|TULIP_PCI_SHAREDROM;
+	psc->sc_flags |= TULIP_PCI_SHAREDINTR | TULIP_PCI_SHAREDROM;
 }
 
 static void
@@ -1388,6 +1393,7 @@ static void
 tlp_smc9332dst_tmsw_init(struct tulip_softc *sc)
 {
 	struct tulip_21x4x_media *tm;
+	struct mii_data *mii = &sc->sc_mii;
 	const char *sep = "";
 	uint32_t reg;
 	int i, cnt;
@@ -1396,15 +1402,14 @@ tlp_smc9332dst_tmsw_init(struct tulip_softc *sc)
 	sc->sc_opmode = OPMODE_MBO | OPMODE_PS;
 	TULIP_WRITE(sc, CSR_OPMODE, sc->sc_opmode);
 
-	ifmedia_init(&sc->sc_mii.mii_media, 0, tlp_mediachange,
-	    tlp_mediastatus);
+	ifmedia_init(&mii->mii_media, 0, tlp_mediachange, tlp_mediastatus);
 	aprint_normal_dev(sc->sc_dev, "");
 
 #define	ADD(m, c) \
-	tm = malloc(sizeof(*tm), M_DEVBUF, M_WAITOK|M_ZERO);		\
+	tm = malloc(sizeof(*tm), M_DEVBUF, M_WAITOK | M_ZERO);		\
 	tm->tm_opmode = (c);						\
 	tm->tm_gpdata = GPP_SMC9332DST_INIT;				\
-	ifmedia_add(&sc->sc_mii.mii_media, (m), 0, tm)
+	ifmedia_add(&mii->mii_media, (m), 0, tm)
 #define	PRINT(str)	aprint_normal("%s%s", sep, str); sep = ", "
 
 	ADD(IFM_MAKEWORD(IFM_ETHER, IFM_10_T, 0, 0), OPMODE_TTM);
@@ -1448,18 +1453,17 @@ tlp_smc9332dst_tmsw_init(struct tulip_softc *sc)
 		}
 		delay(1000);
 	}
-	if (cnt > 100) {
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_100_TX);
-	} else {
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_10_T);
-	}
+	if (cnt > 100)
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_100_TX);
+	else
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_10_T);
 }
 
 static void
 tlp_pci_vpc_21140_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr)
 {
 	struct tulip_softc *sc = &psc->sc_tulip;
-	char *p1 = (char *) &sc->sc_srom[32];
+	char *p1 = (char *)&sc->sc_srom[32];
 	char *p2 = &sc->sc_name[0];
 
 	do {
@@ -1546,7 +1550,7 @@ tlp_pci_adaptec_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr)
 
 		case 0x13:
 			strcpy(psc->sc_tulip.sc_name, "Cogent ???");
- 			sc->sc_mediasw = &tlp_cogent_em1x0_mediasw;
+			sc->sc_mediasw = &tlp_cogent_em1x0_mediasw;
 			psc->sc_flags |= TULIP_PCI_SHAREDINTR |
 			    TULIP_PCI_SHAREDROM;
 			break;
@@ -1583,7 +1587,7 @@ tlp_pci_adaptec_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr)
 
 	case 0x2400:
 		strcpy(psc->sc_tulip.sc_name, "Adaptec ANA-6944A");
-		psc->sc_flags |= TULIP_PCI_SHAREDINTR|TULIP_PCI_SHAREDROM;
+		psc->sc_flags |= TULIP_PCI_SHAREDINTR | TULIP_PCI_SHAREDROM;
 		break;
 
 	case 0x2b00:
@@ -1592,7 +1596,7 @@ tlp_pci_adaptec_quirks(struct tulip_pci_softc *psc, const uint8_t *enaddr)
 
 	case 0x3000:
 		strcpy(psc->sc_tulip.sc_name, "Adaptec ANA-6922");
-		psc->sc_flags |= TULIP_PCI_SHAREDINTR|TULIP_PCI_SHAREDROM;
+		psc->sc_flags |= TULIP_PCI_SHAREDINTR | TULIP_PCI_SHAREDROM;
 		break;
 
 	default:
@@ -1606,21 +1610,21 @@ static void
 tlp_cogent_em1x0_tmsw_init(struct tulip_softc *sc)
 {
 	struct tulip_21x4x_media *tm;
+	struct mii_data *mii = &sc->sc_mii;
 	const char *sep = "";
 
 	sc->sc_gp_dir = GPP_COGENT_EM1x0_PINS;
 	sc->sc_opmode = OPMODE_MBO | OPMODE_PS;
 	TULIP_WRITE(sc, CSR_OPMODE, sc->sc_opmode);
 
-	ifmedia_init(&sc->sc_mii.mii_media, 0, tlp_mediachange,
-	    tlp_mediastatus);
+	ifmedia_init(&mii->mii_media, 0, tlp_mediachange, tlp_mediastatus);
 	aprint_normal_dev(sc->sc_dev, "");
 
 #define	ADD(m, c) \
-	tm = malloc(sizeof(*tm), M_DEVBUF, M_WAITOK|M_ZERO);		\
+	tm = malloc(sizeof(*tm), M_DEVBUF, M_WAITOK | M_ZERO);		\
 	tm->tm_opmode = (c);						\
 	tm->tm_gpdata = GPP_COGENT_EM1x0_INIT;				\
-	ifmedia_add(&sc->sc_mii.mii_media, (m), 0, tm)
+	ifmedia_add(&mii->mii_media, (m), 0, tm)
 #define	PRINT(str)	aprint_normal("%s%s", sep, str); sep = ", "
 
 	if (sc->sc_srom[32] == 0x15) {
@@ -1633,7 +1637,7 @@ tlp_cogent_em1x0_tmsw_init(struct tulip_softc *sc)
 		PRINT("100baseFX-FDX");
 		aprint_normal("\n");
 
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_100_FX);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_100_FX);
 	} else {
 		ADD(IFM_MAKEWORD(IFM_ETHER, IFM_100_TX, 0, 0),
 		    OPMODE_PS | OPMODE_PCS | OPMODE_SCR);
@@ -1644,7 +1648,7 @@ tlp_cogent_em1x0_tmsw_init(struct tulip_softc *sc)
 		PRINT("100baseTX-FDX");
 		aprint_normal("\n");
 
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_100_TX);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_100_TX);
 	}
 
 #undef ADD

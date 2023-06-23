@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_pset.c,v 1.19 2015/07/30 08:11:44 maxv Exp $	*/
+/*	$NetBSD: sys_pset.c,v 1.24 2020/05/23 23:42:43 ad Exp $	*/
 
 /*
  * Copyright (c) 2008, Mindaugas Rasiukevicius <rmind at NetBSD org>
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_pset.c,v 1.19 2015/07/30 08:11:44 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_pset.c,v 1.24 2020/05/23 23:42:43 ad Exp $");
 
 #include <sys/param.h>
 
@@ -72,8 +72,8 @@ psets_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	int result;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_system_req)arg0;
-	id = (psetid_t)(unsigned long)arg1;
+	req = (enum kauth_system_req)(uintptr_t)arg0;
+	id = (psetid_t)(uintptr_t)arg1;
 
 	if (action != KAUTH_SYSTEM_PSET)
 		return result;
@@ -94,7 +94,7 @@ void
 psets_init(void)
 {
 
-	psets_max = max(maxcpus, 32);
+	psets_max = uimax(maxcpus, 32);
 	psets = kmem_zalloc(psets_max * sizeof(void *), KM_SLEEP);
 	psets_count = 0;
 
@@ -156,8 +156,6 @@ psid_validate(psetid_t psid, bool chkps)
 		return EINVAL;
 	if (psets[psid - 1] == NULL)
 		return EINVAL;
-	if (psets[psid - 1]->ps_flags & PSET_BUSY)
-		return EBUSY;
 
 	return 0;
 }
@@ -204,7 +202,6 @@ static int
 kern_pset_destroy(psetid_t psid)
 {
 	struct cpu_info *ci;
-	pset_info_t *pi;
 	struct lwp *l;
 	CPU_INFO_ITERATOR cii;
 	int error;
@@ -229,28 +226,23 @@ kern_pset_destroy(psetid_t psid)
 			continue;
 		spc->spc_psid = PS_NONE;
 	}
-	/* Mark that processor-set is going to be destroyed */
-	pi = psets[psid - 1];
-	pi->ps_flags |= PSET_BUSY;
-	mutex_exit(&cpu_lock);
 
 	/* Unmark the processor-set ID from each thread */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	LIST_FOREACH(l, &alllwp, l_list) {
 		/* Safe to check and set without lock held */
 		if (l->l_psid != psid)
 			continue;
 		l->l_psid = PS_NONE;
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	/* Destroy the processor-set */
-	mutex_enter(&cpu_lock);
+	kmem_free(psets[psid - 1], sizeof(pset_info_t));
 	psets[psid - 1] = NULL;
 	psets_count--;
 	mutex_exit(&cpu_lock);
 
-	kmem_free(pi, sizeof(pset_info_t));
 	return 0;
 }
 
@@ -352,6 +344,12 @@ sys_pset_assign(struct lwp *l, const struct sys_pset_assign_args *uap,
 		/* FALLTHROUGH */
 	default:
 		/*
+		 * Just finish if old and new processor-sets are
+		 * the same.
+		 */
+		if (spc->spc_psid == psid)
+			break;
+		/*
 		 * Ensure at least one CPU stays in the default set,
 		 * and that specified CPU is not offline.
 		 */
@@ -360,7 +358,7 @@ sys_pset_assign(struct lwp *l, const struct sys_pset_assign_args *uap,
 			mutex_exit(&cpu_lock);
 			return EBUSY;
 		}
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		/*
 		 * Ensure that none of the threads are using affinity mask
 		 * with this target CPU in it.
@@ -376,7 +374,7 @@ sys_pset_assign(struct lwp *l, const struct sys_pset_assign_args *uap,
 			}
 			if (kcpuset_isset(t->l_affinity, cpu_index(ci))) {
 				lwp_unlock(t);
-				mutex_exit(proc_lock);
+				mutex_exit(&proc_lock);
 				mutex_exit(&cpu_lock);
 				return EPERM;
 			}
@@ -399,7 +397,7 @@ sys_pset_assign(struct lwp *l, const struct sys_pset_assign_args *uap,
 			KASSERT(tci != ci);
 			lwp_migrate(t, tci);
 		}
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		break;
 	}
 	mutex_exit(&cpu_lock);
@@ -446,9 +444,6 @@ sys__pset_bind(struct lwp *l, const struct sys__pset_bind_args *uap,
 	}
 	if (psid == PS_MYID)
 		psid = curlwp->l_psid;
-	if (psid != PS_QUERY && psid != PS_NONE)
-		psets[psid - 1]->ps_flags |= PSET_BUSY;
-	mutex_exit(&cpu_lock);
 
 	/*
 	 * Get PID and LID from the ID.
@@ -457,6 +452,7 @@ sys__pset_bind(struct lwp *l, const struct sys__pset_bind_args *uap,
 	id1 = SCARG(uap, first_id);
 	id2 = SCARG(uap, second_id);
 
+	mutex_enter(&proc_lock);
 	switch (SCARG(uap, idtype)) {
 	case P_PID:
 		/*
@@ -487,19 +483,13 @@ sys__pset_bind(struct lwp *l, const struct sys__pset_bind_args *uap,
 	}
 
 	/* Find the process */
-	mutex_enter(proc_lock);
 	p = proc_find(pid);
 	if (p == NULL) {
-		mutex_exit(proc_lock);
 		error = ESRCH;
 		goto error;
 	}
-	mutex_enter(p->p_lock);
-	mutex_exit(proc_lock);
-
 	/* Disallow modification of the system processes */
 	if (p->p_flag & PK_SYSTEM) {
-		mutex_exit(p->p_lock);
 		error = EPERM;
 		goto error;
 	}
@@ -507,6 +497,7 @@ sys__pset_bind(struct lwp *l, const struct sys__pset_bind_args *uap,
 	/* Find the LWP(s) */
 	lcnt = 0;
 	ci = NULL;
+	mutex_enter(p->p_lock);
 	LIST_FOREACH(t, &p->p_lwps, l_sibling) {
 		if (lid && lid != t->l_lid)
 			continue;
@@ -525,16 +516,12 @@ sys__pset_bind(struct lwp *l, const struct sys__pset_bind_args *uap,
 	mutex_exit(p->p_lock);
 	if (lcnt == 0) {
 		error = ESRCH;
-		goto error;
 	}
-	if (SCARG(uap, opsid))
-		error = copyout(&opsid, SCARG(uap, opsid), sizeof(psetid_t));
 error:
-	if (psid != PS_QUERY && psid != PS_NONE) {
-		mutex_enter(&cpu_lock);
-		psets[psid - 1]->ps_flags &= ~PSET_BUSY;
-		mutex_exit(&cpu_lock);
-	}
+	mutex_exit(&proc_lock);
+	mutex_exit(&cpu_lock);
+	if (error == 0 && SCARG(uap, opsid))
+		error = copyout(&opsid, SCARG(uap, opsid), sizeof(psetid_t));
 	return error;
 }
 
@@ -588,7 +575,7 @@ sysctl_psets_list(SYSCTLFN_ARGS)
 	len = strlen(buf) + 1;
 	error = 0;
 	if (oldp != NULL)
-		error = copyout(buf, oldp, min(len, *oldlenp));
+		error = copyout(buf, oldp, uimin(len, *oldlenp));
 	*oldlenp = len;
 	kmem_free(buf, bufsz);
 	sysctl_relock();

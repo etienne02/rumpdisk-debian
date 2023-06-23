@@ -1,4 +1,4 @@
-/*	$NetBSD: uipc_syscalls_50.c,v 1.3 2011/01/19 10:21:16 tsutsui Exp $	*/
+/*	$NetBSD: uipc_syscalls_50.c,v 1.11 2020/01/29 05:48:22 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -37,7 +30,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_50.c,v 1.3 2011/01/19 10:21:16 tsutsui Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -48,6 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_50.c,v 1.3 2011/01/19 10:21:16 tsutsui
 #include <sys/kauth.h>
 #include <sys/proc.h>
 #include <sys/time.h>
+#include <sys/compat_stub.h>
 
 #include <net/if.h>
 
@@ -55,25 +52,38 @@ __KERNEL_RCSID(0, "$NetBSD: uipc_syscalls_50.c,v 1.3 2011/01/19 10:21:16 tsutsui
 #include <compat/sys/socket.h>
 #include <compat/sys/sockio.h>
 
-#ifdef COMPAT_OIFDATA
+#include <compat/common/compat_mod.h>
+
 /*ARGSUSED*/
-int
+static int
 compat_ifdatareq(struct lwp *l, u_long cmd, void *data)
 {
+	struct if_data ifi;
 	struct oifdatareq *ifdr = data;
 	struct ifnet *ifp;
 	int error;
+
+	/* Validate arguments. */
+	switch (cmd) {
+	case OSIOCGIFDATA:
+	case OSIOCZIFDATA:
+		break;
+	default:
+		return ENOSYS;
+	}
 
 	ifp = ifunit(ifdr->ifdr_name);
 	if (ifp == NULL)
 		return ENXIO;
 
+	/* Do work. */
 	switch (cmd) {
-	case SIOCGIFDATA:
-		ifdatan2o(&ifdr->ifdr_data, &ifp->if_data);
+	case OSIOCGIFDATA:
+		if_export_if_data(ifp, &ifi, false);
+		ifdatan2o(&ifdr->ifdr_data, &ifi);
 		return 0;
 
-	case SIOCZIFDATA:
+	case OSIOCZIFDATA:
 		if (l != NULL) {
 			error = kauth_authorize_network(l->l_cred,
 			    KAUTH_NETWORK_INTERFACE,
@@ -82,17 +92,27 @@ compat_ifdatareq(struct lwp *l, u_long cmd, void *data)
 			if (error != 0)
 				return error;
 		}
-		ifdatan2o(&ifdr->ifdr_data, &ifp->if_data);
-		/*
-		 * Assumes that the volatile counters that can be
-		 * zero'ed are at the end of if_data.
-		 */
-		memset(&ifp->if_data.ifi_ipackets, 0, sizeof(ifp->if_data) -
-		    offsetof(struct if_data, ifi_ipackets));
+		if_export_if_data(ifp, &ifi, true);
+		ifdatan2o(&ifdr->ifdr_data, &ifi);
+		/* XXX if_lastchange? */
 		return 0;
 
 	default:
-		return EINVAL;
+		/* Impossible due to above validation, but makes gcc happy. */
+		return ENOSYS;
 	}
 }
-#endif
+
+void
+uipc_syscalls_50_init(void)
+{
+
+	MODULE_HOOK_SET(uipc_syscalls_50_hook, compat_ifdatareq);
+}
+
+void
+uipc_syscalls_50_fini(void)
+{
+ 
+	MODULE_HOOK_UNSET(uipc_syscalls_50_hook);
+}

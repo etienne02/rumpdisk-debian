@@ -1,5 +1,5 @@
 /*	$KAME: sctp.h,v 1.18 2005/03/06 16:04:16 itojun Exp $	*/
-/*	$NetBSD: sctp.h,v 1.1 2015/10/13 21:28:35 rjs Exp $ */
+/*	$NetBSD: sctp.h,v 1.3 2019/06/03 06:04:21 msaitoh Exp $ */
 
 #ifndef _NETINET_SCTP_H_
 #define _NETINET_SCTP_H_
@@ -47,7 +47,7 @@ struct sctphdr {
 	u_int32_t v_tag;		/* verification tag of packet */
 	u_int32_t checksum;		/* Adler32 C-Sum */
 	/* chunks follow... */
-};
+} __packed;
 
 /*
  * SCTP Chunks
@@ -57,7 +57,7 @@ struct sctp_chunkhdr {
 	u_int8_t  chunk_flags;		/* chunk flags */
 	u_int16_t chunk_length;		/* chunk length */
 	/* optional params follow */
-};
+} __packed;
 
 /*
  * SCTP chunk parameters
@@ -65,7 +65,7 @@ struct sctp_chunkhdr {
 struct sctp_paramhdr {
 	u_int16_t param_type;		/* parameter type */
 	u_int16_t param_length;		/* parameter length */
-};
+} __packed;
 
 /*
  * user socket options
@@ -97,7 +97,7 @@ struct sctp_paramhdr {
  * For the UDP model if this is turned on then the socket buffer is
  * shared for send resources amongst all associations. The default
  * for the UDP model is that is SS_NBIO is set. Which means all associations
- * have a seperate send limit BUT they will NOT ever BLOCK instead
+ * have a separate send limit BUT they will NOT ever BLOCK instead
  * you will get an error back EAGAIN if you try to send to much. If
  * you want the blocking symantics you set this option at the cost
  * of sharing one socket send buffer size amongst all associations.
@@ -199,38 +199,38 @@ struct sctp_error_cause {
 	u_int16_t code;
 	u_int16_t length;
 	/* optional cause-specific info may follow */
-};
+} __packed;
 
 struct sctp_error_invalid_stream {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_INVALID_STREAM */
 	u_int16_t stream_id;		/* stream id of the DATA in error */
 	u_int16_t reserved;
-};
+} __packed;
 
 struct sctp_error_missing_param {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_MISSING_PARAM */
 	u_int32_t num_missing_params;	/* number of missing parameters */
 	/* u_int16_t param_type's follow */
-};
+} __packed;
 
 struct sctp_error_stale_cookie {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_STALE_COOKIE */
 	u_int32_t stale_time;		/* time in usec of staleness */
-};
+} __packed;
 
 struct sctp_error_out_of_resource {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_OUT_OF_RESOURCES */
-};
+} __packed;
 
 struct sctp_error_unresolv_addr {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_UNRESOLVABLE_ADDR */
 
-};
+} __packed;
 
 struct sctp_error_unrecognized_chunk {
 	struct sctp_error_cause cause;	/* code=SCTP_ERROR_UNRECOG_CHUNK */
 	struct sctp_chunkhdr ch;	/* header from chunk in error */
-};
+} __packed;
 
 #define HAVE_SCTP			1
 #define HAVE_KERNEL_SCTP		1

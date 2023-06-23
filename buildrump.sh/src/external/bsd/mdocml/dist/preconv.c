@@ -1,4 +1,4 @@
-/*	Id: preconv.c,v 1.15 2015/10/06 18:32:19 schwarze Exp  */
+/*	Id: preconv.c,v 1.17 2018/12/13 11:55:47 schwarze Exp  */
 /*
  * Copyright (c) 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2014 Ingo Schwarze <schwarze@openbsd.org>
@@ -22,7 +22,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+
 #include "mandoc.h"
+#include "roff.h"
+#include "mandoc_parse.h"
 #include "libmandoc.h"
 
 int
@@ -30,8 +33,8 @@ preconv_encode(const struct buf *ib, size_t *ii, struct buf *ob, size_t *oi,
     int *filenc)
 {
 	const unsigned char	*cu;
-	int		 nby;
-	unsigned int	 accum;
+	int			 nby;
+	unsigned int		 accum;
 
 	cu = (const unsigned char *)ib->buf + *ii;
 	assert(*cu & 0x80);

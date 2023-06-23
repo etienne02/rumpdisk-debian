@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joerg Exp $	*/
+/*	$NetBSD: netbsd32_compat_43.c,v 1.61 2021/01/19 03:20:13 simonb Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.61 2021/01/19 03:20:13 simonb Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_43.h"
@@ -35,6 +35,7 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joer
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/module.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/mbuf.h>
@@ -45,6 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joer
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 #include <sys/time.h>
 #include <sys/ucred.h>
@@ -54,6 +56,7 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joer
 #include <sys/swap.h>
 
 #include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_syscall.h>
 #include <compat/netbsd32/netbsd32_syscallargs.h>
 
 #include <compat/sys/stat.h>
@@ -67,7 +70,6 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_43.c,v 1.53 2010/04/23 23:05:40 joer
 SYS_DEF(compat_43_netbsd32_sethostid);
 SYS_DEF(compat_43_netbsd32_killpg);
 SYS_DEF(compat_43_netbsd32_sigblock);
-SYS_DEF(compat_43_netbsd32_sigblock);
 SYS_DEF(compat_43_netbsd32_sigsetmask);
 #undef SYS_DEF
 
@@ -75,6 +77,7 @@ static void
 netbsd32_from_stat(const struct stat *sb, struct netbsd32_stat43 *sp32)
 {
 
+	memset(sp32, 0, sizeof(*sp32));
 	sp32->st_dev = sb->st_dev;
 	sp32->st_ino = sb->st_ino;
 	sp32->st_mode = sb->st_mode;
@@ -109,7 +112,7 @@ compat_43_netbsd32_ocreat(struct lwp *l, const struct compat_43_netbsd32_ocreat_
 	NETBSD32TO64_UAP(mode);
 	SCARG(&ua, flags) = O_WRONLY | O_CREAT | O_TRUNC;
 
-	return (sys_open(l, &ua, retval));
+	return sys_open(l, &ua, retval);
 }
 
 int
@@ -197,7 +200,7 @@ compat_43_netbsd32_otruncate(struct lwp *l, const struct compat_43_netbsd32_otru
 
 	NETBSD32TOP_UAP(path, const char);
 	NETBSD32TO64_UAP(length);
-	return (sys_truncate(l, &ua, retval));
+	return sys_truncate(l, &ua, retval);
 }
 
 int
@@ -211,7 +214,7 @@ compat_43_netbsd32_oftruncate(struct lwp *l, const struct compat_43_netbsd32_oft
 
 	NETBSD32TO64_UAP(fd);
 	NETBSD32TO64_UAP(length);
-	return (sys_ftruncate(l, &ua, retval));
+	return sys_ftruncate(l, &ua, retval);
 }
 
 int
@@ -229,7 +232,7 @@ compat_43_netbsd32_ogetdirentries(struct lwp *l, const struct compat_43_netbsd32
 	NETBSD32TOP_UAP(buf, char);
 	NETBSD32TO64_UAP(count);
 	NETBSD32TOP_UAP(basep, long);
-	return (compat_43_sys_getdirentries(l, &ua, retval));
+	return compat_43_sys_getdirentries(l, &ua, retval);
 }
 
 /* kernel syscalls */
@@ -248,7 +251,7 @@ compat_43_netbsd32_ogetkerninfo(struct lwp *l, const struct compat_43_netbsd32_o
 	NETBSD32TOP_UAP(where, char);
 	NETBSD32TOP_UAP(size, int);
 	NETBSD32TO64_UAP(arg);
-	return (compat_43_sys_getkerninfo(l, &ua, retval));
+	return compat_43_sys_getkerninfo(l, &ua, retval);
 }
 
 int
@@ -264,8 +267,8 @@ compat_43_netbsd32_ogethostname(struct lwp *l, const struct compat_43_netbsd32_o
 	name[0] = CTL_KERN;
 	name[1] = KERN_HOSTNAME;
 	sz = SCARG(uap, len);
-	return (old_sysctl(&name[0], 2,
-	    SCARG_P32(uap, hostname), &sz, 0, 0, l));
+	return old_sysctl(&name[0], 2,
+	    SCARG_P32(uap, hostname), &sz, 0, 0, l);
 }
 
 int
@@ -292,7 +295,7 @@ compat_43_netbsd32_sethostid(struct lwp *l, const struct compat_43_netbsd32_seth
 	struct compat_43_sys_sethostid_args ua;
 
 	NETBSD32TO64_UAP(hostid);
-	return (compat_43_sys_sethostid(l, &ua, retval));
+	return compat_43_sys_sethostid(l, &ua, retval);
 }
 
 int
@@ -306,7 +309,7 @@ compat_43_netbsd32_ogetrlimit(struct lwp *l, const struct compat_43_netbsd32_oge
 
 	NETBSD32TO64_UAP(which);
 	NETBSD32TOP_UAP(rlp, struct orlimit);
-	return (compat_43_sys_getrlimit(l, &ua, retval));
+	return compat_43_sys_getrlimit(l, &ua, retval);
 }
 
 int
@@ -320,7 +323,7 @@ compat_43_netbsd32_osetrlimit(struct lwp *l, const struct compat_43_netbsd32_ose
 
 	NETBSD32TO64_UAP(which);
 	NETBSD32TOP_UAP(rlp, struct orlimit);
-	return (compat_43_sys_setrlimit(l, &ua, retval));
+	return compat_43_sys_setrlimit(l, &ua, retval);
 }
 
 int
@@ -334,7 +337,7 @@ compat_43_netbsd32_killpg(struct lwp *l, const struct compat_43_netbsd32_killpg_
 
 	NETBSD32TO64_UAP(pgid);
 	NETBSD32TO64_UAP(signum);
-	return (compat_43_sys_killpg(l, &ua, retval));
+	return compat_43_sys_killpg(l, &ua, retval);
 }
 
 /* virtual memory syscalls */
@@ -357,7 +360,7 @@ compat_43_netbsd32_ommap(struct lwp *l, const struct compat_43_netbsd32_ommap_ar
 	NETBSD32TO64_UAP(flags);
 	NETBSD32TO64_UAP(fd);
 	NETBSD32TOX_UAP(pos, long);
-	return (compat_43_sys_mmap(l, &ua, retval));
+	return compat_43_sys_mmap(l, &ua, retval);
 }
 
 /* network syscalls */
@@ -374,7 +377,7 @@ compat_43_netbsd32_oaccept(struct lwp *l, const struct compat_43_netbsd32_oaccep
 	NETBSD32TOX_UAP(s, int);
 	NETBSD32TOP_UAP(name, void *);
 	NETBSD32TOP_UAP(anamelen, int);
-	return (compat_43_sys_accept(l, &ua, retval));
+	return compat_43_sys_accept(l, &ua, retval);
 }
 
 int
@@ -392,7 +395,7 @@ compat_43_netbsd32_osend(struct lwp *l, const struct compat_43_netbsd32_osend_ar
 	NETBSD32TOP_UAP(buf, void *);
 	NETBSD32TO64_UAP(len);
 	NETBSD32TO64_UAP(flags);
-	return (compat_43_sys_send(l, &ua, retval));
+	return compat_43_sys_send(l, &ua, retval);
 }
 
 int
@@ -410,7 +413,7 @@ compat_43_netbsd32_orecv(struct lwp *l, const struct compat_43_netbsd32_orecv_ar
 	NETBSD32TOP_UAP(buf, void *);
 	NETBSD32TO64_UAP(len);
 	NETBSD32TO64_UAP(flags);
-	return (compat_43_sys_recv(l, &ua, retval));
+	return compat_43_sys_recv(l, &ua, retval);
 }
 
 /*
@@ -430,9 +433,9 @@ compat_43_netbsd32_orecvmsg(struct lwp *l, const struct compat_43_netbsd32_orecv
 	struct iovec *iov, aiov[UIO_SMALLIOV];
 	int error;
 
-	error = copyin(SCARG_P32(uap, msg), &omsg, sizeof (struct omsghdr));
+	error = copyin(SCARG_P32(uap, msg), &omsg, sizeof(omsg));
 	if (error)
-		return (error);
+		return error;
 
 	if (NETBSD32PTR64(omsg.msg_accrights) == NULL)
 		omsg.msg_accrightslen = 0;
@@ -515,9 +518,9 @@ compat_43_netbsd32_osendmsg(struct lwp *l, const struct compat_43_netbsd32_osend
 	struct sockaddr *sa;
 	int error;
 
-	error = copyin(SCARG_P32(uap, msg), &omsg, sizeof (struct omsghdr));
+	error = copyin(SCARG_P32(uap, msg), &omsg, sizeof(omsg));
 	if (error != 0)
-		return (error);
+		return error;
 
 	iov = netbsd32_get_iov(NETBSD32PTR64(omsg.msg_iov), omsg.msg_iovlen,
 	    aiov, __arraycount(aiov));
@@ -529,7 +532,7 @@ compat_43_netbsd32_osendmsg(struct lwp *l, const struct compat_43_netbsd32_osend
 	msg.msg_flags = MSG_NAMEMBUF;
 
 	error = sockargs(&nam, NETBSD32PTR64(omsg.msg_name), omsg.msg_namelen,
-	    MT_SONAME);
+	    UIO_USERSPACE, MT_SONAME);
 	if (error != 0)
 		goto out;
 
@@ -547,12 +550,13 @@ compat_43_netbsd32_osendmsg(struct lwp *l, const struct compat_43_netbsd32_osend
 		goto out;
 	}
 
-	error = do_sys_sendmsg(l, SCARG(uap, s), &msg, SCARG(uap, flags), retval);
+	error = do_sys_sendmsg(l, SCARG(uap, s), &msg, SCARG(uap, flags),
+	    retval);
 
     out:
 	if (iov != aiov)
 		kmem_free(iov, omsg.msg_iovlen * sizeof(*iov));
-	return (error);
+	return error;
 }
 
 int
@@ -574,7 +578,7 @@ compat_43_netbsd32_orecvfrom(struct lwp *l, const struct compat_43_netbsd32_orec
 	NETBSD32TO64_UAP(flags);
 	NETBSD32TOP_UAP(from, void *);
 	NETBSD32TOP_UAP(fromlenaddr, int);
-	return (compat_43_sys_recvfrom(l, &ua, retval));
+	return compat_43_sys_recvfrom(l, &ua, retval);
 }
 
 int
@@ -590,7 +594,7 @@ compat_43_netbsd32_ogetsockname(struct lwp *l, const struct compat_43_netbsd32_o
 	NETBSD32TO64_UAP(fdec);
 	NETBSD32TOP_UAP(asa, void *);
 	NETBSD32TOP_UAP(alen, int *);
-	return (compat_43_sys_getsockname(l, &ua, retval));
+	return compat_43_sys_getsockname(l, &ua, retval);
 }
 
 int
@@ -606,7 +610,7 @@ compat_43_netbsd32_ogetpeername(struct lwp *l, const struct compat_43_netbsd32_o
 	NETBSD32TO64_UAP(fdes);
 	NETBSD32TOP_UAP(asa, void *);
 	NETBSD32TOP_UAP(alen, int *);
-	return (compat_43_sys_getpeername(l, &ua, retval));
+	return compat_43_sys_getpeername(l, &ua, retval);
 }
 
 /* signal syscalls */
@@ -660,7 +664,7 @@ compat_43_netbsd32_sigblock(struct lwp *l, const struct compat_43_netbsd32_sigbl
 	struct compat_43_sys_sigblock_args ua;
 
 	NETBSD32TO64_UAP(mask);
-	return (compat_43_sys_sigblock(l, &ua, retval));
+	return compat_43_sys_sigblock(l, &ua, retval);
 }
 
 int
@@ -672,7 +676,7 @@ compat_43_netbsd32_sigsetmask(struct lwp *l, const struct compat_43_netbsd32_sig
 	struct compat_43_sys_sigsetmask_args ua;
 
 	NETBSD32TO64_UAP(mask);
-	return (compat_43_sys_sigsetmask(l, &ua, retval));
+	return compat_43_sys_sigsetmask(l, &ua, retval);
 }
 
 int
@@ -706,4 +710,104 @@ compat_43_netbsd32_osigstack(struct lwp *l, const struct compat_43_netbsd32_osig
 	}
 
 	return error;
+}
+
+static struct syscall_package compat_netbsd32_43_syscalls[] = {
+	{ NETBSD32_SYS_compat_43_netbsd32_ocreat, 0,
+	    (sy_call_t *)compat_43_netbsd32_ocreat },
+	{ NETBSD32_SYS_compat_43_netbsd32_olseek, 0,
+	    (sy_call_t *)compat_43_netbsd32_olseek },
+	{ NETBSD32_SYS_compat_43_netbsd32_stat43, 0,
+	    (sy_call_t *)compat_43_netbsd32_stat43 },
+	{ NETBSD32_SYS_compat_43_netbsd32_lstat43, 0,
+	    (sy_call_t *)compat_43_netbsd32_lstat43 },
+	{ NETBSD32_SYS_compat_43_netbsd32_fstat43, 0,
+	    (sy_call_t *)compat_43_netbsd32_fstat43 },
+	{ NETBSD32_SYS_compat_43_netbsd32_otruncate, 0,
+	    (sy_call_t *)compat_43_netbsd32_otruncate },
+	{ NETBSD32_SYS_compat_43_netbsd32_oftruncate, 0,
+	    (sy_call_t *)compat_43_netbsd32_oftruncate },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogetdirentries, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogetdirentries },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogetkerninfo, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogetkerninfo },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogethostname, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogethostname },
+	{ NETBSD32_SYS_compat_43_netbsd32_osethostname, 0,
+	    (sy_call_t *)compat_43_netbsd32_osethostname },
+	{ NETBSD32_SYS_compat_43_netbsd32_sethostid, 0,
+	    (sy_call_t *)compat_43_netbsd32_sethostid },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogetrlimit, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogetrlimit },
+	{ NETBSD32_SYS_compat_43_netbsd32_osetrlimit, 0,
+	    (sy_call_t *)compat_43_netbsd32_osetrlimit },
+	{ NETBSD32_SYS_compat_43_netbsd32_killpg, 0,
+	    (sy_call_t *)compat_43_netbsd32_killpg },
+	{ NETBSD32_SYS_compat_43_netbsd32_ommap, 0,
+	    (sy_call_t *)compat_43_netbsd32_ommap },
+	{ NETBSD32_SYS_compat_43_netbsd32_oaccept, 0,
+	    (sy_call_t *)compat_43_netbsd32_oaccept },
+	{ NETBSD32_SYS_compat_43_netbsd32_osend, 0,
+	    (sy_call_t *)compat_43_netbsd32_osend },
+	{ NETBSD32_SYS_compat_43_netbsd32_orecv, 0,
+	    (sy_call_t *)compat_43_netbsd32_orecv },
+	{ NETBSD32_SYS_compat_43_netbsd32_orecvmsg, 0,
+	    (sy_call_t *)compat_43_netbsd32_orecvmsg },
+	{ NETBSD32_SYS_compat_43_netbsd32_osendmsg, 0,
+	    (sy_call_t *)compat_43_netbsd32_osendmsg },
+	{ NETBSD32_SYS_compat_43_netbsd32_orecvfrom, 0,
+	    (sy_call_t *)compat_43_netbsd32_orecvfrom },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogetsockname, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogetsockname },
+	{ NETBSD32_SYS_compat_43_netbsd32_ogetpeername, 0,
+	    (sy_call_t *)compat_43_netbsd32_ogetpeername },
+	{ NETBSD32_SYS_compat_43_netbsd32_osigvec, 0,
+	    (sy_call_t *)compat_43_netbsd32_osigvec },
+	{ NETBSD32_SYS_compat_43_netbsd32_sigblock, 0,
+	    (sy_call_t *)compat_43_netbsd32_sigblock },
+	{ NETBSD32_SYS_compat_43_netbsd32_sigsetmask, 0,
+	    (sy_call_t *)compat_43_netbsd32_sigsetmask },
+	{ NETBSD32_SYS_compat_43_netbsd32_osigstack, 0,
+	    (sy_call_t *)compat_43_netbsd32_osigstack },
+/*
+ * These syscalls are provided by emul_netbsd compat_43 code, but their
+ * entry points must still be loaded in the emul_netbsd32 disatch table
+ */
+	{ NETBSD32_SYS_compat_43_ogetpagesize, 0,
+	    (sy_call_t *)compat_43_sys_getpagesize },
+	{ NETBSD32_SYS_compat_43_ogetdtablesize, 0,
+	    (sy_call_t *)compat_43_sys_getdtablesize},
+	{ NETBSD32_SYS_compat_43_ogethostid, 0,
+	    (sy_call_t *)compat_43_sys_gethostid },
+	{ NETBSD32_SYS_compat_43_owait, 0,
+	    (sy_call_t *)compat_43_sys_wait },
+/*
+ * Skip oquota since it isn't part of compat_43
+ *	{ NETBSD32_SYS_compat_43_oquota, 0,
+ *	    (sy_call_t *)compat_43_sys_quota },
+ */
+
+/* End of compat_43 syscalls */
+
+	{ 0, 0, NULL }
+}; 
+
+MODULE(MODULE_CLASS_EXEC, compat_netbsd32_43, "compat_netbsd32,compat_43");
+
+static int
+compat_netbsd32_43_modcmd(modcmd_t cmd, void *arg)
+{
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		return syscall_establish(&emul_netbsd32,
+		    compat_netbsd32_43_syscalls);
+
+	case MODULE_CMD_FINI:
+		return syscall_disestablish(&emul_netbsd32,
+		    compat_netbsd32_43_syscalls);
+
+	default:
+		return ENOTTY;
+	}
 }

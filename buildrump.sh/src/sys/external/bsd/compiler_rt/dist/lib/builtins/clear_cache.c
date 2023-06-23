@@ -23,6 +23,10 @@
   #include <machine/sysarch.h>
 #endif
 
+#if defined(__NetBSD__) && defined(__ppc__)
+  #include <machine/cpu.h>
+#endif
+
 #if defined(__mips__)
   #include <sys/cachectl.h>
   #include <sys/syscall.h>
@@ -139,14 +143,25 @@ void __clear_cache(void *start, void *end) {
    * uintptr_t in case this runs in an IPL32 environment.
    */
   const size_t dcache_line_size = 4 << ((ctr_el0 >> 16) & 15);
-  for (addr = xstart; addr < xend; addr += dcache_line_size)
+  for (addr = xstart & ~(dcache_line_size - 1); addr < xend;
+       addr += dcache_line_size)
     __asm __volatile("dc cvau, %0" :: "r"(addr));
   __asm __volatile("dsb ish");
 
   const size_t icache_line_size = 4 << ((ctr_el0 >> 0) & 15);
-  for (addr = xstart; addr < xend; addr += icache_line_size)
+  for (addr = xstart & ~(icache_line_size - 1); addr < xend;
+       addr += icache_line_size)
     __asm __volatile("ic ivau, %0" :: "r"(addr));
   __asm __volatile("isb sy");
+#elif defined(__sparc__)
+  uintptr_t xstart = (uintptr_t) start & ~(uintptr_t)3;
+  uintptr_t xend = (uintptr_t) end;
+
+  for (; xstart < xend; xstart += 4) {
+    __asm __volatile("flush %0" :: "r" (xstart));
+  }
+#elif defined(__NetBSD__) && defined(__ppc__)
+  __syncicache(start, (uintptr_t)end - (uintptr_t)start);
 #else
     #if __APPLE__
         /* On Darwin, sys_icache_invalidate() provides this functionality */

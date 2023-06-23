@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,7 +43,6 @@
 
 #define _DECLARE_GLOBALS
 #include "acpidump.h"
-#include "acapps.h"
 
 
 /*
@@ -92,7 +91,7 @@ UINT32                      CurrentAction = 0;
 
 
 #define AP_UTILITY_NAME             "ACPI Binary Table Dump Utility"
-#define AP_SUPPORTED_OPTIONS        "?a:bc:f:hn:o:r:svxz"
+#define AP_SUPPORTED_OPTIONS        "?a:bc:f:hn:o:r:sv^xz"
 
 
 /******************************************************************************
@@ -116,6 +115,7 @@ ApDisplayUsage (
     ACPI_OPTION ("-r <Address>",            "Dump tables from specified RSDP");
     ACPI_OPTION ("-s",                      "Print table summaries only");
     ACPI_OPTION ("-v",                      "Display version information");
+    ACPI_OPTION ("-vd",                     "Display build date and time");
     ACPI_OPTION ("-z",                      "Verbose mode");
 
     ACPI_USAGE_TEXT ("\nTable Options:\n");
@@ -124,8 +124,7 @@ ApDisplayUsage (
     ACPI_OPTION ("-c <on|off>",             "Turning on/off customized table dumping");
     ACPI_OPTION ("-f <BinaryFile>",         "Get table via a binary file");
     ACPI_OPTION ("-n <Signature>",          "Get table via a name/signature");
-    ACPI_OPTION ("-x",                      "Do not use but dump XSDT");
-    ACPI_OPTION ("-x -x",                   "Do not use or dump XSDT");
+    ACPI_OPTION ("-x",                      "Use RSDT instead of XSDT");
 
     ACPI_USAGE_TEXT (
         "\n"
@@ -161,7 +160,7 @@ ApInsertAction (
     CurrentAction++;
     if (CurrentAction > AP_MAX_ACTIONS)
     {
-        AcpiLogError ("Too many table options (max %u)\n", AP_MAX_ACTIONS);
+        fprintf (stderr, "Too many table options (max %d)\n", AP_MAX_ACTIONS);
         return (-1);
     }
 
@@ -215,7 +214,7 @@ ApDoOptions (
         }
         else
         {
-            AcpiLogError ("%s: Cannot handle this switch, please use on|off\n",
+            fprintf (stderr, "%s: Cannot handle this switch, please use on|off\n",
                 AcpiGbl_Optarg);
             return (-1);
         }
@@ -237,11 +236,10 @@ ApDoOptions (
 
     case 'r':   /* Dump tables from specified RSDP */
 
-        Status = AcpiUtStrtoul64 (AcpiGbl_Optarg, ACPI_ANY_BASE,
-            ACPI_MAX64_BYTE_WIDTH, &Gbl_RsdpBase);
+        Status = AcpiUtStrtoul64 (AcpiGbl_Optarg, &Gbl_RsdpBase);
         if (ACPI_FAILURE (Status))
         {
-            AcpiLogError ("%s: Could not convert to a physical address\n",
+            fprintf (stderr, "%s: Could not convert to a physical address\n",
                 AcpiGbl_Optarg);
             return (-1);
         }
@@ -264,15 +262,32 @@ ApDoOptions (
         }
         continue;
 
-    case 'v':   /* Revision/version */
+    case 'v': /* -v: (Version): signon already emitted, just exit */
 
-        AcpiOsPrintf (ACPI_COMMON_SIGNON (AP_UTILITY_NAME));
-        return (1);
+        switch (AcpiGbl_Optarg[0])
+        {
+        case '^':  /* -v: (Version) */
+
+            fprintf (stderr, ACPI_COMMON_SIGNON (AP_UTILITY_NAME));
+            return (1);
+
+        case 'd':
+
+            fprintf (stderr, ACPI_COMMON_SIGNON (AP_UTILITY_NAME));
+            printf (ACPI_COMMON_BUILD_TIME);
+            return (1);
+
+        default:
+
+            printf ("Unknown option: -v%s\n", AcpiGbl_Optarg);
+            return (-1);
+        }
+        break;
 
     case 'z':   /* Verbose mode */
 
         Gbl_VerboseMode = TRUE;
-        AcpiLogError (ACPI_COMMON_SIGNON (AP_UTILITY_NAME));
+        fprintf (stderr, ACPI_COMMON_SIGNON (AP_UTILITY_NAME));
         continue;
 
     /*
@@ -334,7 +349,7 @@ ApDoOptions (
  *
  ******************************************************************************/
 
-#ifndef _GNU_EFI
+#if !defined(_GNU_EFI) && !defined(_EDK2_EFI)
 int ACPI_SYSTEM_XFACE
 main (
     int                     argc,
@@ -355,6 +370,7 @@ acpi_main (
     ACPI_DEBUG_INITIALIZE (); /* For debug version only */
     AcpiOsInitialize ();
     Gbl_OutputFile = ACPI_FILE_OUT;
+    AcpiGbl_IntegerByteWidth = 8;
 
     /* Process command line options */
 
@@ -397,7 +413,7 @@ acpi_main (
 
         default:
 
-            AcpiLogError ("Internal error, invalid action: 0x%X\n",
+            fprintf (stderr, "Internal error, invalid action: 0x%X\n",
                 Action->ToBeDone);
             return (-1);
         }
@@ -415,11 +431,11 @@ acpi_main (
             /* Summary for the output file */
 
             FileSize = CmGetFileSize (Gbl_OutputFile);
-            AcpiLogError ("Output file %s contains 0x%X (%u) bytes\n\n",
+            fprintf (stderr, "Output file %s contains 0x%X (%u) bytes\n\n",
                 Gbl_OutputFilename, FileSize, FileSize);
         }
 
-        AcpiOsCloseFile (Gbl_OutputFile);
+        fclose (Gbl_OutputFile);
     }
 
     return (Status);

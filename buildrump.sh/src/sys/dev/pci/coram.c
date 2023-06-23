@@ -1,4 +1,4 @@
-/* $NetBSD: coram.c,v 1.13 2014/03/29 19:28:24 christos Exp $ */
+/* $NetBSD: coram.c,v 1.20 2021/08/07 16:19:14 thorpej Exp $ */
 
 /*
  * Copyright (c) 2008, 2011 Jonathan A. Kollasch
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coram.c,v 1.13 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coram.c,v 1.20 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -69,8 +69,6 @@ static const struct coram_board * coram_board_lookup(uint16_t, uint16_t);
 
 static int coram_iic_exec(void *, i2c_op_t, i2c_addr_t,
     const void *, size_t, void *, size_t, int);
-static int coram_iic_acquire_bus(void *, int);
-static void coram_iic_release_bus(void *, int);
 static int coram_iic_read(struct coram_iic_softc *, i2c_op_t, i2c_addr_t,
     const void *, size_t, void *, size_t, int);
 static int coram_iic_write(struct coram_iic_softc *, i2c_op_t, i2c_addr_t,
@@ -194,7 +192,8 @@ coram_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_VM, coram_intr, self);
+	sc->sc_ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_VM, coram_intr,
+	    self, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -218,19 +217,16 @@ coram_attach(device_t parent, device_t self, void *aux)
 		    I2C_BASE + (I2C_SIZE * i), I2C_SIZE, &cic->cic_regh))
 			panic("failed to subregion i2c");
 
-		mutex_init(&cic->cic_busmutex, MUTEX_DRIVER, IPL_NONE);
+		iic_tag_init(&cic->cic_i2c);
 		cic->cic_i2c.ic_cookie = cic;
-		cic->cic_i2c.ic_acquire_bus = coram_iic_acquire_bus;
-		cic->cic_i2c.ic_release_bus = coram_iic_release_bus;
 		cic->cic_i2c.ic_exec = coram_iic_exec;
 
 #ifdef CORAM_ATTACH_I2C
 		/* attach iic(4) */
 		memset(&iba, 0, sizeof(iba));
 		iba.iba_tag = &cic->cic_i2c;
-		iba.iba_type = I2C_TYPE_SMBUS;
-		cic->cic_i2cdev = config_found_ia(self, "i2cbus", &iba,
-		    iicbus_print);
+		cic->cic_i2cdev = config_found(self, &iba, iicbus_print,
+		    CFARGS(.iattr = "i2cbus"));
 #endif
 	}
 
@@ -251,10 +247,10 @@ coram_attach(device_t parent, device_t self, void *aux)
 	bar = 0;
 //	seeprom_bootstrap_read(&sc->sc_i2c, 0x50, 0, 256, foo, 256);
 
-	iic_acquire_bus(&sc->sc_i2c, I2C_F_POLL);
+	iic_acquire_bus(&sc->sc_i2c, 0);
 	iic_exec(&sc->sc_i2c, I2C_OP_READ_WITH_STOP, 0x50, &bar, 1, foo, 256,
-	    I2C_F_POLL);
-	iic_release_bus(&sc->sc_i2c, I2C_F_POLL);
+	    0);
+	iic_release_bus(&sc->sc_i2c, 0);
 
 	printf("\n");
 	for ( i = 0; i < 256; i++) {
@@ -306,7 +302,7 @@ coram_detach(device_t self, int flags)
 		cic = &sc->sc_iic[i];
 		if (cic->cic_i2cdev)
 			config_detach(cic->cic_i2cdev, flags);
-		mutex_destroy(&cic->cic_busmutex);
+		iic_tag_fini(&cic->cic_i2c);
 	}
 	pmf_device_deregister(self);
 
@@ -328,8 +324,8 @@ coram_rescan(device_t self, const char *ifattr, const int *locs)
 	daa.priv = sc;
 
 	if (ifattr_match(ifattr, "dtvbus") && sc->sc_dtvdev == NULL)
-		sc->sc_dtvdev = config_found_ia(sc->sc_dev, "dtvbus",
-		    &daa, dtv_print);
+		sc->sc_dtvdev = config_found(sc->sc_dev, &daa, dtv_print,
+		    CFARGS(.iattr = "dtvbus"));
 
 	return 0;
 }
@@ -452,36 +448,6 @@ static bool
 coram_resume(device_t dv, const pmf_qual_t *qual)
 {
 	return true;
-}
-
-static int
-coram_iic_acquire_bus(void *cookie, int flags)
-{
-	struct coram_iic_softc *cic;
-
-	cic = cookie;
-
-	if (flags & I2C_F_POLL) {
-		while (mutex_tryenter(&cic->cic_busmutex) == 0)
-			delay(50);
-		return 0;
-	}
-
-	mutex_enter(&cic->cic_busmutex);
-
-	return 0;
-}
-
-static void
-coram_iic_release_bus(void *cookie, int flags)
-{
-	struct coram_iic_softc *cic;
-
-	cic = cookie;
-
-	mutex_exit(&cic->cic_busmutex);
-
-	return;
 }
 
 /* I2C Bus */
@@ -612,9 +578,6 @@ coram_mpeg_attach(struct coram_softc *sc)
 	sc->sc_riscbufsz = ch->csc_riscsz;
 	sc->sc_riscbuf = kmem_alloc(ch->csc_riscsz, KM_SLEEP);
 
-	if ( sc->sc_riscbuf == NULL )
-		panic("riscbuf null");
-
 	coram_mpeg_reset(sc);
 
 	sc->sc_tsbuf = NULL;
@@ -717,7 +680,7 @@ coram_dtv_get_status(void *cookie)
 	if (sc->sc_demod == NULL)
 		return ENXIO;
 
-	return cx24227_get_dtv_status(sc->sc_demod);;
+	return cx24227_get_dtv_status(sc->sc_demod);
 }
 
 static uint16_t
@@ -796,8 +759,6 @@ coram_mpeg_malloc(struct coram_softc *sc, size_t size)
 	int err;
 
 	p = kmem_alloc(sizeof(struct coram_dma), KM_SLEEP);
-	if ( p == NULL )
-		return NULL;
 	err = coram_allocmem(sc, size, 16, p);
 	if (err) {
 		kmem_free(p, sizeof(struct coram_dma));

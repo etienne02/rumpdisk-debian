@@ -1,4 +1,4 @@
-/*	$NetBSD: stand.h,v 1.81 2016/06/11 06:20:11 dholland Exp $	*/
+/*	$NetBSD: stand.h,v 1.83 2021/05/17 08:50:36 mrg Exp $	*/
 
 /*
  * Copyright (c) 1999 Christopher G. Demetriou.  All rights reserved.
@@ -77,7 +77,6 @@
 
 #ifdef LIBSA_RENAME_PRINTF
 #define getchar		libsa_getchar
-#define gets		libsa_gets
 #define kgets		libsa_kgets
 #define printf		libsa_printf
 #define putchar		libsa_putchar
@@ -247,7 +246,6 @@ void	*alloc(size_t) __compactcall;
 void	dealloc(void *, size_t) __compactcall;
 struct	disklabel;
 char	*getdisklabel(const char *, struct disklabel *);
-int	dkcksum(const struct disklabel *);
 
 void	printf(const char *, ...)
     __attribute__((__format__(__printf__, 1, 2)));
@@ -258,7 +256,6 @@ void	vprintf(const char *, va_list)
 int	vsnprintf(char *, size_t, const char *, va_list)
     __attribute__((__format__(__printf__, 3, 0)));
 void	twiddle(void);
-void	gets(char *);
 void	kgets(char *, size_t);
 int	getfile(char *prompt, int mode);
 char	*strerror(int);

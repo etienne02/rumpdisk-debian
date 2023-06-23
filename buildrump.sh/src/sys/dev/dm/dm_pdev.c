@@ -1,4 +1,4 @@
-/*        $NetBSD: dm_pdev.c,v 1.8 2010/12/23 14:58:13 mlelstv Exp $      */
+/*        $NetBSD: dm_pdev.c,v 1.23 2021/08/21 22:23:33 andvar Exp $      */
 
 /*
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -28,37 +28,37 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: dm_pdev.c,v 1.23 2021/08/21 22:23:33 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
-
 #include <sys/disk.h>
 #include <sys/fcntl.h>
 #include <sys/kmem.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
 
 #include <dev/dkvar.h>
 
 #include "dm.h"
 
-SLIST_HEAD(dm_pdevs, dm_pdev) dm_pdev_list;
+static SLIST_HEAD(dm_pdevs, dm_pdev) dm_pdev_list;
 
-	kmutex_t dm_pdev_mutex;
+static kmutex_t dm_pdev_mutex;
 
-	static dm_pdev_t *dm_pdev_alloc(const char *);
-	static int dm_pdev_rem(dm_pdev_t *);
-	static dm_pdev_t *dm_pdev_lookup_name(const char *);
+static dm_pdev_t *dm_pdev_alloc(const char *);
+static int dm_pdev_rem(dm_pdev_t *);
+static dm_pdev_t *dm_pdev_lookup_name(const char *);
 
 /*
- * Find used pdev with name == dm_pdev_name.
- */
-	dm_pdev_t *
-	          dm_pdev_lookup_name(const char *dm_pdev_name)
+* Find used pdev with name == dm_pdev_name.
+*/
+dm_pdev_t *
+dm_pdev_lookup_name(const char *dm_pdev_name)
 {
 	dm_pdev_t *dm_pdev;
-	int dlen;
-	int slen;
+	size_t dlen;
+	size_t slen;
 
 	KASSERT(dm_pdev_name != NULL);
 
@@ -76,6 +76,7 @@ SLIST_HEAD(dm_pdevs, dm_pdev) dm_pdev_list;
 
 	return NULL;
 }
+
 /*
  * Create entry for device with name dev_name and open vnode for it.
  * If entry already exists in global SLIST I will only increment
@@ -95,50 +96,60 @@ dm_pdev_insert(const char *dev_name)
 
 	if (dmp != NULL) {
 		dmp->ref_cnt++;
-		aprint_debug("dmp_pdev_insert pdev %s already in tree\n", dev_name);
+		aprint_debug("%s: pdev %s already in tree\n",
+		    __func__, dev_name);
 		mutex_exit(&dm_pdev_mutex);
 		return dmp;
 	}
-	mutex_exit(&dm_pdev_mutex);
 
-	if ((dmp = dm_pdev_alloc(dev_name)) == NULL)
+	if ((dmp = dm_pdev_alloc(dev_name)) == NULL) {
+		mutex_exit(&dm_pdev_mutex);
 		return NULL;
+	}
 
 	dev_pb = pathbuf_create(dev_name);
 	if (dev_pb == NULL) {
-		aprint_debug("pathbuf_create on device: %s failed!\n",
-		    dev_name);
+		aprint_debug("%s: pathbuf_create on device: %s failed!\n",
+		    __func__, dev_name);
+		mutex_exit(&dm_pdev_mutex);
 		kmem_free(dmp, sizeof(dm_pdev_t));
 		return NULL;
 	}
-	error = dk_lookup(dev_pb, curlwp, &dmp->pdev_vnode);
+	error = vn_bdev_openpath(dev_pb, &dmp->pdev_vnode, curlwp);
 	pathbuf_destroy(dev_pb);
 	if (error) {
-		aprint_debug("dk_lookup on device: %s failed with error %d!\n",
-		    dev_name, error);
+		aprint_debug("%s: lookup on device: %s (error %d)\n",
+		    __func__, dev_name, error);
+		mutex_exit(&dm_pdev_mutex);
 		kmem_free(dmp, sizeof(dm_pdev_t));
 		return NULL;
 	}
 	getdisksize(dmp->pdev_vnode, &dmp->pdev_numsec, &dmp->pdev_secsize);
 	dmp->ref_cnt = 1;
 
-	mutex_enter(&dm_pdev_mutex);
+	snprintf(dmp->udev_name, sizeof(dmp->udev_name), "%d:%d",
+	    major(dmp->pdev_vnode->v_rdev), minor(dmp->pdev_vnode->v_rdev));
+	aprint_debug("%s: %s %s\n", __func__, dev_name, dmp->udev_name);
+
 	SLIST_INSERT_HEAD(&dm_pdev_list, dmp, next_pdev);
 	mutex_exit(&dm_pdev_mutex);
 
 	return dmp;
 }
+
 /*
  * Initialize pdev subsystem.
  */
 int
 dm_pdev_init(void)
 {
+
 	SLIST_INIT(&dm_pdev_list);	/* initialize global pdev list */
 	mutex_init(&dm_pdev_mutex, MUTEX_DEFAULT, IPL_NONE);
 
 	return 0;
 }
+
 /*
  * Allocat new pdev structure if is not already present and
  * set name.
@@ -148,60 +159,59 @@ dm_pdev_alloc(const char *name)
 {
 	dm_pdev_t *dmp;
 
-	if ((dmp = kmem_zalloc(sizeof(dm_pdev_t), KM_SLEEP)) == NULL)
-		return NULL;
-
-	strlcpy(dmp->name, name, MAX_DEV_NAME);
-
+	dmp = kmem_zalloc(sizeof(*dmp), KM_SLEEP);
+	strlcpy(dmp->name, name, sizeof(dmp->name));
 	dmp->ref_cnt = 0;
 	dmp->pdev_vnode = NULL;
 
 	return dmp;
 }
+
 /*
  * Destroy allocated dm_pdev.
  */
 static int
-dm_pdev_rem(dm_pdev_t * dmp)
+dm_pdev_rem(dm_pdev_t *dmp)
 {
-	int err;
 
 	KASSERT(dmp != NULL);
 
 	if (dmp->pdev_vnode != NULL) {
-		err = vn_close(dmp->pdev_vnode, FREAD | FWRITE, FSCRED);
-		if (err != 0)
-			return err;
+		int error = vn_close(dmp->pdev_vnode, FREAD | FWRITE, FSCRED);
+		if (error != 0) {
+			kmem_free(dmp, sizeof(*dmp));
+			return error;
+		}
 	}
 	kmem_free(dmp, sizeof(*dmp));
-	dmp = NULL;
 
 	return 0;
 }
+
 /*
  * Destroy all existing pdev's in device-mapper.
  */
 int
 dm_pdev_destroy(void)
 {
-	dm_pdev_t *dm_pdev;
+	dm_pdev_t *dmp;
 
 	mutex_enter(&dm_pdev_mutex);
-	while (!SLIST_EMPTY(&dm_pdev_list)) {	/* List Deletion. */
 
-		dm_pdev = SLIST_FIRST(&dm_pdev_list);
-
-		SLIST_REMOVE_HEAD(&dm_pdev_list, next_pdev);
-
-		dm_pdev_rem(dm_pdev);
+	while ((dmp = SLIST_FIRST(&dm_pdev_list)) != NULL) {
+		SLIST_REMOVE(&dm_pdev_list, dmp, dm_pdev, next_pdev);
+		dm_pdev_rem(dmp);
 	}
+	KASSERT(SLIST_EMPTY(&dm_pdev_list));
+
 	mutex_exit(&dm_pdev_mutex);
 
 	mutex_destroy(&dm_pdev_mutex);
 	return 0;
 }
+
 /*
- * This funcion is called from dm_dev_remove_ioctl.
+ * This function is called from dm_dev_remove_ioctl.
  * When I'm removing device from list, I have to decrement
  * reference counter. If reference counter is 0 I will remove
  * dmp from global list and from device list to. And I will CLOSE
@@ -212,8 +222,9 @@ dm_pdev_destroy(void)
  * Decrement pdev reference counter if 0 remove it.
  */
 int
-dm_pdev_decr(dm_pdev_t * dmp)
+dm_pdev_decr(dm_pdev_t *dmp)
 {
+
 	KASSERT(dmp != NULL);
 	/*
 	 * If this was last reference remove dmp from
@@ -227,21 +238,24 @@ dm_pdev_decr(dm_pdev_t * dmp)
 		dm_pdev_rem(dmp);
 		return 0;
 	}
+
 	mutex_exit(&dm_pdev_mutex);
 	return 0;
 }
-/*static int
-  dm_pdev_dump_list(void)
-  {
-  dm_pdev_t *dmp;
-	
-  aprint_verbose("Dumping dm_pdev_list \n");
-	
-  SLIST_FOREACH(dmp, &dm_pdev_list, next_pdev) {
-  aprint_verbose("dm_pdev_name %s ref_cnt %d list_rf_cnt %d\n",
-  dmp->name, dmp->ref_cnt, dmp->list_ref_cnt);
-  }
-	
-  return 0;
-	
-  }*/
+
+#if 0
+static int
+dm_pdev_dump_list(void)
+{
+	dm_pdev_t *dmp;
+
+	aprint_verbose("Dumping dm_pdev_list\n");
+
+	SLIST_FOREACH(dmp, &dm_pdev_list, next_pdev) {
+		aprint_verbose("dm_pdev_name %s ref_cnt %d list_rf_cnt %d\n",
+		dmp->name, dmp->ref_cnt, dmp->list_ref_cnt);
+	}
+
+	return 0;
+}
+#endif

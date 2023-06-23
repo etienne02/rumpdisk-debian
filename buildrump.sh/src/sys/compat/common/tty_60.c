@@ -1,4 +1,4 @@
-/*	$NetBSD: tty_60.c,v 1.4 2015/10/22 15:18:25 christos Exp $	*/
+/*	$NetBSD: tty_60.c,v 1.11 2021/07/21 06:35:44 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -30,22 +30,25 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tty_60.c,v 1.4 2015/10/22 15:18:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tty_60.c,v 1.11 2021/07/21 06:35:44 skrll Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
 #endif
 
+#include <sys/param.h>
 #include <sys/types.h>
 
 #include <sys/conf.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
+#include <sys/compat_stub.h>
+#include <sys/kmem.h>
 
 #include <sys/tty.h>
-#include <compat/sys/ttycom.h>
 
-#ifdef COMPAT_60
+#include <compat/common/compat_mod.h>
+#include <compat/sys/ttycom.h>
 
 /* convert struct ptmget to struct compat_60_ptmget */
 static int
@@ -69,7 +72,7 @@ compat_60_ptmget_ioctl(dev_t dev, u_long cmd, void *data, int flag,
 {
 	int ret;
 	u_long newcmd;
-	struct ptmget pg;
+	struct ptmget *pg;
 	const struct cdevsw *cd = cdevsw_lookup(dev);
 
 	if (cd == NULL || cd->d_ioctl == NULL)
@@ -81,10 +84,16 @@ compat_60_ptmget_ioctl(dev_t dev, u_long cmd, void *data, int flag,
 	default: return ENOTTY;
 	}
 
-	ret = (cd->d_ioctl)(dev, newcmd, &pg, flag, l);
+	pg = kmem_alloc(sizeof(*pg), KM_SLEEP);
+
+	ret = (cd->d_ioctl)(dev, newcmd, pg, flag, l);
 	if (ret != 0)
-		return ret;
-	ret = ptmget_to_ptmget60(&pg, data);
+		goto out;
+
+	ret = ptmget_to_ptmget60(pg, data);
+
+out:
+	kmem_free(pg, sizeof(*pg));
 	return ret;
 }
 
@@ -106,7 +115,8 @@ compat_60_ttioctl(struct tty *tp, u_long cmd, void *data, int flag,
 }
 
 int
-compat_60_ptmioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
+compat_60_ptmioctl(dev_t dev, u_long cmd, void *data, int flag,
+    struct lwp *l)
 {
 
 	switch (cmd) {
@@ -117,4 +127,17 @@ compat_60_ptmioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	}
 }
 
-#endif /* COMPAT_60 */
+void
+kern_tty_60_init(void)
+{
+
+	MODULE_HOOK_SET(tty_ttioctl_60_hook, compat_60_ttioctl);
+	MODULE_HOOK_SET(tty_ptmioctl_60_hook, compat_60_ptmioctl);
+}
+
+void
+kern_tty_60_fini(void)
+{
+	MODULE_HOOK_UNSET(tty_ttioctl_60_hook);
+	MODULE_HOOK_UNSET(tty_ptmioctl_60_hook);
+}

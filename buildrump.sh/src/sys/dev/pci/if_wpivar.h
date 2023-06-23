@@ -1,4 +1,4 @@
-/*  $NetBSD: if_wpivar.h,v 1.19 2015/01/06 15:39:54 bouyer Exp $    */
+/*  $NetBSD: if_wpivar.h,v 1.23 2020/03/20 17:19:25 sevan Exp $    */
 
 /*-
  * Copyright (c) 2006
@@ -150,6 +150,8 @@ struct wpi_softc {
 	bus_space_tag_t		sc_st;
 	bus_space_handle_t	sc_sh;
 	void 			*sc_ih;
+	void			*sc_soft_ih;
+	pci_intr_handle_t	*sc_pihp;
 	pci_chipset_tag_t	sc_pct;
 	pcitag_t		sc_pcitag;
 	bus_size_t		sc_sz;
@@ -169,6 +171,8 @@ struct wpi_softc {
 	int			sc_tx_timer;
 
 	struct bpf_if *		sc_drvbpf;
+
+	kmutex_t 		sc_media_mtx;	/* XXX */
 
 	union {
 		struct wpi_rx_radiotap_header th;
@@ -195,5 +199,7 @@ struct wpi_softc {
 	struct lwp		*sc_rsw_lwp;
 	struct kmutex 		sc_rsw_mtx;
 	struct kcondvar 	sc_rsw_cv;
-	int 			sc_dying;
+	bool 			sc_dying;
+	bool 			sc_rsw_suspend;
+	bool 			sc_rsw_suspended;
 };

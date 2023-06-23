@@ -1,4 +1,4 @@
-/*	$NetBSD: est.c,v 1.30 2014/04/18 15:00:37 christos Exp $	*/
+/*	$NetBSD: est.c,v 1.32 2020/10/25 16:39:00 nia Exp $	*/
 /*
  * Copyright (c) 2003 Michael Eriksson.
  * All rights reserved.
@@ -76,7 +76,7 @@
  *   http://www.codemonkey.org.uk/projects/cpufreq/cpufreq-2.4.22-pre6-1.gz
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: est.c,v 1.30 2014/04/18 15:00:37 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: est.c,v 1.32 2020/10/25 16:39:00 nia Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -1236,10 +1236,6 @@ est_tables(device_t self)
 
 		sc->sc_fake_table = kmem_alloc(tablesize *
 		    sizeof(uint16_t), KM_SLEEP);
-
-		if (sc->sc_fake_table == NULL)
-			return false;
-
 		sc->sc_fake_fqlist.n = tablesize;
 
 		/* The frequency/voltage table is highest frequency first */
@@ -1267,10 +1263,6 @@ est_tables(device_t self)
 
 	sc->sc_freqs_len = sc->sc_fqlist->n * (sizeof("9999 ") - 1) + 1;
 	sc->sc_freqs = kmem_zalloc(sc->sc_freqs_len, KM_SLEEP);
-
-	if (sc->sc_freqs == NULL)
-		return false;
-
 	for (i = len = 0; i < sc->sc_fqlist->n; i++) {
 		if (len >= sc->sc_freqs_len)
 			break;
@@ -1304,11 +1296,11 @@ static bool
 est_sysctl(device_t self)
 {
 	struct est_softc *sc = device_private(self);
-	const struct sysctlnode	*node, *estnode, *freqnode;
+	const struct sysctlnode	*node, *cpunode, *freqnode;
 	int rv;
 
 	/*
-	 * Setup the sysctl sub-tree machdep.est.*
+	 * Setup the sysctl sub-tree machdep.cpu.*
 	 */
 	rv = sysctl_createv(&sc->sc_log, 0, NULL, &node,
 	    CTLFLAG_PERMANENT, CTLTYPE_NODE, "machdep", NULL,
@@ -1317,14 +1309,14 @@ est_sysctl(device_t self)
 	if (rv != 0)
 		goto fail;
 
-	rv = sysctl_createv(&sc->sc_log, 0, &node, &estnode,
-	    0, CTLTYPE_NODE, "est", NULL,
+	rv = sysctl_createv(&sc->sc_log, 0, &node, &cpunode,
+	    0, CTLTYPE_NODE, "cpu", NULL,
 	    NULL, 0, NULL, 0, CTL_CREATE, CTL_EOL);
 
 	if (rv != 0)
 		goto fail;
 
-	rv = sysctl_createv(&sc->sc_log, 0, &estnode, &freqnode,
+	rv = sysctl_createv(&sc->sc_log, 0, &cpunode, &freqnode,
 	    0, CTLTYPE_NODE, "frequency", NULL,
 	    NULL, 0, NULL, 0, CTL_CREATE, CTL_EOL);
 

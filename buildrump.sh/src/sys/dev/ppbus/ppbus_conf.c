@@ -1,4 +1,4 @@
-/* $NetBSD: ppbus_conf.c,v 1.20 2012/10/27 17:18:37 chs Exp $ */
+/* $NetBSD: ppbus_conf.c,v 1.23 2021/08/07 16:19:15 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1997, 1998, 1999 Nicolas Souchu
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ppbus_conf.c,v 1.20 2012/10/27 17:18:37 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ppbus_conf.c,v 1.23 2021/08/07 16:19:15 thorpej Exp $");
 
 #include "opt_ppbus.h"
 #include "opt_ppbus_1284.h"
@@ -144,7 +144,7 @@ ppbus_attach(device_t parent, device_t self, void *aux)
 	ppbus->sc_1284_state = PPBUS_FORWARD_IDLE;
 	ppbus->sc_1284_error = PPBUS_NO_ERROR;
 
-	/* Record device's sucessful attachment */
+	/* Record device's successful attachment */
 	ppbus->sc_dev_ok = PPBUS_OK;
 
 #ifndef DONTPROBE_1284
@@ -170,7 +170,9 @@ ppbus_attach(device_t parent, device_t self, void *aux)
 
 	/* Configure child devices */
 	SLIST_INIT(&(ppbus->sc_childlist_head));
-	config_search_ia(ppbus_search_children, self, "ppbus", &args);
+	config_search(self, &args,
+	    CFARGS(.search = ppbus_search_children,
+		   .iattr = "ppbus"));
 
 #if NGPIO > 0
 	gpio_ppbus_attach(ppbus);
@@ -242,8 +244,8 @@ ppbus_search_children(device_t parent, cfdata_t cf, const int *ldesc, void *aux)
 	device_t dev;
 	int rval = 0;
 
-	if (config_match(parent, cf, aux) > 0) {
-		dev = config_attach(parent, cf, aux, NULL);
+	if (config_probe(parent, cf, aux)) {
+		dev = config_attach(parent, cf, aux, NULL, CFARGS_NONE);
 		if (dev) {
 			child = device_private(dev);
 			SLIST_INSERT_HEAD(&(ppbus->sc_childlist_head),

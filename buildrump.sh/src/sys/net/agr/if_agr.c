@@ -1,4 +1,4 @@
-/*	$NetBSD: if_agr.c,v 1.38 2016/07/20 07:37:51 ozaki-r Exp $	*/
+/*	$NetBSD: if_agr.c,v 1.52 2021/08/02 12:56:25 andvar Exp $	*/
 
 /*-
  * Copyright (c)2005 YAMAMOTO Takashi,
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_agr.c,v 1.38 2016/07/20 07:37:51 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_agr.c,v 1.52 2021/08/02 12:56:25 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -44,12 +44,16 @@ __KERNEL_RCSID(0, "$NetBSD: if_agr.c,v 1.38 2016/07/20 07:37:51 ozaki-r Exp $");
 #include <sys/proc.h>	/* XXX for curproc */
 #include <sys/kauth.h>
 #include <sys/xcall.h>
+#include <sys/device.h>
+#include <sys/module.h>
+#include <sys/atomic.h>
 
 #include <net/bpf.h>
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_ether.h>
+#include <net/if_vlanvar.h>
 
 #if defined(INET)
 #include <netinet/in.h>
@@ -96,6 +100,8 @@ static void agr_ports_exit(struct agr_softc *);
 static struct if_clone agr_cloner =
     IF_CLONE_INITIALIZER("agr", agr_clone_create, agr_clone_destroy);
 
+static u_int agr_count;
+
 /*
  * EXPORTED FUNCTIONS
  */
@@ -108,7 +114,30 @@ void
 agrattach(int count)
 {
 
+	/*
+	 * Nothing to do here, initialization is handled by the
+	 * module initialization code in agrinit() below).
+	 */
+}
+
+static void
+agrinit(void)
+{
 	if_clone_attach(&agr_cloner);
+}
+
+static int
+agrdetach(void)
+{
+	int error = 0;
+
+	if (agr_count != 0)
+		error = EBUSY;
+
+	if (error == 0)
+		if_clone_detach(&agr_cloner);
+
+	return error;
 }
 
 /*
@@ -118,46 +147,32 @@ agrattach(int count)
 void
 agr_input(struct ifnet *ifp_port, struct mbuf *m)
 {
+	struct ethercom *ec = (struct ethercom *)ifp_port;
 	struct agr_port *port;
 	struct ifnet *ifp;
-#if NVLAN > 0
-	struct m_tag *mtag;
-#endif
 
 	port = ifp_port->if_agrprivate;
 	KASSERT(port);
 	ifp = port->port_agrifp;
 	if ((port->port_flags & AGRPORT_COLLECTING) == 0) {
 		m_freem(m);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
-	ifp->if_ipackets++;
 	m_set_rcvif(m, ifp);
 
-#define DNH_DEBUG
-#if NVLAN > 0
-	/* got a vlan packet? */
-	if ((mtag = m_tag_find(m, PACKET_TAG_VLAN, NULL)) != NULL) {
-#ifdef DNH_DEBUG 
-		printf("%s: vlan tag %d attached\n",
-			ifp->if_xname,
-			htole16((*(u_int *)(mtag + 1)) & 0xffff));
-		printf("%s: vlan input\n", ifp->if_xname);
-#endif
-		vlan_input(ifp, m);
+	/*
+	 * If VLANs are configured on the interface, check to
+	 * see if the device performed the decapsulation and
+	 * provided us with the tag.
+	 */
+	if (ec->ec_nvlans && vlan_has_tag(m)) {
+		MODULE_HOOK_CALL_VOID(if_vlan_vlan_input_hook, (ifp, m),
+		    m_freem(m));
 		return;
-#ifdef DNH_DEBUG 
-	} else {
-		struct ethercom *ec = (void *)ifp;
-		printf("%s: no vlan tag attached, ec_nvlans=%d\n",
-			ifp->if_xname, ec->ec_nvlans);
-#endif
 	}
-#endif
 
-	bpf_mtap(ifp, m);
 	if_percpuq_enqueue(ifp->if_percpuq, m);
 }
 
@@ -228,62 +243,6 @@ agrport_ioctl(struct agr_port *port, u_long cmd, void *arg)
 /*
  * INTERNAL FUNCTIONS
  */
-
-/*
- * Enable vlan hardware assist for the specified port.
- */
-static int
-agr_vlan_add(struct agr_port *port, void *arg)
-{
-	struct ifnet *ifp = port->port_ifp;
-	struct ethercom *ec_port = (void *)ifp;
-	int error=0;
-
-	if (ec_port->ec_nvlans++ == 0 &&
-	    (ec_port->ec_capabilities & ETHERCAP_VLAN_MTU) != 0) {
-		struct ifnet *p = port->port_ifp;
-		/*
-		 * Enable Tx/Rx of VLAN-sized frames.
-		 */
-		ec_port->ec_capenable |= ETHERCAP_VLAN_MTU;
-		if (p->if_flags & IFF_UP) {
-			error = if_flags_set(p, p->if_flags);
-			if (error) {
-				if (ec_port->ec_nvlans-- == 1)
-					ec_port->ec_capenable &=
-					    ~ETHERCAP_VLAN_MTU;
-				return (error);
-			}
-		}
-	}
-
-	return error;
-}
-
-/*
- * Disable vlan hardware assist for the specified port.
- */
-static int
-agr_vlan_del(struct agr_port *port, void *arg)
-{
-	struct ethercom *ec_port = (void *)port->port_ifp;
-
-	/* Disable vlan support */
-	if (ec_port->ec_nvlans-- == 1) {
-		/*
-		 * Disable Tx/Rx of VLAN-sized frames.
-		 */
-		ec_port->ec_capenable &= ~ETHERCAP_VLAN_MTU;
-		if (port->port_ifp->if_flags & IFF_UP) {
-			(void)if_flags_set(port->port_ifp,
-			    port->port_ifp->if_flags);
-		}
-	}
-
-	return 0;
-}
-
-
 /*
  * Check for vlan attach/detach.
  * ec->ec_nvlans is directly modified by the vlan driver.
@@ -306,8 +265,9 @@ agr_vlan_check(struct ifnet *ifp, struct agr_softc *sc)
 		agr_port_foreach(sc, agr_vlan_add, NULL);
 		sc->sc_nvlans = ec->ec_nvlans;
 	} else if (ec->ec_nvlans == 0) {
+		bool force_zero = false;
 		/* vlan removed */
-		agr_port_foreach(sc, agr_vlan_del, NULL);
+		agr_port_foreach(sc, agr_vlan_del, &force_zero);
 		sc->sc_nvlans = 0;
 	}
 }
@@ -317,14 +277,19 @@ agr_clone_create(struct if_clone *ifc, int unit)
 {
 	struct agr_softc *sc;
 	struct ifnet *ifp;
+	int error;
 
 	sc = agr_alloc_softc();
+	error = agrtimer_init(sc);
+	if (error) {
+		agr_free_softc(sc);
+		return error;
+	}
 	TAILQ_INIT(&sc->sc_ports);
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NET);
 	mutex_init(&sc->sc_entry_mtx, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&sc->sc_insc_cv, "agrsoftc");
 	cv_init(&sc->sc_ports_cv, "agrports");
-	agrtimer_init(sc);
 	ifp = &sc->sc_if;
 	snprintf(ifp->if_xname, sizeof(ifp->if_xname), "%s%d",
 	    ifc->ifc_name, unit);
@@ -338,7 +303,7 @@ agr_clone_create(struct if_clone *ifc, int unit)
 	if_attach(ifp);
 
 	agr_reset_iftype(ifp);
-
+	atomic_inc_uint(&agr_count);
 	return 0;
 }
 
@@ -375,6 +340,7 @@ agr_clone_destroy(struct ifnet *ifp)
 	cv_destroy(&sc->sc_ports_cv);
 	agr_free_softc(sc);
 
+	atomic_dec_uint(&agr_count);
 	return 0;
 }
 
@@ -422,21 +388,23 @@ agr_start(struct ifnet *ifp)
 		if (m == NULL) {
 			break;
 		}
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 		port = agr_select_tx_port(sc, m);
+		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (port) {
 			int error;
 
 			error = agr_xmit_frame(port->port_ifp, m);
 			if (error) {
-				ifp->if_oerrors++;
+				if_statinc_ref(nsr, if_oerrors);
 			} else {
-				ifp->if_opackets++;
+				if_statinc_ref(nsr, if_opackets);
 			}
 		} else {
 			m_freem(m);
-			ifp->if_oerrors++;
+			if_statinc_ref(nsr, if_oerrors);
 		}
+		IF_STAT_PUTREF(ifp);
 	}
 
 	AGR_UNLOCK(sc);
@@ -641,7 +609,9 @@ agr_addport(struct ifnet *ifp, struct ifnet *ifp_port)
 	 * of each port to that of the first port. No need for arps 
 	 * since there are no inet addresses assigned to the ports.
 	 */
+	IFNET_LOCK(ifp_port);
 	error = if_addr_init(ifp_port, ifp->if_dl, true);
+	IFNET_UNLOCK(ifp_port);
 
 	if (error) {
 		printf("%s: if_addr_init error %d\n", __func__, error);
@@ -671,8 +641,6 @@ agr_addport(struct ifnet *ifp, struct ifnet *ifp_port)
 		goto cleanup;
 	}
 
-	ifp->if_flags |= IFF_RUNNING;
-
 	agrport_config_promisc(port, (ifp->if_flags & IFF_PROMISC) != 0);
 	error = (*sc->sc_iftop->iftop_configmulti_port)(sc, port, true);
 	if (error) {
@@ -687,6 +655,8 @@ out:
 	if (error && port) {
 		free(port, M_DEVBUF);
 	}
+	if (error == 0)
+		ifp->if_flags |= IFF_RUNNING;
 	return error;
 
 cleanup:
@@ -876,7 +846,7 @@ agr_ioctl_filter(struct ifnet *ifp, u_long cmd, void *arg)
 	case SIOCSIFMETRIC: /* set IF metric */
 	case SIOCSIFMTU: /* set ifnet mtu */
 	case SIOCSIFNETMASK: /* set net addr mask */
-	case SIOCSIFPHYADDR: /* set gif addres */
+	case SIOCSIFPHYADDR: /* set gif address */
 	case SIOCSLIFPHYADDR: /* set gif addrs */
 	case SIOCSVH: /* set carp param */
 		error = EBUSY;
@@ -926,13 +896,11 @@ agrreq_copyout(void *ubuf, struct agrreq *ar)
 static void
 agr_sync(void)
 {
-	uint64_t h;
 
 	if (!mp_online)
 		return;
 
-	h = xc_broadcast(0, (xcfunc_t)nullop, NULL, NULL);
-	xc_wait(h);
+	xc_barrier(0);
 }
 
 static int
@@ -1191,3 +1159,10 @@ agrport_config_promisc(struct agr_port *port, bool promisc)
 
 	return error;
 }
+
+/*
+ * Module infrastructure
+ */
+#include <net/if_module.h>
+
+IF_MODULE(MODULE_CLASS_DRIVER, agr, NULL)

@@ -1,4 +1,4 @@
-/*	$NetBSD: raidframevar.h,v 1.17 2014/11/14 14:29:16 oster Exp $ */
+/*	$NetBSD: raidframevar.h,v 1.23 2021/08/07 16:19:15 thorpej Exp $ */
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -210,7 +210,8 @@ typedef RF_uint32 RF_RaidAccessFlags_t;
 typedef struct RF_AccessStripeMap_s RF_AccessStripeMap_t;
 typedef struct RF_AccessStripeMapHeader_s RF_AccessStripeMapHeader_t;
 typedef struct RF_AllocListElem_s RF_AllocListElem_t;
-typedef struct RF_CallbackDesc_s RF_CallbackDesc_t;
+typedef struct RF_CallbackFuncDesc_s RF_CallbackFuncDesc_t;
+typedef struct RF_CallbackValueDesc_s RF_CallbackValueDesc_t;
 typedef struct RF_ChunkDesc_s RF_ChunkDesc_t;
 typedef struct RF_CommonLogData_s RF_CommonLogData_t;
 typedef struct RF_Config_s RF_Config_t;
@@ -318,7 +319,7 @@ typedef union RF_GenericParam_u RF_CBParam_t;
  * but it must be shut down first.
  */
 struct RF_Config_s {
-	RF_RowCol_t numRow, numCol, numSpare;	/* number of rows, columns,
+	RF_RowCol_t numCol, numSpare;		/* number of columns,
 						 * and spare disks */
 	dev_t   devs[RF_MAXROW][RF_MAXCOL];	/* device numbers for disks
 						 * comprising array */
@@ -354,14 +355,11 @@ typedef RF_uint32 RF_ReconReqFlags_t;
 /* flags that can be put in the rf_recon_req structure */
 #define RF_FDFLAGS_NONE   0x0	/* just fail the disk */
 #define RF_FDFLAGS_RECON  0x1	/* fail and initiate recon */
+#define RF_FDFLAGS_RECON_FORCE  0x2	/* fail and initiate recon, ignoring errors */
 
 struct rf_recon_req {		/* used to tell the kernel to fail a disk */
-	RF_RowCol_t row, col;
+	RF_RowCol_t col;
 	RF_ReconReqFlags_t flags;
-	void   *raidPtr;	/* used internally; need not be set at ioctl
-				 * time */
-	struct rf_recon_req *next;	/* used internally; need not be set at
-					 * ioctl time */
 };
 
 struct RF_SparetWait_s {
@@ -400,19 +398,18 @@ typedef enum RF_DiskStatus_e RF_DiskStatus_t;
 struct RF_RaidDisk_s {
         char    devname[56];    /* name of device file */
         RF_DiskStatus_t status; /* whether it is up or down */
-        RF_RowCol_t spareRow;   /* if in status "spared", this identifies the
-                                 * spare disk */
         RF_RowCol_t spareCol;   /* if in status "spared", this identifies the
                                  * spare disk */
-        RF_SectorCount_t numBlocks;     /* number of blocks, obtained via READ
-                                         * CAPACITY */
         int     blockSize;
-        RF_SectorCount_t partitionSize; /* The *actual* and *full* size of
-                                           the partition, from the disklabel */
         int     auto_configured;/* 1 if this component was autoconfigured.
                                    0 otherwise. */
+        RF_SectorCount_t numBlocks;     /* number of blocks, obtained via READ
+                                         * CAPACITY */
+        RF_SectorCount_t partitionSize; /* The *actual* and *full* size of
+                                           the partition, from the disklabel */
         dev_t   dev;
 };
+#if 0
 /* The per-component label information that the user can set */
 typedef struct RF_ComponentInfo_s {
 	int row;              /* the row number of this component */
@@ -420,6 +417,7 @@ typedef struct RF_ComponentInfo_s {
 	int serial_number;    /* a user-specified serial number for this
 				 RAID set */
 } RF_ComponentInfo_t;
+#endif
 
 /* The per-component label information */
 typedef struct RF_ComponentLabel_s {
@@ -479,7 +477,7 @@ typedef struct RF_ComponentLabel_s {
  * Following four functions are access macros for the number of blocks
  * and partition size in component label.
  */
-static inline RF_SectorCount_t
+static __inline RF_SectorCount_t
 rf_component_label_numblocks(const RF_ComponentLabel_t *cl)
 {
 
@@ -487,7 +485,7 @@ rf_component_label_numblocks(const RF_ComponentLabel_t *cl)
 	    cl->__numBlocks;
 }
 
-static inline void
+static __inline void
 rf_component_label_set_numblocks(RF_ComponentLabel_t *cl, RF_SectorCount_t siz)
 {
 
@@ -495,7 +493,7 @@ rf_component_label_set_numblocks(RF_ComponentLabel_t *cl, RF_SectorCount_t siz)
 	cl->__numBlocks = siz;
 }
 
-static inline RF_SectorCount_t
+static __inline RF_SectorCount_t
 rf_component_label_partitionsize(const RF_ComponentLabel_t *cl)
 {
 
@@ -503,7 +501,7 @@ rf_component_label_partitionsize(const RF_ComponentLabel_t *cl)
 	    cl->__partitionSize;
 }
 
-static inline void
+static __inline void
 rf_component_label_set_partitionsize(RF_ComponentLabel_t *cl,
     RF_SectorCount_t siz)
 {
@@ -513,18 +511,17 @@ rf_component_label_set_partitionsize(RF_ComponentLabel_t *cl,
 }
 
 typedef struct RF_SingleComponent_s {
-	int row;
+	int row;		/* obsolete */
 	int column;
 	char component_name[50]; /* name of the component */
 } RF_SingleComponent_t;
 
 typedef struct RF_DeviceConfig_s {
-	u_int   rows;
 	u_int   cols;
 	u_int   maxqdepth;
 	int     ndevs;
 	RF_RaidDisk_t devs[RF_MAX_DISKS];
-	int     nspares;
+	u_int    nspares;
 	RF_RaidDisk_t spares[RF_MAX_DISKS];
 }       RF_DeviceConfig_t;
 
@@ -550,18 +547,18 @@ typedef struct RF_LayoutSW_s {
 	int     (*Configure) (RF_ShutdownList_t ** shutdownListp,
 			      RF_Raid_t * raidPtr, RF_Config_t * cfgPtr);
 
-	/* routine to map RAID sector address -> physical (row, col, offset) */
+	/* routine to map RAID sector address -> physical (col, offset) */
 	void    (*MapSector) (RF_Raid_t * raidPtr, RF_RaidAddr_t raidSector,
 			      RF_RowCol_t * col,
 			      RF_SectorNum_t * diskSector, int remap);
 
-	/* routine to map RAID sector address -> physical (r,c,o) of parity
+	/* routine to map RAID sector address -> physical (c,o) of parity
 	 * unit */
 	void    (*MapParity) (RF_Raid_t * raidPtr, RF_RaidAddr_t raidSector,
 			      RF_RowCol_t * col,
 			      RF_SectorNum_t * diskSector, int remap);
 
-	/* routine to map RAID sector address -> physical (r,c,o) of Q unit */
+	/* routine to map RAID sector address -> physical (c,o) of Q unit */
 	void    (*MapQ) (RF_Raid_t * raidPtr, RF_RaidAddr_t raidSector,
 			 RF_RowCol_t * col,
 			 RF_SectorNum_t * diskSector, int remap);
@@ -592,8 +589,7 @@ typedef struct RF_LayoutSW_s {
 	RF_ReconUnitCount_t(*GetNumSpareRUs) (RF_Raid_t * raidPtr);
 
 	/* spare table installation (may be NULL) */
-	int     (*InstallSpareTable) (RF_Raid_t * raidPtr, RF_RowCol_t frow,
-				      RF_RowCol_t fcol);
+	int     (*InstallSpareTable) (RF_Raid_t * raidPtr, RF_RowCol_t fcol);
 
 	/* recon buffer submission function */
 	int     (*SubmitReconBuffer) (RF_ReconBuffer_t * rbuf, int keep_it,

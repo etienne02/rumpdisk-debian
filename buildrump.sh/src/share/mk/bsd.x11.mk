@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.x11.mk,v 1.119 2016/05/29 03:02:07 nakayama Exp $
+#	$NetBSD: bsd.x11.mk,v 1.141 2021/08/24 06:29:18 mrg Exp $
 
 .include <bsd.init.mk>
 
@@ -44,10 +44,10 @@ X11FLAGS.EXTENSION=	${X11FLAGS.BASE_EXTENSION} \
 			${X11FLAGS.PERVASIVE_EXTENSION}
 
 X11FLAGS.DIX=		-DHAVE_DIX_CONFIG_H -D_BSD_SOURCE -DHAS_FCHOWN \
-			-DHAS_STICKY_DIR_BIT -D_POSIX_THREAD_SAFE_FUNCTIONS \
+			-DHAS_STICKY_DIR_BIT -D_POSIX_THREAD_SAFE_FUNCTIONS=200112L \
 			-DHAVE_XORG_CONFIG_H
-X11INCS.DIX=		-I${X11INCSDIR}/freetype2  \
-			-I${X11INCSDIR}/pixman-1 \
+X11INCS.DIX=		-I${X11INCDIR}/freetype2  \
+			-I${X11INCDIR}/pixman-1 \
 			-I$(X11SRCDIR.xorg-server)/include \
 			-I$(X11SRCDIR.xorg-server)/Xext \
 			-I$(X11SRCDIR.xorg-server)/composite \
@@ -82,20 +82,26 @@ X11FLAGS.OS_DEFINES=	-DDDXOSINIT -DSERVER_LOCK -DDDXOSFATALERROR \
 			-DDDXOSVERRORF -DDDXTIME -DUSB_HID
 
 .if !(${MACHINE} == "acorn32"	|| \
-    ${MACHINE} == "amiga"	|| \
     ${MACHINE} == "pmax"	|| \
     ${MACHINE} == "sun3"	|| \
+    ${MACHINE} == "x68k"	|| \
     ${MACHINE} == "vax")
 #	EXT_DEFINES
 X11FLAGS.EXTENSION+=	-DXF86VIDMODE
 
+X11FLAGS.DIX+=		-DDBE -DXRECORD -DPRESENT
+
 #	ServerDefines
-X11FLAGS.SERVER+=	-DXINPUT -DXFreeXDGA -DXF86VIDMODE
+X11FLAGS.SERVER+=	-DXFreeXDGA -DXF86VIDMODE
+X11FLAGS.SERVER+=	-DXINPUT -DXSERVER_LIBPCIACCESS
 .endif
 
 .if ${MACHINE_ARCH} == "alpha"	|| \
+    ${MACHINE_ARCH} == "ia64"   || \
+    ${MACHINE_ARCH} == "powerpc64" || \
     ${MACHINE_ARCH} == "sparc64" || \
-    ${MACHINE_ARCH} == "x86_64"
+    ${MACHINE_ARCH} == "x86_64" || \
+    ${MACHINE_CPU} == "aarch64"
 #	ServerDefines
 X11FLAGS.SERVER+=	-D_XSERVER64
 X11FLAGS.EXTENSION+=	-D__GLX_ALIGN64
@@ -114,20 +120,30 @@ X11FLAGS.EXTENSION+=	-D__GLX_ALIGN64
     ${MACHINE} == "shark"	|| \
     ${MACHINE} == "zaurus"
 #	LOADABLE
-X11FLAGS.LOADABLE=	-DXFree86LOADER -DIN_MODULE -DXFree86Module \
-			${${ACTIVE_CXX} == "gcc":? -fno-merge-constants :}
+.if ${XORG_SERVER_SUBDIR:Uxorg-server.old} == "xorg-server.old"
+X11FLAGS.LOADABLE=	-DXFree86LOADER
 .endif
-  
+X11FLAGS.LOADABLE+=	${${ACTIVE_CXX} == "gcc":? -fno-merge-constants :}
+.endif
+
 # XXX FIX ME
+XORG_SERVER_MAJOR=	1
+.if ${XORG_SERVER_SUBDIR:Uxorg-server.old} == "xorg-server.old"
+XORG_SERVER_MINOR=	10
+XORG_SERVER_TEENY=	6
+.else
+XORG_SERVER_MINOR=	20
+XORG_SERVER_TEENY=	13
+.endif
+
 XVENDORNAMESHORT=	'"X.Org"'
 XVENDORNAME=		'"The X.Org Foundation"'
-XORG_RELEASE=		'"Release 1.10.6"'
+XORG_RELEASE=		'"Release ${XORG_SERVER_MAJOR}.${XORG_SERVER_MINOR}.${XORG_SERVER_TEENY}"'
 __XKBDEFRULES__=	'"xorg"'
 XLOCALE.DEFINES=	-DXLOCALEDIR=\"${X11LIBDIR}/locale\" \
 			-DXLOCALELIBDIR=\"${X11LIBDIR}/locale\"
 
-# XXX oh yeah, fix me later
-XORG_VERSION_CURRENT="(((1) * 10000000) + ((10) * 100000) + ((6) * 1000) + 0)"
+XORG_VERSION_CURRENT="(((${XORG_SERVER_MAJOR}) * 10000000) + ((${XORG_SERVER_MINOR}) * 100000) + ((${XORG_SERVER_TEENY}) * 1000) + 0)"
 
 PRINT_PACKAGE_VERSION=	awk '/^PACKAGE_VERSION=/ {			\
 				match($$1, "([0-9]+\\.)+[0-9]+");	\
@@ -176,6 +192,15 @@ realall: ${CPPSCRIPTS}
 
 CLEANFILES+= ${CPPSCRIPTS}
 .endif								# }
+
+# Used by pkg-config and manual handling to ensure we picked up all
+# the necessary changes.
+#
+# Skip any line that starts with .IN (old X11 indexing method),
+# or between a tab(@) and .TE.
+_X11SKIP_FALSE_POSITIVE_GREP_CMD= \
+	${TOOL_SED} -e '/tab(@)/,/^\.TE/d' -e '/^\.IN /d' ${.TARGET}.tmp | \
+	${TOOL_GREP} -E '@([^ 	]+)@'
 
 #
 # X.Org pkgconfig files handling
@@ -338,8 +363,13 @@ ${_pkg}.pc: ${PKGDIST.${_pkg}}/configure Makefile
 		s,@EXPAT_CFLAGS@,,; \
 		s,@FREETYPE_CFLAGS@,-I${X11ROOTDIR}/include/freetype2 -I${X11ROOTDIR}/include,;" \
 		-e '/^Libs:/ s%-L\([^ 	]*\)%-Wl,-rpath,\1 &%g' \
-		< ${.IMPSRC} > ${.TARGET}.tmp && \
-	mv -f ${.TARGET}.tmp ${.TARGET}
+		< ${.IMPSRC} > ${.TARGET}.tmp
+	if ${_X11SKIP_FALSE_POSITIVE_GREP_CMD}; then \
+		echo "pkg-config ${.TARGET} matches @.*@, probably missing updates" 1>&2; \
+		false; \
+	else \
+		${MV} ${.TARGET}.tmp ${.TARGET}; \
+	fi
 
 CLEANFILES+= ${_PKGCONFIG_FILES} ${_PKGCONFIG_FILES:C/$/.tmp/}
 .endif
@@ -373,35 +403,52 @@ CLEANDIRFILES+= ${MAN:U${PROG:D${PROG.1}}}
 
 .SUFFIXES:	.man .man.pre .1 .3 .4 .5 .7
 
-_X11MANTRANSFORM= \
-	__adminmansuffix__	8 \
-	__apploaddir__		${X11ROOTDIR}/lib/X11/app-defaults \
-	__appmansuffix__ 	1 \
-	__bindir__		${X11BINDIR} \
-	__drivermansuffix__	4 \
-	__filemansuffix__	5 \
-	__LIB_MAN_SUFFIX__	3 \
-	__libmansuffix__	3 \
-	__logdir__		/var/log \
-	__mandir__		${X11MANDIR} \
-	__miscmansuffix__	7 \
-	__oslibmansuffix__	3 \
-	__projectroot__		${X11ROOTDIR} \
-	${X11EXTRAMANTRANSFORMS}
-
 # Note the escaping trick for _X11MANTRANSFORM using % to replace spaces
 XORGVERSION=	'"X Version 11"'
-X11MANCPP?=	no
+
+_X11MANTRANSFORM= \
+	${X11EXTRAMANTRANSFORMS}
+
+# These ones used to appear as __foo__ but may be now @foo@.
+_X11MANTRANSFORMS_BOTH=\
+	${X11EXTRAMANTRANSFORMS_BOTH} \
+	appmansuffix		1 \
+	LIB_MAN_SUFFIX		3 \
+	libmansuffix		3 \
+	oslibmansuffix		3 \
+	drivermansuffix		4 \
+	filemansuffix		5 \
+	miscmansuffix		7 \
+	adminmansuffix		8 \
+	logdir			/var/log \
+	sysconfdir		/etc \
+	apploaddir		${X11ROOTDIR}/lib/X11/app-defaults \
+	bindir			${X11BINDIR} \
+	datadir			${X11LIBDIR} \
+	libdir			${X11ROOTDIR}/lib \
+	mandir			${X11MANDIR} \
+	projectroot		${X11ROOTDIR} \
+	xkbconfigroot		${X11LIBDIR}/xkb \
+	vendorversion		${XORGVERSION:C/ /%/gW} \
+	XCONFIGFILE		xorg.conf \
+	xconfigfile		xorg.conf \
+	XCONFIGFILEMAN		'xorg.conf(5)' \
+	xorgversion		${XORGVERSION:C/ /%/gW} \
+	XSERVERNAME		Xorg \
+	xservername		Xorg
+
+.for __def__ __value__ in ${_X11MANTRANSFORMS_BOTH}
 _X11MANTRANSFORM+= \
-	__vendorversion__	${XORGVERSION:C/ /%/gW} \
-	__XCONFIGFILE__		xorg.conf \
-	__xconfigfile__		xorg.conf \
-	__XCONFIGFILEMAN__	'__XCONFIGFILE__%(__filemansuffix__)' \
-	__xorgversion__		${XORGVERSION:C/ /%/gW} \
-	__XSERVERNAME__		Xorg \
-	__xservername__		Xorg
+	__${__def__}__		${__value__} \
+	@${__def__}@		${__value__}
+.endfor
+
+_X11MANTRANSFORM+= \
 
 _X11MANTRANSFORMCMD=	${TOOL_SED} -e 's/\\$$/\\ /' ${.IMPSRC}
+
+# XXX document me.
+X11MANCPP?=	no
 
 .if ${X11MANCPP} != "no"
 _X11MANTRANSFORMCMD+=	| ${CC} -E -undef -traditional -
@@ -419,7 +466,13 @@ _X11MANTRANSFORMCMD+=	${X11EXTRAMANDEFS}
 .man.1 .man.3 .man.4 .man.5 .man.7 .man.pre.1 .man.pre.4 .man.pre.5:
 	${_MKTARGET_CREATE}
 	rm -f ${.TARGET}
-	${_X11MANTRANSFORMCMD} | ${X11TOOL_UNXCOMM} > ${.TARGET}
+	${_X11MANTRANSFORMCMD} | ${X11TOOL_UNXCOMM} > ${.TARGET}.tmp
+	if ${_X11SKIP_FALSE_POSITIVE_GREP_CMD}; then \
+		echo "manual ${.TARGET} matches @.*@, probably missing updates" 1>&2; \
+		false; \
+	else \
+		${MV} ${.TARGET}.tmp ${.TARGET}; \
+	fi
 
 ##### Pull in related .mk logic
 .include <bsd.clean.mk>

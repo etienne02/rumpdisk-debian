@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -80,6 +80,7 @@ AcpiUpdateAllGpes (
     void)
 {
     ACPI_STATUS             Status;
+    BOOLEAN                 IsPollingNeeded = FALSE;
 
 
     ACPI_FUNCTION_TRACE (AcpiUpdateAllGpes);
@@ -96,7 +97,8 @@ AcpiUpdateAllGpes (
         goto UnlockAndExit;
     }
 
-    Status = AcpiEvWalkGpeList (AcpiEvInitializeGpeBlock, NULL);
+    Status = AcpiEvWalkGpeList (AcpiEvInitializeGpeBlock,
+        &IsPollingNeeded);
     if (ACPI_SUCCESS (Status))
     {
         AcpiGbl_AllGpesInitialized = TRUE;
@@ -104,6 +106,13 @@ AcpiUpdateAllGpes (
 
 UnlockAndExit:
     (void) AcpiUtReleaseMutex (ACPI_MTX_EVENTS);
+
+    if (IsPollingNeeded && AcpiGbl_AllGpesInitialized)
+    {
+        /* Poll GPEs to handle already triggered events */
+
+        AcpiEvGpeDetect (AcpiGbl_GpeXruptListHead);
+    }
     return_ACPI_STATUS (Status);
 }
 
@@ -150,7 +159,17 @@ AcpiEnableGpe (
         if (ACPI_GPE_DISPATCH_TYPE (GpeEventInfo->Flags) !=
             ACPI_GPE_DISPATCH_NONE)
         {
-            Status = AcpiEvAddGpeReference (GpeEventInfo);
+            Status = AcpiEvAddGpeReference (GpeEventInfo, TRUE);
+            if (ACPI_SUCCESS (Status) &&
+                ACPI_GPE_IS_POLLING_NEEDED (GpeEventInfo))
+            {
+                /* Poll edge-triggered GPEs to handle existing events */
+
+                AcpiOsReleaseLock (AcpiGbl_GpeLock, Flags);
+                (void) AcpiEvDetectGpe (
+                    GpeDevice, GpeEventInfo, GpeNumber);
+                Flags = AcpiOsAcquireLock (AcpiGbl_GpeLock);
+            }
         }
         else
         {
@@ -271,11 +290,13 @@ AcpiSetGpe (
     case ACPI_GPE_ENABLE:
 
         Status = AcpiHwLowSetGpe (GpeEventInfo, ACPI_GPE_ENABLE);
+        GpeEventInfo->DisableForDispatch = FALSE;
         break;
 
     case ACPI_GPE_DISABLE:
 
         Status = AcpiHwLowSetGpe (GpeEventInfo, ACPI_GPE_DISABLE);
+        GpeEventInfo->DisableForDispatch = TRUE;
         break;
 
     default:
@@ -290,6 +311,56 @@ UnlockAndExit:
 }
 
 ACPI_EXPORT_SYMBOL (AcpiSetGpe)
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiMaskGpe
+ *
+ * PARAMETERS:  GpeDevice           - Parent GPE Device. NULL for GPE0/GPE1
+ *              GpeNumber           - GPE level within the GPE block
+ *              IsMasked            - Whether the GPE is masked or not
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Unconditionally mask/unmask the an individual GPE, ex., to
+ *              prevent a GPE flooding.
+ *
+ ******************************************************************************/
+
+ACPI_STATUS
+AcpiMaskGpe (
+    ACPI_HANDLE             GpeDevice,
+    UINT32                  GpeNumber,
+    BOOLEAN                 IsMasked)
+{
+    ACPI_GPE_EVENT_INFO     *GpeEventInfo;
+    ACPI_STATUS             Status;
+    ACPI_CPU_FLAGS          Flags;
+
+
+    ACPI_FUNCTION_TRACE (AcpiMaskGpe);
+
+
+    Flags = AcpiOsAcquireLock (AcpiGbl_GpeLock);
+
+    /* Ensure that we have a valid GPE number */
+
+    GpeEventInfo = AcpiEvGetGpeEventInfo (GpeDevice, GpeNumber);
+    if (!GpeEventInfo)
+    {
+        Status = AE_BAD_PARAMETER;
+        goto UnlockAndExit;
+    }
+
+    Status = AcpiEvMaskGpe (GpeEventInfo, IsMasked);
+
+UnlockAndExit:
+    AcpiOsReleaseLock (AcpiGbl_GpeLock, Flags);
+    return_ACPI_STATUS (Status);
+}
+
+ACPI_EXPORT_SYMBOL (AcpiMaskGpe)
 
 
 /*******************************************************************************
@@ -448,6 +519,16 @@ AcpiSetupGpeForWake (
          */
         GpeEventInfo->Flags =
             (ACPI_GPE_DISPATCH_NOTIFY | ACPI_GPE_LEVEL_TRIGGERED);
+    }
+    else if (GpeEventInfo->Flags & ACPI_GPE_AUTO_ENABLED)
+    {
+        /*
+         * A reference to this GPE has been added during the GPE block
+         * initialization, so drop it now to prevent the GPE from being
+         * permanently enabled and clear its ACPI_GPE_AUTO_ENABLED flag.
+         */
+        (void) AcpiEvRemoveGpeReference (GpeEventInfo);
+        GpeEventInfo->Flags &= ~~ACPI_GPE_AUTO_ENABLED;
     }
 
     /*
@@ -688,6 +769,33 @@ ACPI_EXPORT_SYMBOL (AcpiGetGpeStatus)
 
 /*******************************************************************************
  *
+ * FUNCTION:    AcpiDispatchGpe
+ *
+ * PARAMETERS:  GpeDevice           - Parent GPE Device. NULL for GPE0/GPE1
+ *              GpeNumber           - GPE level within the GPE block
+ *
+ * RETURN:      INTERRUPT_HANDLED or INTERRUPT_NOT_HANDLED
+ *
+ * DESCRIPTION: Detect and dispatch a General Purpose Event to either a function
+ *              (e.g. EC) or method (e.g. _Lxx/_Exx) handler.
+ *
+ ******************************************************************************/
+
+UINT32
+AcpiDispatchGpe(
+    ACPI_HANDLE             GpeDevice,
+    UINT32                  GpeNumber)
+{
+    ACPI_FUNCTION_TRACE(acpi_dispatch_gpe);
+
+    return (AcpiEvDetectGpe (GpeDevice, NULL, GpeNumber));
+}
+
+ACPI_EXPORT_SYMBOL (AcpiDispatchGpe)
+
+
+/*******************************************************************************
+ *
  * FUNCTION:    AcpiFinishGpe
  *
  * PARAMETERS:  GpeDevice           - Namespace node for the GPE Block
@@ -696,9 +804,9 @@ ACPI_EXPORT_SYMBOL (AcpiGetGpeStatus)
  *
  * RETURN:      Status
  *
- * DESCRIPTION: Clear and conditionally reenable a GPE. This completes the GPE
+ * DESCRIPTION: Clear and conditionally re-enable a GPE. This completes the GPE
  *              processing. Intended for use by asynchronous host-installed
- *              GPE handlers. The GPE is only reenabled if the EnableForRun bit
+ *              GPE handlers. The GPE is only re-enabled if the EnableForRun bit
  *              is set in the GPE info.
  *
  ******************************************************************************/
@@ -847,6 +955,44 @@ AcpiEnableAllWakeupGpes (
 }
 
 ACPI_EXPORT_SYMBOL (AcpiEnableAllWakeupGpes)
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    AcpiAnyGpeStatusSet
+ *
+ * PARAMETERS:  None
+ *
+ * RETURN:      Whether or not the status bit is set for any GPE
+ *
+ * DESCRIPTION: Check the status bits of all enabled GPEs and return TRUE if any
+ *              of them is set or FALSE otherwise.
+ *
+ ******************************************************************************/
+
+UINT32
+AcpiAnyGpeStatusSet (
+    void)
+{
+    ACPI_STATUS                Status;
+    UINT8                      Ret;
+
+
+    ACPI_FUNCTION_TRACE (AcpiAnyGpeStatusSet);
+
+    Status = AcpiUtAcquireMutex (ACPI_MTX_EVENTS);
+    if (ACPI_FAILURE (Status))
+    {
+        return (FALSE);
+    }
+
+    Ret = AcpiHwCheckAllGpes ();
+    (void) AcpiUtReleaseMutex (ACPI_MTX_EVENTS);
+
+    return (Ret);
+}
+
+ACPI_EXPORT_SYMBOL(AcpiAnyGpeStatusSet)
 
 
 /*******************************************************************************

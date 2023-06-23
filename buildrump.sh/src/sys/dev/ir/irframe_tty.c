@@ -1,4 +1,4 @@
-/*	$NetBSD: irframe_tty.c,v 1.61 2015/08/20 14:40:18 christos Exp $	*/
+/*	$NetBSD: irframe_tty.c,v 1.64 2020/12/19 01:18:59 thorpej Exp $	*/
 
 /*
  * TODO
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: irframe_tty.c,v 1.61 2015/08/20 14:40:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: irframe_tty.c,v 1.64 2020/12/19 01:18:59 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -376,6 +376,12 @@ irframetioctl(struct tty *tp, u_long cmd, void *data, int flag,
 	int d;
 
 	DPRINTF(("%s: tp=%p\n", __func__, tp));
+
+	/*
+	 * XXX
+	 * This function can be called without KERNEL_LOCK when caller's
+	 * struct cdevsw is set D_MPSAFE. Is KERNEL_LOCK required?
+	 */
 
 	if (sc == NULL || tp != sc->sc_tp)
 		return (EPASSTHROUGH);
@@ -781,7 +787,7 @@ filt_irframetrdetach(struct knote *kn)
 	int s;
 
 	s = splir();
-	SLIST_REMOVE(&sc->sc_rsel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->sc_rsel, kn);
 	splx(s);
 }
 
@@ -803,7 +809,7 @@ filt_irframetwdetach(struct knote *kn)
 	int s;
 
 	s = splir();
-	SLIST_REMOVE(&sc->sc_wsel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->sc_wsel, kn);
 	splx(s);
 }
 
@@ -823,26 +829,35 @@ filt_irframetwrite(struct knote *kn, long hint)
 	return (0);
 }
 
-static const struct filterops irframetread_filtops =
-	{ 1, NULL, filt_irframetrdetach, filt_irframetread };
-static const struct filterops irframetwrite_filtops =
-	{ 1, NULL, filt_irframetwdetach, filt_irframetwrite };
+static const struct filterops irframetread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_irframetrdetach,
+	.f_event = filt_irframetread,
+};
+
+static const struct filterops irframetwrite_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_irframetwdetach,
+	.f_event = filt_irframetwrite,
+};
 
 int
 irframet_kqfilter(void *h, struct knote *kn)
 {
 	struct tty *tp = h;
 	struct irframet_softc *sc = (struct irframet_softc *)tp->t_sc;
-	struct klist *klist;
+	struct selinfo *sip;
 	int s;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &sc->sc_rsel.sel_klist;
+		sip = &sc->sc_rsel;
 		kn->kn_fop = &irframetread_filtops;
 		break;
 	case EVFILT_WRITE:
-		klist = &sc->sc_wsel.sel_klist;
+		sip = &sc->sc_wsel;
 		kn->kn_fop = &irframetwrite_filtops;
 		break;
 	default:
@@ -852,7 +867,7 @@ irframet_kqfilter(void *h, struct knote *kn)
 	kn->kn_hook = tp;
 
 	s = splir();
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(sip, kn);
 	splx(s);
 
 	return (0);

@@ -1,4 +1,4 @@
-/*	$NetBSD: threads.c,v 1.24 2016/01/26 23:12:18 pooka Exp $	*/
+/*	$NetBSD: threads.c,v 1.27 2020/08/01 22:30:57 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2007-2009 Antti Kantee.  All Rights Reserved.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: threads.c,v 1.24 2016/01/26 23:12:18 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: threads.c,v 1.27 2020/08/01 22:30:57 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -247,6 +247,32 @@ kthread_join(struct lwp *l)
 	return rv;
 }
 
+int
+kthread_fpu_enter(void)
+{
+	struct lwp *l = curlwp;
+	int s;
+
+	KASSERTMSG(l->l_flag & LW_SYSTEM,
+	    "%s is allowed only in kthreads", __func__);
+	s = l->l_flag & LW_SYSTEM_FPU;
+	l->l_flag |= LW_SYSTEM_FPU;
+
+	return s;
+}
+
+void
+kthread_fpu_exit(int s)
+{
+	struct lwp *l = curlwp;
+
+	KASSERT(s == (s & LW_SYSTEM_FPU));
+	KASSERTMSG(l->l_flag & LW_SYSTEM,
+	    "%s is allowed only in kthreads", __func__);
+	KASSERT(l->l_flag & LW_SYSTEM_FPU);
+	l->l_flag ^= s ^ LW_SYSTEM_FPU;
+}
+
 /*
  * Create a non-kernel thread that is scheduled by a rump kernel hypercall.
  *
@@ -293,8 +319,9 @@ lwpbouncer(void *arg)
 
 int
 lwp_create(struct lwp *l1, struct proc *p2, vaddr_t uaddr, int flags,
-           void *stack, size_t stacksize, void (*func)(void *), void *arg,
-           struct lwp **newlwpp, int sclass)
+    void *stack, size_t stacksize, void (*func)(void *), void *arg,
+    struct lwp **newlwpp, int sclass, const sigset_t *sigmask,
+    const stack_t *sigstk)
 {
 	struct thrdesc *td;
 	struct lwp *l;

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,6 +43,21 @@
 
 #ifndef __ACEVENTS_H__
 #define __ACEVENTS_H__
+
+
+/*
+ * Conditions to trigger post enabling GPE polling:
+ * It is not sufficient to trigger edge-triggered GPE with specific GPE
+ * chips, software need to poll once after enabling.
+ */
+#ifdef ACPI_USE_GPE_POLLING
+#define ACPI_GPE_IS_POLLING_NEEDED(__gpe__)             \
+    ((__gpe__)->RuntimeCount == 1 &&                    \
+     (__gpe__)->Flags & ACPI_GPE_INITIALIZED &&         \
+     ((__gpe__)->Flags & ACPI_GPE_XRUPT_TYPE_MASK) == ACPI_GPE_EDGE_TRIGGERED)
+#else
+#define ACPI_GPE_IS_POLLING_NEEDED(__gpe__)             FALSE
+#endif
 
 
 /*
@@ -116,8 +131,14 @@ AcpiEvEnableGpe (
     ACPI_GPE_EVENT_INFO     *GpeEventInfo);
 
 ACPI_STATUS
+AcpiEvMaskGpe (
+    ACPI_GPE_EVENT_INFO     *GpeEventInfo,
+    BOOLEAN                 IsMasked);
+
+ACPI_STATUS
 AcpiEvAddGpeReference (
-    ACPI_GPE_EVENT_INFO     *GpeEventInfo);
+    ACPI_GPE_EVENT_INFO     *GpeEventInfo,
+    BOOLEAN                 ClearOnEnable);
 
 ACPI_STATUS
 AcpiEvRemoveGpeReference (
@@ -136,6 +157,12 @@ AcpiEvLowGetGpeInfo (
 ACPI_STATUS
 AcpiEvFinishGpe (
     ACPI_GPE_EVENT_INFO     *GpeEventInfo);
+
+UINT32
+AcpiEvDetectGpe (
+    ACPI_NAMESPACE_NODE     *GpeDevice,
+    ACPI_GPE_EVENT_INFO     *GpeEventInfo,
+    UINT32                  GpeNumber);
 
 
 /*
@@ -331,8 +358,11 @@ AcpiEvDefaultRegionSetup (
 
 ACPI_STATUS
 AcpiEvInitializeRegion (
-    ACPI_OPERAND_OBJECT     *RegionObj,
-    BOOLEAN                 AcpiNsLocked);
+    ACPI_OPERAND_OBJECT     *RegionObj);
+
+BOOLEAN
+AcpiEvIsPciRootBridge (
+    ACPI_NAMESPACE_NODE     *Node);
 
 
 /*

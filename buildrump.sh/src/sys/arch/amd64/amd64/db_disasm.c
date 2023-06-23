@@ -1,4 +1,4 @@
-/*	$NetBSD: db_disasm.c,v 1.23 2016/03/25 10:14:43 shm Exp $	*/
+/*	$NetBSD: db_disasm.c,v 1.28 2021/05/23 08:59:08 riastradh Exp $	*/
 
 /* 
  * Mach Operating System
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.23 2016/03/25 10:14:43 shm Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.28 2021/05/23 08:59:08 riastradh Exp $");
 
 #ifndef _KERNEL
 #include <sys/types.h>
@@ -1191,28 +1191,7 @@ db_disasm(db_addr_t loc, bool altfmt)
 	uint64_t imm64;
 	int	len;
 	struct i_addr	address;
-#ifdef _KERNEL
-	pt_entry_t *pte, *pde;
-#endif
 	u_int	rex = 0;
-
-#ifdef _KERNEL
-	/*
-	 * Don't try to disassemble the location if the mapping is invalid.
-	 * If we do, we'll fault, and end up debugging the debugger!
-	 * in the case of largepages, "pte" is really the pde and "pde" is
-	 * really the entry for the pdp itself.
-	 */
-	if ((vaddr_t)loc >= VM_MIN_KERNEL_ADDRESS)
-		pte = kvtopte((vaddr_t)loc);
-	else
-		pte = vtopte((vaddr_t)loc);
-	pde = vtopte((vaddr_t)pte);
-	if ((*pde & PG_V) == 0 || (*pte & PG_V) == 0) {
-		db_printf("invalid address\n");
-		return (loc);
-	}
-#endif
 
 	get_value_inc(inst, loc, 1, false);
 	short_addr = false;
@@ -1376,20 +1355,33 @@ db_disasm(db_addr_t loc, bool altfmt)
 
 		switch (i_mode & 0xFF) {
 		case E:
-			db_print_address(seg, rex, size, &address);
-			break;
 		case Eind:
-			db_printf("*");
-			db_print_address(seg, rex, size, &address);
-			break;
 		case Ed:
-			db_print_address(seg, rex, LONG, &address);
-			break;
 		case Ew:
-			db_print_address(seg, rex, WORD, &address);
-			break;
 		case Eb:
-			db_print_address(seg, rex, BYTE, &address);
+			if (!ip->i_has_modrm) {
+				db_printf("Bad address mode %#x without modrm",
+				    i_mode);
+				break;
+			}
+			switch (i_mode & 0xFF) {
+			case E:
+				db_print_address(seg, rex, size, &address);
+				break;
+			case Eind:
+				db_printf("*");
+				db_print_address(seg, rex, size, &address);
+				break;
+			case Ed:
+				db_print_address(seg, rex, LONG, &address);
+				break;
+			case Ew:
+				db_print_address(seg, rex, WORD, &address);
+				break;
+			case Eb:
+				db_print_address(seg, rex, BYTE, &address);
+				break;
+			}
 			break;
 		case R: {
 			int ext = ((rex & REX_R) != 0);
@@ -1449,6 +1441,7 @@ db_disasm(db_addr_t loc, bool altfmt)
 				db_printf("$%s", tbuf);
 				break;
 			}
+			/* FALLTHROUGH */
 		case I:
 			len = db_lengths[size];
 			get_value_inc(imm, loc, len, false);/* unsigned */

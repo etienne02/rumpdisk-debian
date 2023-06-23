@@ -1,4 +1,4 @@
-/*	$NetBSD: cardbus.c,v 1.108 2011/08/01 11:20:27 drochner Exp $	*/
+/*	$NetBSD: cardbus.c,v 1.112 2021/08/07 16:19:10 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999 and 2000
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cardbus.c,v 1.108 2011/08/01 11:20:27 drochner Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cardbus.c,v 1.112 2021/08/07 16:19:10 thorpej Exp $");
 
 #include "opt_cardbus.h"
 
@@ -557,11 +557,8 @@ cardbus_rescan(device_t self, const char *ifattr,
 		 * We need to allocate the ct here, since we might
 		 * need it when reading the CIS
 		 */
-		if ((ct = malloc(sizeof(struct cardbus_devfunc),
-		    M_DEVBUF, M_NOWAIT)) == NULL) {
-			panic("no room for cardbus_tag");
-		}
-
+		ct = malloc(sizeof(struct cardbus_devfunc),
+		    M_DEVBUF, M_WAITOK);
 		ct->ct_bhlc = bhlc;
 		ct->ct_cc = sc->sc_cc;
 		ct->ct_cf = sc->sc_cf;
@@ -607,8 +604,9 @@ cardbus_rescan(device_t self, const char *ifattr,
 
 		locs[CARDBUSCF_FUNCTION] = function;
 
-		if ((csc = config_found_sm_loc(sc->sc_dev, "cardbus", locs,
-		    &ca, cardbusprint, config_stdsubmatch)) == NULL) {
+		if ((csc = config_found(sc->sc_dev, &ca, cardbusprint,
+					CFARGS(.submatch = config_stdsubmatch,
+					       .locators = locs))) == NULL) {
 			/* do not match */
 			disable_function(sc, function);
 			sc->sc_funcs[function] = NULL;
@@ -778,7 +776,7 @@ enable_function(struct cardbus_softc *sc, int cdstatus, int function)
 static void
 disable_function(struct cardbus_softc *sc, int function)
 {
-	bool powerdown;
+	bool no_powerdown;
 	cardbus_devfunc_t ct;
 	device_t dv;
 	int i;
@@ -791,7 +789,7 @@ disable_function(struct cardbus_softc *sc, int function)
 			continue;
 		dv = ct->ct_device;
 		if (prop_dictionary_get_bool(device_properties(dv),
-		    "pmf-powerdown", &powerdown) && !powerdown)
+		    "pmf-no-powerdown", &no_powerdown) && no_powerdown)
 			return;
 	}
 	/* power-off because no functions are enabled */

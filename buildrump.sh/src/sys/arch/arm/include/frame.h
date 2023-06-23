@@ -1,4 +1,4 @@
-/*	$NetBSD: frame.h,v 1.18 2013/08/18 05:07:19 matt Exp $	*/
+/*	$NetBSD: frame.h,v 1.21 2018/01/24 19:42:30 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1997 Mark Brinicombe.
@@ -35,7 +35,7 @@
  * SUCH DAMAGE.
  */
 /*
- * arm/frame.h - Stack frames structures common to arm26 and arm32
+ * arm/frame.h - Stack frames structures
  */
 
 #ifndef _ARM_FRAME_H_
@@ -51,7 +51,7 @@
  */
 
 typedef struct trapframe {
-	register_t tf_spsr; /* Zero on arm26 */
+	register_t tf_spsr;
 	register_t tf_fill; /* fill here so r0 will be dword aligned */
 	register_t tf_r0;
 	register_t tf_r1;
@@ -68,8 +68,8 @@ typedef struct trapframe {
 	register_t tf_r12;
 	register_t tf_usr_sp;
 	register_t tf_usr_lr;
-	register_t tf_svc_sp; /* Not used on arm26 */
-	register_t tf_svc_lr; /* Not used on arm26 */
+	register_t tf_svc_sp;
+	register_t tf_svc_lr;
 	register_t tf_pc;
 } trapframe_t;
 
@@ -79,11 +79,7 @@ typedef struct trapframe {
 #define tf_r14 tf_usr_lr
 #define tf_r15 tf_pc
 
-#ifdef __PROG32
 #define TRAP_USERMODE(tf)	(((tf)->tf_spsr & PSR_MODE) == PSR_USR32_MODE)
-#elif defined(__PROG26)
-#define TRAP_USERMODE(tf)	(((tf)->tf_r15 & R15_MODE) == R15_MODE_USR)
-#endif
 
 /*
  * Signal frame.  Pushed onto user stack before calling sigcode.
@@ -100,14 +96,16 @@ struct sigframe_siginfo {
 	ucontext_t	sf_uc;		/* actual saved ucontext */
 };
 
+#if defined(_KERNEL) || defined(_KMEMUSER)
 #ifdef _KERNEL
 __BEGIN_DECLS
 void sendsig_sigcontext(const ksiginfo_t *, const sigset_t *);
 void *getframe(struct lwp *, int, int *);
 __END_DECLS
-#define lwp_trapframe(l)		((l)->l_md.md_tf)
 #define lwp_settrapframe(l, tf)		((l)->l_md.md_tf = (tf))
 #endif
+#define lwp_trapframe(l)		((l)->l_md.md_tf)
+#endif /* _KERNEL || _KMEMUSER */
 
 #endif /* _LOCORE */
 

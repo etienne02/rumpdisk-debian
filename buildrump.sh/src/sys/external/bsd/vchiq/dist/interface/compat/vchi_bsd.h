@@ -45,6 +45,7 @@
 #include <sys/callout.h>
 
 #include <linux/completion.h>
+#include <asm/barrier.h>
 
 /*
  * Copy from/to user API
@@ -83,7 +84,7 @@ typedef kmutex_t spinlock_t;
  */
 #define DEFINE_SPINLOCK(name)	kmutex_t name
 
-#define spin_lock_init(lock)	mutex_init(lock, MUTEX_DEFAULT, IPL_SCHED)
+#define spin_lock_init(lock)	mutex_init(lock, MUTEX_DEFAULT, IPL_VM)
 #define spin_lock_destroy(lock)	mutex_destroy(lock)
 #define spin_lock(lock)		mutex_spin_enter(lock)
 #define spin_unlock(lock)	mutex_spin_exit(lock)
@@ -108,7 +109,7 @@ typedef kmutex_t rwlock_t;
 
 #define DEFINE_RWLOCK(name)	kmutex_t name
 
-#define rwlock_init(rwlock)	mutex_init(rwlock, MUTEX_DEFAULT, IPL_SCHED)
+#define rwlock_init(rwlock)	mutex_init(rwlock, MUTEX_DEFAULT, IPL_VM)
 #define read_lock(rwlock)	mutex_spin_enter(rwlock)
 #define read_unlock(rwlock)	mutex_spin_exit(rwlock)
 
@@ -215,32 +216,6 @@ device_rlprintf(int pps, device_t dev, const char *fmt, ...)
 
 #define vchiq_static_assert(cond) CTASSERT(cond)
 
-#define KERN_EMERG	"<0>"	/* system is unusable			*/
-#define KERN_ALERT	"<1>"	/* action must be taken immediately	*/
-#define KERN_CRIT	"<2>"	/* critical conditions			*/
-#define KERN_ERR	"<3>"	/* error conditions			*/
-#define KERN_WARNING	"<4>"	/* warning conditions			*/
-#define KERN_NOTICE	"<5>"	/* normal but significant condition	*/
-#define KERN_INFO	"<6>"	/* informational			*/
-#define KERN_DEBUG	"<7>"	/* debug-level messages			*/
-#define KERN_CONT	""
-
-#define printk(fmt, args...)		printf(fmt, ##args)
-#define vprintk(fmt, args)		vprintf(fmt, args)
-
-/*
- * Malloc API
- */
-#define GFP_KERNEL	0
-#define GFP_ATOMIC	0
-
-MALLOC_DECLARE(M_VCHI);
-
-#define kmalloc(size, flags)	malloc((size), M_VCHI, M_NOWAIT | M_ZERO)
-#define kcalloc(n, size, flags)	malloc((n) * (size), M_VCHI, M_NOWAIT | M_ZERO)
-#define kzalloc(a, b)		kcalloc(1, (a), (b))
-#define kfree(p)		do { if (p) free(p, M_VCHI); } while (0)
-
 /*
  * Kernel module API
  */
@@ -318,7 +293,7 @@ int fatal_signal_pending(VCHIQ_THREAD_T);
 #define __user
 
 #define	current			curlwp
-#define EXPORT_SYMBOL(x) 
+#define EXPORT_SYMBOL(x)
 #define PAGE_ALIGN(addr)	round_page(addr)
 
 typedef	void	irqreturn_t;
@@ -326,14 +301,6 @@ typedef	off_t	loff_t;
 
 #define BCM2835_MBOX_CHAN_VCHIQ	3
 #define bcm_mbox_write	bcmmbox_write
-
-#define rmb	membar_consumer
-#define wmb	membar_producer
-#define dsb	membar_producer
-
-#define smp_mb	membar_producer
-#define smp_rmb	membar_consumer
-#define smp_wmb	membar_producer
 
 #define device_print_prettyname(dev)	device_printf((dev), "")
 

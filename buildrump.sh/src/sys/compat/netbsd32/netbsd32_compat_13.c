@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_compat_13.c,v 1.26 2014/01/24 22:44:00 christos Exp $	*/
+/*	$NetBSD: netbsd32_compat_13.c,v 1.28 2021/01/19 03:20:13 simonb Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -27,17 +27,20 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_13.c,v 1.26 2014/01/24 22:44:00 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_compat_13.c,v 1.28 2021/01/19 03:20:13 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #include <sys/syscallargs.h>
+#include <sys/syscallvar.h>
 
 #include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_syscall.h>
 #include <compat/netbsd32/netbsd32_syscallargs.h>
 
 #include <compat/sys/stat.h>
@@ -71,10 +74,10 @@ compat_13_netbsd32_sigprocmask(struct lwp *l, const struct compat_13_netbsd32_si
 	error = sigprocmask1(l, SCARG(uap, how), &nbss, &obss);
 	mutex_exit(p->p_lock);
 	if (error)
-		return (error);
+		return error;
 	native_sigset_to_sigset13(&obss, &oess);
 	*retval = oess;
-	return (0);
+	return 0;
 }
 
 int
@@ -88,5 +91,37 @@ compat_13_netbsd32_sigsuspend(struct lwp *l, const struct compat_13_netbsd32_sig
 
 	ess = SCARG(uap, mask);
 	native_sigset13_to_sigset(&ess, &bss);
-	return (sigsuspend1(l, &bss));
+	return sigsuspend1(l, &bss);
+}
+
+static struct syscall_package compat_netbsd32_13_syscalls[] = {
+	{ NETBSD32_SYS_compat_13_netbsd32_sigaltstack13, 0,
+	    (sy_call_t *)compat_13_netbsd32_sigaltstack13 },
+	{ NETBSD32_SYS_compat_13_sigprocmask13, 0,
+	    (sy_call_t *)compat_13_netbsd32_sigprocmask },
+	{ NETBSD32_SYS_compat_13_sigsuspend13, 0,
+	    (sy_call_t *)compat_13_netbsd32_sigsuspend },
+	{ 0, 0, NULL }
+}; 
+
+MODULE(MODULE_CLASS_EXEC, compat_netbsd32_13, "compat_13,compat_netbsd32_16");
+
+static int
+compat_netbsd32_13_modcmd(modcmd_t cmd, void *arg)
+{
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		netbsd32_machdep_md_13_init();
+		return syscall_establish(&emul_netbsd32,
+		    compat_netbsd32_13_syscalls);
+
+	case MODULE_CMD_FINI:
+		netbsd32_machdep_md_13_fini();
+		return syscall_disestablish(&emul_netbsd32,
+		    compat_netbsd32_13_syscalls);
+
+	default:
+		return ENOTTY;
+	}
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: mips_fpu.c,v 1.13 2016/03/26 17:40:02 martin Exp $	*/
+/*	$NetBSD: mips_fpu.c,v 1.17 2021/05/29 12:35:27 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -30,9 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mips_fpu.c,v 1.13 2016/03/26 17:40:02 martin Exp $");
-
-#include "opt_multiprocessor.h"
+__KERNEL_RCSID(0, "$NetBSD: mips_fpu.c,v 1.17 2021/05/29 12:35:27 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/mutex.h>
@@ -58,9 +56,9 @@ const pcu_ops_t mips_fpu_ops = {
 };
 
 void
-fpu_discard(void)
+fpu_discard(lwp_t *l)
 {
-	pcu_discard(&mips_fpu_ops, false);
+	pcu_discard(&mips_fpu_ops, l, false);
 }
 
 void
@@ -70,18 +68,18 @@ fpu_load(void)
 }
 
 void
-fpu_save(void)
+fpu_save(lwp_t *l)
 {
-	pcu_save(&mips_fpu_ops);
+	pcu_save(&mips_fpu_ops, l);
 }
 
 bool
-fpu_used_p(void)
+fpu_used_p(const lwp_t *l)
 {
-	return pcu_valid_p(&mips_fpu_ops);
+	return pcu_valid_p(&mips_fpu_ops, l);
 }
 
-void
+static void
 mips_fpu_state_save(lwp_t *l)
 {
 	struct trapframe * const tf = l->l_md.md_utf;
@@ -208,7 +206,7 @@ mips_fpu_state_save(lwp_t *l)
 	__asm volatile ("mtc0 %0, $%1" :: "r"(status), "n"(MIPS_COP_0_STATUS));
 }
 
-void
+static void
 mips_fpu_state_load(lwp_t *l, u_int flags)
 {
 	struct trapframe * const tf = l->l_md.md_utf;
@@ -338,8 +336,10 @@ mips_fpu_state_load(lwp_t *l, u_int flags)
 #endif
 
 	/*
-	 * load FPCSR and stop COP1 again
+	 * Mask off the exception bits in the FPCSR, load the FPCSR
+	 * and stop COP1 again
 	 */
+	fpcsr &= ~MIPS_FCSR_CAUSE;
 	__asm volatile(
 		".set noreorder"	"\n\t"
 		".set noat"		"\n\t"
@@ -348,11 +348,11 @@ mips_fpu_state_load(lwp_t *l, u_int flags)
 		"mtc0	%1, $%2"	"\n\t"
 		".set at"		"\n\t"
 		".set reorder"		"\n\t"
-	    ::	"r"(fpcsr &~ MIPS_FPU_EXCEPTION_BITS), "r"(status),
+	    ::	"r"(fpcsr), "r"(status),
 		"n"(MIPS_COP_0_STATUS));
 }
 
-void
+static void
 mips_fpu_state_release(lwp_t *l)
 {
 	l->l_md.md_utf->tf_regs[_R_SR] &= ~MIPS_SR_COP_1_BIT;

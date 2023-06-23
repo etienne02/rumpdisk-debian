@@ -1,5 +1,5 @@
 /*	$OpenBSD: db_machdep.h,v 1.2 1997/03/21 00:48:48 niklas Exp $	*/
-/*	$NetBSD: db_machdep.h,v 1.25 2015/01/23 07:27:05 nonaka Exp $	*/
+/*	$NetBSD: db_machdep.h,v 1.30 2021/03/11 08:33:34 simonb Exp $	*/
 
 /* 
  * Mach Operating System
@@ -33,16 +33,15 @@
 #ifndef	_PPC_DB_MACHDEP_H_
 #define	_PPC_DB_MACHDEP_H_
 
+#if defined(_KERNEL_OPT)
+#include "opt_ppcarch.h"
+#endif
+
 #include <uvm/uvm_prot.h>
 #include <uvm/uvm_param.h>
 #include <machine/trap.h>
 
-#ifdef _KERNEL
-#include "opt_ppcarch.h"
-#endif
-
 #define	DB_ELF_SYMBOLS
-#define	DB_ELFSIZE	32
 
 typedef	vaddr_t		db_addr_t;	/* address - unsigned */
 #define	DDB_EXPR_FMT	"l"		/* expression is long */
@@ -72,8 +71,8 @@ extern	db_regs_t	ddb_regs;		/* register state */
 #define	BKPT_SIZE	(4)		/* size of breakpoint inst */
 #define	BKPT_SET(inst, addr)	(BKPT_INST)
 
-#ifndef PPC_IBM4XX
-#define SR_SINGLESTEP	0x400
+#if !defined(PPC_BOOKE) && !defined(PPC_IBM4XX)
+#define	SR_SINGLESTEP	0x400		/* PSL_SE, available only for oea */
 #define	db_clear_single_step(regs)	((regs)->msr &= ~SR_SINGLESTEP)
 #define	db_set_single_step(regs)	((regs)->msr |=  SR_SINGLESTEP)
 #else
@@ -99,7 +98,7 @@ extern	db_regs_t	ddb_regs;		/* register state */
 #define M_B		0xfc000001
 #define I_B		0x48000000
 #define I_BL		0x48000001
-#define	M_BCTR		0xfc0007fe
+#define	M_BCTR		0xfc0007ff
 #define	I_BCTR		0x4c000420
 #define	I_BCTRL		0x4c000421
 #define	M_RFI		0xfc0007fe

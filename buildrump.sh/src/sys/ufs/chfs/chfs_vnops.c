@@ -1,4 +1,4 @@
-/*	$NetBSD: chfs_vnops.c,v 1.28 2015/04/20 23:03:09 riastradh Exp $	*/
+/*	$NetBSD: chfs_vnops.c,v 1.45 2021/07/18 23:56:14 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2010 Department of Software Engineering,
@@ -38,12 +38,11 @@
 #include <miscfs/genfs/genfs.h>
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/ufs_extern.h>
-#include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 #include <sys/namei.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
 #include <sys/buf.h>
-#include <sys/fstrans.h>
 #include <sys/vnode.h>
 
 #include "chfs.h"
@@ -61,7 +60,7 @@ chfs_lookup(void *v)
 	struct chfs_inode* ip;
 	struct ufsmount* ump;
 	struct chfs_mount* chmp;
-	struct chfs_vnode_cache* chvc;
+	struct chfs_vnode_cache* chvc __diagused;
 	struct chfs_dirent* fd;
 
 	dbg("lookup(): %s\n", cnp->cn_nameptr);
@@ -91,6 +90,10 @@ chfs_lookup(void *v)
 		return (*vpp == NULLVP ? ENOENT : 0);
 	}
 
+	/* May need to restart the lookup with an exclusive lock. */
+	if (VOP_ISLOCKED(dvp) != LK_EXCLUSIVE)
+		return ENOLCK;
+
 	ip = VTOI(dvp);
 	ump = VFSTOUFS(dvp->v_mount);
 	chmp = ump->um_chfs;
@@ -107,7 +110,8 @@ chfs_lookup(void *v)
 
 	if (cnp->cn_flags & ISDOTDOT) {
 		VOP_UNLOCK(dvp);
-		error = VFS_VGET(dvp->v_mount, ip->chvc->pvno, vpp);
+		error = VFS_VGET(dvp->v_mount, ip->chvc->pvno, LK_EXCLUSIVE,
+		    vpp);
 		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
 	} else if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.') {
 		vref(dvp);
@@ -148,7 +152,8 @@ chfs_lookup(void *v)
 
 			dbg("vno@allocating new vnode: %llu\n",
 				(unsigned long long)fd->vno);
-			error = VFS_VGET(dvp->v_mount, fd->vno, vpp);
+			error = VFS_VGET(dvp->v_mount, fd->vno, LK_EXCLUSIVE,
+			    vpp);
 		}
 	}
 	/* Store the result of this lookup in the cache.  Avoid this if the
@@ -366,13 +371,13 @@ int
 chfs_access(void *v)
 {
 	struct vnode *vp = ((struct vop_access_args *) v)->a_vp;
-	int mode = ((struct vop_access_args *) v)->a_mode;
+	accmode_t accmode = ((struct vop_access_args *) v)->a_accmode;
 	kauth_cred_t cred = ((struct vop_access_args *) v)->a_cred;
 
 	dbg("access()\n");
 	struct chfs_inode *ip = VTOI(vp);
 
-	if (mode & VWRITE) {
+	if (accmode & VWRITE) {
 		switch (vp->v_type) {
 		case VLNK:
 		case VDIR:
@@ -390,12 +395,12 @@ chfs_access(void *v)
 		}
 	}
 
-	if (mode & VWRITE && ip->flags & IMMUTABLE)
+	if (accmode & VWRITE && ip->flags & IMMUTABLE)
 		return (EPERM);
 
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(mode, vp->v_type,
-	    ip->mode & ALLPERMS), vp, NULL, genfs_can_access(vp->v_type,
-	    ip->mode & ALLPERMS, ip->uid, ip->gid, mode, cred));
+	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
+	    vp->v_type, ip->mode & ALLPERMS), vp, NULL, genfs_can_access(vp,
+	    cred, ip->uid, ip->gid, ip->mode & ALLPERMS, NULL, accmode));
 }
 
 /* --------------------------------------------------------------------- */
@@ -505,7 +510,8 @@ chfs_setattr(void *v)
 	/* set time */
 	if (vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL) {
 		error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_TIMES, vp,
-		    NULL, genfs_can_chtimes(vp, vap->va_vaflags, ip->uid, cred));
+		    NULL, genfs_can_chtimes(vp, cred, ip->uid,
+		    vap->va_vaflags));
 		if (error)
 			return error;
 		if (vap->va_atime.tv_sec != VNOVAL)
@@ -534,7 +540,7 @@ chfs_chmod(struct vnode *vp, int mode, kauth_cred_t cred)
 	dbg("chmod\n");
 
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_WRITE_SECURITY, vp,
-	    NULL, genfs_can_chmod(vp->v_type, cred, ip->uid, ip->gid, mode));
+	    NULL, genfs_can_chmod(vp, cred, ip->uid, ip->gid, mode));
 	if (error)
 		return error;
 	ip->mode &= ~ALLPERMS;
@@ -561,7 +567,7 @@ chfs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred)
 		gid = ip->gid;
 
 	error = kauth_authorize_vnode(cred, KAUTH_VNODE_CHANGE_OWNERSHIP, vp,
-	    NULL, genfs_can_chown(cred, ip->uid, ip->gid, uid, gid));
+	    NULL, genfs_can_chown(vp, cred, ip->uid, ip->gid, uid, gid));
 	if (error)
 		return error;
 
@@ -653,8 +659,6 @@ chfs_read(void *v)
 	if (uio->uio_resid == 0)
 		return (0);
 
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
-
 	if (uio->uio_offset >= ip->size)
 		goto out;
 
@@ -672,8 +676,7 @@ chfs_read(void *v)
 			if (bytelen == 0)
 				break;
 			error = ubc_uiomove(&vp->v_uobj, uio, bytelen, advice,
-			    UBC_READ | UBC_PARTIALOK |
-			    (UBC_WANT_UNMAP(vp) ? UBC_UNMAP : 0));
+			    UBC_READ | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 			if (error)
 				break;
 
@@ -737,7 +740,6 @@ out:
 		ip->iflag |= IN_ACCESS;
 		if ((ap->a_ioflag & IO_SYNC) == IO_SYNC) {
 			if (error) {
-				fstrans_done(vp->v_mount);
 				return error;
 			}
 			error = chfs_update(vp, NULL, NULL, UPDATE_WAIT);
@@ -745,7 +747,6 @@ out:
 	}
 
 	dbg("[END]\n");
-	fstrans_done(vp->v_mount);
 
 	return (error);
 }
@@ -825,15 +826,13 @@ chfs_write(void *v)
 	if (vp->v_type == VREG && l &&
 	    uio->uio_offset + uio->uio_resid >
 	    l->l_proc->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		psignal(l->l_proc, SIGXFSZ);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		return (EFBIG);
 	}
 	if (uio->uio_resid == 0)
 		return (0);
-
-	fstrans_start(vp->v_mount, FSTRANS_SHARED);
 
 	flags = ioflag & IO_SYNC ? B_SYNC : 0;
 	async = vp->v_mount->mnt_flag & MNT_ASYNC;
@@ -864,7 +863,7 @@ chfs_write(void *v)
 		if (error)
 			goto out;
 		if (flags & B_SYNC) {
-			mutex_enter(vp->v_interlock);
+			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 			VOP_PUTPAGES(vp,
 			    trunc_page(osize & chmp->chm_fs_bmask),
 			    round_page(eob),
@@ -934,7 +933,7 @@ chfs_write(void *v)
 		 * copy the data.
 		 */
 
-		ubc_flags |= UBC_WANT_UNMAP(vp) ? UBC_UNMAP : 0;
+		ubc_flags |= UBC_VNODE_FLAGS(vp);
 		error = ubc_uiomove(&vp->v_uobj, uio, bytelen,
 		    IO_ADV_DECODE(ioflag), ubc_flags);
 
@@ -959,7 +958,7 @@ chfs_write(void *v)
 		 */
 
 		if (!async && oldoff >> 16 != uio->uio_offset >> 16) {
-			mutex_enter(vp->v_interlock);
+			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 			error = VOP_PUTPAGES(vp, (oldoff >> 16) << 16,
 			    (uio->uio_offset >> 16) << 16,
 			    PGO_CLEANIT | PGO_JOURNALLOCKED);
@@ -969,7 +968,7 @@ chfs_write(void *v)
 	}
 out:
 	if (error == 0 && ioflag & IO_SYNC) {
-		mutex_enter(vp->v_interlock);
+		rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 		error = VOP_PUTPAGES(vp,
 		    trunc_page(origoff & chmp->chm_fs_bmask),
 		    round_page(chfs_blkroundup(chmp, uio->uio_offset)),
@@ -1003,7 +1002,6 @@ out:
 
 
 	KASSERT(vp->v_size == ip->size);
-	fstrans_done(vp->v_mount);
 
 	mutex_enter(&chmp->chm_lock_mountfields);
 	error = chfs_write_flash_vnode(chmp, ip, ALLOC_NORMAL);
@@ -1040,9 +1038,9 @@ chfs_fsync(void *v)
 int
 chfs_remove(void *v)
 {
-	struct vnode *dvp = ((struct vop_remove_args *) v)->a_dvp;
-	struct vnode *vp = ((struct vop_remove_args *) v)->a_vp;
-	struct componentname *cnp = (((struct vop_remove_args *) v)->a_cnp);
+	struct vnode *dvp = ((struct vop_remove_v2_args *) v)->a_dvp;
+	struct vnode *vp = ((struct vop_remove_v2_args *) v)->a_vp;
+	struct componentname *cnp = (((struct vop_remove_v2_args *) v)->a_cnp);
 	dbg("remove\n");
 
 	KASSERT(VOP_ISLOCKED(dvp));
@@ -1064,7 +1062,6 @@ chfs_remove(void *v)
 	    parent, cnp->cn_nameptr, cnp->cn_namelen);
 
 out:
-	vput(dvp);
 	vput(vp);
 
 	return error;
@@ -1149,7 +1146,7 @@ chfs_rename(void *v)
 		    newparent, tcnp->cn_nameptr, tcnp->cn_namelen);
 		vput(tvp);
 	}
-	VFS_VGET(tdvp->v_mount, old->ino, &tvp);
+	VFS_VGET(tdvp->v_mount, old->ino, LK_EXCLUSIVE, &tvp);
 	ip = VTOI(tvp);
 
 	/* link new */
@@ -1203,9 +1200,9 @@ chfs_mkdir(void *v)
 int
 chfs_rmdir(void *v)
 {
-	struct vnode *dvp = ((struct vop_rmdir_args *) v)->a_dvp;
-	struct vnode *vp = ((struct vop_rmdir_args *) v)->a_vp;
-	struct componentname *cnp = ((struct vop_rmdir_args *) v)->a_cnp;
+	struct vnode *dvp = ((struct vop_rmdir_v2_args *) v)->a_dvp;
+	struct vnode *vp = ((struct vop_rmdir_v2_args *) v)->a_vp;
+	struct componentname *cnp = ((struct vop_rmdir_v2_args *) v)->a_cnp;
 	dbg("rmdir()\n");
 
 	KASSERT(VOP_ISLOCKED(dvp));
@@ -1234,7 +1231,6 @@ chfs_rmdir(void *v)
 	    parent, cnp->cn_nameptr, cnp->cn_namelen);
 
 out:
-	vput(dvp);
 	vput(vp);
 
 	return error;
@@ -1460,7 +1456,7 @@ chfs_readlink(void *v)
 int
 chfs_inactive(void *v)
 {
-	struct vnode *vp = ((struct vop_inactive_args *) v)->a_vp;
+	struct vnode *vp = ((struct vop_inactive_v2_args *) v)->a_vp;
 	struct chfs_inode *ip = VTOI(vp);
 	struct chfs_vnode_cache *chvc;
 	dbg("inactive | vno: %llu\n", (unsigned long long)ip->ino);
@@ -1471,12 +1467,10 @@ chfs_inactive(void *v)
 	if (ip->ino) {
 		chvc = ip->chvc;
 		if (chvc->nlink)
-			*((struct vop_inactive_args *) v)->a_recycle = 0;
+			*((struct vop_inactive_v2_args *) v)->a_recycle = 0;
 	} else {
-		*((struct vop_inactive_args *) v)->a_recycle = 1;
+		*((struct vop_inactive_v2_args *) v)->a_recycle = 1;
 	}
-
-	VOP_UNLOCK(vp);
 
 	return 0;
 }
@@ -1486,11 +1480,13 @@ chfs_inactive(void *v)
 int
 chfs_reclaim(void *v)
 {
-	struct vop_reclaim_args *ap = v;
+	struct vop_reclaim_v2_args *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct chfs_inode *ip = VTOI(vp);
 	struct chfs_mount *chmp = ip->chmp;
 	struct chfs_dirent *fd;
+
+	VOP_UNLOCK(vp);
 
 	mutex_enter(&chmp->chm_lock_mountfields);
 
@@ -1512,7 +1508,6 @@ chfs_reclaim(void *v)
 	}
 
 	cache_purge(vp);
-	vcache_remove(vp->v_mount, &ip->ino, sizeof(ip->ino));
 	if (ip->devvp) {
 		vrele(ip->devvp);
 		ip->devvp = 0;
@@ -1603,12 +1598,14 @@ int
 const struct vnodeopv_entry_desc chfs_vnodeop_entries[] =
 	{
 		{ &vop_default_desc, vn_default_error },
+		{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 		{ &vop_lookup_desc, chfs_lookup },
 		{ &vop_create_desc, chfs_create },
 		{ &vop_mknod_desc, chfs_mknod },
 		{ &vop_open_desc, chfs_open },
 		{ &vop_close_desc, chfs_close },
 		{ &vop_access_desc, chfs_access },
+		{ &vop_accessx_desc, genfs_accessx },
 		{ &vop_getattr_desc, chfs_getattr },
 		{ &vop_setattr_desc, chfs_setattr },
 		{ &vop_read_desc, chfs_read },
@@ -1661,48 +1658,23 @@ int
 const struct vnodeopv_entry_desc chfs_specop_entries[] =
 	{
 		{ &vop_default_desc, vn_default_error },
-		{ &vop_lookup_desc, spec_lookup },
-		{ &vop_create_desc, spec_create },
-		{ &vop_mknod_desc, spec_mknod },
-		{ &vop_open_desc, spec_open },
+		GENFS_SPECOP_ENTRIES,
 		{ &vop_close_desc, ufsspec_close },
 		{ &vop_access_desc, chfs_access },
+		{ &vop_accessx_desc, genfs_accessx },
 		{ &vop_getattr_desc, chfs_getattr },
 		{ &vop_setattr_desc, chfs_setattr },
 		{ &vop_read_desc, chfs_read },
 		{ &vop_write_desc, chfs_write },
-		{ &vop_fallocate_desc, spec_fallocate },
-		{ &vop_fdiscard_desc, spec_fdiscard },
-		{ &vop_ioctl_desc, spec_ioctl },
 		{ &vop_fcntl_desc, genfs_fcntl },
-		{ &vop_poll_desc, spec_poll },
-		{ &vop_kqfilter_desc, spec_kqfilter },
-		{ &vop_revoke_desc, spec_revoke },
-		{ &vop_mmap_desc, spec_mmap },
 		{ &vop_fsync_desc, spec_fsync },
-		{ &vop_seek_desc, spec_seek },
-		{ &vop_remove_desc, spec_remove },
-		{ &vop_link_desc, spec_link },
-		{ &vop_rename_desc, spec_rename },
-		{ &vop_mkdir_desc, spec_mkdir },
-		{ &vop_rmdir_desc, spec_rmdir },
-		{ &vop_symlink_desc, spec_symlink },
-		{ &vop_readdir_desc, spec_readdir },
-		{ &vop_readlink_desc, spec_readlink },
-		{ &vop_abortop_desc, spec_abortop },
 		{ &vop_inactive_desc, chfs_inactive },
 		{ &vop_reclaim_desc, chfs_reclaim },
 		{ &vop_lock_desc, genfs_lock },
 		{ &vop_unlock_desc, genfs_unlock },
-		{ &vop_bmap_desc, spec_bmap },
-		{ &vop_strategy_desc, spec_strategy },
 		{ &vop_print_desc, ufs_print },
-		{ &vop_pathconf_desc, spec_pathconf },
 		{ &vop_islocked_desc, genfs_islocked },
-		{ &vop_advlock_desc, spec_advlock },
 		{ &vop_bwrite_desc, vn_bwrite },
-		{ &vop_getpages_desc, spec_getpages },
-		{ &vop_putpages_desc, spec_putpages },
 		{ NULL, NULL } };
 
 const struct vnodeopv_desc chfs_specop_opv_desc =
@@ -1717,48 +1689,24 @@ int
 const struct vnodeopv_entry_desc chfs_fifoop_entries[] =
 	{
 		{ &vop_default_desc, vn_default_error },
-		{ &vop_lookup_desc, vn_fifo_bypass },
-		{ &vop_create_desc, vn_fifo_bypass },
-		{ &vop_mknod_desc, vn_fifo_bypass },
-		{ &vop_open_desc, vn_fifo_bypass },
+		GENFS_FIFOOP_ENTRIES,
 		{ &vop_close_desc, ufsfifo_close },
 		{ &vop_access_desc, chfs_access },
+		{ &vop_accessx_desc, genfs_accessx },
 		{ &vop_getattr_desc, chfs_getattr },
 		{ &vop_setattr_desc, chfs_setattr },
 		{ &vop_read_desc, ufsfifo_read },
 		{ &vop_write_desc, ufsfifo_write },
-		{ &vop_fallocate_desc, vn_fifo_bypass },
-		{ &vop_fdiscard_desc, vn_fifo_bypass },
-		{ &vop_ioctl_desc, vn_fifo_bypass },
 		{ &vop_fcntl_desc, genfs_fcntl },
-		{ &vop_poll_desc, vn_fifo_bypass },
-		{ &vop_kqfilter_desc, vn_fifo_bypass },
-		{ &vop_revoke_desc, vn_fifo_bypass },
-		{ &vop_mmap_desc, vn_fifo_bypass },
 		{ &vop_fsync_desc, vn_fifo_bypass },
-		{ &vop_seek_desc, vn_fifo_bypass },
-		{ &vop_remove_desc, vn_fifo_bypass },
-		{ &vop_link_desc, vn_fifo_bypass },
-		{ &vop_rename_desc, vn_fifo_bypass },
-		{ &vop_mkdir_desc, vn_fifo_bypass },
-		{ &vop_rmdir_desc, vn_fifo_bypass },
-		{ &vop_symlink_desc, vn_fifo_bypass },
-		{ &vop_readdir_desc, vn_fifo_bypass },
-		{ &vop_readlink_desc, vn_fifo_bypass },
-		{ &vop_abortop_desc, vn_fifo_bypass },
 		{ &vop_inactive_desc, chfs_inactive },
 		{ &vop_reclaim_desc, chfs_reclaim },
 		{ &vop_lock_desc, genfs_lock },
 		{ &vop_unlock_desc, genfs_unlock },
-		{ &vop_bmap_desc, vn_fifo_bypass },
 		{ &vop_strategy_desc, vn_fifo_bypass },
 		{ &vop_print_desc, ufs_print },
-		{ &vop_pathconf_desc, vn_fifo_bypass },
 		{ &vop_islocked_desc, genfs_islocked },
-		{ &vop_advlock_desc, vn_fifo_bypass },
 		{ &vop_bwrite_desc, genfs_nullop },
-		{ &vop_getpages_desc, genfs_badop },
-		{ &vop_putpages_desc, vn_fifo_bypass },
 		{ NULL, NULL } };
 
 const struct vnodeopv_desc chfs_fifoop_opv_desc =

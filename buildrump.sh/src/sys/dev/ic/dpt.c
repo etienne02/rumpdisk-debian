@@ -1,4 +1,4 @@
-/*	$NetBSD: dpt.c,v 1.73 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: dpt.c,v 1.77 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dpt.c,v 1.73 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dpt.c,v 1.77 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -98,6 +98,8 @@ __KERNEL_RCSID(0, "$NetBSD: dpt.c,v 1.73 2016/07/07 06:55:41 msaitoh Exp $");
 #include <dev/ic/dptvar.h>
 
 #include <dev/i2o/dptivar.h>
+
+#include "ioconf.h"
 
 #ifdef DEBUG
 #define	DPRINTF(x)		printf x
@@ -150,8 +152,6 @@ const struct cdevsw dpt_cdevsw = {
 	.d_discard = nodiscard,
 	.d_flag = D_OTHER,
 };
-
-extern struct cfdriver dpt_cd;
 
 static struct dpt_sig dpt_sig = {
 	{ 'd', 'P', 't', 'S', 'i', 'G'},
@@ -346,7 +346,7 @@ dpt_init(struct dpt_softc *sc, const char *intrstr)
 	 * Allocate the CCB/status packet/scratch DMA map and load.
 	 */
 	sc->sc_nccbs =
-	    min(be16toh(*(int16_t *)ec->ec_queuedepth), DPT_MAX_CCBS);
+	    uimin(be16toh(*(int16_t *)ec->ec_queuedepth), DPT_MAX_CCBS);
 	sc->sc_stpoff = sc->sc_nccbs * sizeof(struct dpt_ccb);
 	sc->sc_scroff = sc->sc_stpoff + sizeof(struct eata_sp);
 	mapsize = sc->sc_nccbs * sizeof(struct dpt_ccb) +
@@ -491,7 +491,7 @@ dpt_init(struct dpt_softc *sc, const char *intrstr)
 		chan->chan_ntargets = maxtarget + 1;
 		chan->chan_nluns = ec->ec_maxlun + 1;
 		chan->chan_id = sc->sc_hbaid[i];
-		config_found(sc->sc_dev, chan, scsiprint);
+		config_found(sc->sc_dev, chan, scsiprint, CFARGS_NONE);
 	}
 }
 
@@ -1134,7 +1134,7 @@ dptioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 
 	switch (cmd & 0xffff) {
 	case DPT_SIGNATURE:
-		memcpy(data, &dpt_sig, min(IOCPARM_LEN(cmd), sizeof(dpt_sig)));
+		memcpy(data, &dpt_sig, uimin(IOCPARM_LEN(cmd), sizeof(dpt_sig)));
 		break;
 
 	case DPT_CTRLINFO:
@@ -1375,7 +1375,7 @@ dpt_passthrough(struct dpt_softc *sc, struct eata_ucp *ucp, struct lwp *l)
 		}
 	}
 	if (rv == 0 && ucp->ucp_senseaddr != NULL) {
-		i = min(uslen, sizeof(ccb->ccb_sense));
+		i = uimin(uslen, sizeof(ccb->ccb_sense));
 		rv = copyout(&ccb->ccb_sense, ucp->ucp_senseaddr, i);
 		if (rv != 0) {
 			DPRINTF(("%s: sense copyout() failed\n",

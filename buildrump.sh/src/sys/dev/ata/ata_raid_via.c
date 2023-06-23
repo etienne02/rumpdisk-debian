@@ -1,4 +1,4 @@
-/*	$NetBSD: ata_raid_via.c,v 1.7 2014/03/25 16:19:13 christos Exp $	*/
+/*	$NetBSD: ata_raid_via.c,v 1.9 2018/10/22 19:38:06 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2000,2001,2002 Søren Schmidt <sos@FreeBSD.org>
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ata_raid_via.c,v 1.7 2014/03/25 16:19:13 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ata_raid_via.c,v 1.9 2018/10/22 19:38:06 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -45,7 +45,6 @@ __KERNEL_RCSID(0, "$NetBSD: ata_raid_via.c,v 1.7 2014/03/25 16:19:13 christos Ex
 #include <sys/disk.h>
 #include <sys/disklabel.h>
 #include <sys/fcntl.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/kauth.h>
 
@@ -114,6 +113,7 @@ ata_raid_via_print_info(struct via_raid_conf *info)
 int
 ata_raid_read_config_via(struct wd_softc *sc)
 {
+	struct dk_softc *dksc = &sc->sc_dksc;
 	struct via_raid_conf *info;
 	struct atabus_softc *atabus;
 	struct vnode *vp;
@@ -125,12 +125,12 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	struct ataraid_array_info *aai;
 	struct ataraid_disk_info *adi;
 
-	info = malloc(sizeof(*info), M_DEVBUF, M_WAITOK);
+	info = kmem_zalloc(sizeof(*info), KM_SLEEP);
 
-	bmajor = devsw_name2blk(device_xname(sc->sc_dev), NULL, 0);
+	bmajor = devsw_name2blk(dksc->sc_xname, NULL, 0);
 
 	/* Get a vnode for the raw partition of this disk. */
-	dev = MAKEDISKDEV(bmajor, device_unit(sc->sc_dev), RAW_PART);
+	dev = MAKEDISKDEV(bmajor, device_unit(dksc->sc_dev), RAW_PART);
 	error = bdevvp(dev, &vp);
 	if (error)
 		goto out;
@@ -146,7 +146,7 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	VOP_CLOSE(vp, FREAD, NOCRED);
 	vput(vp);
 	if (error) {
-		aprint_error_dev(sc->sc_dev,
+		aprint_error_dev(dksc->sc_dev,
 		    "error %d reading VIA V-RAID config block\n", error);
 		goto out;
 	}
@@ -159,7 +159,7 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	/* Check the signature. */
 	if (info->magic != VIA_MAGIC) {
 		DPRINTF(("%s: VIA V-RAID signature check failed\n",
-		    device_xname(sc->sc_dev)));
+		    dksc->sc_xname));
 		error = ESRCH;
 		goto out;
 	}
@@ -175,7 +175,7 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	checksum += byte3;
 	if (checksum != info->checksum && checksum_alt != info->checksum) {
 		DPRINTF(("%s: VIA V-RAID checksum failed 0x%02x != "
-		    "0x%02x or 0x%02x\n", device_xname(sc->sc_dev),
+		    "0x%02x or 0x%02x\n", dksc->sc_xname,
 		    info->checksum, checksum, checksum_alt));
 		error = ESRCH;
 		goto out;
@@ -215,7 +215,7 @@ ata_raid_read_config_via(struct wd_softc *sc)
 		break;
 
 	default:
-		aprint_error_dev(sc->sc_dev,
+		aprint_error_dev(dksc->sc_dev,
 		    "unknown VIA V-RAID type 0x%02x\n", info->type);
 		error = EINVAL;
 		goto out;
@@ -238,10 +238,10 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	if (aai->aai_interleave == 0)
 		aai->aai_interleave = aai->aai_capacity;
 
-	atabus = device_private(device_parent(sc->sc_dev));
+	atabus = device_private(device_parent(dksc->sc_dev));
 	drive = atabus->sc_chan->ch_channel;
 	if (drive >= aai->aai_ndisks) {
-		aprint_error_dev(sc->sc_dev,
+		aprint_error_dev(dksc->sc_dev,
 		    "drive number %d doesn't make sense within %d-disk "
 		    "array\n", drive, aai->aai_ndisks);
 		error = EINVAL;
@@ -249,7 +249,7 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	}
 
 	adi = &aai->aai_disks[drive];
-	adi->adi_dev = sc->sc_dev;
+	adi->adi_dev = dksc->sc_dev;
 	adi->adi_status = ADI_S_ONLINE | ADI_S_ASSIGNED;
 	adi->adi_sectors = aai->aai_capacity;
 	adi->adi_compsize = info->disk_sectors;
@@ -257,6 +257,6 @@ ata_raid_read_config_via(struct wd_softc *sc)
 	error = 0;
 
  out:
-	free(info, M_DEVBUF);
+	kmem_free(info, sizeof(*info));
 	return (error);
 }

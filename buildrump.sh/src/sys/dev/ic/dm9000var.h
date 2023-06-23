@@ -1,4 +1,4 @@
-/*	$NetBSD: dm9000var.h,v 1.2 2012/01/28 08:29:55 nisimura Exp $	*/
+/*	$NetBSD: dm9000var.h,v 1.7 2020/05/29 09:05:19 rin Exp $	*/
 
 /*
  * Copyright (c) 2009 Paul Fleischer
@@ -64,6 +64,10 @@
 #define _DEV_IC_DM9000VAR_H_
 
 #include <sys/callout.h>
+#include <sys/rndsource.h>
+
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 
 #define DM9000_MODE_8BIT 2
 #define DM9000_MODE_16BIT 0
@@ -71,13 +75,8 @@
 
 struct dme_softc {
 	device_t	sc_dev;		/* Generic Base Device */
-
 	struct ethercom sc_ethercom;	/* Ethernet common data */
-	struct ifmedia	sc_media;	/* Media control structures */
-
-	uint		sc_media_active;
-	uint		sc_media_status;
-
+	struct mii_data sc_mii;		/* MII/media information */
 	bus_space_tag_t		sc_iot;
 	bus_space_handle_t	sc_ioh;
 	void		*sc_ih;
@@ -97,8 +96,8 @@ struct dme_softc {
 					   for transmission. */
 	uint16_t	txready_length;
 
-	int (*sc_pkt_write)(struct dme_softc*, struct mbuf *);
-	int (*sc_pkt_read)(struct dme_softc*, struct ifnet *, struct mbuf **);
+	int (*sc_pkt_write)(struct dme_softc *, struct mbuf *);
+	int (*sc_pkt_read)(struct dme_softc *, struct mbuf **);
 
 	callout_t	sc_link_callout;
 
@@ -107,6 +106,7 @@ struct dme_softc {
 #ifdef DIAGNOSTIC
 	bool		sc_inside_interrupt;
 #endif
+	krndsource_t rnd_source;
 };
 
 /* Function declarations */
@@ -114,40 +114,37 @@ int	dme_attach(struct dme_softc *, const uint8_t *);
 int	dme_detach(struct dme_softc *);
 int	dme_intr(void *);
 
-/* Helper method used by sc_pkt_read */
-struct mbuf* dme_alloc_receive_buffer(struct ifnet *, unsigned int);
-
 /* Inline memory access methods */
-static inline uint8_t
+static __inline uint8_t
 dme_read(struct dme_softc *sc, int reg)
 {
 	bus_space_write_1(sc->sc_iot, sc->sc_ioh, sc->dme_io, reg);
 	return (bus_space_read_1(sc->sc_iot, sc->sc_ioh, sc->dme_data));
 }
 
-static inline void
+static __inline void
 dme_write(struct dme_softc *sc, int reg, uint8_t value)
 {
 	bus_space_write_1(sc->sc_iot, sc->sc_ioh, sc->dme_io, reg);
 	bus_space_write_1(sc->sc_iot, sc->sc_ioh, sc->dme_data, value);
 }
 
-static inline void
+static __inline void
 dme_write2(struct dme_softc *sc, int reg, uint16_t value)
 {
 	bus_space_write_1(sc->sc_iot, sc->sc_ioh, sc->dme_io, reg);
 	bus_space_write_2(sc->sc_iot, sc->sc_ioh, sc->dme_data, value);
 }
 
-static inline void
-dme_write_c(struct dme_softc *sc, int reg, uint8_t value[], uint count)
+static __inline void
+dme_write_c(struct dme_softc *sc, int reg, const uint8_t value[], uint count)
 {
 	for(int i=0; i<count; i++) {
 		dme_write(sc, reg+i, value[i]);
 	}
 }
 
-static inline void
+static __inline void
 dme_read_c(struct dme_softc *sc, int reg, uint8_t *value, uint count)
 {
 	for(int i=0; i<count; i++) {
@@ -156,4 +153,3 @@ dme_read_c(struct dme_softc *sc, int reg, uint8_t *value, uint count)
 }
 
 #endif /* _DEV_IC_DM9000VAR_H_ */
-

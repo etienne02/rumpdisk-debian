@@ -1,4 +1,4 @@
-/*	$NetBSD: socketvar.h,v 1.140 2016/06/01 04:15:54 pgoyette Exp $	*/
+/*	$NetBSD: socketvar.h,v 1.163 2020/11/23 00:52:53 chs Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -93,7 +93,7 @@ struct sockbuf {
 	u_long	sb_hiwat;		/* max actual char count */
 	u_long	sb_mbcnt;		/* chars of mbufs used */
 	u_long	sb_mbmax;		/* max chars of mbufs to use */
-	long	sb_lowat;		/* low water mark */
+	u_long	sb_lowat;		/* low water mark */
 	struct mbuf *sb_mb;		/* the mbuf chain */
 	struct mbuf *sb_mbtail;		/* the last mbuf in the chain */
 	struct mbuf *sb_lastrecord;	/* first mbuf of last record in
@@ -160,6 +160,7 @@ struct socket {
 	short		so_qlimit;	/* max number queued connections */
 	short		so_timeo;	/* connection timeout */
 	u_short		so_error;	/* error affecting connection */
+	u_short		so_rerror;	/* error affecting receiving */
 	u_short		so_aborting;	/* references from soabort() */
 	pid_t		so_pgid;	/* pgid for signals */
 	u_long		so_oobmark;	/* chars to oob mark */
@@ -196,13 +197,12 @@ struct socket {
 #define	SS_RCVATMARK		0x040	/* at mark on input */
 #define	SS_ISABORTING		0x080	/* aborting fd references - close() */
 #define	SS_RESTARTSYS		0x100	/* restart blocked system calls */
-#define	SS_ISDISCONNECTED	0x800	/* socket disconnected from peer */
-
-#define	SS_ASYNC		0x100	/* async i/o notify */
+#define	SS_POLLRDBAND		0x200	/* poll should return POLLRDBAND */
 #define	SS_MORETOCOME		0x400	/*
 					 * hint from sosend to lower layer;
 					 * more data coming
 					 */
+#define	SS_ISDISCONNECTED	0x800	/* socket disconnected from peer */
 #define	SS_ISAPIPE 		0x1000	/* socket is implementing a pipe */
 #define	SS_NBIO			0x2000	/* socket is in non blocking I/O */
 
@@ -224,6 +224,7 @@ struct sockopt {
 	int		sopt_level;		/* option level */
 	int		sopt_name;		/* option name */
 	size_t		sopt_size;		/* data length */
+	size_t		sopt_retsize;		/* returned data length */
 	void *		sopt_data;		/* data pointer */
 	uint8_t		sopt_buf[sizeof(int)];	/* internal storage */
 };
@@ -247,8 +248,11 @@ struct lwp;
 struct msghdr;
 struct stat;
 struct knote;
+struct sockaddr_big;
+enum uio_seg;
 
-struct	mbuf *getsombuf(struct socket *, int);
+/* 0x400 is SO_OTIMESTAMP */
+#define SOOPT_TIMESTAMP(o)     ((o) & (SO_TIMESTAMP | 0x400))
 
 /*
  * File operations on sockets.
@@ -276,6 +280,8 @@ struct mbuf *
 	sbcreatecontrol(void *, int, int, int);
 struct mbuf *
 	sbcreatecontrol1(void **, int, int, int, int);
+struct mbuf **
+	sbsavetimestamp(int, struct mbuf **);
 void	sbdrop(struct sockbuf *, int);
 void	sbdroprecord(struct sockbuf *);
 void	sbflush(struct sockbuf *);
@@ -293,6 +299,7 @@ int	sofamily(const struct socket *);
 int	sobind(struct socket *, struct sockaddr *, struct lwp *);
 void	socantrcvmore(struct socket *);
 void	socantsendmore(struct socket *);
+void	soroverflow(struct socket *);
 int	soclose(struct socket *);
 int	soconnect(struct socket *, struct sockaddr *, struct lwp *);
 int	soconnect2(struct socket *, struct socket *);
@@ -323,12 +330,12 @@ int	so_setsockopt(struct lwp *, struct socket *, int, int, const void *, size_t)
 int	soshutdown(struct socket *, int);
 void	sorestart(struct socket *);
 void	sowakeup(struct socket *, struct sockbuf *, int);
-int	sockargs(struct mbuf **, const void *, size_t, int);
+int	sockargs(struct mbuf **, const void *, size_t, enum uio_seg, int);
 int	sopoll(struct socket *, int);
 struct	socket *soget(bool);
 void	soput(struct socket *);
-bool	solocked(struct socket *);
-bool	solocked2(struct socket *, struct socket *);
+bool	solocked(const struct socket *);
+bool	solocked2(const struct socket *, const struct socket *);
 int	sblock(struct sockbuf *, int);
 void	sbunlock(struct sockbuf *);
 int	sowait(struct socket *, bool, int);
@@ -346,20 +353,29 @@ int	sockopt_setmbuf(struct sockopt *, struct mbuf *);
 struct mbuf *sockopt_getmbuf(const struct sockopt *);
 
 int	copyout_sockname(struct sockaddr *, unsigned int *, int, struct mbuf *);
+int	copyout_sockname_sb(struct sockaddr *, unsigned int *,
+    int , struct sockaddr_big *);
 int	copyout_msg_control(struct lwp *, struct msghdr *, struct mbuf *);
 void	free_control_mbuf(struct lwp *, struct mbuf *, struct mbuf *);
 
 int	do_sys_getpeername(int, struct sockaddr *);
 int	do_sys_getsockname(int, struct sockaddr *);
+
 int	do_sys_sendmsg(struct lwp *, int, struct msghdr *, int, register_t *);
-int	do_sys_recvmsg(struct lwp *, int, struct msghdr *, struct mbuf **,
-	    struct mbuf **, register_t *);
+int	do_sys_sendmsg_so(struct lwp *, int, struct socket *, file_t *,
+	    struct msghdr *, int, register_t *);
+
+int	do_sys_recvmsg(struct lwp *, int, struct msghdr *,
+	    struct mbuf **, struct mbuf **, register_t *);
+int	do_sys_recvmsg_so(struct lwp *, int, struct socket *,
+	    struct msghdr *mp, struct mbuf **, struct mbuf **, register_t *);
 
 int	do_sys_bind(struct lwp *, int, struct sockaddr *);
 int	do_sys_connect(struct lwp *, int, struct sockaddr *);
 int	do_sys_accept(struct lwp *, int, struct sockaddr *, register_t *,
 	    const sigset_t *, int, int);
 
+int	do_sys_peeloff(struct socket *, void *);
 /*
  * Inline functions for sockets and socket buffering.
  */
@@ -370,7 +386,7 @@ int	do_sys_accept(struct lwp *, int, struct sockaddr *, register_t *,
 /*
  * Do we need to notify the other side when I/O is possible?
  */
-static inline int
+static __inline int
 sb_notify(struct sockbuf *sb)
 {
 
@@ -381,42 +397,56 @@ sb_notify(struct sockbuf *sb)
 
 /*
  * How much space is there in a socket buffer (so->so_snd or so->so_rcv)?
- * This is problematical if the fields are unsigned, as the space might
- * still be negative (cc > hiwat or mbcnt > mbmax).  Should detect
- * overflow and return 0.
+ * Since the fields are unsigned, detect overflow and return 0.
  */
-static inline long
-sbspace(struct sockbuf *sb)
+static __inline u_long
+sbspace(const struct sockbuf *sb)
 {
 
 	KASSERT(solocked(sb->sb_so));
-
+	if (sb->sb_hiwat <= sb->sb_cc || sb->sb_mbmax <= sb->sb_mbcnt)
+		return 0;
 	return lmin(sb->sb_hiwat - sb->sb_cc, sb->sb_mbmax - sb->sb_mbcnt);
 }
 
+static __inline u_long
+sbspace_oob(const struct sockbuf *sb)
+{
+	u_long hiwat = sb->sb_hiwat;
+
+	if (hiwat < ULONG_MAX - 1024)
+		hiwat += 1024;
+
+	KASSERT(solocked(sb->sb_so));
+
+	if (hiwat <= sb->sb_cc || sb->sb_mbmax <= sb->sb_mbcnt)
+		return 0;
+	return lmin(hiwat - sb->sb_cc, sb->sb_mbmax - sb->sb_mbcnt);
+}
+
 /* do we have to send all at once on a socket? */
-static inline int
-sosendallatonce(struct socket *so)
+static __inline int
+sosendallatonce(const struct socket *so)
 {
 
 	return so->so_proto->pr_flags & PR_ATOMIC;
 }
 
 /* can we read something from so? */
-static inline int
-soreadable(struct socket *so)
+static __inline int
+soreadable(const struct socket *so)
 {
 
 	KASSERT(solocked(so));
 
 	return so->so_rcv.sb_cc >= so->so_rcv.sb_lowat ||
 	    (so->so_state & SS_CANTRCVMORE) != 0 ||
-	    so->so_qlen != 0 || so->so_error != 0;
+	    so->so_qlen != 0 || so->so_error != 0 || so->so_rerror != 0;
 }
 
 /* can we write something to so? */
-static inline int
-sowritable(struct socket *so)
+static __inline int
+sowritable(const struct socket *so)
 {
 
 	KASSERT(solocked(so));
@@ -429,7 +459,7 @@ sowritable(struct socket *so)
 }
 
 /* adjust counters in sb reflecting allocation of m */
-static inline void
+static __inline void
 sballoc(struct sockbuf *sb, struct mbuf *m)
 {
 
@@ -442,7 +472,7 @@ sballoc(struct sockbuf *sb, struct mbuf *m)
 }
 
 /* adjust counters in sb reflecting freeing of m */
-static inline void
+static __inline void
 sbfree(struct sockbuf *sb, struct mbuf *m)
 {
 
@@ -454,7 +484,7 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 		sb->sb_mbcnt -= m->m_ext.ext_size;
 }
 
-static inline void
+static __inline void
 sorwakeup(struct socket *so)
 {
 
@@ -464,7 +494,7 @@ sorwakeup(struct socket *so)
 		sowakeup(so, &so->so_rcv, POLL_IN);
 }
 
-static inline void
+static __inline void
 sowwakeup(struct socket *so)
 {
 
@@ -474,7 +504,7 @@ sowwakeup(struct socket *so)
 		sowakeup(so, &so->so_snd, POLL_OUT);
 }
 
-static inline void
+static __inline void
 solock(struct socket *so)
 {
 	kmutex_t *lock;
@@ -485,7 +515,7 @@ solock(struct socket *so)
 		solockretry(so, lock);
 }
 	
-static inline void
+static __inline void
 sounlock(struct socket *so)
 {
 
@@ -557,6 +587,10 @@ struct	accept_filter *accept_filt_get(char *);
 SYSCTL_DECL(_net_inet_accf);
 #endif
 void	accept_filter_init(void);
+#endif
+#ifdef DDB
+int sofindproc(struct socket *so, int all, void (*pr)(const char *, ...));
+void socket_print(const char *modif, void (*pr)(const char *, ...));
 #endif
 
 #endif /* _KERNEL */

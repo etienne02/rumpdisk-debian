@@ -1,4 +1,4 @@
-/*	$NetBSD: fdesc_vfsops.c,v 1.91 2014/11/09 18:08:06 maxv Exp $	*/
+/*	$NetBSD: fdesc_vfsops.c,v 1.96 2020/04/13 19:23:18 ad Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993, 1995
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fdesc_vfsops.c,v 1.91 2014/11/09 18:08:06 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fdesc_vfsops.c,v 1.96 2020/04/13 19:23:18 ad Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -67,8 +67,6 @@ __KERNEL_RCSID(0, "$NetBSD: fdesc_vfsops.c,v 1.91 2014/11/09 18:08:06 maxv Exp $
 MODULE(MODULE_CLASS_VFS, fdesc, NULL);
 
 VFS_PROTOS(fdesc);
-
-static struct sysctllog *fdesc_sysctl_log;
 
 /*
  * Mount the per-process file descriptors (/dev/fd)
@@ -121,7 +119,7 @@ fdesc_unmount(struct mount *mp, int mntflags)
 	if (mntflags & MNT_FORCE)
 		flags |= FORCECLOSE;
 
-	if (rtvp->v_usecount > 1 && (mntflags & MNT_FORCE) == 0)
+	if (vrefcnt(rtvp) > 1 && (mntflags & MNT_FORCE) == 0)
 		return (EBUSY);
 	if ((error = vflush(mp, rtvp, flags)) != 0)
 		return (error);
@@ -136,7 +134,7 @@ fdesc_unmount(struct mount *mp, int mntflags)
 }
 
 int
-fdesc_root(struct mount *mp, struct vnode **vpp)
+fdesc_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *vp;
 
@@ -145,7 +143,7 @@ fdesc_root(struct mount *mp, struct vnode **vpp)
 	 */
 	vp = mp->mnt_data;
 	vref(vp);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(vp, lktype | LK_RETRY);
 	*vpp = vp;
 	return (0);
 }
@@ -164,7 +162,7 @@ fdesc_sync(struct mount *mp, int waitfor,
  * Currently unsupported.
  */
 int
-fdesc_vget(struct mount *mp, ino_t ino,
+fdesc_vget(struct mount *mp, ino_t ino, int lktype,
     struct vnode **vpp)
 {
 
@@ -256,12 +254,28 @@ struct vfsops fdesc_vfsops = {
 	.vfs_done = fdesc_done,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
 	.vfs_opv_descs = fdesc_vnodeopv_descs
 };
+
+SYSCTL_SETUP(fdesc_sysctl_setup, "fdesc sysctl")
+{
+
+		sysctl_createv(clog, 0, NULL, NULL,
+			       CTLFLAG_PERMANENT,
+			       CTLTYPE_NODE, "fdesc",
+			       SYSCTL_DESCR("File-descriptor file system"),
+			       NULL, 0, NULL, 0,
+			       CTL_VFS, 7, CTL_EOL);
+		/*
+		 * XXX the "7" above could be dynamic, thereby eliminating one
+		 * more instance of the "number to vfs" mapping problem, but
+		 * "7" is the order as taken from sys/mount.h
+		 */
+}
 
 static int
 fdesc_modcmd(modcmd_t cmd, void *arg)
@@ -273,23 +287,11 @@ fdesc_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_attach(&fdesc_vfsops);
 		if (error != 0)
 			break;
-		sysctl_createv(&fdesc_sysctl_log, 0, NULL, NULL,
-			       CTLFLAG_PERMANENT,
-			       CTLTYPE_NODE, "fdesc",
-			       SYSCTL_DESCR("File-descriptor file system"),
-			       NULL, 0, NULL, 0,
-			       CTL_VFS, 7, CTL_EOL);
-		/*
-		 * XXX the "7" above could be dynamic, thereby eliminating one
-		 * more instance of the "number to vfs" mapping problem, but
-		 * "7" is the order as taken from sys/mount.h
-		 */
 		break;
 	case MODULE_CMD_FINI:
 		error = vfs_detach(&fdesc_vfsops);
 		if (error != 0)
 			break;
-		sysctl_teardown(&fdesc_sysctl_log);
 		break;
 	default:
 		error = ENOTTY;

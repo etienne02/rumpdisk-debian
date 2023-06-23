@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -89,7 +89,7 @@ AcpiDsExecuteArguments (
     ACPI_WALK_STATE         *WalkState;
 
 
-    ACPI_FUNCTION_TRACE (DsExecuteArguments);
+    ACPI_FUNCTION_TRACE_PTR (DsExecuteArguments, AmlStart);
 
 
     /* Allocate a new parser op to be the root of the parsed tree */
@@ -366,12 +366,14 @@ AcpiDsGetPackageArguments (
         return_ACPI_STATUS (AE_AML_INTERNAL);
     }
 
-    ACPI_DEBUG_PRINT ((ACPI_DB_EXEC, "Package Arg Init\n"));
+    ACPI_DEBUG_PRINT ((ACPI_DB_EXEC, "Package Argument Init, AML Ptr: %p\n",
+        ObjDesc->Package.AmlStart));
 
     /* Execute the AML code for the TermArg arguments */
 
     Status = AcpiDsExecuteArguments (Node, Node,
         ObjDesc->Package.AmlLength, ObjDesc->Package.AmlStart);
+
     return_ACPI_STATUS (Status);
 }
 

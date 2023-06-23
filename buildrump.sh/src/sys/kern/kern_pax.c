@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_pax.c,v 1.55 2016/05/27 16:35:16 christos Exp $	*/
+/*	$NetBSD: kern_pax.c,v 1.62 2021/08/30 01:25:10 rin Exp $	*/
 
 /*
- * Copyright (c) 2015 The NetBSD Foundation, Inc.
+ * Copyright (c) 2015, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_pax.c,v 1.55 2016/05/27 16:35:16 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_pax.c,v 1.62 2021/08/30 01:25:10 rin Exp $");
 
 #include "opt_pax.h"
 
@@ -69,7 +69,6 @@ __KERNEL_RCSID(0, "$NetBSD: kern_pax.c,v 1.55 2016/05/27 16:35:16 christos Exp $
 #include <sys/sysctl.h>
 #include <sys/kmem.h>
 #include <sys/mman.h>
-#include <sys/fileassoc.h>
 #include <sys/syslog.h>
 #include <sys/vnode.h>
 #include <sys/queue.h>
@@ -111,6 +110,19 @@ int pax_aslr_global = PAX_ASLR;
 #endif
 #define PAX_ASLR_MAX_STACK_WASTE	8
 
+#ifdef PAX_ASLR_DEBUG
+int pax_aslr_debug;
+/* flag set means disable */
+int pax_aslr_flags;
+uint32_t pax_aslr_rand;
+#define PAX_ASLR_STACK		0x01
+#define PAX_ASLR_STACK_GAP	0x02
+#define PAX_ASLR_MMAP		0x04
+#define PAX_ASLR_EXEC_OFFSET	0x08
+#define PAX_ASLR_RTLD_OFFSET	0x10
+#define PAX_ASLR_FIXED		0x20
+#endif
+
 static bool pax_aslr_elf_flags_active(uint32_t);
 #endif /* PAX_ASLR */
 
@@ -135,26 +147,12 @@ int pax_mprotect_debug;
 #define	PAX_SEGVGUARD_MAXCRASHES	5
 #endif
 
-#ifdef PAX_ASLR_DEBUG
-int pax_aslr_debug;
-/* flag set means disable */
-int pax_aslr_flags;
-uint32_t pax_aslr_rand;
-#define PAX_ASLR_STACK		0x01
-#define PAX_ASLR_STACK_GAP	0x02
-#define PAX_ASLR_MMAP		0x04
-#define PAX_ASLR_EXEC_OFFSET	0x08
-#define PAX_ASLR_RTLD_OFFSET	0x10
-#define PAX_ASLR_FIXED		0x20
-#endif
 
 static int pax_segvguard_enabled = 1;
 static int pax_segvguard_global = PAX_SEGVGUARD;
 static int pax_segvguard_expiry = PAX_SEGVGUARD_EXPIRY;
 static int pax_segvguard_suspension = PAX_SEGVGUARD_SUSPENSION;
 static int pax_segvguard_maxcrashes = PAX_SEGVGUARD_MAXCRASHES;
-
-static fileassoc_t segvguard_id;
 
 struct pax_segvguard_uid_entry {
 	uid_t sue_uid;
@@ -169,7 +167,6 @@ struct pax_segvguard_entry {
 };
 
 static bool pax_segvguard_elf_flags_active(uint32_t);
-static void pax_segvguard_cleanup_cb(void *);
 #endif /* PAX_SEGVGUARD */
 
 SYSCTL_SETUP(sysctl_security_pax_setup, "sysctl security.pax setup")
@@ -290,7 +287,7 @@ SYSCTL_SETUP(sysctl_security_pax_setup, "sysctl security.pax setup")
 	sysctl_createv(clog, 0, &rnode, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
 		       CTLTYPE_INT, "debug",
-		       SYSCTL_DESCR("Pring ASLR selected addresses."),
+		       SYSCTL_DESCR("Print ASLR selected addresses."),
 		       NULL, 0, &pax_aslr_debug, 0,
 		       CTL_CREATE, CTL_EOL);
 	sysctl_createv(clog, 0, &rnode, NULL,
@@ -337,15 +334,6 @@ SYSCTL_SETUP(sysctl_security_pax_setup, "sysctl security.pax setup")
 void
 pax_init(void)
 {
-#ifdef PAX_SEGVGUARD
-	int error;
-
-	error = fileassoc_register("segvguard", pax_segvguard_cleanup_cb,
-	    &segvguard_id);
-	if (error) {
-		panic("pax_init: segvguard_id: error=%d\n", error);
-	}
-#endif /* PAX_SEGVGUARD */
 #ifdef PAX_ASLR
 	/* Adjust maximum stack by the size we can consume for ASLR */
 	extern rlim_t maxsmap;
@@ -422,42 +410,48 @@ pax_mprotect_elf_flags_active(uint32_t flags)
 	return true;
 }
 
-void
-pax_mprotect_adjust(
+vm_prot_t
+pax_mprotect_maxprotect(
 #ifdef PAX_MPROTECT_DEBUG
     const char *file, size_t line,
 #endif
-    struct lwp *l, vm_prot_t *prot, vm_prot_t *maxprot)
+    struct lwp *l, vm_prot_t active, vm_prot_t extra, vm_prot_t maxprot)
 {
 	uint32_t flags;
 
 	flags = l->l_proc->p_pax;
 	if (!pax_flags_active(flags, P_PAX_MPROTECT))
-		return;
+		return maxprot;
 
-	if ((*prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) != VM_PROT_EXECUTE) {
+	return (active|extra) & maxprot;
+}
+
+int
+pax_mprotect_validate(
+#ifdef PAX_MPROTECT_DEBUG
+    const char *file, size_t line,
+#endif
+    struct lwp *l, vm_prot_t prot)
+{
+	uint32_t flags;
+
+	flags = l->l_proc->p_pax;
+	if (!pax_flags_active(flags, P_PAX_MPROTECT))
+		return 0;
+
+	if ((prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE|VM_PROT_EXECUTE)) {
 #ifdef PAX_MPROTECT_DEBUG
 		struct proc *p = l->l_proc;
-		if ((*prot & VM_PROT_EXECUTE) && pax_mprotect_debug) {
-			printf("%s: %s,%zu: %d.%d (%s): -x\n",
+
+		if (pax_mprotect_debug)
+			printf("%s: %s,%zu: %d.%d (%s): WX rejected\n",
 			    __func__, file, line,
 			    p->p_pid, l->l_lid, p->p_comm);
-		}
 #endif
-		*prot &= ~VM_PROT_EXECUTE;
-		*maxprot &= ~VM_PROT_EXECUTE;
-	} else {
-#ifdef PAX_MPROTECT_DEBUG
-		struct proc *p = l->l_proc;
-		if ((*prot & VM_PROT_WRITE) && pax_mprotect_debug) {
-			printf("%s: %s,%zu: %d.%d (%s): -w\n",
-			    __func__, file, line,
-			    p->p_pid, l->l_lid, p->p_comm);
-		}
-#endif
-		*prot &= ~VM_PROT_WRITE;
-		*maxprot &= ~VM_PROT_WRITE;
+		return EACCES;
 	}
+	return 0;
 }
 
 /*
@@ -577,7 +571,7 @@ pax_aslr_offset(vaddr_t align)
 	uint32_t rand;
 	vaddr_t offset;
 
-	pax_align = align == 0 ? PGSHIFT : align;
+	pax_align = align == 0 ? PAGE_SIZE : align;
 	l2 = ilog2(pax_align);
 
 	rand = cprng_fast32();
@@ -589,7 +583,8 @@ pax_aslr_offset(vaddr_t align)
 #define	PAX_TRUNC(a, b)	((a) & ~((b) - 1))
 
 	delta = PAX_ASLR_DELTA(rand, l2, PAX_ASLR_DELTA_EXEC_LEN);
-	offset = PAX_TRUNC(delta, pax_align) + PAGE_SIZE;
+	offset = PAX_TRUNC(delta, pax_align);
+	offset = MAX(offset, pax_align);
 
 	PAX_DPRINTF("rand=%#x l2=%#zx pax_align=%#zx delta=%#zx offset=%#jx",
 	    rand, l2, pax_align, delta, (uintmax_t)offset);
@@ -607,7 +602,7 @@ pax_aslr_exec_offset(struct exec_package *epp, vaddr_t align)
 	if (pax_aslr_flags & PAX_ASLR_EXEC_OFFSET)
 		goto out;
 #endif
-	return pax_aslr_offset(align) + PAGE_SIZE;
+	return pax_aslr_offset(align);
 out:
 	return MAX(align, PAGE_SIZE);
 }
@@ -632,7 +627,7 @@ pax_aslr_rtld_offset(struct exec_package *epp, vaddr_t align, int use_topdown)
 }
 
 void
-pax_aslr_stack(struct exec_package *epp, u_long *max_stack_size)
+pax_aslr_stack(struct exec_package *epp, vsize_t *max_stack_size)
 {
 	if (!pax_aslr_epp_active(epp))
 		return;
@@ -696,13 +691,13 @@ pax_segvguard_elf_flags_active(uint32_t flags)
 	return true;
 }
 
-static void
-pax_segvguard_cleanup_cb(void *v)
+void
+pax_segvguard_cleanup(struct vnode *vp)
 {
-	struct pax_segvguard_entry *p = v;
+	struct pax_segvguard_entry *p = vp->v_segvguard;
 	struct pax_segvguard_uid_entry *up;
 
-	if (p == NULL) {
+	if (__predict_true(p == NULL)) {
 		return;
 	}
 	while ((up = LIST_FIRST(&p->segv_uids)) != NULL) {
@@ -710,14 +705,17 @@ pax_segvguard_cleanup_cb(void *v)
 		kmem_free(up, sizeof(*up));
 	}
 	kmem_free(p, sizeof(*p));
+	vp->v_segvguard = NULL;
 }
 
 /*
  * Called when a process of image vp generated a segfault.
+ *
+ * => exec_lock must be held by the caller
+ * => if "crashed" is true, exec_lock must be held for write
  */
 int
-pax_segvguard(struct lwp *l, struct vnode *vp, const char *name,
-    bool crashed)
+pax_segvguard(struct lwp *l, struct vnode *vp, const char *name, bool crashed)
 {
 	struct pax_segvguard_entry *p;
 	struct pax_segvguard_uid_entry *up;
@@ -726,6 +724,9 @@ pax_segvguard(struct lwp *l, struct vnode *vp, const char *name,
 	uint32_t flags;
 	bool have_uid;
 
+	KASSERT(rw_lock_held(&exec_lock));
+	KASSERT(!crashed || rw_write_held(&exec_lock));
+
 	flags = l->l_proc->p_pax;
 	if (!pax_flags_active(flags, P_PAX_GUARD))
 		return 0;
@@ -733,11 +734,8 @@ pax_segvguard(struct lwp *l, struct vnode *vp, const char *name,
 	if (vp == NULL)
 		return EFAULT;	
 
-	/* Check if we already monitor the file. */
-	p = fileassoc_lookup(vp, segvguard_id);
-
 	/* Fast-path if starting a program we don't know. */
-	if (p == NULL && !crashed)
+	if ((p = vp->v_segvguard) == NULL && !crashed)
 		return 0;
 
 	microtime(&tv);
@@ -748,7 +746,7 @@ pax_segvguard(struct lwp *l, struct vnode *vp, const char *name,
 	 */
 	if (p == NULL) {
 		p = kmem_alloc(sizeof(*p), KM_SLEEP);
-		fileassoc_add(vp, segvguard_id, p);
+		vp->v_segvguard = p;
 		LIST_INIT(&p->segv_uids);
 
 		/*

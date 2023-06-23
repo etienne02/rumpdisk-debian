@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_exec_fd.c,v 1.7 2014/09/05 09:20:59 matt Exp $	*/
+/*	$NetBSD: subr_exec_fd.c,v 1.12 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -27,9 +27,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_exec_fd.c,v 1.7 2014/09/05 09:20:59 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_exec_fd.c,v 1.12 2021/06/29 22:40:53 dholland Exp $");
 
 #include <sys/param.h>
+#include <sys/atomic.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/mutex.h>
@@ -46,12 +47,13 @@ fd_ktrexecfd(void)
 	fdfile_t *ff;
 	lwp_t *l;
 	fdtab_t *dt;
+	file_t *fp;
 	int fd;
 
 	l = curlwp;
 	p = l->l_proc;
 	fdp = p->p_fd;
-	dt = fdp->fd_dt;
+	dt = atomic_load_consume(&fdp->fd_dt);
 
 	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
 		if ((ff = dt->dt_ff[fd]) == NULL) {
@@ -60,16 +62,16 @@ fd_ktrexecfd(void)
 		}
 		KASSERT(fd >= NDFDFILE ||
 		    ff == (fdfile_t *)fdp->fd_dfdfile[fd]);
-		if (ff->ff_file == NULL)
+		if ((fp = atomic_load_consume(&ff->ff_file)) == NULL)
 			continue;
-		ktr_execfd(fd, ff->ff_file->f_type);
+		ktr_execfd(fd, fp->f_type);
 	}
 }
 
 /*
  * It is unsafe for set[ug]id processes to be started with file
  * descriptors 0..2 closed, as these descriptors are given implicit
- * significance in the Standard C library.  fdcheckstd() will create a
+ * significance in the Standard C library.  fd_checkstd() will create a
  * descriptor referencing /dev/null for each of stdin, stdout, and
  * stderr that is not already open.
  */
@@ -79,7 +81,7 @@ fd_checkstd(void)
 {
 	struct proc *p;
 	struct pathbuf *pb;
-	struct nameidata nd;
+	struct vnode *vp;
 	filedesc_t *fdp;
 	file_t *fp;
 	fdtab_t *dt;
@@ -91,7 +93,7 @@ fd_checkstd(void)
 	closed[0] = '\0';
 	if ((fdp = p->p_fd) == NULL)
 		return (0);
-	dt = fdp->fd_dt;
+	dt = atomic_load_consume(&fdp->fd_dt);
 	for (i = 0; i < CHECK_UPTO; i++) {
 		KASSERT(i >= NDFDFILE ||
 		    dt->dt_ff[i] == (fdfile_t *)fdp->fd_dfdfile[i]);
@@ -106,22 +108,22 @@ fd_checkstd(void)
 		if (pb == NULL) {
 			return ENOMEM;
 		}
-		NDINIT(&nd, LOOKUP, FOLLOW, pb);
-		if ((error = vn_open(&nd, flags, 0)) != 0) {
+		error = vn_open(NULL, pb, 0, flags, 0, &vp, NULL, NULL);
+		if (error != 0) {
 			pathbuf_destroy(pb);
 			fd_abort(p, fp, fd);
 			return (error);
 		}
 		fp->f_type = DTYPE_VNODE;
-		fp->f_vnode = nd.ni_vp;
+		fp->f_vnode = vp;
 		fp->f_flag = flags;
 		fp->f_ops = &vnops;
-		VOP_UNLOCK(nd.ni_vp);
+		VOP_UNLOCK(vp);
 		fd_affix(p, fp, fd);
 		pathbuf_destroy(pb);
 	}
 	if (closed[0] != '\0') {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		pp = p->p_pptr;
 		mutex_enter(pp->p_lock);
 		log(LOG_WARNING, "set{u,g}id pid %d (%s) "
@@ -130,7 +132,7 @@ fd_checkstd(void)
 		    p->p_pid, p->p_comm, kauth_cred_geteuid(pp->p_cred),
 		    pp->p_pid, pp->p_comm, &closed[1]);
 		mutex_exit(pp->p_lock);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	}
 	return (0);
 }

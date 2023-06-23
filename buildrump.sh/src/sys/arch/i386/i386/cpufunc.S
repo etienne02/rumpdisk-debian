@@ -1,7 +1,7 @@
-/*	$NetBSD: cpufunc.S,v 1.21 2014/09/16 09:42:47 mrg Exp $	*/
+/*	$NetBSD: cpufunc.S,v 1.49 2020/07/19 07:35:08 maxv Exp $	*/
 
 /*-
- * Copyright (c) 1998, 2007 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 2007, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -38,7 +38,7 @@
 #include <sys/errno.h>
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: cpufunc.S,v 1.21 2014/09/16 09:42:47 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpufunc.S,v 1.49 2020/07/19 07:35:08 maxv Exp $");
 
 #include "opt_xen.h"
 
@@ -65,27 +65,51 @@ ENTRY(x86_mfence)
 	ret
 END(x86_mfence)
 
+#ifndef XENPV
 ENTRY(lidt)
 	movl	4(%esp), %eax
 	lidt	(%eax)
 	ret
 END(lidt)
 
-ENTRY(rcr3)
-	movl	%cr3, %eax
-	ret
-END(rcr3)
+ENTRY(x86_hotpatch)
+	/* save EFLAGS, and disable intrs */
+	pushfl
+	cli
 
-ENTRY(lcr4)
-	movl	4(%esp), %eax
-	movl	%eax, %cr4
-	ret
-END(lcr4)
+	/* save CR0, and disable WP */
+	movl	%cr0,%ecx
+	pushl	%ecx
+	andl	$~CR0_WP,%ecx
+	movl	%ecx,%cr0
 
-ENTRY(rcr4)
-	movl	%cr4, %eax
+	pushl	4*4(%esp) /* arg2 */
+	pushl	4*4(%esp) /* arg1 */
+	call	_C_LABEL(x86_hotpatch_apply)
+	addl	$2*4,%esp
+
+	/* write back and invalidate cache */
+	wbinvd
+
+	/* restore CR0 */
+	popl	%ecx
+	movl	%ecx,%cr0
+
+	/* flush instruction pipeline */
+	pushl	%eax
+	call	x86_flush
+	popl	%eax
+
+	/* clean up */
+	pushl	%eax
+	call	_C_LABEL(x86_hotpatch_cleanup)
+	addl	$4,%esp
+
+	/* restore RFLAGS */
+	popfl
 	ret
-END(rcr4)
+END(x86_hotpatch)
+#endif /* XENPV */
 
 ENTRY(x86_read_flags)
 	pushfl
@@ -100,44 +124,10 @@ ENTRY(x86_write_flags)
 	ret
 END(x86_write_flags)
 
-#ifndef XEN
+#ifndef XENPV
 STRONG_ALIAS(x86_write_psl,x86_write_flags)
 STRONG_ALIAS(x86_read_psl,x86_read_flags)
-#endif	/* XEN */
-
-ENTRY(rdmsr)
-	movl	4(%esp), %ecx
-	rdmsr
-	ret
-END(rdmsr)
-
-ENTRY(wrmsr)
-	movl	4(%esp), %ecx
-	movl	8(%esp), %eax
-	movl	12(%esp), %edx
-	wrmsr
-	ret
-END(wrmsr)
-
-ENTRY(rdmsr_locked)
-	movl	4(%esp), %ecx
-	pushl	%edi
-	movl	$OPTERON_MSR_PASSCODE, %edi
-	rdmsr
-	popl	%edi
-	ret
-END(rdmsr_locked)
-
-ENTRY(wrmsr_locked)
-	movl	4(%esp), %ecx
-	movl	8(%esp), %eax
-	movl	12(%esp), %edx
-	pushl	%edi
-	movl	$OPTERON_MSR_PASSCODE, %edi
-	wrmsr
-	popl	%edi
-	ret
-END(wrmsr_locked)
+#endif	/* XENPV */
 
 /*
  * Support for reading MSRs in the safe manner (returns EFAULT on fault)
@@ -162,27 +152,10 @@ ENTRY(rdmsr_safe)
 	ret
 END(rdmsr_safe)
 
-/* uint64_t rdxcr(uint32_t) */
-ENTRY(rdxcr)
-	movl	4(%esp), %ecx	/* extended control reg number */
-	xgetbv			/* Read to %edx:%eax */
-	ret
-END(rdxcr)
-
-/* void wrxcr(uint32_t, uint64_t) */
-ENTRY(wrxcr)
-	movl	4(%esp), %ecx	/* extended control reg number */
-	movl	8(%esp), %eax	/* feature mask bits */
-	movl	12(%esp), %edx
-	xsetbv
-	ret
-END(wrxcr)
-	
-
 /*
  * MSR operations fault handler
  */
-NENTRY(msr_onfault)
+ENTRY(msr_onfault)
 	movl	CPUVAR(CURLWP), %ecx
 	movl	L_PCB(%ecx), %ecx
 	movl	$0, PCB_ONFAULT(%ecx)
@@ -190,24 +163,59 @@ NENTRY(msr_onfault)
 	ret
 END(msr_onfault)
 
-ENTRY(cpu_counter)
-	rdtsc
-	addl	CPUVAR(CC_SKEW), %eax
-	adcl	CPUVAR(CC_SKEW+4), %edx
-	ret
-END(cpu_counter)
+#define ADD_counter32	addl	CPUVAR(CC_SKEW), %eax
+#define ADD_counter	ADD_counter32			;\
+			adcl	CPUVAR(CC_SKEW+4), %edx
 
-ENTRY(cpu_counter32)
-	rdtsc
-	addl	CPUVAR(CC_SKEW), %eax
-	ret
-END(cpu_counter32)
+#define SERIALIZE_lfence	lfence
+#define SERIALIZE_mfence	mfence
 
-ENTRY(rdpmc)
-	movl	4(%esp), %ecx
-	rdpmc
-	ret
-END(rdpmc)
+#define CPU_COUNTER_FENCE(counter, fence) \
+ENTRY(cpu_ ## counter ## _ ## fence)	;\
+	pushl	%ebx			;\
+	movl	CPUVAR(CURLWP), %ecx	;\
+1:					;\
+	movl	L_NCSW(%ecx), %ebx	;\
+	SERIALIZE_ ## fence		;\
+	rdtsc				;\
+	ADD_ ## counter			;\
+	cmpl	%ebx, L_NCSW(%ecx)	;\
+	jne	2f			;\
+	popl	%ebx			;\
+	ret				;\
+2:					;\
+	jmp	1b			;\
+END(cpu_ ## counter ## _ ## fence)
+
+CPU_COUNTER_FENCE(counter, lfence)
+CPU_COUNTER_FENCE(counter, mfence)
+CPU_COUNTER_FENCE(counter32, lfence)
+CPU_COUNTER_FENCE(counter32, mfence)
+
+#define CPU_COUNTER_CPUID(counter)	\
+ENTRY(cpu_ ## counter ## _cpuid)	;\
+	pushl	%ebx			;\
+	pushl	%esi			;\
+	movl	CPUVAR(CURLWP), %ecx	;\
+1:					;\
+	movl	L_NCSW(%ecx), %esi	;\
+	pushl	%ecx			;\
+	xor	%eax, %eax		;\
+	cpuid				;\
+	rdtsc				;\
+	ADD_ ## counter			;\
+	popl	%ecx			;\
+	cmpl	%esi, L_NCSW(%ecx)	;\
+	jne	2f			;\
+	popl	%esi			;\
+	popl	%ebx			;\
+	ret				;\
+2:					;\
+	jmp	1b			;\
+END(cpu_ ## counter ##_cpuid)
+
+CPU_COUNTER_CPUID(counter)
+CPU_COUNTER_CPUID(counter32)
 
 ENTRY(breakpoint)
 	pushl	%ebp
@@ -226,12 +234,6 @@ ENTRY(x86_curlwp)
 	movl	%fs:(CPU_INFO_CURLWP), %eax
 	ret
 END(x86_curlwp)
-
-ENTRY(cpu_set_curpri)
-	movl	4(%esp), %eax
-	movl	%eax, %fs:(CPU_INFO_CURPRIORITY)
-	ret
-END(cpu_set_curpri)
 
 ENTRY(__byte_swap_u32_variable)
 	movl	4(%esp), %eax
@@ -295,95 +297,6 @@ ENTRY(x86_mwait)
 	ret
 END(x86_mwait)  
 
-ENTRY(x86_pause)
-	pause
-	ret
-END(x86_pause)
-
-ENTRY(x86_cpuid2)
-	pushl	%ebx
-	pushl	%edi
-	movl	12(%esp), %eax
-	movl	16(%esp), %ecx
-	movl	20(%esp), %edi
-	cpuid
-	movl	%eax, 0(%edi)
-	movl	%ebx, 4(%edi)
-	movl	%ecx, 8(%edi)
-	movl	%edx, 12(%edi)
-	popl	%edi
-	popl	%ebx
-	ret
-END(x86_cpuid2)
-
-ENTRY(x86_getss)
-	movl	%ss, %eax
-	ret
-END(x86_getss)
-
-ENTRY(fldcw)
-	movl	4(%esp), %eax
-	fldcw	(%eax)
-	ret
-END(fldcw)
-
-ENTRY(fnclex)	
-	fnclex
-	ret
-END(fnclex)	
-
-ENTRY(fninit)
-	fninit
-	ret
-END(fninit)
-
-ENTRY(fnsave)
-	movl	4(%esp), %eax
-	fnsave	(%eax)
-	ret
-END(fnsave)
-
-ENTRY(fnstcw)
-	movl	4(%esp), %eax
-	fnstcw	(%eax)
-	ret
-END(fnstcw)
-
-ENTRY(fngetsw)
-	fnstsw	%ax
-	ret
-END(fngetsw)
-
-ENTRY(fnstsw)
-	movl	4(%esp), %eax
-	fnstsw	(%eax)
-	ret
-END(fnstsw)
-
-ENTRY(fp_divide_by_0)
-	fldz
-	fld1
-	fdiv	%st, %st(1)
-	fwait
-	ret
-END(fp_divide_by_0)
-
-ENTRY(frstor)
-	movl	4(%esp), %eax
-	frstor	(%eax)
-	ret
-END(frstor)
-
-ENTRY(fwait)
-	fwait
-	ret
-END(fwait)
-
-ENTRY(clts)
-	clts
-	ret
-END(clts)
-
 ENTRY(stts)
 	movl	%cr0, %eax
 	testl	$CR0_TS, %eax
@@ -393,54 +306,6 @@ ENTRY(stts)
 1:
 	ret
 END(stts)
-
-ENTRY(fxsave)
-	movl	4(%esp), %eax
-	fxsave	(%eax)
-	ret
-END(fxsave)
-
-ENTRY(fxrstor)
-	movl	4(%esp), %eax
-	fxrstor	(%eax)
-	ret
-END(fxrstor)
-
-ENTRY(xsave)
-	movl	4(%esp), %ecx
-	movl	8(%esp), %eax	/* feature mask bits */
-	movl	12(%esp), %edx
-	xsave	(%ecx)
-	ret
-END(xsave)
-
-ENTRY(xsaveopt)
-	movl	4(%esp), %ecx
-	movl	8(%esp), %eax	/* feature mask bits */
-	movl	12(%esp), %edx
-	xsaveopt	(%ecx)
-	ret
-END(xsaveopt)
-
-ENTRY(xrstor)
-	movl	4(%esp), %ecx
-	movl	8(%esp), %eax	/* feature mask bits */
-	movl	12(%esp), %edx
-	xrstor	(%ecx)
-	ret
-END(xrstor)
-
-ENTRY(x86_stmxcsr)
-	movl	4(%esp), %eax
-	stmxcsr	(%eax)
-	ret
-END(x86_stmxcsr)
-
-ENTRY(x86_ldmxcsr)
-	movl	4(%esp), %eax
-	ldmxcsr	(%eax)
-	ret
-END(x86_ldmxcsr)
 
 ENTRY(fldummy)
 	ffree	%st(7)
@@ -455,17 +320,6 @@ ENTRY(inb)
 	ret
 END(inb)
 
-ENTRY(insb)
-	pushl	%edi
-	movl	8(%esp), %edx
-	movl	12(%esp), %edi
-	movl	16(%esp), %ecx
-	rep
-	insb
-	popl	%edi
-	ret
-END(insb)
-
 ENTRY(inw)
 	movl	4(%esp), %edx
 	xorl	%eax, %eax
@@ -473,33 +327,11 @@ ENTRY(inw)
 	ret
 END(inw)
 
-ENTRY(insw)
-	pushl	%edi
-	movl	8(%esp), %edx
-	movl	12(%esp), %edi
-	movl	16(%esp), %ecx
-	rep
-	insw
-	popl	%edi
-	ret
-END(insw)
-
 ENTRY(inl)
 	movl	4(%esp), %edx
 	inl	%dx, %eax
 	ret
 END(inl)
-
-ENTRY(insl)
-	pushl	%edi
-	movl	8(%esp), %edx
-	movl	12(%esp), %edi
-	movl	16(%esp), %ecx
-	rep
-	insl
-	popl	%edi
-	ret
-END(insl)
 
 ENTRY(outb)
 	movl	4(%esp), %edx
@@ -508,17 +340,6 @@ ENTRY(outb)
 	ret
 END(outb)
 
-ENTRY(outsb)
-	pushl	%esi
-	movl	8(%esp), %edx
-	movl	12(%esp), %esi
-	movl	16(%esp), %ecx
-	rep
-	outsb
-	popl	%esi
-	ret
-END(outsb)
-
 ENTRY(outw)
 	movl	4(%esp), %edx
 	movl	8(%esp), %eax
@@ -526,31 +347,9 @@ ENTRY(outw)
 	ret
 END(outw)
 
-ENTRY(outsw)
-	pushl	%esi
-	movl	8(%esp), %edx
-	movl	12(%esp), %esi
-	movl	16(%esp), %ecx
-	rep
-	outsw
-	popl	%esi
-	ret
-END(outsw)
-
 ENTRY(outl)
 	movl	4(%esp), %edx
 	movl	8(%esp), %eax
 	outl	%eax, %dx
 	ret
 END(outl)
-
-ENTRY(outsl)
-	pushl	%esi
-	movl	8(%esp), %edx
-	movl	12(%esp), %esi
-	movl	16(%esp), %ecx
-	rep
-	outsl
-	popl	%esi
-	ret
-END(outsl)

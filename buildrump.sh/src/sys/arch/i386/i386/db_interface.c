@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.71 2014/02/28 10:16:51 skrll Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.86 2021/02/23 07:13:52 mrg Exp $	*/
 
 /*
  * Mach Operating System
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.71 2014/02/28 10:16:51 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.86 2021/02/23 07:13:52 mrg Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -47,8 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.71 2014/02/28 10:16:51 skrll Exp 
 #include <sys/systm.h>
 #include <sys/atomic.h>
 #include <sys/cpu.h>
-
-#include <uvm/uvm_extern.h>
 
 #include <dev/cons.h>
 
@@ -74,7 +72,12 @@ extern const char *const trap_type[];
 extern int trap_types;
 
 int	db_active = 0;
-db_regs_t ddb_regs;	/* register state */
+#ifdef MULTIPROCESSOR
+/* ddb_regs defined as a macro */
+db_regs_t *ddb_regp = NULL;
+#else
+db_regs_t ddb_regs;
+#endif
 
 void db_mach_cpu (db_expr_t, bool, db_expr_t, const char *);
 
@@ -83,41 +86,46 @@ const struct db_command db_machine_command_table[] = {
 	{ DDB_ADD_CMD("cpu",	db_mach_cpu,	0,
 	  "switch to another cpu", "cpu-no", NULL) },
 #endif
-		
-	{ DDB_ADD_CMD(NULL, NULL, 0,  NULL,NULL,NULL) },
+	{ DDB_END_CMD },
 };
 
 void kdbprinttrap(int, int);
 #ifdef MULTIPROCESSOR
-extern void ddb_ipi(int, struct trapframe);
+extern void ddb_ipi(struct trapframe);
 extern void ddb_ipi_tss(struct i386tss *);
 static void ddb_suspend(struct trapframe *);
-#ifndef XEN
+#ifndef XENPV
 int ddb_vec;
-#endif /* XEN */
+#endif /* XENPV */
 static bool ddb_mp_online;
 #endif
 
-db_regs_t *ddb_regp = 0;
-
-#define NOCPU -1
+#define NOCPU	-1
 
 int ddb_cpu = NOCPU;
 
 typedef void (vector)(void);
-extern vector Xintrddbipi;
+extern vector Xintr_ddbipi, Xintr_x2apic_ddbipi;
 
 void
 db_machine_init(void)
 {
 
 #ifdef MULTIPROCESSOR
-#ifndef XEN
-	ddb_vec = idt_vec_alloc(0xf0, 0xff);
-	idt_vec_set(ddb_vec, &Xintrddbipi);
+#ifndef XENPV
+	vector *handler = &Xintr_ddbipi;
+	struct idt_vec *iv;
+
+	iv = &(cpu_info_primary.ci_idtvec);
+#if NLAPIC > 0
+	if (lapic_is_x2apic())
+		handler = &Xintr_x2apic_ddbipi;
+#endif
+	ddb_vec = idt_vec_alloc(iv, 0xf0, 0xff);
+	idt_vec_set(iv, ddb_vec, handler);
 #else
 	/* Initialised as part of xen_ipi_init() */
-#endif /* XEN */
+#endif /* XENPV */
 #endif
 }
 
@@ -131,10 +139,10 @@ db_suspend_others(void)
 	int cpu_me = cpu_number();
 	int win;
 
-#ifndef XEN
+#ifndef XENPV
 	if (ddb_vec == 0)
 		return 1;
-#endif /* XEN */
+#endif /* XENPV */
 
 	__cpu_simple_lock(&db_lock);
 	if (ddb_cpu == NOCPU)
@@ -142,11 +150,13 @@ db_suspend_others(void)
 	win = (ddb_cpu == cpu_me);
 	__cpu_simple_unlock(&db_lock);
 	if (win) {
-#ifdef XEN
+#ifdef XENPV
 		xen_broadcast_ipi(XEN_IPI_DDB);
 #else
+#if NLAPIC > 0		
 		x86_ipi(ddb_vec, LAPIC_DEST_ALLEXCL, LAPIC_DLMODE_FIXED);
-#endif /* XEN */
+#endif		
+#endif /* XENPV */
 	}
 	ddb_mp_online = x86_mp_online;
 	x86_mp_online = false;
@@ -194,7 +204,9 @@ int
 kdb_trap(int type, int code, db_regs_t *regs)
 {
 	int s, flags;
+#ifdef MULTIPROCESSOR
 	db_regs_t dbreg;
+#endif
 
 	flags = regs->tf_err & TC_FLAGMASK;
 	regs->tf_err &= ~TC_FLAGMASK;
@@ -227,7 +239,7 @@ kdb_trap(int type, int code, db_regs_t *regs)
 #endif
 	/* XXX Should switch to kdb's own stack here. */
 	ddb_regs = *regs;
-	if (!(flags & TC_TSS) && KERNELMODE(regs->tf_cs, regs->tf_eflags)) {
+	if (!(flags & TC_TSS) && KERNELMODE(regs->tf_cs)) {
 		/*
 		 * Kernel mode - esp and ss not saved
 		 */
@@ -241,6 +253,7 @@ kdb_trap(int type, int code, db_regs_t *regs)
 	ddb_regs.tf_fs &= 0xffff;
 	ddb_regs.tf_gs &= 0xffff;
 	ddb_regs.tf_ss &= 0xffff;
+
 	s = splhigh();
 	db_active++;
 	cnpollc(true);
@@ -251,8 +264,9 @@ kdb_trap(int type, int code, db_regs_t *regs)
 #ifdef MULTIPROCESSOR
 	db_resume_others();
 	}
-#endif
+	/* Restore dbreg because ddb_regp can be changed by db_mach_cpu */
 	ddb_regp = &dbreg;
+#endif
 
 	regs->tf_gs     = ddb_regs.tf_gs;
 	regs->tf_fs     = ddb_regs.tf_fs;
@@ -268,14 +282,14 @@ kdb_trap(int type, int code, db_regs_t *regs)
 	regs->tf_eip    = ddb_regs.tf_eip;
 	regs->tf_cs     = ddb_regs.tf_cs;
 	regs->tf_eflags = ddb_regs.tf_eflags;
-	if (!(flags & TC_TSS) && !KERNELMODE(regs->tf_cs, regs->tf_eflags)) {
+	if (!(flags & TC_TSS) && !KERNELMODE(regs->tf_cs)) {
 		/* ring transit - saved esp and ss valid */
 		regs->tf_esp    = ddb_regs.tf_esp;
 		regs->tf_ss     = ddb_regs.tf_ss;
 	}
 
-#ifdef TRAPLOG
-	wrmsr(MSR_DEBUGCTLMSR, 0x1);
+#ifdef MULTIPROCESSOR
+	ddb_regp = NULL;
 #endif
 
 	return (1);
@@ -297,7 +311,7 @@ cpu_Debugger(void)
  * that the effect is as if the arguments were passed call by reference.
  */
 void
-ddb_ipi(int cpl, struct trapframe frame)
+ddb_ipi(struct trapframe frame)
 {
 
 	ddb_suspend(&frame);
@@ -340,7 +354,7 @@ ddb_suspend(struct trapframe *frame)
 	regs = *frame;
 	flags = regs.tf_err & TC_FLAGMASK;
 	regs.tf_err &= ~TC_FLAGMASK;
-	if (!(flags & TC_TSS) && KERNELMODE(regs.tf_cs, regs.tf_eflags)) {
+	if (!(flags & TC_TSS) && KERNELMODE(regs.tf_cs)) {
 		/*
 		 * Kernel mode - esp and ss not saved
 		 */
@@ -351,6 +365,7 @@ ddb_suspend(struct trapframe *frame)
 	ci->ci_ddb_regs = &regs;
 
 	atomic_or_32(&ci->ci_flags, CPUF_PAUSE);
+
 	while (ci->ci_flags & CPUF_PAUSE)
 		;
 	ci->ci_ddb_regs = 0;
@@ -361,11 +376,7 @@ ddb_suspend(struct trapframe *frame)
 extern void cpu_debug_dump(void); /* XXX */
 
 void
-db_mach_cpu(
-	db_expr_t	addr,
-	bool		have_addr,
-	db_expr_t	count,
-	const char *	modif)
+db_mach_cpu(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
 {
 	struct cpu_info *ci;
 	if (!have_addr) {
@@ -395,6 +406,5 @@ db_mach_cpu(
 	db_printf("using CPU %ld", addr);
 	ddb_regp = ci->ci_ddb_regs;
 }
-
 
 #endif

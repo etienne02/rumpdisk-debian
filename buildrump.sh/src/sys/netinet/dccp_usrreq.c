@@ -1,5 +1,5 @@
 /*	$KAME: dccp_usrreq.c,v 1.67 2005/11/03 16:05:04 nishida Exp $	*/
-/*	$NetBSD: dccp_usrreq.c,v 1.9 2016/07/07 06:55:43 msaitoh Exp $ */
+/*	$NetBSD: dccp_usrreq.c,v 1.21 2018/12/16 17:46:58 christos Exp $ */
 
 /*
  * Copyright (c) 2003 Joacim Häggmark, Magnus Erixzon, Nils-Erik Mattsson 
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dccp_usrreq.c,v 1.9 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dccp_usrreq.c,v 1.21 2018/12/16 17:46:58 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -108,7 +108,6 @@ __KERNEL_RCSID(0, "$NetBSD: dccp_usrreq.c,v 1.9 2016/07/07 06:55:43 msaitoh Exp 
 #ifdef INET6
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
-#include <netinet6/nd6.h>
 #include <netinet6/dccp6_var.h>
 #endif
 #include <netinet/dccp.h>
@@ -182,7 +181,7 @@ dccp_init(void)
 }
 
 void
-dccp_input(struct mbuf *m, ...)
+dccp_input(struct mbuf *m, int off, int proto)
 {
 	int iphlen;
 	struct ip *ip = NULL;
@@ -211,12 +210,7 @@ dccp_input(struct mbuf *m, ...)
 	struct ip6_hdr *ip6 = NULL;
 #endif
 
-	int off;
-	va_list ap;
-	
-	va_start(ap, m);
-	iphlen = off = va_arg(ap, int);
-	va_end(ap);
+	iphlen = off;
 
 	DCCP_DEBUG((LOG_INFO, "Got DCCP packet!\n"));
 
@@ -231,7 +225,7 @@ dccp_input(struct mbuf *m, ...)
 	if (isipv6) {
 		DCCP_DEBUG((LOG_INFO, "Got DCCP ipv6 packet, iphlen = %u!\n", iphlen));
 		ip6 = mtod(m, struct ip6_hdr *);
-		IP6_EXTHDR_GET(dh, struct dccphdr *, m, iphlen, sizeof(*dh));
+		M_REGION_GET(dh, struct dccphdr *, m, iphlen, sizeof(*dh));
 		if (dh == NULL) {
 			dccpstat.dccps_badlen++;
 			return;
@@ -257,7 +251,7 @@ dccp_input(struct mbuf *m, ...)
 		 * Get IP and DCCP header together in first mbuf.
 		 */
 		ip = mtod(m, struct ip *);
-		IP6_EXTHDR_GET(dh, struct dccphdr *, m, iphlen, sizeof(*dh));
+		M_REGION_GET(dh, struct dccphdr *, m, iphlen, sizeof(*dh));
 		if (dh == NULL) {
 			dccpstat.dccps_badlen++;
 			return;
@@ -327,7 +321,7 @@ dccp_input(struct mbuf *m, ...)
 	} else
 #endif
 	{
-		bzero(ipov->ih_x1, sizeof(ipov->ih_x1));
+		memset(ipov->ih_x1, 0, sizeof(ipov->ih_x1));
 		ip->ip_len = htons(m->m_pkthdr.len);
 		dh->dh_sum = in4_cksum(m, IPPROTO_DCCP, off, cslen);
 
@@ -378,11 +372,12 @@ dccp_input(struct mbuf *m, ...)
 
 #ifdef INET6
 			if (isipv6) {
+				char ip6buf[INET6_ADDRSTRLEN];
 				strlcpy(dbuf, "[", sizeof dbuf);
-				strlcat(dbuf, ip6_sprintf(&ip6->ip6_dst), sizeof dbuf);
+				strlcat(dbuf, IN6_PRINT(ip6buf, &ip6->ip6_dst), sizeof dbuf);
 				strlcat(dbuf, "]", sizeof dbuf);
 				strlcpy(sbuf, "[", sizeof sbuf);
-				strlcat(sbuf, ip6_sprintf(&ip6->ip6_src), sizeof sbuf);
+				strlcat(sbuf, IN6_PRINT(ip6buf, &ip6->ip6_src), sizeof sbuf);
 				strlcat(sbuf, "]", sizeof sbuf);
 			} else
 #endif
@@ -539,7 +534,7 @@ dccp_input(struct mbuf *m, ...)
 
 	if (! (DCCP_SEQ_GT(seqnr, low_seqnr) && DCCP_SEQ_LT(seqnr, high_seqnr))) {
 		dccpstat.dccps_badseq++;
-		DCCP_DEBUG((LOG_INFO, "Recieved DCCP packet with bad sequence number = %llu (low_seqnr = %llu, high_seqnr = %llu)\n", seqnr, low_seqnr, high_seqnr));
+		DCCP_DEBUG((LOG_INFO, "Received DCCP packet with bad sequence number = %llu (low_seqnr = %llu, high_seqnr = %llu)\n", seqnr, low_seqnr, high_seqnr));
 		INP_UNLOCK(inp);
 		goto badunlocked;
 	}
@@ -634,7 +629,7 @@ dccp_input(struct mbuf *m, ...)
 		}
 
 		DCCP_DEBUG((LOG_INFO, "Parsing DCCP options, optlen = %i\n", optlen));
-		bcopy(optp, options, optlen);
+		memcpy(options, optp, optlen);
 		dccp_parse_options(dp, options, optlen);
 	}
 
@@ -926,11 +921,7 @@ dccp_input(struct mbuf *m, ...)
 	}
 
 	if (dh->dh_type == DCCP_TYPE_DATA || dh->dh_type == DCCP_TYPE_DATAACK) {
-#if defined(__FreeBSD__) && __FreeBSD_version >= 503000
-		if (so->so_rcv.sb_state & SBS_CANTRCVMORE) 
-#else
 		if (so->so_state & SS_CANTRCVMORE) 
-#endif
 		{
 			DCCP_DEBUG((LOG_INFO, "state & SS_CANTRCVMORE...!\n"));
 			m_freem(m);
@@ -1348,14 +1339,14 @@ again:
 	/* Adding options. */
 	if (dp->optlen) {
 		DCCP_DEBUG((LOG_INFO, "Copying options from dp->options! %u\n", dp->optlen));
-		bcopy(dp->options, options , dp->optlen);
+		memcpy(options, dp->options, dp->optlen);
 		optlen = dp->optlen;
 		dp->optlen = 0;
 	}
 
 	if (dp->featlen && (optlen + dp->featlen < DCCP_MAX_OPTIONS)) {
 		DCCP_DEBUG((LOG_INFO, "Copying options from dp->features! %u\n", dp->featlen));
-		bcopy(dp->features, options + optlen, dp->featlen);
+		memcpy(options + optlen, dp->features, dp->featlen);
 		optlen += dp->featlen;
 	}
 
@@ -1417,7 +1408,8 @@ again:
 			mtod(m, char *) + hdrlen);
 			m->m_len += len;
 		} else {
-			m->m_next = m_copy(so->so_snd.sb_mb, off, (int) len);
+			m->m_next = m_copym(so->so_snd.sb_mb, off,
+			    (int)len, M_DONTWAIT);
 			if (m->m_next == 0) {
 				error = ENOBUFS;
 				goto release;
@@ -1454,7 +1446,7 @@ again:
 	{
 		ip = mtod(m, struct ip *);
 		dh = (struct dccphdr *)(ip + 1);
-		bzero(ip, sizeof(struct ip));
+		memset(ip, 0, sizeof(struct ip));
 		ip->ip_p = IPPROTO_DCCP;
 		ip->ip_src = inp->inp_laddr;
 		ip->ip_dst = inp->inp_faddr;
@@ -1545,7 +1537,7 @@ again:
 	}
 
 	if (optlen)
-		bcopy(options, optp, optlen);
+		memcpy(optp, options, optlen);
 
 	m->m_pkthdr.len = hdrlen + len;
 
@@ -1577,13 +1569,7 @@ again:
 	/*
 	 * Set up checksum 
 	 */
-#ifdef __FreeBSD__
-	m->m_pkthdr.csum_flags = CSUM_IP; /* Do not allow the network card to calculate the checksum */
-#elif defined(__NetBSD__)
 	m->m_pkthdr.csum_flags = 0;
-#else
-	m->m_pkthdr.csum = 0;
-#endif
 
 	dh->dh_sum = 0;
 #ifdef INET6
@@ -1620,7 +1606,7 @@ again:
 		DCCP_DEBUG((LOG_INFO, "Calling ip_output, mbuf->m_len = %u, mbuf->m_pkthdr.len = %u\n", m->m_len, m->m_pkthdr.len));
 		error = ip_output(m, inp->inp_options, &inp->inp_route,
 		    (inp->inp_socket->so_options & SO_DONTROUTE), 0, 
-				  inp->inp_socket);
+				  inp);
 	}
 
 	if (error) {
@@ -1825,6 +1811,7 @@ dccp_bind(struct socket *so, struct sockaddr *nam, struct lwp *l)
 {
 	struct inpcb *inp;
 	int error;
+	int s;
 	struct sockaddr_in *sin = (struct sockaddr_in *)nam;
 
 	DCCP_DEBUG((LOG_INFO, "Entering dccp_bind!\n"));
@@ -1842,7 +1829,9 @@ dccp_bind(struct socket *so, struct sockaddr *nam, struct lwp *l)
 		return EAFNOSUPPORT;
 	}
 	INP_LOCK(inp);
+	s = splsoftnet();
 	error = in_pcbbind(inp, sin, l);
+	splx(s);
 	INP_UNLOCK(inp);
 	INP_INFO_WUNLOCK(&dccpbinfo);
 	return error;
@@ -2168,7 +2157,7 @@ dccp_send(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		}
 	}
 
-	if (sbspace(&so->so_snd) < -512) {
+	if (sbspace_oob(&so->so_snd) == 0) {
 		INP_UNLOCK(inp);
 		error = ENOBUFS;
 		goto release;
@@ -2308,7 +2297,7 @@ dccp_newdccpcb(int family, void *aux)
 	dp = pool_get(&dccpcb_pool, PR_NOWAIT);
 	if (dp == NULL)
 		return NULL;
-	bzero((char *) dp, sizeof(struct dccpcb));
+	memset((char *) dp, 0, sizeof(struct dccpcb));
 
 	callout_init(&dp->connect_timer, 0);
 	callout_init(&dp->retrans_timer, 0);
@@ -2471,7 +2460,7 @@ dccp_parse_options(struct dccpcb *dp, char *options, int optlen)
 			}
 			/* Feature negotiations are options 33 to 35 */ 
 			DCCP_DEBUG((LOG_INFO, "Got option %u, size = %u, feature = %u\n", opt, size, options[i+2]));
-			bcopy(options + i + 3, val, size -3);
+			memcpy(val, options + i + 3, size -3);
 			DCCP_DEBUG((LOG_INFO, "Calling dccp_feature neg(%u, %u, options[%u + 1], %u)!\n", (u_int)dp, opt, i+ 1, (size - 3)));
 			dccp_feature_neg(dp, opt, options[i+2], (size -3) , val);
 			i += size - 1;
@@ -2496,8 +2485,8 @@ dccp_parse_options(struct dccpcb *dp, char *options, int optlen)
 					DCCP_DEBUG((LOG_INFO, "Got DCCP_OPT_TIMESTAMP, size = %u\n", size));
 
 					/* Adding TimestampEcho to next outgoing */
-					bcopy(options + i + 2, val, 4);
-					bzero(val + 4, 4);
+					memcpy(val, options + i + 2, 4);
+					memset(val + 4, 0, 4);
 					dccp_add_option(dp, DCCP_OPT_TIMESTAMP_ECHO, val, 8);
 				break;
 				
@@ -2509,10 +2498,10 @@ dccp_parse_options(struct dccpcb *dp, char *options, int optlen)
 					DCCP_DEBUG((LOG_INFO, "\n"));
 
 					/*
-						bcopy(options + i + 2, &(dp->timestamp_echo), 4);
-						bcopy(options + i + 6, &(dp->timestamp_elapsed), 4);
-						ACK_DEBUG((LOG_INFO, "DATA; echo = %u , elapsed = %u\n",
-						   dp->timestamp_echo, dp->timestamp_elapsed));
+					memcpy(&(dp->timestamp_echo), options + i + 2, 4);
+					memcpy(&(dp->timestamp_elapsed), options + i + 6, 4);
+					ACK_DEBUG((LOG_INFO, "DATA; echo = %u , elapsed = %u\n",
+					    dp->timestamp_echo, dp->timestamp_elapsed));
 					*/
 				
 				break;
@@ -2660,7 +2649,7 @@ dccp_feature_neg(struct dccpcb *dp, u_int8_t opt, u_int8_t feature, u_int8_t val
 			
 		case DCCP_FEATURE_ACKRATIO:
 			if (opt == DCCP_OPT_CHANGE_R) {
-				bcopy(val , &(dp->ack_ratio), 1);
+				memcpy(&(dp->ack_ratio), val, 1);
 				ACK_DEBUG((LOG_INFO, "Feature: Change Ack Ratio to %u\n", dp->ack_ratio));
 			}
 			break;
@@ -2755,12 +2744,12 @@ dccp_pcblist(SYSCTL_HANDLER_ARGS)
 			vaddr_t inp_ppcb;
 			xd.xd_len = sizeof xd;
 			/* XXX should avoid extra copy */
-			bcopy(inp, &xd.xd_inp, sizeof *inp);
+			memcpy(&xd.xd_inp, inp, sizeof *inp);
 			inp_ppcb = inp->inp_ppcb;
 			if (inp_ppcb != NULL)
-				bcopy(inp_ppcb, &xd.xd_dp, sizeof xd.xd_dp);
+				memcpy(&xd.xd_dp, inp_ppcb, sizeof xd.xd_dp);
 			else
-				bzero((char *) &xd.xd_dp, sizeof xd.xd_dp);
+				memset((char *) &xd.xd_dp, 0, sizeof xd.xd_dp);
 			if (inp->inp_socket)
 				 sotoxsocket(inp->inp_socket, &xd.xd_socket);
 			error = SYSCTL_OUT(req, &xd, sizeof xd);

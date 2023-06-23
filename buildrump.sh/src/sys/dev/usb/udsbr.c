@@ -1,4 +1,4 @@
-/*	$NetBSD: udsbr.c,v 1.24 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: udsbr.c,v 1.31 2020/03/14 02:35:33 christos Exp $	*/
 
 /*
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -38,7 +38,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udsbr.c,v 1.24 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udsbr.c,v 1.31 2020/03/14 02:35:33 christos Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -69,7 +73,7 @@ int	udsbrdebug = 0;
 Static	int     udsbr_get_info(void *, struct radio_info *);
 Static	int     udsbr_set_info(void *, struct radio_info *);
 
-const struct radio_hw_if udsbr_hw_if = {
+static const struct radio_hw_if udsbr_hw_if = {
 	NULL, /* open */
 	NULL, /* close */
 	udsbr_get_info,
@@ -78,7 +82,7 @@ const struct radio_hw_if udsbr_hw_if = {
 };
 
 struct udsbr_softc {
- 	device_t		sc_dev;
+	device_t		sc_dev;
 	struct usbd_device *	sc_udev;
 
 	char			sc_mute;
@@ -97,16 +101,16 @@ Static	void	udsbr_stop(struct udsbr_softc *);
 Static	void	udsbr_setfreq(struct udsbr_softc *, int);
 Static	int	udsbr_status(struct udsbr_softc *);
 
-int udsbr_match(device_t, cfdata_t, void *);
-void udsbr_attach(device_t, device_t, void *);
-void udsbr_childdet(device_t, device_t);
-int udsbr_detach(device_t, int);
-int udsbr_activate(device_t, enum devact);
-extern struct cfdriver udsbr_cd;
+static int udsbr_match(device_t, cfdata_t, void *);
+static void udsbr_attach(device_t, device_t, void *);
+static void udsbr_childdet(device_t, device_t);
+static int udsbr_detach(device_t, int);
+static int udsbr_activate(device_t, enum devact);
+
 CFATTACH_DECL2_NEW(udsbr, sizeof(struct udsbr_softc), udsbr_match,
     udsbr_attach, udsbr_detach, udsbr_activate, NULL, udsbr_childdet);
 
-int
+static int
 udsbr_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
@@ -119,7 +123,7 @@ udsbr_match(device_t parent, cfdata_t match, void *aux)
 	return UMATCH_VENDOR_PRODUCT;
 }
 
-void
+static void
 udsbr_attach(device_t parent, device_t self, void *aux)
 {
 	struct udsbr_softc *sc = device_private(self);
@@ -157,12 +161,12 @@ udsbr_attach(device_t parent, device_t self, void *aux)
 	return;
 }
 
-void
+static void
 udsbr_childdet(device_t self, device_t child)
 {
 }
 
-int
+static int
 udsbr_detach(device_t self, int flags)
 {
 	struct udsbr_softc *sc = device_private(self);
@@ -170,13 +174,14 @@ udsbr_detach(device_t self, int flags)
 
 	if (sc->sc_child != NULL)
 		rv = config_detach(sc->sc_child, flags);
-
-	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
+	if (sc->sc_udev != NULL)
+		usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev,
+		    sc->sc_dev);
 
 	return rv;
 }
 
-int
+static int
 udsbr_activate(device_t self, enum devact act)
 {
 	struct udsbr_softc *sc = device_private(self);

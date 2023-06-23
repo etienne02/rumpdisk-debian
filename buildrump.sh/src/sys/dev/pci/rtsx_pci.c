@@ -1,4 +1,4 @@
-/*	$NetBSD: rtsx_pci.c,v 1.6 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: rtsx_pci.c,v 1.9 2020/04/27 23:06:34 jmcneill Exp $	*/
 /*	$OpenBSD: rtsx_pci.c,v 1.7 2014/08/19 17:55:03 phessler Exp $	*/
 
 
@@ -20,7 +20,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtsx_pci.c,v 1.6 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtsx_pci.c,v 1.9 2020/04/27 23:06:34 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -36,7 +36,8 @@ __KERNEL_RCSID(0, "$NetBSD: rtsx_pci.c,v 1.6 2016/07/07 06:55:41 msaitoh Exp $")
 
 #include <dev/sdmmc/sdmmcvar.h>
 
-#define RTSX_PCI_BAR	0x10
+#define RTSX_PCI_BAR		0x10
+#define RTSX_PCI_BAR_525A	0x14
 
 struct rtsx_pci_softc {
 	struct rtsx_softc sc;
@@ -78,6 +79,8 @@ rtsx_pci_match(device_t parent, cfdata_t cf, void *aux)
 	case PCI_PRODUCT_REALTEK_RTS5209:
 	case PCI_PRODUCT_REALTEK_RTS5227:
 	case PCI_PRODUCT_REALTEK_RTS5229:
+	case PCI_PRODUCT_REALTEK_RTS522A:
+	case PCI_PRODUCT_REALTEK_RTS525A:
 	case PCI_PRODUCT_REALTEK_RTL8402:
 	case PCI_PRODUCT_REALTEK_RTL8411:
 	case PCI_PRODUCT_REALTEK_RTL8411B:
@@ -100,44 +103,11 @@ rtsx_pci_attach(device_t parent, device_t self, void *aux)
 	bus_space_handle_t ioh;
 	bus_size_t size;
 	uint32_t flags;
+	int bar = RTSX_PCI_BAR;
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	sc->sc.sc_dev = self;
 	sc->sc_pc = pc;
-
-	pci_aprint_devinfo(pa, NULL);
-
-	if ((pci_conf_read(pc, tag, RTSX_CFG_PCI) & RTSX_CFG_ASIC) != 0) {
-		aprint_error_dev(self, "no asic\n");
-		return;
-	}
-
-	if (pci_mapreg_map(pa, RTSX_PCI_BAR, PCI_MAPREG_TYPE_MEM, 0,
-	    &iot, &ioh, NULL, &size)) {
-		aprint_error_dev(self, "couldn't map registers\n");
-		return;
-	}
-
-	if (pci_intr_alloc(pa, &sc->sc_pihp, NULL, 0)) {
-		aprint_error_dev(self, "couldn't map interrupt\n");
-		return;
-	}
-	intrstr = pci_intr_string(pc, sc->sc_pihp[0], intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, sc->sc_pihp[0], IPL_SDMMC,
-	    rtsx_intr, &sc->sc);
-	if (sc->sc_ih == NULL) {
-		aprint_error_dev(self, "couldn't establish interrupt\n");
-		return;
-	}
-	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
-
-	/* Enable the device */
-	reg = pci_conf_read(pc, tag, PCI_COMMAND_STATUS_REG);
-	reg |= PCI_COMMAND_MASTER_ENABLE;
-	pci_conf_write(pc, tag, PCI_COMMAND_STATUS_REG, reg);
-
-	/* Power up the device */
-	pci_set_powerstate(pc, tag, PCI_PMCSR_STATE_D0);
 
 	switch (PCI_PRODUCT(pa->pa_id)) {
 	case PCI_PRODUCT_REALTEK_RTS5209:
@@ -148,6 +118,10 @@ rtsx_pci_attach(device_t parent, device_t self, void *aux)
 		break;
 	case PCI_PRODUCT_REALTEK_RTS5229:
 		flags = RTSX_F_5229;
+		break;
+	case PCI_PRODUCT_REALTEK_RTS525A:
+		flags = RTSX_F_525A;
+		bar = RTSX_PCI_BAR_525A;
 		break;
 	case PCI_PRODUCT_REALTEK_RTL8402:
 		flags = RTSX_F_8402;
@@ -162,6 +136,40 @@ rtsx_pci_attach(device_t parent, device_t self, void *aux)
 		flags = 0;
 		break;
 	}
+
+	pci_aprint_devinfo(pa, NULL);
+
+	if ((pci_conf_read(pc, tag, RTSX_CFG_PCI) & RTSX_CFG_ASIC) != 0) {
+		aprint_error_dev(self, "no asic\n");
+		return;
+	}
+
+	if (pci_mapreg_map(pa, bar, PCI_MAPREG_TYPE_MEM, 0,
+	    &iot, &ioh, NULL, &size)) {
+		aprint_error_dev(self, "couldn't map registers\n");
+		return;
+	}
+
+	if (pci_intr_alloc(pa, &sc->sc_pihp, NULL, 0)) {
+		aprint_error_dev(self, "couldn't map interrupt\n");
+		return;
+	}
+	intrstr = pci_intr_string(pc, sc->sc_pihp[0], intrbuf, sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish_xname(pc, sc->sc_pihp[0], IPL_SDMMC,
+	    rtsx_intr, &sc->sc, device_xname(self));
+	if (sc->sc_ih == NULL) {
+		aprint_error_dev(self, "couldn't establish interrupt\n");
+		return;
+	}
+	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
+
+	/* Enable the device */
+	reg = pci_conf_read(pc, tag, PCI_COMMAND_STATUS_REG);
+	reg |= PCI_COMMAND_MASTER_ENABLE;
+	pci_conf_write(pc, tag, PCI_COMMAND_STATUS_REG, reg);
+
+	/* Power up the device */
+	pci_set_powerstate(pc, tag, PCI_PMCSR_STATE_D0);
 
 	if (rtsx_attach(&sc->sc, iot, ioh, size, pa->pa_dmat, flags) != 0) {
 		aprint_error_dev(self, "couldn't initialize chip\n");

@@ -1,4 +1,4 @@
-/*	$NetBSD: dlfcn_elf.c,v 1.13 2012/06/24 15:26:03 christos Exp $	*/
+/*	$NetBSD: dlfcn_elf.c,v 1.16 2018/07/13 19:49:47 joerg Exp $	*/
 
 /*
  * Copyright (c) 2000 Takuya SHIOZAKI
@@ -27,7 +27,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: dlfcn_elf.c,v 1.13 2012/06/24 15:26:03 christos Exp $");
+__RCSID("$NetBSD: dlfcn_elf.c,v 1.16 2018/07/13 19:49:47 joerg Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #include "namespace.h"
@@ -38,6 +38,7 @@ __RCSID("$NetBSD: dlfcn_elf.c,v 1.13 2012/06/24 15:26:03 christos Exp $");
 #include <string.h>
 #include <stdbool.h>
 
+#undef dl_iterate_phdr
 #undef dlopen
 #undef dlclose
 #undef dlsym
@@ -75,6 +76,7 @@ __weak_alias(__dlerror,___dlerror)
 __weak_alias(__dladdr,___dladdr)
 __weak_alias(__dlinfo,___dlinfo)
 __weak_alias(__dl_iterate_phdr,___dl_iterate_phdr)
+__weak_alias(__dl_cxa_refcount, ___dl_cxa_refcount)
 #endif
 
 /*
@@ -174,6 +176,17 @@ dl_iterate_phdr_setup(void)
 			break;
 		}
 	}
+
+	if (!dlpi_phdr)
+		return;
+
+	const Elf_Phdr *phdr = (const Elf_Phdr *)dlpi_phdr;
+	const Elf_Phdr *phlimit = phdr + dlpi_phnum;
+
+	for (; phdr < phlimit; ++phdr) {
+		if (phdr->p_type == PT_PHDR)
+			dlpi_addr = (uintptr_t)phdr - phdr->p_vaddr;
+	}
 }
 
 /*ARGSUSED*/
@@ -202,4 +215,12 @@ dl_iterate_phdr(int (*callback)(struct dl_phdr_info *, size_t, void *),
 	phdr_info.dlpi_name = dlpi_name;
 
 	return callback(&phdr_info, sizeof(phdr_info), data);
+}
+
+void ___dl_cxa_refcount(void *, ssize_t);
+
+/*ARGSUSED*/
+void
+___dl_cxa_refcount(void *dso_symbol, ssize_t delta)
+{
 }

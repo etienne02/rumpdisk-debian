@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_timer.c,v 1.22 2013/12/27 18:51:44 christos Exp $ */
+/* $NetBSD: acpi_timer.c,v 1.27 2021/07/25 01:43:08 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2006 Matthias Drochner <drochner@NetBSD.org>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_timer.c,v 1.22 2013/12/27 18:51:44 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_timer.c,v 1.27 2021/07/25 01:43:08 jmcneill Exp $");
 
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -39,25 +39,35 @@ __KERNEL_RCSID(0, "$NetBSD: acpi_timer.c,v 1.22 2013/12/27 18:51:44 christos Exp
 
 #include <machine/acpi_machdep.h>
 
+#if (!ACPI_REDUCED_HARDWARE)
 static int	acpitimer_test(void);
 
 static struct timecounter acpi_timecounter = {
-	acpitimer_read_safe,
-	0,
-	0x00ffffff,
-	ACPI_PM_TIMER_FREQUENCY,
-	"ACPI-Safe",
-	900,
-	NULL,
-	NULL,
+	.tc_get_timecount = acpitimer_read_safe,
+	.tc_counter_mask = 0x00ffffff,
+	.tc_frequency = ACPI_PM_TIMER_FREQUENCY,
+	.tc_name = "ACPI-Safe",
+	.tc_quality = 900,
 };
+
+static bool
+acpitimer_supported(void)
+{
+	return AcpiGbl_FADT.PmTimerLength != 0;
+}
+#endif
 
 int
 acpitimer_init(struct acpi_softc *sc)
 {
+#if (!ACPI_REDUCED_HARDWARE)
+	ACPI_TABLE_WAET *waet;
 	ACPI_STATUS rv;
 	uint32_t bits;
 	int i, j;
+
+	if (!acpitimer_supported())
+		return -1;
 
 	rv = AcpiGetTimerResolution(&bits);
 
@@ -69,6 +79,18 @@ acpitimer_init(struct acpi_softc *sc)
 
 	for (i = j = 0; i < 10; i++)
 		j += acpitimer_test();
+
+	rv = AcpiGetTable(ACPI_SIG_WAET, 0, (ACPI_TABLE_HEADER **)&waet);
+	if (ACPI_SUCCESS(rv)) {
+		/*
+		 * Windows ACPI Emulated Devices Table (WAET) has a hint
+		 * to let the OS know that a single read of the PM timer
+		 * provides a reliable value.
+		 */
+		if ((waet->Flags & ACPI_WAET_TIMER_ONE_READ) != 0) {
+			j += 10;
+		}
+	}
 
 	if (j >= 10) {
 		acpi_timecounter.tc_name = "ACPI-Fast";
@@ -82,15 +104,25 @@ acpitimer_init(struct acpi_softc *sc)
 	    acpi_timecounter.tc_name, bits);
 
 	return 0;
+#else
+	return -1;
+#endif
 }
 
 int
 acpitimer_detach(void)
 {
+#if (!ACPI_REDUCED_HARDWARE)
+	if (!acpitimer_supported())
+		return -1;
 
 	return tc_detach(&acpi_timecounter);
+#else
+	return -1;
+#endif
 }
 
+#if (!ACPI_REDUCED_HARDWARE)
 u_int
 acpitimer_read_fast(struct timecounter *tc)
 {
@@ -178,3 +210,4 @@ acpitimer_test(void)
 
 	return n;
 }
+#endif

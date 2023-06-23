@@ -1,4 +1,4 @@
-/*	$NetBSD: cdefs.h,v 1.15 2014/03/18 17:11:19 christos Exp $	*/
+/*	$NetBSD: cdefs.h,v 1.17 2021/03/24 05:00:24 simonb Exp $	*/
 
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
@@ -31,19 +31,19 @@
 #define	_MIPS_CDEFS_H_
 
 /*
- * These are depreciated.  Use __mips_{o32,o64,n32,n64} instead.
+ * These are deprecated.  Use __mips_{o32,o64,n32,n64} instead.
  */
 /*      MIPS Subprogram Interface Model */
-#define _MIPS_SIM_ABIX32	4	/* 64 bit safe, ILP32 o32 model */
-#define _MIPS_SIM_ABI64		3
-#define _MIPS_SIM_NABI32	2	/* 64bit safe, ILP32 n32 model */
-#define _MIPS_SIM_ABI32		1
+#define	_MIPS_SIM_ABIX32	4	/* 64 bit safe, ILP32 o32 model */
+#define	_MIPS_SIM_ABI64		3
+#define	_MIPS_SIM_NABI32	2	/* 64bit safe, ILP32 n32 model */
+#define	_MIPS_SIM_ABI32		1
 
-#define _MIPS_BSD_API_LP32	_MIPS_SIM_ABI32
+#define	_MIPS_BSD_API_LP32	_MIPS_SIM_ABI32
 #define	_MIPS_BSD_API_LP32_64CLEAN	_MIPS_SIM_ABIX32
 #define	_MIPS_BSD_API_LP64	_MIPS_SIM_ABI64
 
-#define _MIPS_BSD_API_O32	_MIPS_SIM_ABI32
+#define	_MIPS_BSD_API_O32	_MIPS_SIM_ABI32
 #define	_MIPS_BSD_API_O64	_MIPS_SIM_ABIX32
 #define	_MIPS_BSD_API_N32	_MIPS_SIM_NABI32
 #define	_MIPS_BSD_API_N64	_MIPS_SIM_ABI64

@@ -1,4 +1,4 @@
-/*	$NetBSD: bootconfig.c,v 1.9 2016/03/02 19:25:32 christos Exp $	*/
+/*	$NetBSD: bootconfig.c,v 1.13 2020/10/18 16:28:57 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -40,9 +40,10 @@
 
 #include <sys/param.h>
 
-__KERNEL_RCSID(0, "$NetBSD: bootconfig.c,v 1.9 2016/03/02 19:25:32 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bootconfig.c,v 1.13 2020/10/18 16:28:57 skrll Exp $");
 
 #include <sys/systm.h>
+#include <sys/kmem.h>
 
 #include <machine/bootconfig.h>
 
@@ -50,14 +51,14 @@ __KERNEL_RCSID(0, "$NetBSD: bootconfig.c,v 1.9 2016/03/02 19:25:32 christos Exp 
 #include <net/if_ether.h>
 #endif
 
-/* 
+/*
  * Function to identify and process different types of boot argument
  * Note, results may contain trailing data, eg:
  * get_bootconf_option("cow=moo milk=1", "moo", BOOTOPT_TYPE_STRING, &ptr)
  * will return ptr of "moo milk=1", *not* "moo"
  */
 
-int
+int __noasan
 get_bootconf_option(char *opts, const char *opt, int type, void *result)
 {
 	char *ptr;
@@ -108,7 +109,7 @@ get_bootconf_option(char *opts, const char *opt, int type, void *result)
 					break;
 				case BOOTOPT_TYPE_STRING :
 					*((char **)result) = ptr;
-					break;			
+					break;
 				case BOOTOPT_TYPE_INT :
 					*((int *)result) =
 					    (u_int)strtoul(ptr, NULL, 10);
@@ -144,4 +145,35 @@ get_bootconf_option(char *opts, const char *opt, int type, void *result)
 			++ptr;
 	}
 	return 0;
+}
+
+char *
+get_bootconf_string(char *opts, const char *key)
+{
+	char *s, *ret;
+	int i = 0;
+
+	if (!get_bootconf_option(opts, key, BOOTOPT_TYPE_STRING, &s))
+		return NULL;
+
+	for (;;) {
+		if (s[i] == ' ' || s[i] == '\t' || s[i] == '\0')
+			break;
+		++i;
+	}
+
+	ret = kmem_alloc(i + 1, KM_SLEEP);
+	strlcpy(ret, s, i + 1);
+	return ret;
+}
+
+bool
+match_bootconf_option(char *opts, const char *key, const char *val)
+{
+	char *s;
+
+	if (!get_bootconf_option(opts, key, BOOTOPT_TYPE_STRING, &s))
+		return false;
+
+	return strncmp(s, val, strlen(val)) == 0;
 }

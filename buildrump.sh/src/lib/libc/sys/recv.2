@@ -1,4 +1,4 @@
-.\"	$NetBSD: recv.2,v 1.36 2013/07/14 14:29:09 njoly Exp $
+.\"	$NetBSD: recv.2,v 1.39 2019/08/04 01:22:49 uwe Exp $
 .\"
 .\" Copyright (c) 1983, 1990, 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -29,7 +29,7 @@
 .\"
 .\"     @(#)recv.2	8.3 (Berkeley) 2/21/94
 .\"
-.Dd June 22, 2012
+.Dd March 19, 2018
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -72,11 +72,10 @@ address stored there.
 .Pp
 The
 .Fn recvmmsg
-call be used to receive multiple messages in the same call using an array of
+call can be used to receive multiple messages in the same call using an array of
 .Fa mmsghdr
 elements with the following form, as defined in
-.Ao Pa sys/socket.h Ac :
-.Pp
+.In sys/socket.h :
 .Bd -literal
 struct mmsghdr {
 	struct msghdr	msg_hdr;	/* the message to be sent */
@@ -167,19 +166,20 @@ The
 .Xr select 2
 or
 .Xr poll 2
-call may be used to determine when more data arrive.
+call may be used to determine when more data arrives.
 .Pp
 The
 .Fa flags
 argument to a recv call is formed by
 .Em or Ap ing
 one or more of the values:
-.Bl -column MSG_CMSG_CLOEXEC -offset indent
+.Bl -column ".Dv MSG_CMSG_CLOEXEC" -offset indent
 .It Dv MSG_CMSG_CLOEXEC Ta set the close on exec property for passed file descriptors
 .It Dv MSG_OOB Ta process out-of-band data
 .It Dv MSG_PEEK Ta peek at incoming message
 .It Dv MSG_WAITALL Ta wait for full request or error
 .El
+.Pp
 The
 .Dv MSG_OOB
 flag requests receipt of out-of-band data
@@ -206,8 +206,7 @@ call uses a
 .Fa msghdr
 structure to minimize the number of directly supplied parameters.
 This structure has the following form, as defined in
-.Ao Pa sys/socket.h Ac :
-.Pp
+.In sys/socket.h :
 .Bd -literal
 struct msghdr {
 	void		*msg_name;	/* optional address */
@@ -255,7 +254,7 @@ struct cmsghdr {
 As an example, one could use this to learn of changes in the data-stream
 in XNS/SPP, or in ISO, to obtain user-connection-request data by requesting
 a recvmsg with no data buffer provided immediately after an
-.Fn accept
+.Xr accept 2
 call.
 .Pp
 Open file descriptors are now passed as ancillary data for
@@ -298,7 +297,7 @@ For connected sockets whose remote peer was shut down,
 0 is returned when no more data is available.
 The
 .Fn recvmmsg
-calls return the number of messages received, or \-1
+call returns the number of messages received, or \-1
 if an error occurred.
 .Sh ERRORS
 The calls fail if:
@@ -319,8 +318,11 @@ address space.
 The receive was interrupted by delivery of a signal before
 any data were available.
 .It Bq Er EINVAL
-The total length of the I/O is more than can be expressed by the ssize_t
+The total length of the I/O is more than can be expressed by the
+.Vt ssize_t
 return value.
+.It Bq Er ENOBUFS
+A message was not delivered because it would have overflowed the buffer.
 .It Bq Er ENOTCONN
 The socket is associated with a connection-oriented protocol
 and has not been connected (see
@@ -341,7 +343,7 @@ The
 .Fa msg_iovlen
 member of the
 .Fa msg
-structure is less than or equal to 0
+structure is less than or equal to 0,
 or is greater than
 .Brq Dv IOV_MAX .
 .El

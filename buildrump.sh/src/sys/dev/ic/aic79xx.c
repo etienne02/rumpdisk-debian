@@ -1,4 +1,4 @@
-/*	$NetBSD: aic79xx.c,v 1.50 2014/10/18 08:33:27 snj Exp $	*/
+/*	$NetBSD: aic79xx.c,v 1.57 2021/07/24 21:31:37 andvar Exp $	*/
 
 /*
  * Core routines and tables shareable across OS platforms.
@@ -49,7 +49,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aic79xx.c,v 1.50 2014/10/18 08:33:27 snj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aic79xx.c,v 1.57 2021/07/24 21:31:37 andvar Exp $");
 
 #include <dev/ic/aic79xx_osm.h>
 #include <dev/ic/aic79xx_inline.h>
@@ -63,7 +63,7 @@ __KERNEL_RCSID(0, "$NetBSD: aic79xx.c,v 1.50 2014/10/18 08:33:27 snj Exp $");
 struct ahd_softc_tailq ahd_tailq = TAILQ_HEAD_INITIALIZER(ahd_tailq);
 
 /***************************** Lookup Tables **********************************/
-const char *ahd_chip_names[] =
+const char * const ahd_chip_names[] =
 {
 	"NONE",
 	"aic7901",
@@ -222,7 +222,7 @@ static void		ahd_dumpseq(struct ahd_softc *ahd);
 #endif
 static void		ahd_loadseq(struct ahd_softc *ahd);
 static int		ahd_check_patch(struct ahd_softc *ahd,
-					struct patch **start_patch,
+					const struct patch **start_patch,
 					u_int start_instr, u_int *skip_addr);
 static u_int		ahd_resolve_seqaddr(struct ahd_softc *ahd,
 					    u_int address);
@@ -1401,6 +1401,7 @@ ahd_handle_seqint(struct ahd_softc *ahd, u_int intstat)
 			switch (scb->hscb->task_management) {
 			case SIU_TASKMGMT_ABORT_TASK:
 				tag = SCB_GET_TAG(scb);
+				/* FALLTHROUGH */
 			case SIU_TASKMGMT_ABORT_TASK_SET:
 			case SIU_TASKMGMT_CLEAR_TASK_SET:
 				lun = scb->hscb->lun;
@@ -1411,6 +1412,7 @@ ahd_handle_seqint(struct ahd_softc *ahd, u_int intstat)
 				break;
 			case SIU_TASKMGMT_LUN_RESET:
 				lun = scb->hscb->lun;
+				/* FALLTHROUGH */
 			case SIU_TASKMGMT_TARGET_RESET:
 			{
 				struct ahd_devinfo devinfo;
@@ -1577,7 +1579,7 @@ ahd_handle_scsiint(struct ahd_softc *ahd, u_int intstat)
 		/*
 		 * Although the driver does not care about the
 		 * 'Selection in Progress' status bit, the busy
-		 * LED does.  SELINGO is only cleared by a sucessfull
+		 * LED does.  SELINGO is only cleared by a successful
 		 * selection, so we must manually clear it to insure
 		 * the LED turns off just incase no future successful
 		 * selections occur (e.g. no devices on the bus).
@@ -1961,7 +1963,7 @@ ahd_handle_lqiphase_error(struct ahd_softc *ahd, u_int lqistat1)
 		ahd_outb(ahd, CLRINT, CLRSCSIINT);
 		ahd_unpause(ahd);
 	} else {
-		printf("Reseting Channel for LQI Phase error\n");
+		printf("Resetting Channel for LQI Phase error\n");
 		ahd_dump_card_state(ahd);
 		ahd_reset_channel(ahd, 'A', /*Initiate Reset*/TRUE);
 	}
@@ -2704,9 +2706,7 @@ ahd_alloc_tstate(struct ahd_softc *ahd, u_int scsi_id, char channel)
 	 && ahd->enabled_targets[scsi_id] != master_tstate)
 		panic("%s: ahd_alloc_tstate - Target already allocated",
 		      ahd_name(ahd));
-	tstate = malloc(sizeof(*tstate), M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (tstate == NULL)
-		return (NULL);
+	tstate = malloc(sizeof(*tstate), M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/*
 	 * If we have allocated a master tstate, copy user settings from
@@ -5515,8 +5515,8 @@ ahd_fini_scbdata(struct ahd_softc *ahd)
 				       &sns_map->dmasegs, sns_map->nseg);
 			free(sns_map, M_DEVBUF);
 		}
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 	case 2:
 	{
 		struct map_node *sg_map;
@@ -5529,8 +5529,8 @@ ahd_fini_scbdata(struct ahd_softc *ahd)
 				       &sg_map->dmasegs, sg_map->nseg);
 			free(sg_map, M_DEVBUF);
 		}
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 	case 1:
 	{
 		struct map_node *hscb_map;
@@ -5543,8 +5543,8 @@ ahd_fini_scbdata(struct ahd_softc *ahd)
 				       &hscb_map->dmasegs, hscb_map->nseg);
 			free(hscb_map, M_DEVBUF);
 		}
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 	case 0:
 		break;
 	}
@@ -5983,14 +5983,14 @@ ahd_controller_info(struct ahd_softc *ahd, char *tbuf, size_t l)
 		ahd->scb_data.maxhscbs);
 }
 
-static const char *channel_strings[] = {
+static const char * const channel_strings[] = {
 	"Primary Low",
 	"Primary High",
 	"Secondary Low",
 	"Secondary High"
 };
 
-static const char *termstat_strings[] = {
+static const char * const termstat_strings[] = {
 	"Terminated Correctly",
 	"Over Terminated",
 	"Under Terminated",
@@ -6016,11 +6016,7 @@ ahd_init(struct ahd_softc *ahd)
 
 	ahd->stack_size = ahd_probe_stack_size(ahd);
 	ahd->saved_stack = malloc(ahd->stack_size * sizeof(uint16_t),
-				  M_DEVBUF, M_NOWAIT);
-	if (ahd->saved_stack == NULL)
-		return (ENOMEM);
-	/* Zero the memory */
-	memset(ahd->saved_stack, 0, ahd->stack_size * sizeof(uint16_t));
+				  M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/*
 	 * Verify that the compiler hasn't over-agressively
@@ -6175,6 +6171,7 @@ ahd_init(struct ahd_softc *ahd)
 		case FLX_CSTAT_OVER:
 		case FLX_CSTAT_UNDER:
 			warn_user++;
+			/* FALLTHROUGH */
 		case FLX_CSTAT_INVALID:
 		case FLX_CSTAT_OKAY:
 			if (warn_user == 0 && bootverbose == 0)
@@ -7341,8 +7338,8 @@ ahd_search_scb_list(struct ahd_softc *ahd, int target, char channel,
 			if ((scb->flags & SCB_ACTIVE) == 0)
 				printf("Inactive SCB in Waiting List\n");
 			ahd_done(ahd, scb);
-			/* FALLTHROUGH */
 		}
+		/* FALLTHROUGH */
 		case SEARCH_REMOVE:
 			ahd_rem_wscb(ahd, scbid, prev, next, tid);
 			if (prev == SCB_LIST_NULL)
@@ -7350,6 +7347,7 @@ ahd_search_scb_list(struct ahd_softc *ahd, int target, char channel,
 			break;
 		case SEARCH_PRINT:
 			printf("0x%x ", scbid);
+			/* FALLTHROUGH */
 		case SEARCH_COUNT:
 			prev = scbid;
 			break;
@@ -8254,13 +8252,13 @@ ahd_dumpseq(struct ahd_softc* ahd)
 }
 #endif
 
-static void
+static void __noinline
 ahd_loadseq(struct ahd_softc *ahd)
 {
 	struct	cs cs_table[num_critical_sections];
 	u_int	begin_set[num_critical_sections];
 	u_int	end_set[num_critical_sections];
-	struct	patch *cur_patch;
+	const struct patch *cur_patch;
 	u_int	cs_count;
 	u_int	cur_cs;
 	u_int	i;
@@ -8411,12 +8409,12 @@ ahd_loadseq(struct ahd_softc *ahd)
 }
 
 static int
-ahd_check_patch(struct ahd_softc *ahd, struct patch **start_patch,
+ahd_check_patch(struct ahd_softc *ahd, const struct patch **start_patch,
 		u_int start_instr, u_int *skip_addr)
 {
-	struct	patch *cur_patch;
-	struct	patch *last_patch;
-	u_int	num_patches;
+	const struct	patch *cur_patch;
+	const struct	patch *last_patch;
+	u_int		num_patches;
 
 	num_patches = sizeof(patches)/sizeof(struct patch);
 	last_patch = &patches[num_patches];
@@ -8431,7 +8429,7 @@ ahd_check_patch(struct ahd_softc *ahd, struct patch **start_patch,
 			cur_patch += cur_patch->skip_patch;
 		} else {
 			/* Accepted this patch.  Advance to the next
-			 * one and wait for our intruction pointer to
+			 * one and wait for our instruction pointer to
 			 * hit this point.
 			 */
 			cur_patch++;
@@ -8449,7 +8447,7 @@ ahd_check_patch(struct ahd_softc *ahd, struct patch **start_patch,
 static u_int
 ahd_resolve_seqaddr(struct ahd_softc *ahd, u_int address)
 {
-	struct patch *cur_patch;
+	const struct patch *cur_patch;
 	int address_offset;
 	u_int skip_addr;
 	u_int i;
@@ -8486,7 +8484,7 @@ ahd_download_instr(struct ahd_softc *ahd, u_int instrptr, uint8_t *dconsts)
 	/*
 	 * The firmware is always compiled into a little endian format.
 	 */
-	instr.integer = ahd_le32toh(*(uint32_t*)&seqprog[instrptr * 4]);
+	instr.integer = ahd_le32toh(*(const uint32_t*)&seqprog[instrptr * 4]);
 
 	fmt1_ins = &instr.format1;
 	fmt3_ins = NULL;
@@ -8505,8 +8503,8 @@ ahd_download_instr(struct ahd_softc *ahd, u_int instrptr, uint8_t *dconsts)
 	{
 		fmt3_ins = &instr.format3;
 		fmt3_ins->address = ahd_resolve_seqaddr(ahd, fmt3_ins->address);
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 	case AIC_OP_OR:
 	case AIC_OP_AND:
 	case AIC_OP_XOR:

@@ -1,4 +1,4 @@
-/*	$NetBSD: arm32_reboot.c,v 1.10 2015/11/11 14:50:08 jmcneill Exp $	*/
+/*	$NetBSD: arm32_reboot.c,v 1.13 2020/06/20 07:10:36 skrll Exp $	*/
 
 /*
  * Copyright (c) 2002, 2003, 2005  Genetec Corporation.  All rights reserved.
@@ -122,14 +122,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm32_reboot.c,v 1.10 2015/11/11 14:50:08 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm32_reboot.c,v 1.13 2020/06/20 07:10:36 skrll Exp $");
 
 #include <sys/param.h>
+
+#include <dev/cons.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
 #include <sys/reboot.h>
-
-#include <dev/cons.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -138,7 +138,7 @@ __KERNEL_RCSID(0, "$NetBSD: arm32_reboot.c,v 1.10 2015/11/11 14:50:08 jmcneill E
 
 void (*cpu_powerdown_address)(void);
 
-static int
+static void
 docpureset(int howto)
 {
 	if ((howto & RB_POWERDOWN) == RB_POWERDOWN) {
@@ -157,7 +157,7 @@ docpureset(int howto)
 		/* If there is no keyboard, cngetc() returns 0, so loop */
 		while (cngetc() == 0)
 			delay(100000);
-		cnpollc(false);		
+		cnpollc(false);
 	}
 
 	printf("rebooting...\r\n");

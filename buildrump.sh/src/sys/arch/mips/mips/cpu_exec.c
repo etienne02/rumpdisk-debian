@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu_exec.c,v 1.64 2011/07/10 23:21:58 matt Exp $	*/
+/*	$NetBSD: cpu_exec.c,v 1.68 2021/05/23 23:24:45 mrg Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.64 2011/07/10 23:21:58 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.68 2021/05/23 23:24:45 mrg Exp $");
 
 #include "opt_compat_netbsd.h"
 #include "opt_compat_ultrix.h"
@@ -64,8 +64,6 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.64 2011/07/10 23:21:58 matt Exp $");
 
 #include <compat/common/compat_util.h>
 
-int	mips_elf_makecmds(struct lwp *, struct exec_package *);
-
 #ifdef EXEC_ECOFF
 void
 cpu_exec_ecoff_setregs(struct lwp *l, struct exec_package *epp, vaddr_t stack)
@@ -91,161 +89,6 @@ cpu_exec_ecoff_probe(struct lwp *l, struct exec_package *epp)
 }
 #endif /* EXEC_ECOFF */
 
-/*
- * mips_elf_makecmds (l, epp)
- *
- * Test if an executable is a MIPS ELF executable.   If it is,
- * try to load it.
- */
-
-int
-mips_elf_makecmds(struct lwp *l, struct exec_package *epp)
-{
-	Elf32_Ehdr *ex = (Elf32_Ehdr *)epp->ep_hdr;
-	Elf32_Phdr ph;
-	int i, error;
-	size_t resid;
-
-	/* Make sure we got enough data to check magic numbers... */
-	if (epp->ep_hdrvalid < sizeof (Elf32_Ehdr)) {
-#ifdef DIAGNOSTIC
-		if (epp->ep_hdrlen < sizeof (Elf32_Ehdr))
-			printf ("mips_elf_makecmds: execsw hdrsize too short!\n");
-#endif
-	    return ENOEXEC;
-	}
-
-	/* See if it's got the basic elf magic number leadin... */
-	if (memcmp(ex->e_ident, ELFMAG, SELFMAG) != 0) {
-		return ENOEXEC;
-	}
-
-	/* XXX: Check other magic numbers here. */
-	if (ex->e_ident[EI_CLASS] != ELFCLASS32) {
-		return ENOEXEC;
-	}
-
-	/* See if we got any program header information... */
-	if (!ex->e_phoff || !ex->e_phnum) {
-		return ENOEXEC;
-	}
-
-	error = vn_marktext(epp->ep_vp);
-	if (error)
-		return (error);
-
-	/* Set the entry point... */
-	epp->ep_entry = ex->e_entry;
-	epp->ep_taddr = 0;
-	epp->ep_tsize = 0;
-	epp->ep_daddr = 0;
-	epp->ep_dsize = 0;
-
-	for (i = 0; i < ex->e_phnum; i++) {
-#ifdef DEBUG
-		/*printf("obsolete elf: mapping %x %x %x\n", resid);*/
-#endif
-		if ((error = vn_rdwr(UIO_READ, epp->ep_vp, (void *)&ph,
-				    sizeof ph, ex->e_phoff + i * sizeof ph,
-				    UIO_SYSSPACE, IO_NODELOCKED,
-				    l->l_cred, &resid, NULL))
-		    != 0)
-			return error;
-
-		if (resid != 0) {
-			return ENOEXEC;
-		}
-
-		/* We only care about loadable sections... */
-		if (ph.p_type == PT_LOAD) {
-			int prot = VM_PROT_READ | VM_PROT_EXECUTE;
-			int residue;
-			unsigned vaddr, offset, length;
-
-			vaddr = ph.p_vaddr;
-			offset = ph.p_offset;
-			length = ph.p_filesz;
-			residue = ph.p_memsz - ph.p_filesz;
-
-			if (ph.p_flags & PF_W) {
-				prot |= VM_PROT_WRITE;
-				if (!epp->ep_daddr || vaddr < epp->ep_daddr)
-					epp->ep_daddr = vaddr;
-				epp->ep_dsize += ph.p_memsz;
-				/* Read the data from the file... */
-				NEW_VMCMD(&epp->ep_vmcmds, vmcmd_map_readvn,
-					  length, vaddr,
-					  epp->ep_vp, offset, prot);
-#ifdef OLD_ELF_DEBUG
-/*XXX*/		printf(
-	"obsolete elf: NEW_VMCMD len %x va %x off %x prot %x residue %x\n",
-			length, vaddr, offset, prot, residue);
-#endif /*ELF_DEBUG*/
-
-				if (residue) {
-					vaddr &= ~(PAGE_SIZE - 1);
-					offset &= ~(PAGE_SIZE - 1);
-					length = roundup (length + ph.p_vaddr
-							  - vaddr, PAGE_SIZE);
-					residue = (ph.p_vaddr + ph.p_memsz)
-						  - (vaddr + length);
-				}
-			} else {
-				vaddr &= ~(PAGE_SIZE - 1);
-				offset &= ~(PAGE_SIZE - 1);
-				length = roundup (length + ph.p_vaddr - vaddr,
-						  PAGE_SIZE);
-				residue = (ph.p_vaddr + ph.p_memsz)
-					  - (vaddr + length);
-				if (!epp->ep_taddr || vaddr < epp->ep_taddr)
-					epp->ep_taddr = vaddr;
-				epp->ep_tsize += ph.p_memsz;
-				/* Map the data from the file... */
-				NEW_VMCMD(&epp->ep_vmcmds, vmcmd_map_pagedvn,
-					  length, vaddr,
-					  epp->ep_vp, offset, prot);
-			}
-			/* If part of the segment is just zeros (e.g., bss),
-			   map that. */
-			if (residue > 0) {
-#ifdef OLD_ELF_DEBUG
-/*XXX*/			printf(
-	"old elf:resid NEW_VMCMD len %x va %x off %x prot %x residue %x\n",
-				length, vaddr + length, offset, prot, residue);
-#endif /*ELF_DEBUG*/
-
-				NEW_VMCMD (&epp->ep_vmcmds, vmcmd_map_zero,
-					   residue, vaddr + length,
-					   NULLVP, 0, prot);
-			}
-		}
-	}
-
-	epp->ep_maxsaddr = USRSTACK - MAXSSIZ;
-	epp->ep_minsaddr = USRSTACK;
-	epp->ep_ssize = l->l_proc->p_rlimit[RLIMIT_STACK].rlim_cur;
-
-	/*
-	 * set up commands for stack.  note that this takes *two*, one to
-	 * map the part of the stack which we can access, and one to map
-	 * the part which we can't.
-	 *
-	 * arguably, it could be made into one, but that would require the
-	 * addition of another mapping proc, which is unnecessary
-	 *
-	 * note that in memory, things assumed to be: 0 ....... ep_maxsaddr
-	 * <stack> ep_minsaddr
-	 */
-	NEW_VMCMD2(&epp->ep_vmcmds, vmcmd_map_zero,
-	    ((epp->ep_minsaddr - epp->ep_ssize) - epp->ep_maxsaddr),
-	    epp->ep_maxsaddr, NULLVP, 0, VM_PROT_NONE, VMCMD_STACK);
-	NEW_VMCMD2(&epp->ep_vmcmds, vmcmd_map_zero, epp->ep_ssize,
-	    (epp->ep_minsaddr - epp->ep_ssize), NULLVP, 0,
-	    VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, VMCMD_STACK);
-
-	return 0;
-}
-
 #if EXEC_ELF32
 int
 mips_netbsd_elf32_probe(struct lwp *l, struct exec_package *epp, void *eh0,
@@ -253,7 +96,9 @@ mips_netbsd_elf32_probe(struct lwp *l, struct exec_package *epp, void *eh0,
 {
 	struct proc * const p = l->l_proc;
 	const Elf32_Ehdr * const eh = eh0;
+#ifdef DEBUG_EXEC
 	int old_abi = p->p_md.md_abi;
+#endif /* DEBUG_EXEC */
 	const char *itp_suffix = NULL;
 
 	/*
@@ -295,8 +140,10 @@ mips_netbsd_elf32_probe(struct lwp *l, struct exec_package *epp, void *eh0,
 	case EF_MIPS_ABI2:
 		itp_suffix = "n32";
 		p->p_md.md_abi = _MIPS_BSD_API_N32;
+#ifdef DEBUG_EXEC
 		if (old_abi != p->p_md.md_abi)
 			printf("pid %d(%s): ABI set to N32 (e_flags=%#x)\n", p->p_pid, p->p_comm, eh->e_flags);
+#endif /* DEBUG_EXEC */
 		break;
 #endif
 #ifdef COMPAT_16
@@ -307,8 +154,10 @@ mips_netbsd_elf32_probe(struct lwp *l, struct exec_package *epp, void *eh0,
 	case EF_MIPS_ABI_O32:
 		itp_suffix = "o32";
 		p->p_md.md_abi = _MIPS_BSD_API_O32;
+#ifdef DEBUG_EXEC
 		if (old_abi != p->p_md.md_abi)
 			printf("pid %d(%s): ABI set to O32 (e_flags=%#x)\n", p->p_pid, p->p_comm, eh->e_flags);
+#endif /* DEBUG_EXEC */
 		break;
 	default:
 		return ENOEXEC;
@@ -352,7 +201,7 @@ coredump_elf32_setup(struct lwp *l, void *eh0)
 		eh->e_flags |= EF_MIPS_ABI2;
 		break;
 	case _MIPS_BSD_API_O32:
-		eh->e_flags |=EF_MIPS_ABI_O32; 
+		eh->e_flags |= EF_MIPS_ABI_O32; 
 		break;
 	}
 }
@@ -365,7 +214,9 @@ mips_netbsd_elf64_probe(struct lwp *l, struct exec_package *epp, void *eh0,
 {
 	struct proc * const p = l->l_proc;
 	const Elf64_Ehdr * const eh = eh0;
+#ifdef DEBUG_EXEC
 	int old_abi = p->p_md.md_abi;
+#endif /* DEBUG_EXEC */
 	const char *itp_suffix = NULL;
 
 	switch (eh->e_flags & EF_MIPS_ARCH) {
@@ -404,14 +255,18 @@ mips_netbsd_elf64_probe(struct lwp *l, struct exec_package *epp, void *eh0,
 	case 0:
 		itp_suffix = "64";
 		p->p_md.md_abi = _MIPS_BSD_API_N64;
+#ifdef DEBUG_EXEC
 		if (old_abi != p->p_md.md_abi)
 			printf("pid %d(%s): ABI set to N64 (e_flags=%#x)\n", p->p_pid, p->p_comm, eh->e_flags);
+#endif /* DEBUG_EXEC */
 		break;
 	case EF_MIPS_ABI_O64:
 		itp_suffix = "o64";
 		p->p_md.md_abi = _MIPS_BSD_API_O64;
+#ifdef DEBUG_EXEC
 		if (old_abi != p->p_md.md_abi)
 			printf("pid %d(%s): ABI set to O64 (e_flags=%#x)\n", p->p_pid, p->p_comm, eh->e_flags);
+#endif /* DEBUG_EXEC */
 		break;
 	default:
 		return ENOEXEC;

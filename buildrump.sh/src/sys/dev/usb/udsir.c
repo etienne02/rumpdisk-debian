@@ -1,11 +1,11 @@
-/*	$NetBSD: udsir.c,v 1.3 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: udsir.c,v 1.14 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by David Sainty <David.Sainty@dtsp.co.nz>
+ * by David Sainty <dsainty@NetBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udsir.c,v 1.3 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udsir.c,v 1.14 2021/08/07 16:19:17 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -230,7 +230,7 @@ udsir_attach(device_t parent, device_t self, void *aux)
 	ia.ia_methods = &udsir_methods;
 	ia.ia_handle = sc;
 
-	sc->sc_child = config_found(self, &ia, ir_print);
+	sc->sc_child = config_found(self, &ia, ir_print, CFARGS_NONE);
 	selinit(&sc->sc_rd_sel);
 	selinit(&sc->sc_wr_sel);
 
@@ -344,7 +344,7 @@ udsir_open(void *h, int flag, int mode, struct lwp *l)
 		goto bad2;
 	}
 	error = usbd_create_xfer(sc->sc_rd_pipe, sc->sc_rd_maxpsz,
-	    USBD_SHORT_XFER_OK, 0, &sc->sc_rd_xfer);
+	    0, 0, &sc->sc_rd_xfer);
 	if (error)
 		 goto bad3;
 
@@ -357,11 +357,6 @@ udsir_open(void *h, int flag, int mode, struct lwp *l)
 	sc->sc_wr_buf = usbd_get_buffer(sc->sc_wr_xfer);
 
 	sc->sc_ur_buf = kmem_alloc(IRDA_MAX_FRAME_SIZE, KM_SLEEP);
-	if (sc->sc_ur_buf == NULL) {
-		error = ENOMEM;
-		goto bad5;
-	}
-
 	sc->sc_rd_index = sc->sc_rd_count = 0;
 	sc->sc_closing = 0;
 	sc->sc_rd_readinprogress = 0;
@@ -372,7 +367,7 @@ udsir_open(void *h, int flag, int mode, struct lwp *l)
 	sc->sc_direction = udir_idle;
 	sc->sc_params.speed = 0;
 	sc->sc_params.ebofs = 0;
-	sc->sc_params.maxsize = min(sc->sc_rd_maxpsz, sc->sc_wr_maxpsz);
+	sc->sc_params.maxsize = uimin(sc->sc_rd_maxpsz, sc->sc_wr_maxpsz);
 
 	deframe_init(&sc->sc_framestate, sc->sc_ur_buf, IRDA_MAX_FRAME_SIZE);
 
@@ -667,38 +662,47 @@ udsir_poll(void *h, int events, struct lwp *l)
 	return revents;
 }
 
-static const struct filterops udsirread_filtops =
-	{ 1, NULL, filt_udsirrdetach, filt_udsirread };
-static const struct filterops udsirwrite_filtops =
-	{ 1, NULL, filt_udsirwdetach, filt_udsirwrite };
+static const struct filterops udsirread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_udsirrdetach,
+	.f_event = filt_udsirread,
+};
+
+static const struct filterops udsirwrite_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_udsirwdetach,
+	.f_event = filt_udsirwrite,
+};
 
 static int
 udsir_kqfilter(void *h, struct knote *kn)
 {
 	struct udsir_softc *sc = h;
-	struct klist *klist;
+	struct selinfo *sip;
 	int s;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &sc->sc_rd_sel.sel_klist;
+		sip = &sc->sc_rd_sel;
 		kn->kn_fop = &udsirread_filtops;
 		break;
 	case EVFILT_WRITE:
-		klist = &sc->sc_wr_sel.sel_klist;
+		sip = &sc->sc_wr_sel;
 		kn->kn_fop = &udsirwrite_filtops;
 		break;
 	default:
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	kn->kn_hook = sc;
 
 	s = splusb();
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(sip, kn);
 	splx(s);
 
-	return (0);
+	return 0;
 }
 
 static int
@@ -716,7 +720,7 @@ udsir_set_params(void *h, struct irda_params *p)
 		return EINVAL;
 
 	if (p->maxsize != sc->sc_params.maxsize) {
-		if (p->maxsize > min(sc->sc_rd_maxpsz, sc->sc_wr_maxpsz))
+		if (p->maxsize > uimin(sc->sc_rd_maxpsz, sc->sc_wr_maxpsz))
 			return EINVAL;
 		sc->sc_params.maxsize = p->maxsize;
 	}
@@ -768,7 +772,7 @@ filt_udsirrdetach(struct knote *kn)
 	int s;
 
 	s = splusb();
-	SLIST_REMOVE(&sc->sc_rd_sel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->sc_rd_sel, kn);
 	splx(s);
 }
 
@@ -779,7 +783,7 @@ filt_udsirread(struct knote *kn, long hint)
 	struct udsir_softc *sc = kn->kn_hook;
 
 	kn->kn_data = sc->sc_ur_framelen;
-	return (kn->kn_data > 0);
+	return kn->kn_data > 0;
 }
 
 static void
@@ -789,7 +793,7 @@ filt_udsirwdetach(struct knote *kn)
 	int s;
 
 	s = splusb();
-	SLIST_REMOVE(&sc->sc_wr_sel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->sc_wr_sel, kn);
 	splx(s);
 }
 
@@ -800,7 +804,7 @@ filt_udsirwrite(struct knote *kn, long hint)
 	struct udsir_softc *sc = kn->kn_hook;
 
 	kn->kn_data = 0;
-	return (sc->sc_direction != udir_input);
+	return sc->sc_direction != udir_input;
 }
 
 

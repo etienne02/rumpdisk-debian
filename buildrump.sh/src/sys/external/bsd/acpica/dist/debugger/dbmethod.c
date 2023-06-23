@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -52,6 +52,19 @@
 
 #define _COMPONENT          ACPI_CA_DEBUGGER
         ACPI_MODULE_NAME    ("dbmethod")
+
+/* Local prototypes */
+
+static ACPI_STATUS
+AcpiDbWalkForExecute (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  NestingLevel,
+    void                    *Context,
+    void                    **ReturnValue);
+
+static ACPI_STATUS
+AcpiDbEvaluateObject (
+    ACPI_NAMESPACE_NODE     *Node);
 
 
 /*******************************************************************************
@@ -276,6 +289,7 @@ Cleanup:
 }
 
 
+#ifdef ACPI_DISASSEMBLER
 /*******************************************************************************
  *
  * FUNCTION:    AcpiDbDisassembleAml
@@ -309,9 +323,7 @@ AcpiDbDisassembleAml (
         NumStatements = strtoul (Statements, NULL, 0);
     }
 
-#ifdef ACPI_DISASSEMBLER
     AcpiDmDisassemble (NULL, Op, NumStatements);
-#endif
 }
 
 
@@ -377,6 +389,11 @@ AcpiDbDisassembleMethod (
     }
 
     Status = AcpiUtAllocateOwnerId (&ObjDesc->Method.OwnerId);
+    if (ACPI_FAILURE(Status))
+    {
+        return (Status);
+    }
+
     WalkState->OwnerId = ObjDesc->Method.OwnerId;
 
     /* Push start scope on scope stack and make it current */
@@ -394,8 +411,11 @@ AcpiDbDisassembleMethod (
     WalkState->ParseFlags |= ACPI_PARSE_DISASSEMBLE;
 
     Status = AcpiPsParseAml (WalkState);
+    if (ACPI_FAILURE(Status))
+    {
+        return (Status);
+    }
 
-#ifdef ACPI_DISASSEMBLER
     (void) AcpiDmParseDeferredOps (Op);
 
     /* Now we can disassemble the method */
@@ -403,7 +423,6 @@ AcpiDbDisassembleMethod (
     AcpiGbl_DmOpt_Verbose = FALSE;
     AcpiDmDisassemble (NULL, Op, 0);
     AcpiGbl_DmOpt_Verbose = TRUE;
-#endif
 
     AcpiPsDeleteParseTree (Op);
 
@@ -413,4 +432,267 @@ AcpiDbDisassembleMethod (
     AcpiNsDeleteNamespaceByOwner (ObjDesc->Method.OwnerId);
     AcpiUtReleaseOwnerId (&ObjDesc->Method.OwnerId);
     return (AE_OK);
+}
+#endif
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbEvaluateObject
+ *
+ * PARAMETERS:  Node                - Namespace node for the object
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Main execution function for the Evaluate/Execute/All debugger
+ *              commands.
+ *
+ ******************************************************************************/
+
+static ACPI_STATUS
+AcpiDbEvaluateObject (
+    ACPI_NAMESPACE_NODE     *Node)
+{
+    char                    *Pathname;
+    UINT32                  i;
+    ACPI_DEVICE_INFO        *ObjInfo;
+    ACPI_OBJECT_LIST        ParamObjects;
+    ACPI_OBJECT             Params[ACPI_METHOD_NUM_ARGS];
+    ACPI_BUFFER             ReturnObj;
+    ACPI_STATUS             Status;
+
+
+    Pathname = AcpiNsGetExternalPathname (Node);
+    if (!Pathname)
+    {
+        return (AE_OK);
+    }
+
+    /* Get the object info for number of method parameters */
+
+    Status = AcpiGetObjectInfo (Node, &ObjInfo);
+    if (ACPI_FAILURE (Status))
+    {
+        ACPI_FREE (Pathname);
+        return (Status);
+    }
+
+    ParamObjects.Pointer = NULL;
+    ParamObjects.Count   = 0;
+
+    if (ObjInfo->Type == ACPI_TYPE_METHOD)
+    {
+        /* Setup default parameters */
+
+        for (i = 0; i < ObjInfo->ParamCount; i++)
+        {
+            Params[i].Type           = ACPI_TYPE_INTEGER;
+            Params[i].Integer.Value  = 1;
+        }
+
+        ParamObjects.Pointer     = Params;
+        ParamObjects.Count       = ObjInfo->ParamCount;
+    }
+
+    ACPI_FREE (ObjInfo);
+    ReturnObj.Pointer = NULL;
+    ReturnObj.Length = ACPI_ALLOCATE_BUFFER;
+
+    /* Do the actual method execution */
+
+    AcpiGbl_MethodExecuting = TRUE;
+
+    Status = AcpiEvaluateObject (Node, NULL, &ParamObjects, &ReturnObj);
+    AcpiGbl_MethodExecuting = FALSE;
+
+    AcpiOsPrintf ("%-32s returned %s\n", Pathname, AcpiFormatException (Status));
+    if (ReturnObj.Length)
+    {
+        AcpiOsPrintf ("Evaluation of %s returned object %p, "
+            "external buffer length %X\n",
+            Pathname, ReturnObj.Pointer, (UINT32) ReturnObj.Length);
+
+        AcpiDbDumpExternalObject (ReturnObj.Pointer, 1);
+        AcpiOsPrintf ("\n");
+    }
+
+    ACPI_FREE (Pathname);
+
+    /* Ignore status from method execution */
+
+    return (AE_OK);
+
+    /* Update count, check if we have executed enough methods */
+
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbWalkForExecute
+ *
+ * PARAMETERS:  Callback from WalkNamespace
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Batch execution function. Evaluates all "predefined" objects --
+ *              the nameseg begins with an underscore.
+ *
+ ******************************************************************************/
+
+static ACPI_STATUS
+AcpiDbWalkForExecute (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  NestingLevel,
+    void                    *Context,
+    void                    **ReturnValue)
+{
+    ACPI_NAMESPACE_NODE     *Node = (ACPI_NAMESPACE_NODE *) ObjHandle;
+    ACPI_DB_EXECUTE_WALK    *Info = (ACPI_DB_EXECUTE_WALK *) Context;
+    ACPI_STATUS             Status;
+    const ACPI_PREDEFINED_INFO *Predefined;
+
+
+    Predefined = AcpiUtMatchPredefinedMethod (Node->Name.Ascii);
+    if (!Predefined)
+    {
+        return (AE_OK);
+    }
+
+    if (Node->Type == ACPI_TYPE_LOCAL_SCOPE)
+    {
+        return (AE_OK);
+    }
+
+    AcpiDbEvaluateObject (Node);
+
+    /* Ignore status from object evaluation */
+
+    Status = AE_OK;
+
+    /* Update count, check if we have executed enough methods */
+
+    Info->Count++;
+    if (Info->Count >= Info->MaxCount)
+    {
+        Status = AE_CTRL_TERMINATE;
+    }
+
+    return (Status);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbWalkForExecuteAll
+ *
+ * PARAMETERS:  Callback from WalkNamespace
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Batch execution function. Evaluates all objects whose path ends
+ *              with the nameseg "Info->NameSeg". Used for the "ALL" command.
+ *
+ ******************************************************************************/
+
+static ACPI_STATUS
+AcpiDbWalkForExecuteAll (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  NestingLevel,
+    void                    *Context,
+    void                    **ReturnValue)
+{
+    ACPI_NAMESPACE_NODE     *Node = (ACPI_NAMESPACE_NODE *) ObjHandle;
+    ACPI_DB_EXECUTE_WALK    *Info = (ACPI_DB_EXECUTE_WALK *) Context;
+    ACPI_STATUS             Status;
+
+
+    if (!ACPI_COMPARE_NAMESEG (Node->Name.Ascii, Info->NameSeg))
+    {
+        return (AE_OK);
+    }
+
+    if (Node->Type == ACPI_TYPE_LOCAL_SCOPE)
+    {
+        return (AE_OK);
+    }
+
+    /* Now evaluate the input object (node) */
+
+    AcpiDbEvaluateObject (Node);
+
+    /* Ignore status from method execution */
+
+    Status = AE_OK;
+
+    /* Update count of executed methods/objects */
+
+    Info->Count++;
+    return (Status);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbEvaluatePredefinedNames
+ *
+ * PARAMETERS:  None
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Namespace batch execution. Execute predefined names in the
+ *              namespace, up to the max count, if specified.
+ *
+ ******************************************************************************/
+
+void
+AcpiDbEvaluatePredefinedNames (
+    void)
+{
+    ACPI_DB_EXECUTE_WALK    Info;
+
+
+    Info.Count = 0;
+    Info.MaxCount = ACPI_UINT32_MAX;
+
+    /* Search all nodes in namespace */
+
+    (void) AcpiWalkNamespace (ACPI_TYPE_ANY, ACPI_ROOT_OBJECT, ACPI_UINT32_MAX,
+                AcpiDbWalkForExecute, NULL, (void *) &Info, NULL);
+
+    AcpiOsPrintf ("Evaluated %u predefined names in the namespace\n", Info.Count);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbEvaluateAll
+ *
+ * PARAMETERS:  NoneAcpiGbl_DbMethodInfo
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Namespace batch execution. Implements the "ALL" command.
+ *              Execute all namepaths whose final nameseg matches the
+ *              input nameseg.
+ *
+ ******************************************************************************/
+
+void
+AcpiDbEvaluateAll (
+    char                    *NameSeg)
+{
+    ACPI_DB_EXECUTE_WALK    Info;
+
+
+    Info.Count = 0;
+    Info.MaxCount = ACPI_UINT32_MAX;
+    ACPI_COPY_NAMESEG (Info.NameSeg, NameSeg);
+    Info.NameSeg[ACPI_NAMESEG_SIZE] = 0;
+
+    /* Search all nodes in namespace */
+
+    (void) AcpiWalkNamespace (ACPI_TYPE_ANY, ACPI_ROOT_OBJECT, ACPI_UINT32_MAX,
+                AcpiDbWalkForExecuteAll, NULL, (void *) &Info, NULL);
+
+    AcpiOsPrintf ("Evaluated %u names in the namespace\n", Info.Count);
 }

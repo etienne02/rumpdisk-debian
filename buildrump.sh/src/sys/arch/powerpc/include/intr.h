@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.11 2013/08/23 06:18:14 matt Exp $ */
+/*	$NetBSD: intr.h,v 1.18 2021/03/02 07:37:27 rin Exp $ */
 
 /*-
  * Copyright (c) 2007 Michael Lorenz
@@ -28,7 +28,7 @@
 
 #ifndef _LOCORE
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: intr.h,v 1.11 2013/08/23 06:18:14 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: intr.h,v 1.18 2021/03/02 07:37:27 rin Exp $");
 #endif
 
 #ifndef _POWERPC_INTR_MACHDEP_H_
@@ -61,6 +61,8 @@ __KERNEL_RCSID(0, "$NetBSD: intr.h,v 1.11 2013/08/23 06:18:14 matt Exp $");
 
 #if !defined(_LOCORE)
 void *	intr_establish(int, int, int, int (*)(void *), void *);
+void *	intr_establish_xname(int, int, int, int (*)(void *), void *,
+	    const char *);
 void	intr_disestablish(void *);
 const char *
 	intr_typename(int);
@@ -85,12 +87,15 @@ struct intrhand {
 	struct	intrhand *ih_next;
 	int	ih_ipl;
 	int	ih_virq;
+	char	ih_xname[INTRDEVNAMEBUF];
 };
 
 void softint_fast_dispatch(struct lwp *, int);
 
+#ifdef __HAVE_FAST_SOFTINTS
 #define softint_init_md		powerpc_softint_init_md
 #define softint_trigger		powerpc_softint_trigger
+#endif
 
 #ifdef __IMASK_T
 typedef __IMASK_T imask_t;
@@ -98,11 +103,9 @@ typedef __IMASK_T imask_t;
 typedef uint32_t imask_t;
 #endif
 
-extern imask_t imask[];
-
 #define NVIRQ		(sizeof(imask_t)*8)	/* 32 virtual IRQs */
 #ifndef NIRQ
-#define NIRQ		128	/* up to 128 HW IRQs */
+#define NIRQ		256	/* up to 256 HW IRQs */
 #endif
 
 #define HWIRQ_MAX       (NVIRQ - 1)
@@ -120,14 +123,14 @@ typedef struct {
 	ipl_t _ipl;
 } ipl_cookie_t;
 
-static inline ipl_cookie_t
+static __inline ipl_cookie_t
 makeiplcookie(ipl_t ipl)
 {
 
 	return (ipl_cookie_t){._ipl = ipl};
 }
 
-static inline int
+static __inline int
 splraiseipl(ipl_cookie_t icookie)
 {
 

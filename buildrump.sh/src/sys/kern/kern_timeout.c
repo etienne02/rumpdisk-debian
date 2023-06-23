@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_timeout.c,v 1.51 2015/11/24 15:48:23 christos Exp $	*/
+/*	$NetBSD: kern_timeout.c,v 1.66 2020/06/27 01:26:32 rin Exp $	*/
 
 /*-
- * Copyright (c) 2003, 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2003, 2006, 2007, 2008, 2009, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_timeout.c,v 1.51 2015/11/24 15:48:23 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_timeout.c,v 1.66 2020/06/27 01:26:32 rin Exp $");
 
 /*
  * Timeouts are kept in a hierarchical timing wheel.  The c_time is the
@@ -182,11 +182,16 @@ struct callout_cpu {
 	char		cc_name2[12];
 };
 
-#ifndef CRASH
+#ifdef DDB
+static struct callout_cpu ccb;
+#endif
 
+#ifndef CRASH /* _KERNEL */
 static void	callout_softclock(void *);
-static struct callout_cpu callout_cpu0;
-static void *callout_sih;
+static void	callout_wait(callout_impl_t *, void *, kmutex_t *);
+
+static struct callout_cpu callout_cpu0 __cacheline_aligned;
+static void *callout_sih __read_mostly;
 
 static inline kmutex_t *
 callout_lock(callout_impl_t *c)
@@ -241,8 +246,6 @@ callout_init_cpu(struct cpu_info *ci)
 
 	if ((cc = ci->ci_data.cpu_callout) == NULL) {
 		cc = kmem_zalloc(sizeof(*cc), KM_SLEEP);
-		if (cc == NULL)
-			panic("callout_init_cpu (1)");
 		cc->cc_lock = mutex_obj_alloc(MUTEX_DEFAULT, IPL_SCHED);
 		CIRCQ_INIT(&cc->cc_todo);
 		for (b = 0; b < BUCKETS; b++)
@@ -306,18 +309,20 @@ callout_destroy(callout_t *cs)
 {
 	callout_impl_t *c = (callout_impl_t *)cs;
 
+	KASSERTMSG(c->c_magic == CALLOUT_MAGIC,
+	    "callout %p: c_magic (%#x) != CALLOUT_MAGIC (%#x)",
+	    c, c->c_magic, CALLOUT_MAGIC);
 	/*
 	 * It's not necessary to lock in order to see the correct value
 	 * of c->c_flags.  If the callout could potentially have been
 	 * running, the current thread should have stopped it.
 	 */
 	KASSERTMSG((c->c_flags & CALLOUT_PENDING) == 0,
-	    "callout %p: c_func (%p) c_flags (%#x) destroyed from %p",
+	    "pending callout %p: c_func (%p) c_flags (%#x) destroyed from %p",
 	    c, c->c_func, c->c_flags, __builtin_return_address(0));
-	KASSERT(c->c_cpu->cc_lwp == curlwp || c->c_cpu->cc_active != c);
-	KASSERTMSG(c->c_magic == CALLOUT_MAGIC,
-	    "callout %p: c_magic (%#x) != CALLOUT_MAGIC (%#x)",
-	    c, c->c_magic, CALLOUT_MAGIC);
+	KASSERTMSG(c->c_cpu->cc_lwp == curlwp || c->c_cpu->cc_active != c,
+	    "running callout %p: c_func (%p) c_flags (%#x) destroyed from %p",
+	    c, c->c_func, c->c_flags, __builtin_return_address(0));
 	c->c_magic = 0;
 }
 
@@ -468,32 +473,62 @@ bool
 callout_halt(callout_t *cs, void *interlock)
 {
 	callout_impl_t *c = (callout_impl_t *)cs;
-	struct callout_cpu *cc;
-	struct lwp *l;
-	kmutex_t *lock, *relock;
-	bool expired;
+	kmutex_t *lock;
+	int flags;
 
 	KASSERT(c->c_magic == CALLOUT_MAGIC);
 	KASSERT(!cpu_intr_p());
+	KASSERT(interlock == NULL || mutex_owned(interlock));
 
+	/* Fast path. */
 	lock = callout_lock(c);
-	relock = NULL;
-
-	expired = ((c->c_flags & CALLOUT_FIRED) != 0);
-	if ((c->c_flags & CALLOUT_PENDING) != 0)
+	flags = c->c_flags;
+	if ((flags & CALLOUT_PENDING) != 0)
 		CIRCQ_REMOVE(&c->c_list);
-	c->c_flags &= ~(CALLOUT_PENDING|CALLOUT_FIRED);
+	c->c_flags = flags & ~(CALLOUT_PENDING|CALLOUT_FIRED);
+	if (__predict_false(flags & CALLOUT_FIRED)) {
+		callout_wait(c, interlock, lock);
+		return true;
+	}
+	mutex_spin_exit(lock);
+	return false;
+}
+
+/*
+ * callout_wait:
+ *
+ *	Slow path for callout_halt().  Deliberately marked __noinline to
+ *	prevent unneeded overhead in the caller.
+ */
+static void __noinline
+callout_wait(callout_impl_t *c, void *interlock, kmutex_t *lock)
+{
+	struct callout_cpu *cc;
+	struct lwp *l;
+	kmutex_t *relock;
 
 	l = curlwp;
+	relock = NULL;
 	for (;;) {
+		/*
+		 * At this point we know the callout is not pending, but it
+		 * could be running on a CPU somewhere.  That can be curcpu
+		 * in a few cases:
+		 *
+		 * - curlwp is a higher priority soft interrupt
+		 * - the callout blocked on a lock and is currently asleep
+		 * - the callout itself has called callout_halt() (nice!)
+		 */
 		cc = c->c_cpu;
 		if (__predict_true(cc->cc_active != c || cc->cc_lwp == l))
 			break;
+
+		/* It's running - need to wait for it to complete. */
 		if (interlock != NULL) {
 			/*
 			 * Avoid potential scheduler lock order problems by
 			 * dropping the interlock without the callout lock
-			 * held.
+			 * held; then retry.
 			 */
 			mutex_spin_exit(lock);
 			mutex_exit(interlock);
@@ -507,17 +542,24 @@ callout_halt(callout_t *cs, void *interlock)
 			l->l_kpriority = true;
 			sleepq_enter(&cc->cc_sleepq, l, cc->cc_lock);
 			sleepq_enqueue(&cc->cc_sleepq, cc, "callout",
-			    &sleep_syncobj);
+			    &sleep_syncobj, false);
 			sleepq_block(0, false);
 		}
+
+		/*
+		 * Re-lock the callout and check the state of play again. 
+		 * It's a common design pattern for callouts to re-schedule
+		 * themselves so put a stop to it again if needed.
+		 */
 		lock = callout_lock(c);
+		if ((c->c_flags & CALLOUT_PENDING) != 0)
+			CIRCQ_REMOVE(&c->c_list);
+		c->c_flags &= ~(CALLOUT_PENDING|CALLOUT_FIRED);
 	}
 
 	mutex_spin_exit(lock);
 	if (__predict_false(relock != NULL))
 		mutex_enter(relock);
-
-	return expired;
 }
 
 #ifdef notyet
@@ -718,7 +760,7 @@ callout_softclock(void *v)
 
 		/* If due run it, otherwise insert it into the right bucket. */
 		ticks = cc->cc_ticks;
-		delta = c->c_time - ticks;
+		delta = (int)((unsigned)c->c_time - (unsigned)ticks);
 		if (delta > 0) {
 			CIRCQ_INSERT(&c->c_list, BUCKET(cc, delta, c->c_time));
 			continue;
@@ -759,7 +801,7 @@ callout_softclock(void *v)
 	cc->cc_lwp = NULL;
 	mutex_spin_exit(cc->cc_lock);
 }
-#endif
+#endif /* !CRASH */
 
 #ifdef DDB
 static void
@@ -795,12 +837,12 @@ db_show_callout_bucket(struct callout_cpu *cc, struct callout_circq *kbucket,
 void
 db_show_callout(db_expr_t addr, bool haddr, db_expr_t count, const char *modif)
 {
-	struct callout_cpu *cc, ccb;
-	struct cpu_info *ci, cib;
+	struct callout_cpu *cc;
+	struct cpu_info *ci;
 	int b;
 
 #ifndef CRASH
-	db_printf("hardclock_ticks now: %d\n", hardclock_ticks);
+	db_printf("hardclock_ticks now: %d\n", getticks());
 #endif
 	db_printf("    ticks  wheel               arg  func\n");
 
@@ -810,15 +852,17 @@ db_show_callout(db_expr_t addr, bool haddr, db_expr_t count, const char *modif)
 	 * some other CPU was paused while holding the lock.
 	 */
 	for (ci = db_cpu_first(); ci != NULL; ci = db_cpu_next(ci)) {
-		db_read_bytes((db_addr_t)ci, sizeof(cib), (char *)&cib);
-		cc = cib.ci_data.cpu_callout;
+		db_read_bytes((db_addr_t)ci +
+		    offsetof(struct cpu_info, ci_data.cpu_callout),
+		    sizeof(cc), (char *)&cc);
 		db_read_bytes((db_addr_t)cc, sizeof(ccb), (char *)&ccb);
 		db_show_callout_bucket(&ccb, &cc->cc_todo, &ccb.cc_todo);
 	}
 	for (b = 0; b < BUCKETS; b++) {
 		for (ci = db_cpu_first(); ci != NULL; ci = db_cpu_next(ci)) {
-			db_read_bytes((db_addr_t)ci, sizeof(cib), (char *)&cib);
-			cc = cib.ci_data.cpu_callout;
+			db_read_bytes((db_addr_t)ci +
+			    offsetof(struct cpu_info, ci_data.cpu_callout),
+			    sizeof(cc), (char *)&cc);
 			db_read_bytes((db_addr_t)cc, sizeof(ccb), (char *)&ccb);
 			db_show_callout_bucket(&ccb, &cc->cc_wheel[b],
 			    &ccb.cc_wheel[b]);

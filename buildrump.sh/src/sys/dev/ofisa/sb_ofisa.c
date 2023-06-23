@@ -1,4 +1,4 @@
-/*	$NetBSD: sb_ofisa.c,v 1.17 2008/04/28 20:23:54 martin Exp $	*/
+/*	$NetBSD: sb_ofisa.c,v 1.23 2021/01/27 03:10:21 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sb_ofisa.c,v 1.17 2008/04/28 20:23:54 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sb_ofisa.c,v 1.23 2021/01/27 03:10:21 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -41,9 +41,8 @@ __KERNEL_RCSID(0, "$NetBSD: sb_ofisa.c,v 1.17 2008/04/28 20:23:54 martin Exp $")
 #include <sys/intr.h>
 
 #include <sys/audioio.h>
-#include <dev/audio_if.h>
+#include <dev/audio/audio_if.h>
 #include <dev/midi_if.h>
-#include <dev/mulaw.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/isa/isavar.h>
@@ -59,28 +58,24 @@ void	sb_ofisa_attach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(sb_ofisa, sizeof(struct sbdsp_softc),
     sb_ofisa_match, sb_ofisa_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "pnpPNP,b000" },	/* generic SB 1.5 */
+	{ .compat = "pnpPNP,b001" },	/* generic SB 2.0 */
+	{ .compat = "pnpPNP,b002" },	/* generic SB Pro */
+	{ .compat = "pnpPNP,b003" },	/* generic SB 16 */
+	DEVICE_COMPAT_EOL
+};
+
 int
 sb_ofisa_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct ofisa_attach_args *aa = aux;
-	static const char *const compatible_strings[] = {
-		"pnpPNP,b000",			/* generic SB 1.5 */
-		"pnpPNP,b001",			/* generic SB 2.0 */
-		"pnpPNP,b002",			/* generic SB Pro */
-		"pnpPNP,b003",			/* generic SB 16 */
-		NULL,
-	};
-	int rv = 0;
 
-	if (of_compatible(aa->oba.oba_phandle, compatible_strings) != -1) {
-		/*
-		 * Use a low match priority so that a more specific driver
-		 * can match, e.g. a native ESS driver.
-		 */
-		rv = 1;
-	}
-
-	return (rv);
+	/*
+	 * Use a low match priority so that a more specific driver
+	 * can match, e.g. a native ESS driver.
+	 */
+	return of_compatible_match(aa->oba.oba_phandle, compat_data) ? 1 : 0;
 }
 
 void
@@ -91,8 +86,7 @@ sb_ofisa_attach(device_t parent, device_t self, void *aux)
 	struct ofisa_reg_desc reg;
 	struct ofisa_intr_desc intr;
 	struct ofisa_dma_desc dma[2];
-	int n, ndrq;
-	char *model;
+	int ndrq;
 
 	sc->sc_dev = self;
 
@@ -109,28 +103,28 @@ sb_ofisa_attach(device_t parent, device_t self, void *aux)
 
 	n = ofisa_reg_get(aa->oba.oba_phandle, &reg, 1);
 	if (n != 1) {
-		printf(": error getting register data\n");
+		aprint_error(": error getting register data\n");
 		return;
 	}
 	if (reg.type != OFISA_REG_TYPE_IO) {
-		printf(": register type not i/o\n");
+		aprint_error(": register type not i/o\n");
 		return;
 	}
 	if (reg.len != SB_NPORT && reg.len != SBP_NPORT) {
-		printf(": weird register size (%lu, expected %d or %d)\n",
+		aprint_error(": weird register size (%lu, expected %d or %d)\n",
 		    (unsigned long)reg.len, SB_NPORT, SBP_NPORT);
 		return;
 	}
 
 	n = ofisa_intr_get(aa->oba.oba_phandle, &intr, 1);
 	if (n != 1) {
-		printf(": error getting interrupt data\n");
+		aprint_error(": error getting interrupt data\n");
 		return;
 	}
 
 	ndrq = ofisa_dma_get(aa->oba.oba_phandle, dma, 2);
 	if (ndrq != 1 && ndrq != 2) {
-		printf(": error getting DMA data\n");
+		aprint_error(": error getting DMA data\n");
 		return;
 	}
 
@@ -179,12 +173,7 @@ sb_ofisa_attach(device_t parent, device_t self, void *aux)
 	sc->sc_ih = isa_intr_establish(aa->ic, intr.irq, IST_EDGE, IPL_AUDIO,
 	    sbdsp_intr, sc);
 
-	n = OF_getproplen(aa->oba.oba_phandle, "model");
-	if (n > 0) {
-		model = alloca(n);
-		if (OF_getprop(aa->oba.oba_phandle, "model", model, n) == n)
-			aprint_normal(": %s\n%s", model, device_xname(self));
-	}
+	ofisa_print_model(self, aa->oba.oba_phandle);
 
 	sbattach(sc);
 }

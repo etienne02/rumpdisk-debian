@@ -1,4 +1,4 @@
-/*	$NetBSD: tprof.c,v 1.13 2015/08/20 14:40:18 christos Exp $	*/
+/*	$NetBSD: tprof.c,v 1.15 2020/11/27 20:10:25 riastradh Exp $	*/
 
 /*-
  * Copyright (c)2008,2009,2010 YAMAMOTO Takashi,
@@ -27,20 +27,21 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tprof.c,v 1.13 2015/08/20 14:40:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tprof.c,v 1.15 2020/11/27 20:10:25 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 
-#include <sys/cpu.h>
-#include <sys/conf.h>
 #include <sys/callout.h>
+#include <sys/conf.h>
+#include <sys/cpu.h>
 #include <sys/kmem.h>
 #include <sys/module.h>
+#include <sys/percpu.h>
 #include <sys/proc.h>
-#include <sys/workqueue.h>
 #include <sys/queue.h>
+#include <sys/workqueue.h>
 
 #include <dev/tprof/tprof.h>
 #include <dev/tprof/tprof_ioctl.h>
@@ -97,7 +98,7 @@ static lwp_t *tprof_owner;
 static STAILQ_HEAD(, tprof_buf) tprof_list; /* L: global buffer list */
 static u_int tprof_nbuf_on_list;	/* L: # of buffers on tprof_list */
 static struct workqueue *tprof_wq;
-static tprof_cpu_t tprof_cpus[MAXCPUS] __aligned(CACHE_LINE_SIZE);
+static struct percpu *tprof_cpus __read_mostly;	/* tprof_cpu_t * */
 static u_int tprof_samples_per_buf;
 
 static tprof_backend_t *tprof_backend;	/* S: */
@@ -116,8 +117,20 @@ static struct tprof_stat tprof_stat;	/* L: */
 static tprof_cpu_t *
 tprof_cpu(struct cpu_info *ci)
 {
+	tprof_cpu_t **cp, *c;
 
-	return &tprof_cpus[cpu_index(ci)];
+	/*
+	 * As long as xcalls are blocked -- e.g., by kpreempt_disable
+	 * -- the percpu object will not be swapped and destroyed.  We
+	 * can't write to it, because the data may have already been
+	 * moved to a new buffer, but we can safely read from it.
+	 */
+	kpreempt_disable();
+	cp = percpu_getptr_remote(tprof_cpus, ci);
+	c = *cp;
+	kpreempt_enable();
+
+	return c;
 }
 
 static tprof_cpu_t *
@@ -132,7 +145,7 @@ tprof_buf_alloc(void)
 {
 	tprof_buf_t *new;
 	u_int size = tprof_samples_per_buf;
-	
+
 	new = kmem_alloc(TPROF_BUF_BYTESIZE(size), KM_SLEEP);
 	new->b_used = 0;
 	new->b_size = size;
@@ -247,8 +260,22 @@ tprof_stop1(void)
 	workqueue_destroy(tprof_wq);
 }
 
+static void
+tprof_getinfo(struct tprof_info *info)
+{
+	tprof_backend_t *tb;
+
+	KASSERT(mutex_owned(&tprof_startstop_lock));
+
+	memset(info, 0, sizeof(*info));
+	info->ti_version = TPROF_VERSION;
+	if ((tb = tprof_backend) != NULL) {
+		info->ti_ident = tb->tb_ops->tbo_ident();
+	}
+}
+
 static int
-tprof_start(const struct tprof_param *param)
+tprof_start(const tprof_param_t *param)
 {
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
@@ -296,7 +323,7 @@ tprof_start(const struct tprof_param *param)
 		callout_setfunc(&c->c_callout, tprof_kick, ci);
 	}
 
-	error = tb->tb_ops->tbo_start(NULL);
+	error = tb->tb_ops->tbo_start(param);
 	if (error != 0) {
 		KASSERT(tb->tb_usecount > 0);
 		tb->tb_usecount--;
@@ -404,7 +431,7 @@ tprof_backend_lookup(const char *name)
  */
 
 void
-tprof_sample(tprof_backend_cookie_t *cookie, const tprof_frame_info_t *tfi)
+tprof_sample(void *unused, const tprof_frame_info_t *tfi)
 {
 	tprof_cpu_t * const c = tprof_curcpu();
 	tprof_buf_t * const buf = c->c_buf;
@@ -608,14 +635,16 @@ tprof_read(dev_t dev, struct uio *uio, int flags)
 static int
 tprof_ioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 {
-	const struct tprof_param *param;
+	const tprof_param_t *param;
 	int error = 0;
 
 	KASSERT(minor(dev) == 0);
 
 	switch (cmd) {
-	case TPROF_IOC_GETVERSION:
-		*(int *)data = TPROF_VERSION;
+	case TPROF_IOC_GETINFO:
+		mutex_enter(&tprof_startstop_lock);
+		tprof_getinfo(data);
+		mutex_exit(&tprof_startstop_lock);
 		break;
 	case TPROF_IOC_START:
 		param = data;
@@ -666,9 +695,31 @@ tprofattach(int nunits)
 MODULE(MODULE_CLASS_DRIVER, tprof, NULL);
 
 static void
+tprof_cpu_init(void *vcp, void *vcookie, struct cpu_info *ci)
+{
+	tprof_cpu_t **cp = vcp, *c;
+
+	c = kmem_zalloc(sizeof(*c), KM_SLEEP);
+	c->c_buf = NULL;
+	c->c_cpuid = cpu_index(ci);
+	*cp = c;
+}
+
+static void
+tprof_cpu_fini(void *vcp, void *vcookie, struct cpu_info *ci)
+{
+	tprof_cpu_t **cp = vcp, *c;
+
+	c = *cp;
+	KASSERT(c->c_cpuid == cpu_index(ci));
+	KASSERT(c->c_buf == NULL);
+	kmem_free(c, sizeof(*c));
+	*cp = NULL;
+}
+
+static void
 tprof_driver_init(void)
 {
-	unsigned int i;
 
 	mutex_init(&tprof_lock, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&tprof_reader_lock, MUTEX_DEFAULT, IPL_NONE);
@@ -676,18 +727,15 @@ tprof_driver_init(void)
 	cv_init(&tprof_cv, "tprof");
 	cv_init(&tprof_reader_cv, "tprof_rd");
 	STAILQ_INIT(&tprof_list);
-	for (i = 0; i < __arraycount(tprof_cpus); i++) {
-		tprof_cpu_t * const c = &tprof_cpus[i];
-
-		c->c_buf = NULL;
-		c->c_cpuid = i;
-	}
+	tprof_cpus = percpu_create(sizeof(tprof_cpu_t *),
+	    tprof_cpu_init, tprof_cpu_fini, NULL);
 }
 
 static void
 tprof_driver_fini(void)
 {
 
+	percpu_free(tprof_cpus, sizeof(tprof_cpu_t *));
 	mutex_destroy(&tprof_lock);
 	mutex_destroy(&tprof_reader_lock);
 	mutex_destroy(&tprof_startstop_lock);

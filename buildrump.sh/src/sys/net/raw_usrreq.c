@@ -1,4 +1,4 @@
-/*	$NetBSD: raw_usrreq.c,v 1.55 2016/01/20 21:43:59 riastradh Exp $	*/
+/*	$NetBSD: raw_usrreq.c,v 1.64 2019/08/02 02:17:46 ozaki-r Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.55 2016/01/20 21:43:59 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.64 2019/08/02 02:17:46 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
@@ -54,12 +54,6 @@ __KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.55 2016/01/20 21:43:59 riastradh Ex
 #include <net/netisr.h>
 #include <net/raw_cb.h>
 
-void
-raw_init(void)
-{
-	LIST_INIT(&rawcb);
-}
-
 static inline int
 equal(const struct sockaddr *a1, const struct sockaddr *a2)
 {
@@ -71,25 +65,15 @@ equal(const struct sockaddr *a1, const struct sockaddr *a2)
  * If nothing exists for this packet, drop it.
  */
 void
-raw_input(struct mbuf *m0, ...)
+raw_input(struct mbuf *m0, struct sockproto *proto, struct sockaddr *src,
+    struct sockaddr *dst, struct rawcbhead *rawcbhead)
 {
 	struct rawcb *rp;
 	struct mbuf *m = m0;
 	struct socket *last;
-	va_list ap;
-	struct sockproto *proto;
-	struct sockaddr *src, *dst;
-
-	KASSERT(mutex_owned(softnet_lock));
-
-	va_start(ap, m0);
-	proto = va_arg(ap, struct sockproto *);
-	src = va_arg(ap, struct sockaddr *);
-	dst = va_arg(ap, struct sockaddr *);
-	va_end(ap);
 
 	last = NULL;
-	LIST_FOREACH(rp, &rawcb, rcb_list) {
+	LIST_FOREACH(rp, rawcbhead, rcb_list) {
 		if (rp->rcb_proto.sp_family != proto->sp_family)
 			continue;
 		if (rp->rcb_proto.sp_protocol  &&
@@ -107,23 +91,31 @@ raw_input(struct mbuf *m0, ...)
 			continue;
 		if (rp->rcb_faddr && !equal(rp->rcb_faddr, src))
 			continue;
+		/* Run any filtering that may have been installed. */
+		if (rp->rcb_filter != NULL && rp->rcb_filter(m, proto, rp) != 0)
+			continue;
 		if (last != NULL) {
 			struct mbuf *n;
-			if ((n = m_copy(m, 0, M_COPYALL)) == NULL)
-				;
-			else if (sbappendaddr(&last->so_rcv, src, n, NULL) == 0)
-				/* should notify about lost packet */
-				m_freem(n);
-			else {
+
+			if ((n = m_copypacket(m, M_DONTWAIT)) == NULL ||
+			    sbappendaddr(&last->so_rcv, src, n, NULL) == 0)
+			{
+				if (n != NULL)
+					m_freem(n);
+				soroverflow(last);
+			} else
 				sorwakeup(last);
-			}
 		}
 		last = rp->rcb_socket;
 	}
-	if (last == NULL || sbappendaddr(&last->so_rcv, src, m, NULL) == 0)
+	if (last != NULL) {
+		if (sbappendaddr(&last->so_rcv, src, m, NULL) == 0) {
+			m_freem(m);
+			soroverflow(last);
+		} else
+			sorwakeup(last);
+	} else {
 		m_freem(m);
-	else {
-		sorwakeup(last);
 	}
 }
 

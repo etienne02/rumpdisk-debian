@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_fil.h,v 1.5 2013/06/29 21:06:57 rmind Exp $	*/
+/*	$NetBSD: ip_fil.h,v 1.8 2019/11/11 19:33:43 chs Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -576,7 +576,7 @@ typedef	struct	frdest	{
 	addrfamily_t	fd_addr;
 	fr_dtypes_t	fd_type;
 	int		fd_name;
-	int		fd_local;
+	int		fd_unused; /* part of the kernel/user ABI */
 } frdest_t;
 
 #define	fd_ip6	fd_addr.adf_addr
@@ -1881,7 +1881,7 @@ extern	int	ipf_tune_array_link(ipf_main_softc_t *, ipftuneable_t *);
 extern	int	ipf_tune_array_unlink(ipf_main_softc_t *,
 					   ipftuneable_t *);
 extern	ipftuneable_t *ipf_tune_array_copy(void *, size_t,
-						ipftuneable_t *);
+						const ipftuneable_t *);
 
 extern int	ipf_pr_pullup(fr_info_t *, int);
 

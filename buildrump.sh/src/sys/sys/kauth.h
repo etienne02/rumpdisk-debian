@@ -1,4 +1,4 @@
-/* $NetBSD: kauth.h,v 1.73 2015/10/06 22:13:39 christos Exp $ */
+/* $NetBSD: kauth.h,v 1.86 2020/09/08 14:12:57 christos Exp $ */
 
 /*-
  * Copyright (c) 2005, 2006 Elad Efrat <elad@NetBSD.org>  
@@ -46,6 +46,8 @@ struct tty;
 struct vnode;
 struct cwdinfo;
 
+enum uio_seg;
+
 /* Types. */
 typedef struct kauth_scope     *kauth_scope_t;
 typedef struct kauth_listener  *kauth_listener_t;
@@ -55,7 +57,11 @@ typedef int (*kauth_scope_callback_t)(kauth_cred_t, kauth_action_t,
 typedef	struct kauth_key       *kauth_key_t;
 
 #ifdef __KAUTH_PRIVATE	/* For the debugger */
-/* 
+
+#include <sys/types.h>
+#include <sys/specificdata.h>
+
+/*
  * Credentials.
  *
  * A subset of this structure is used in kvm(3) (src/lib/libkvm/kvm_proc.c)
@@ -84,6 +90,7 @@ struct kauth_cred {
 	gid_t cr_groups[NGROUPS];	/* group memberships */
 	specificdata_reference cr_sd;	/* specific data */
 };
+
 #endif
 
 /*
@@ -144,6 +151,7 @@ enum {
 	KAUTH_SYSTEM_FS_EXTATTR,
 	KAUTH_SYSTEM_FS_SNAPSHOT,
 	KAUTH_SYSTEM_INTR,
+	KAUTH_SYSTEM_KERNADDR,
 };
 
 /*
@@ -153,7 +161,6 @@ enum kauth_system_req {
 	KAUTH_REQ_SYSTEM_CHROOT_CHROOT=1,
 	KAUTH_REQ_SYSTEM_CHROOT_FCHROOT,
 	KAUTH_REQ_SYSTEM_CPU_SETSTATE,
-	KAUTH_REQ_SYSTEM_DEBUG_IPKDB,
 	KAUTH_REQ_SYSTEM_MOUNT_GET,
 	KAUTH_REQ_SYSTEM_MOUNT_NEW,
 	KAUTH_REQ_SYSTEM_MOUNT_UNMOUNT,
@@ -225,13 +232,14 @@ enum kauth_process_req {
 	KAUTH_REQ_PROCESS_CORENAME_GET,
 	KAUTH_REQ_PROCESS_CORENAME_SET,
 	KAUTH_REQ_PROCESS_KTRACE_PERSISTENT,
-	KAUTH_REQ_PROCESS_PROCFS_CTL,
 	KAUTH_REQ_PROCESS_PROCFS_READ,
 	KAUTH_REQ_PROCESS_PROCFS_RW,
 	KAUTH_REQ_PROCESS_PROCFS_WRITE,
 	KAUTH_REQ_PROCESS_RLIMIT_GET,
 	KAUTH_REQ_PROCESS_RLIMIT_SET,
 	KAUTH_REQ_PROCESS_RLIMIT_BYPASS,
+	KAUTH_REQ_PROCESS_CANSEE_EPROC,
+	KAUTH_REQ_PROCESS_CANSEE_KPTR
 };
 
 /*
@@ -303,6 +311,7 @@ enum kauth_network_req {
 	KAUTH_REQ_NETWORK_SMB_VC_ACCESS,
 	KAUTH_REQ_NETWORK_SMB_VC_CREATE,
 	KAUTH_REQ_NETWORK_INTERFACE_FIRMWARE,
+	KAUTH_REQ_NETWORK_BIND_ANYADDR
 };
 
 /*
@@ -321,6 +330,7 @@ enum {
 	KAUTH_MACHDEP_NVRAM,
 	KAUTH_MACHDEP_UNMANAGEDMEM,
 	KAUTH_MACHDEP_PXG,
+	KAUTH_MACHDEP_SVS_DISABLE
 };
 
 /*
@@ -345,6 +355,7 @@ enum {
 	KAUTH_DEVICE_TTY_VIRTUAL,
 	KAUTH_DEVICE_WSCONS_KEYBOARD_BELL,
 	KAUTH_DEVICE_WSCONS_KEYBOARD_KEYREPEAT,
+	KAUTH_DEVICE_NVMM_CTL,
 };
 
 /*
@@ -515,11 +526,11 @@ int kauth_cred_uucmp(kauth_cred_t, const struct uucred *);
 void kauth_cred_toucred(kauth_cred_t, struct ki_ucred *);
 void kauth_cred_topcred(kauth_cred_t, struct ki_pcred *);
 
-kauth_action_t kauth_mode_to_action(mode_t);
+kauth_action_t kauth_accmode_to_action(accmode_t);
 kauth_action_t kauth_extattr_action(mode_t);
 
 #define KAUTH_ACCESS_ACTION(access_mode, vn_vtype, file_mode)	\
-	(kauth_mode_to_action(access_mode) |			\
+	(kauth_accmode_to_action(access_mode) |			\
 	(FS_OBJECT_CAN_EXEC(vn_vtype, file_mode) ? KAUTH_VNODE_IS_EXEC : 0))
 
 kauth_cred_t kauth_cred_get(void);

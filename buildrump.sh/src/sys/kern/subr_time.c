@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_time.c,v 1.18 2016/04/23 23:08:26 christos Exp $	*/
+/*	$NetBSD: subr_time.c,v 1.30 2021/03/18 14:05:37 nia Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_time.c,v 1.18 2016/04/23 23:08:26 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_time.c,v 1.30 2021/03/18 14:05:37 nia Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -227,14 +227,25 @@ gettimeleft(struct timespec *ts, struct timespec *sleepts)
 	return tstohz(ts);
 }
 
+void
+clock_timeleft(clockid_t clockid, struct timespec *ts, struct timespec *sleepts)
+{
+	struct timespec sleptts;
+
+	clock_gettime1(clockid, &sleptts);
+	timespecadd(ts, sleepts, ts);
+	timespecsub(ts, &sleptts, ts);
+	*sleepts = sleptts;
+}
+
 static void
 ticks2ts(uint64_t ticks, struct timespec *ts)
 {
 	ts->tv_sec = ticks / hz;
 	uint64_t sticks = ticks - ts->tv_sec * hz;
-	if (sticks > 18446744073709551LL)	/* floor(2^64 / 1000) */
+	if (sticks > BINTIME_SCALE_MS)	/* floor(2^64 / 1000) */
 		ts->tv_nsec = sticks / hz * 1000000000LL;
-   	else if (sticks > 18446744073709LL)	/* floor(2^64 / 1000000) */
+   	else if (sticks > BINTIME_SCALE_US)	/* floor(2^64 / 1000000) */
    		ts->tv_nsec = sticks * 1000LL / hz * 1000000LL;
 	else
    		ts->tv_nsec = sticks * 1000000000LL / hz;
@@ -254,17 +265,17 @@ clock_gettime1(clockid_t clock_id, struct timespec *ts)
 	if (clock_id & CLOCK_PROCESS_CPUTIME_ID) {
 		pid_t pid = clock_id & CPUCLOCK_ID_MASK;
 
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		p = pid == 0 ? curproc : proc_find(pid);
 		if (p == NULL) {
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 			return ESRCH;
 		}
 		ticks = p->p_uticks + p->p_sticks + p->p_iticks;
 		DPRINTF(("%s: u=%ju, s=%ju, i=%ju\n", __func__,
 		    (uintmax_t)p->p_uticks, (uintmax_t)p->p_sticks,
 		    (uintmax_t)p->p_iticks));
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 
 		// XXX: Perhaps create a special kauth type
 		error = kauth_authorize_process(curlwp->l_cred,
@@ -318,18 +329,26 @@ ts2timo(clockid_t clock_id, int flags, struct timespec *ts,
 	int error;
 	struct timespec tsd;
 
-	flags &= TIMER_ABSTIME;
-	if (start == NULL)
-		start = &tsd;
+	if (ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L)
+		return EINVAL;
 
-	if (flags || start != &tsd)
-		if ((error = clock_gettime1(clock_id, start)) != 0)
+	if ((flags & TIMER_ABSTIME) != 0 || start != NULL) {
+		error = clock_gettime1(clock_id, &tsd);
+		if (error != 0)
 			return error;
+		if (start != NULL)
+			*start = tsd;
+	}
 
-	if (flags)
-		timespecsub(ts, start, ts);
+	if ((flags & TIMER_ABSTIME) != 0) {
+		if ((tsd.tv_sec > 0 && ts->tv_sec < LLONG_MIN + tsd.tv_sec) ||
+		    (tsd.tv_sec < 0 && ts->tv_sec > LLONG_MAX + tsd.tv_sec))
+			return EINVAL;
+		timespecsub(ts, &tsd, ts);
+	}
 
-	if ((error = itimespecfix(ts)) != 0)
+	error = itimespecfix(ts);
+	if (error != 0)
 		return error;
 
 	if (ts->tv_sec == 0 && ts->tv_nsec == 0)

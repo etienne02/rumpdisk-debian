@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.121 2016/07/24 13:22:01 njoly Exp $
+	$NetBSD: syscalls.master,v 1.124 2020/04/26 18:53:32 thorpej Exp $
 
 ;	@(#)syscalls.master	8.1 (Berkeley) 7/19/93
 
@@ -503,16 +503,18 @@
 			    linux_umode_t mode); }
 307	STD		{ int|linux_sys||faccessat(int fd, const char *path, \
 			    int amode); }
-308	UNIMPL		pselect6
+308	STD		{ int|linux_sys||pselect6(int nfds, fd_set *readfds, \
+			   fd_set *writefds, fd_set *exceptfds, \
+			   struct linux_timespec *timeout, \
+			   linux_sized_sigset_t *ss); }
 309	STD		{ int|linux_sys||ppoll(struct pollfd *fds, u_int nfds, \
 			    struct linux_timespec *timeout, \
 			    linux_sigset_t *sigset); }
 310	UNIMPL		unshare
-311	STD		{ int|linux_sys||set_robust_list( \
-			    struct linux_robust_list_head *head, size_t len); }
-312	STD		{ int|linux_sys||get_robust_list(int pid, \
-			    struct linux_robust_list_head **head, \
-			    size_t *len); }
+311	NOARGS		{ int|sys||__futex_set_robust_list(void *head, \
+			    size_t len); }
+312	NOARGS		{ int|sys||__futex_get_robust_list(lwpid_t lwpid, \
+			    void **headp, size_t *lenp); }
 313	UNIMPL		splice
 314	UNIMPL		sync_file_range
 315	UNIMPL		tee
@@ -525,7 +527,8 @@
 321	UNIMPL		signalfd
 322	UNIMPL		timerfd_create
 323	UNIMPL		eventfd
-324	UNIMPL		fallocate
+324	STD		{ int|linux_sys||fallocate(int fd, int mode, \
+			    off_t offset, off_t len); }
 325	UNIMPL		timerfd_settime
 326	UNIMPL		timerfd_gettime
 327	UNIMPL		signalfd4

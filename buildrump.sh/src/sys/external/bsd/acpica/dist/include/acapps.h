@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -44,40 +44,40 @@
 #ifndef _ACAPPS
 #define _ACAPPS
 
-#include <stdio.h>
-
-#ifdef _MSC_VER                 /* disable some level-4 warnings */
-#pragma warning(disable:4100)   /* warning C4100: unreferenced formal parameter */
-#endif
+#ifdef ACPI_USE_STANDARD_HEADERS
+#include <sys/stat.h>
+#endif /* ACPI_USE_STANDARD_HEADERS */
 
 /* Common info for tool signons */
 
 #define ACPICA_NAME                 "Intel ACPI Component Architecture"
-#define ACPICA_COPYRIGHT            "Copyright (c) 2000 - 2016 Intel Corporation"
+#define ACPICA_COPYRIGHT            "Copyright (c) 2000 - 2021 Intel Corporation"
 
 #if ACPI_MACHINE_WIDTH == 64
-#define ACPI_WIDTH          "-64"
+#define ACPI_WIDTH          " (64-bit version)"
 
 #elif ACPI_MACHINE_WIDTH == 32
-#define ACPI_WIDTH          "-32"
+#define ACPI_WIDTH          " (32-bit version)"
 
 #else
 #error unknown ACPI_MACHINE_WIDTH
-#define ACPI_WIDTH          "-??"
+#define ACPI_WIDTH          " (unknown bit width, not 32 or 64)"
 
 #endif
 
 /* Macros for signons and file headers */
 #ifdef ACPI_REPRO
 #define ACPI_DATE "18 Dec 2013"
+#define ACPI_TIME "00:00:00"
 #else
 #define ACPI_DATE __DATE__
+#define ACPI_TIME __TIME__
 #endif
 
 #define ACPI_COMMON_SIGNON(UtilityName) \
-    "\n%s\n%s version %8.8X%s\n%s\n\n", \
+    "\n%s\n%s version %8.8X\n%s\n\n", \
     ACPICA_NAME, \
-    UtilityName, ((UINT32) ACPI_CA_VERSION), ACPI_WIDTH, \
+    UtilityName, ((UINT32) ACPI_CA_VERSION), \
     ACPICA_COPYRIGHT
 
 #define ACPI_COMMON_HEADER(UtilityName, Prefix) \
@@ -87,16 +87,19 @@
     Prefix, ACPICA_COPYRIGHT, \
     Prefix
 
+#define ACPI_COMMON_BUILD_TIME \
+    "Build date/time: %s %s\n", ACPI_DATE, ACPI_TIME
+
 /* Macros for usage messages */
 
 #define ACPI_USAGE_HEADER(Usage) \
-    AcpiOsPrintf ("Usage: %s\nOptions:\n", Usage);
+    printf ("Usage: %s\nOptions:\n", Usage);
 
 #define ACPI_USAGE_TEXT(Description) \
-    AcpiOsPrintf (Description);
+    printf (Description);
 
 #define ACPI_OPTION(Name, Description) \
-    AcpiOsPrintf ("  %-20s%s\n", Name, Description);
+    printf ("  %-20s%s\n", Name, Description);
 
 
 /* Check for unexpected exceptions */
@@ -124,6 +127,10 @@ AcGetAllTablesFromFile (
     char                    *Filename,
     UINT8                   GetOnlyAmlTables,
     ACPI_NEW_TABLE_DESC     **ReturnListHead);
+
+void
+AcDeleteTableList (
+    ACPI_NEW_TABLE_DESC     *ListHead);
 
 BOOLEAN
 AcIsFileBinary (
@@ -193,7 +200,7 @@ AcpiDmFinishNamespaceLoad (
     ACPI_OWNER_ID           OwnerId);
 
 void
-AcpiDmConvertResourceIndexes (
+AcpiDmConvertParseObjects (
     ACPI_PARSE_OBJECT       *ParseTreeRoot,
     ACPI_NAMESPACE_NODE     *NamespaceRoot);
 
@@ -215,6 +222,10 @@ FlSplitInputPathname (
     char                    *InputPath,
     char                    **OutDirectoryPath,
     char                    **OutFilename);
+
+char *
+FlGetFileBasename (
+    char                    *FilePathname);
 
 char *
 AdGenerateFilename (

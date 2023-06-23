@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_log.c,v 1.55 2015/05/20 11:18:36 pooka Exp $	*/
+/*	$NetBSD: subr_log.c,v 1.60 2020/12/11 03:00:09 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_log.c,v 1.55 2015/05/20 11:18:36 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_log.c,v 1.60 2020/12/11 03:00:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -222,7 +222,7 @@ logread(dev_t dev, struct uio *uio, int flag)
 		l = mbp->msg_bufx - mbp->msg_bufr;
 		if (l < 0)
 			l = mbp->msg_bufs - mbp->msg_bufr;
-		l = min(l, uio->uio_resid);
+		l = uimin(l, uio->uio_resid);
 		if (l == 0)
 			break;
 		mutex_spin_exit(&log_lock);
@@ -262,7 +262,7 @@ filt_logrdetach(struct knote *kn)
 {
 
 	mutex_spin_enter(&log_lock);
-	SLIST_REMOVE(&log_selp.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&log_selp, kn);
 	mutex_spin_exit(&log_lock);
 }
 
@@ -289,17 +289,19 @@ filt_logread(struct knote *kn, long hint)
 	return rv;
 }
 
-static const struct filterops logread_filtops =
-	{ 1, NULL, filt_logrdetach, filt_logread };
+static const struct filterops logread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_logrdetach,
+	.f_event = filt_logread,
+};
 
 static int
 logkqfilter(dev_t dev, struct knote *kn)
 {
-	struct klist *klist;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &log_selp.sel_klist;
 		kn->kn_fop = &logread_filtops;
 		break;
 
@@ -307,9 +309,10 @@ logkqfilter(dev_t dev, struct knote *kn)
 		return (EINVAL);
 	}
 
-	mutex_spin_enter(&log_lock);
 	kn->kn_hook = NULL;
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+
+	mutex_spin_enter(&log_lock);
+	selrecord_knote(&log_selp, kn);
 	mutex_spin_exit(&log_lock);
 
 	return (0);
@@ -378,6 +381,40 @@ logioctl(dev_t dev, u_long com, void *data, int flag, struct lwp *lwp)
 	return (0);
 }
 
+static void
+logskip(struct kern_msgbuf *mbp)
+{
+	/*
+	 * Move forward read pointer to the next line
+	 * in the buffer.  Note that the buffer is
+	 * a ring buffer so we should reset msg_bufr
+	 * to 0 when msg_bufr exceeds msg_bufs.
+	 *
+	 * To prevent to loop forever, give up if we
+	 * cannot find a newline in mbp->msg_bufs
+	 * characters (the max size of the buffer).
+	 */
+	for (int i = 0; i < mbp->msg_bufs; i++) {
+		char c0 = mbp->msg_bufc[mbp->msg_bufr];
+		if (++mbp->msg_bufr >= mbp->msg_bufs)
+			mbp->msg_bufr = 0;
+		if (c0 == '\n')
+			break;
+	}
+}
+
+static void
+logaddchar(struct kern_msgbuf *mbp, int c)
+{
+	mbp->msg_bufc[mbp->msg_bufx++] = c;
+	if (mbp->msg_bufx < 0 || mbp->msg_bufx >= mbp->msg_bufs)
+		mbp->msg_bufx = 0;
+
+	/* If the buffer is full, keep the most recent data. */
+	if (mbp->msg_bufr == mbp->msg_bufx)
+		logskip(mbp);
+}
+
 void
 logputchar(int c)
 {
@@ -385,48 +422,29 @@ logputchar(int c)
 
 	if (!cold)
 		mutex_spin_enter(&log_lock);
-	if (msgbufenabled) {
-		mbp = msgbufp;
-		if (mbp->msg_magic != MSG_MAGIC) {
-			/*
-			 * Arguably should panic or somehow notify the
-			 * user...  but how?  Panic may be too drastic,
-			 * and would obliterate the message being kicked
-			 * out (maybe a panic itself), and printf
-			 * would invoke us recursively.  Silently punt
-			 * for now.  If syslog is running, it should
-			 * notice.
-			 */
-			msgbufenabled = 0;
-		} else {
-			mbp->msg_bufc[mbp->msg_bufx++] = c;
-			if (mbp->msg_bufx < 0 || mbp->msg_bufx >= mbp->msg_bufs)
-				mbp->msg_bufx = 0;
-			/* If the buffer is full, keep the most recent data. */
-			if (mbp->msg_bufr == mbp->msg_bufx) {
-				char c0;
-				int i;
 
-				/*
-				 * Move forward read pointer to the next line
-				 * in the buffer.  Note that the buffer is
-				 * a ring buffer so we should reset msg_bufr
-				 * to 0 when msg_bufr exceeds msg_bufs.
-				 *
-				 * To prevent to loop forever, give up if we
-				 * cannot find a newline in mbp->msg_bufs
-				 * characters (the max size of the buffer).
-				 */
-				for (i = 0; i < mbp->msg_bufs; i++) {
-					c0 = mbp->msg_bufc[mbp->msg_bufr];
-					if (++mbp->msg_bufr >= mbp->msg_bufs)
-						mbp->msg_bufr = 0;
-					if (c0 == '\n')
-						break;
-				}
-			}
-		}
+	if (!msgbufenabled)
+		goto out;
+
+	mbp = msgbufp;
+	if (mbp->msg_magic != MSG_MAGIC) {
+		/*
+		 * Arguably should panic or somehow notify the
+		 * user...  but how?  Panic may be too drastic,
+		 * and would obliterate the message being kicked
+		 * out (maybe a panic itself), and printf
+		 * would invoke us recursively.  Silently punt
+		 * for now.  If syslog is running, it should
+		 * notice.
+		 */
+		msgbufenabled = 0;
+		goto out;
+
 	}
+
+	logaddchar(mbp, c);
+
+out:
 	if (!cold)
 		mutex_spin_exit(&log_lock);
 }
@@ -445,7 +463,7 @@ sysctl_msgbuf(SYSCTLFN_ARGS)
 	extern kmutex_t log_lock;
 	int error;
 
-	if (!msgbufenabled || msgbufp->msg_magic != MSG_MAGIC) {
+	if (!logenabled(msgbufp)) {
 		msgbufenabled = 0;
 		return (ENXIO);
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: kern.h,v 1.3 2016/02/08 18:18:19 pooka Exp $	*/
+/*	$NetBSD: kern.h,v 1.5 2020/11/01 20:58:38 christos Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -51,6 +51,7 @@ extern int rump_threads;
 extern struct device rump_rootdev;
 
 extern struct sysent rump_sysent[];
+extern const uint32_t rump_sysent_nomodbits[];
 
 enum rump_component_type {
 	RUMP_COMPONENT_DEV,
@@ -173,6 +174,7 @@ void	rump_syscall_boot_establish(const struct rump_onesyscall *, size_t);
 void	rump_schedlock_cv_wait(struct rumpuser_cv *);
 int	rump_schedlock_cv_timedwait(struct rumpuser_cv *,
 				    const struct timespec *);
+void	rump_schedlock_cv_signal(struct cpu_info *, struct rumpuser_cv *);
 
 void	rump_user_schedule(int, void *);
 void	rump_user_unschedule(int, int *, void *);

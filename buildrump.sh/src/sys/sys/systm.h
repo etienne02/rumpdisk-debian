@@ -1,4 +1,4 @@
-/*	$NetBSD: systm.h,v 1.271 2016/07/06 05:20:48 ozaki-r Exp $	*/
+/*	$NetBSD: systm.h,v 1.301 2021/06/16 11:55:10 rin Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1988, 1991, 1993
@@ -42,6 +42,12 @@
 #if defined(_KERNEL_OPT)
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
+#include "opt_gprof.h"
+#include "opt_kasan.h"
+#include "opt_kcsan.h"
+#include "opt_kmsan.h"
+#include "opt_modular.h"
+#include "opt_wsdisplay_compat.h"
 #endif
 #if !defined(_KERNEL) && !defined(_STANDALONE)
 #include <stdbool.h>
@@ -82,7 +88,7 @@ extern int autoniceval;         /* proc priority after autonicetime */
 extern int selwait;		/* select timeout address */
 
 extern int maxmem;		/* max memory per process */
-extern int physmem;		/* physical memory */
+extern psize_t physmem;		/* physical memory */
 
 extern dev_t dumpdev;		/* dump device */
 extern dev_t dumpcdev;		/* dump device (character equivalent) */
@@ -126,6 +132,7 @@ extern struct sysent {		/* system call table */
 	uint32_t sy_return;	/* DTrace return ID for systrace. */
 } sysent[];
 extern int nsysent;
+extern const uint32_t sysent_nomodbits[];
 #endif
 
 #if	BYTE_ORDER == BIG_ENDIAN
@@ -160,6 +167,8 @@ extern int boothowto;		/* reboot flags, from console subsystem */
 #define	bootverbose	(boothowto & AB_VERBOSE)
 #define	bootquiet	(boothowto & AB_QUIET)
 
+extern const char *get_booted_kernel(void);
+
 extern void (*v_putc)(int); /* Virtual console putc routine */
 
 /*
@@ -182,6 +191,51 @@ enum hashtype {
 };
 
 #ifdef _KERNEL
+#define COND_SET_STRUCT(dst, src, allow) \
+	do { \
+		/* \
+		 * Make sure we don't end up hashing/assigning large \
+		 * structure for performance. Upper-bound is arbitrary, \
+		 * but consider before bumping. \
+		 */ \
+		CTASSERT(sizeof(src) < 32); \
+		if (allow) \
+			dst = src; \
+		else \
+			hash_value(&dst, sizeof(dst), &src, sizeof(src)); \
+	} while (/*CONSTCOND*/0)
+
+#define COND_SET_CPTR(dst, src, allow) \
+	do { \
+		if (allow) \
+			dst = src; \
+		else { \
+			void *__v; \
+			hash_value(&__v, sizeof(__v), &src, sizeof(src)); \
+			dst = __v; \
+		} \
+	} while (/*CONSTCOND*/0)
+
+#define COND_SET_PTR(dst, src, allow) \
+	do { \
+		if (allow) \
+			dst = src; \
+		else \
+			hash_value(&dst, sizeof(dst), &src, sizeof(src)); \
+	} while (/*CONSTCOND*/0)
+
+#define COND_SET_VALUE(dst, src, allow)	\
+	do { \
+		if (allow) \
+			dst = src; \
+		else { \
+			uint64_t __v = src; \
+			hash_value(&dst, sizeof(dst), &__v, sizeof(__v)); \
+		} \
+	} while (/*CONSTCOND*/0)
+
+void	hash_value(void *, size_t, const void *, size_t);
+bool	get_expose_address(struct proc *);
 void	*hashinit(u_int, enum hashtype, bool, u_long *);
 void	hashdone(void *, enum hashtype, u_long);
 int	seltrue(dev_t, int, struct lwp *);
@@ -194,13 +248,13 @@ void	aprint_naive(const char *, ...) __printflike(1, 2);
 void	aprint_verbose(const char *, ...) __printflike(1, 2);
 void	aprint_debug(const char *, ...) __printflike(1, 2);
 
-void	device_printf(device_t, const char *fmt, ...) __printflike(2, 3);
-
 void	aprint_normal_dev(device_t, const char *, ...) __printflike(2, 3);
 void	aprint_error_dev(device_t, const char *, ...) __printflike(2, 3);
 void	aprint_naive_dev(device_t, const char *, ...) __printflike(2, 3);
 void	aprint_verbose_dev(device_t, const char *, ...) __printflike(2, 3);
 void	aprint_debug_dev(device_t, const char *, ...) __printflike(2, 3);
+
+void	device_printf(device_t, const char *fmt, ...) __printflike(2, 3);
 
 struct ifnet;
 
@@ -221,13 +275,21 @@ void	printf_tolog(const char *, ...) __printflike(1, 2);
 
 void	printf_nolog(const char *, ...) __printflike(1, 2);
 
+void	printf_nostamp(const char *, ...) __printflike(1, 2);
+
 void	printf(const char *, ...) __printflike(1, 2);
 
 int	snprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 
+int	vasprintf(char **, const char *, va_list) __printflike(2, 0);
+
 void	vprintf(const char *, va_list) __printflike(1, 0);
 
 int	vsnprintf(char *, size_t, const char *, va_list) __printflike(3, 0);
+
+void	vprintf_flags(int, const char *, va_list) __printflike(2, 0);
+
+void	printf_flags(int, const char *, ...) __printflike(2, 3);
 
 int	humanize_number(char *, size_t, uint64_t, const char *, int);
 
@@ -245,7 +307,18 @@ int	format_bytes(char *, size_t, uint64_t);
 
 void	tablefull(const char *, const char *);
 
+#if defined(_KERNEL) && defined(KASAN)
+int	kasan_kcopy(const void *, void *, size_t);
+#define kcopy		kasan_kcopy
+#elif defined(_KERNEL) && defined(KCSAN)
+int	kcsan_kcopy(const void *, void *, size_t);
+#define kcopy		kcsan_kcopy
+#elif defined(_KERNEL) && defined(KMSAN)
+int	kmsan_kcopy(const void *, void *, size_t);
+#define kcopy		kmsan_kcopy
+#else
 int	kcopy(const void *, void *, size_t);
+#endif
 
 #ifdef _KERNEL
 #define bcopy(src, dst, len)	memcpy((dst), (src), (len))
@@ -254,10 +327,38 @@ int	kcopy(const void *, void *, size_t);
 #endif /* KERNEL */
 
 int	copystr(const void *, void *, size_t, size_t *);
+#if defined(_KERNEL) && defined(KASAN)
+int	kasan_copyinstr(const void *, void *, size_t, size_t *);
+int	kasan_copyoutstr(const void *, void *, size_t, size_t *);
+int	kasan_copyin(const void *, void *, size_t);
+int	copyout(const void *, void *, size_t);
+#define copyinstr	kasan_copyinstr
+#define copyoutstr	kasan_copyoutstr
+#define copyin		kasan_copyin
+#elif defined(_KERNEL) && defined(KCSAN)
+int	kcsan_copyinstr(const void *, void *, size_t, size_t *);
+int	kcsan_copyoutstr(const void *, void *, size_t, size_t *);
+int	kcsan_copyin(const void *, void *, size_t);
+int	kcsan_copyout(const void *, void *, size_t);
+#define copyinstr	kcsan_copyinstr
+#define copyoutstr	kcsan_copyoutstr
+#define copyin		kcsan_copyin
+#define copyout		kcsan_copyout
+#elif defined(_KERNEL) && defined(KMSAN)
+int	kmsan_copyinstr(const void *, void *, size_t, size_t *);
+int	kmsan_copyoutstr(const void *, void *, size_t, size_t *);
+int	kmsan_copyin(const void *, void *, size_t);
+int	kmsan_copyout(const void *, void *, size_t);
+#define copyinstr	kmsan_copyinstr
+#define copyoutstr	kmsan_copyoutstr
+#define copyin		kmsan_copyin
+#define copyout		kmsan_copyout
+#else
 int	copyinstr(const void *, void *, size_t, size_t *);
 int	copyoutstr(const void *, void *, size_t, size_t *);
 int	copyin(const void *, void *, size_t);
 int	copyout(const void *, void *, size_t);
+#endif
 
 #ifdef _KERNEL
 typedef	int	(*copyin_t)(const void *, void *, size_t);
@@ -266,30 +367,146 @@ typedef int	(*copyout_t)(const void *, void *, size_t);
 
 int	copyin_proc(struct proc *, const void *, void *, size_t);
 int	copyout_proc(struct proc *, const void *, void *, size_t);
+int	copyin_pid(pid_t, const void *, void *, size_t);
 int	copyin_vmspace(struct vmspace *, const void *, void *, size_t);
 int	copyout_vmspace(struct vmspace *, const void *, void *, size_t);
 
 int	ioctl_copyin(int ioctlflags, const void *src, void *dst, size_t len);
 int	ioctl_copyout(int ioctlflags, const void *src, void *dst, size_t len);
 
+int	ucas_32(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#ifdef _LP64
+int	ucas_64(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#endif
 int	ucas_ptr(volatile void *, void *, void *, void *);
-int	ucas_int(volatile int *, int, int, int *);
+int	ucas_int(volatile unsigned int *, unsigned int, unsigned int,
+		 unsigned int *);
+int	ufetch_8(const uint8_t *, uint8_t *);
+int	ufetch_16(const uint16_t *, uint16_t *);
+int	ufetch_32(const uint32_t *, uint32_t *);
+#ifdef _LP64
+int	ufetch_64(const uint64_t *, uint64_t *);
+#endif
+int	ufetch_char(const unsigned char *, unsigned char *);
+int	ufetch_short(const unsigned short *, unsigned short *);
+int	ufetch_int(const unsigned int *, unsigned int *);
+int	ufetch_long(const unsigned long *, unsigned long *);
+int	ufetch_ptr(const void **, void **);
+int	ustore_8(uint8_t *, uint8_t);
+int	ustore_16(uint16_t *, uint16_t);
+int	ustore_32(uint32_t *, uint32_t);
+#ifdef _LP64
+int	ustore_64(uint64_t *, uint64_t);
+#endif
+int	ustore_char(unsigned char *, unsigned char);
+int	ustore_short(unsigned short *, unsigned short);
+int	ustore_int(unsigned int *, unsigned int);
+int	ustore_long(unsigned long *, unsigned long);
+int	ustore_ptr(void **, void *);
 
-int	subyte(void *, int);
-int	suibyte(void *, int);
-int	susword(void *, short);
-int	suisword(void *, short);
-int	suswintr(void *, short);
-int	suword(void *, long);
-int	suiword(void *, long);
+#ifdef __UCAS_PRIVATE
 
-int	fubyte(const void *);
-int	fuibyte(const void *);
-int	fusword(const void *);
-int	fuisword(const void *);
-int	fuswintr(const void *);
-long	fuword(const void *);
-long	fuiword(const void *);
+#if defined(__HAVE_UCAS_FULL) && defined(KASAN)
+int	kasan__ucas_32(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#ifdef __HAVE_UCAS_MP
+int	kasan__ucas_32_mp(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#endif /* __HAVE_UCAS_MP */
+#ifdef _LP64
+int	kasan__ucas_64(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#ifdef __HAVE_UCAS_MP
+int	kasan__ucas_64_mp(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#endif /* __HAVE_UCAS_MP */
+#endif /* _LP64 */
+#define _ucas_32	kasan__ucas_32
+#define _ucas_32_mp	kasan__ucas_32_mp
+#define _ucas_64	kasan__ucas_64
+#define _ucas_64_mp	kasan__ucas_64_mp
+#elif defined(__HAVE_UCAS_FULL) && defined(KMSAN)
+int	kmsan__ucas_32(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#ifdef __HAVE_UCAS_MP
+int	kmsan__ucas_32_mp(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#endif /* __HAVE_UCAS_MP */
+#ifdef _LP64
+int	kmsan__ucas_64(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#ifdef __HAVE_UCAS_MP
+int	kmsan__ucas_64_mp(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#endif /* __HAVE_UCAS_MP */
+#endif /* _LP64 */
+#define _ucas_32	kmsan__ucas_32
+#define _ucas_32_mp	kmsan__ucas_32_mp
+#define _ucas_64	kmsan__ucas_64
+#define _ucas_64_mp	kmsan__ucas_64_mp
+#else
+int	_ucas_32(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#ifdef __HAVE_UCAS_MP
+int	_ucas_32_mp(volatile uint32_t *, uint32_t, uint32_t, uint32_t *);
+#endif /* __HAVE_UCAS_MP */
+#ifdef _LP64
+int	_ucas_64(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#ifdef __HAVE_UCAS_MP
+int	_ucas_64_mp(volatile uint64_t *, uint64_t, uint64_t, uint64_t *);
+#endif /* __HAVE_UCAS_MP */
+#endif /* _LP64 */
+#endif
+
+#endif /* __UCAS_PRIVATE */
+
+#ifdef __UFETCHSTORE_PRIVATE
+
+#if defined(KASAN)
+int	kasan__ufetch_8(const uint8_t *, uint8_t *);
+int	kasan__ufetch_16(const uint16_t *, uint16_t *);
+int	kasan__ufetch_32(const uint32_t *, uint32_t *);
+#ifdef _LP64
+int	kasan__ufetch_64(const uint64_t *, uint64_t *);
+#endif
+int	_ustore_8(uint8_t *, uint8_t);
+int	_ustore_16(uint16_t *, uint16_t);
+int	_ustore_32(uint32_t *, uint32_t);
+#ifdef _LP64
+int	_ustore_64(uint64_t *, uint64_t);
+#endif
+#define _ufetch_8	kasan__ufetch_8
+#define _ufetch_16	kasan__ufetch_16
+#define _ufetch_32	kasan__ufetch_32
+#define _ufetch_64	kasan__ufetch_64
+#elif defined(KMSAN)
+int	kmsan__ufetch_8(const uint8_t *, uint8_t *);
+int	kmsan__ufetch_16(const uint16_t *, uint16_t *);
+int	kmsan__ufetch_32(const uint32_t *, uint32_t *);
+#ifdef _LP64
+int	kmsan__ufetch_64(const uint64_t *, uint64_t *);
+#endif
+int	kmsan__ustore_8(uint8_t *, uint8_t);
+int	kmsan__ustore_16(uint16_t *, uint16_t);
+int	kmsan__ustore_32(uint32_t *, uint32_t);
+#ifdef _LP64
+int	kmsan__ustore_64(uint64_t *, uint64_t);
+#endif
+#define _ufetch_8	kmsan__ufetch_8
+#define _ufetch_16	kmsan__ufetch_16
+#define _ufetch_32	kmsan__ufetch_32
+#define _ufetch_64	kmsan__ufetch_64
+#define _ustore_8	kmsan__ustore_8
+#define _ustore_16	kmsan__ustore_16
+#define _ustore_32	kmsan__ustore_32
+#define _ustore_64	kmsan__ustore_64
+#else
+int	_ufetch_8(const uint8_t *, uint8_t *);
+int	_ufetch_16(const uint16_t *, uint16_t *);
+int	_ufetch_32(const uint32_t *, uint32_t *);
+#ifdef _LP64
+int	_ufetch_64(const uint64_t *, uint64_t *);
+#endif
+int	_ustore_8(uint8_t *, uint8_t);
+int	_ustore_16(uint16_t *, uint16_t);
+int	_ustore_32(uint32_t *, uint32_t);
+#ifdef _LP64
+int	_ustore_64(uint64_t *, uint64_t);
+#endif
+#endif
+
+#endif /* __UFETCHSTORE_PRIVATE */
 
 void	hardclock(struct clockframe *);
 void	softclock(void *);
@@ -444,7 +661,12 @@ typedef struct cnm_state {
 #define cn_trap()	console_debugger()
 #endif
 #ifndef cn_isconsole
+#ifndef WSDISPLAY_MULTICONS
 #define cn_isconsole(d)	(cn_tab != NULL && (d) == cn_tab->cn_dev)
+#else
+bool wsdisplay_cn_isconsole(dev_t);
+#define cn_isconsole(d)	wsdisplay_cn_isconsole(d)
+#endif
 #endif
 
 void cn_init_magic(cnm_state_t *);
@@ -507,7 +729,7 @@ void	kernconfig_unlock(void);
 bool	kernconfig_is_held(void);
 #endif
 
-#if defined(MULTIPROCESSOR) || defined(_MODULE)
+#if defined(MULTIPROCESSOR) || defined(MODULAR) || defined(_MODULE)
 #define	KERNEL_LOCK(count, lwp)			\
 do {						\
 	if ((count) != 0)			\

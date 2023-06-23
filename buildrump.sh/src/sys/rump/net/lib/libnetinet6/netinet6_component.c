@@ -1,4 +1,4 @@
-/*	$NetBSD: netinet6_component.c,v 1.4 2016/01/26 23:12:19 pooka Exp $	*/
+/*	$NetBSD: netinet6_component.c,v 1.6 2016/08/13 11:19:35 christos Exp $	*/
 
 /*
  * Copyright (c) 2013 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netinet6_component.c,v 1.4 2016/01/26 23:12:19 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netinet6_component.c,v 1.6 2016/08/13 11:19:35 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/domain.h>
@@ -52,6 +52,8 @@ RUMP_COMPONENT(RUMP_COMPONENT_NET)
 
 RUMP_COMPONENT(RUMP_COMPONENT_NET_IFCFG)
 {
+	if (lo0ifp == NULL)
+		panic("lo0 config: rumpnet_net has not been initialized");
 
 	if_up(lo0ifp);
 }

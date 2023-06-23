@@ -1,4 +1,4 @@
-/*	$NetBSD: bt_page.c,v 1.13 2008/09/11 12:58:00 joerg Exp $	*/
+/*	$NetBSD: bt_page.c,v 1.15 2016/09/24 21:31:25 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993, 1994
@@ -34,7 +34,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: bt_page.c,v 1.13 2008/09/11 12:58:00 joerg Exp $");
+__RCSID("$NetBSD: bt_page.c,v 1.15 2016/09/24 21:31:25 christos Exp $");
 
 #include "namespace.h"
 #include <sys/types.h>

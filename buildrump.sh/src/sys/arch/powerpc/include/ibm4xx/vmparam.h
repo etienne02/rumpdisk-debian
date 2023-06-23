@@ -1,4 +1,4 @@
-/*	$NetBSD: vmparam.h,v 1.10 2015/02/23 20:34:38 joerg Exp $	*/
+/*	$NetBSD: vmparam.h,v 1.12 2019/03/27 19:30:31 christos Exp $	*/
 
 /*-
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -31,8 +31,8 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _MACHINE_VMPARAM_H_
-#define _MACHINE_VMPARAM_H_
+#ifndef _POWERPC_IBM4XX_VMPARAM_H_
+#define _POWERPC_IBM4XX_VMPARAM_H_
 
 /*
  * We use 16K pages on IBM4xx CPUs.  Override the PAGE_* definitions
@@ -90,11 +90,6 @@
 #define	VM_MAX_KERNEL_ADDRESS	(VM_MIN_KERNEL_ADDRESS + SEGMENT_LENGTH - 1)
 #endif
 
-/* XXX max. amount of KVM to be used by buffers. */
-#ifndef VM_MAX_KERNEL_BUF
-#define VM_MAX_KERNEL_BUF	(0x10000000 * 7 / 10)
-#endif
-
 #define	VM_PHYS_SIZE		(USRIOSIZE * PAGE_SIZE)
 
 #define	__HAVE_PMAP_PHYSSEG
@@ -106,4 +101,4 @@ struct pmap_physseg {
 
 #define VM_PHYSSEG_STRAT	VM_PSTRAT_BSEARCH
 
-#endif /* _MACHINE_VMPARAM_H_ */
+#endif /* _POWERPC_IBM4XX_VMPARAM_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: stuirda.c,v 1.18 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: stuirda.c,v 1.20 2019/05/05 03:17:54 mrg Exp $	*/
 
 /*
  * Copyright (c) 2001,2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: stuirda.c,v 1.18 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: stuirda.c,v 1.20 2019/05/05 03:17:54 mrg Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 
@@ -100,7 +104,7 @@ int	stuirda_match(device_t, cfdata_t, void *);
 void	stuirda_attach(device_t, device_t, void *);
 int	stuirda_detach(device_t, int);
 int	stuirda_activate(device_t, enum devact);
-extern struct cfdriver stuirda_cd;
+
 CFATTACH_DECL_NEW(stuirda, sizeof(struct stuirda_softc), stuirda_match,
     stuirda_attach, stuirda_detach, stuirda_activate);
 

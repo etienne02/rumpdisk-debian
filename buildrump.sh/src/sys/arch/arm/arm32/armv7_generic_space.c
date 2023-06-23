@@ -1,4 +1,4 @@
-/*	$NetBSD: armv7_generic_space.c,v 1.2 2015/10/18 00:37:56 jmcneill Exp $	*/
+/*	$NetBSD: armv7_generic_space.c,v 1.13 2020/10/30 18:54:36 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -31,14 +31,14 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: armv7_generic_space.c,v 1.2 2015/10/18 00:37:56 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: armv7_generic_space.c,v 1.13 2020/10/30 18:54:36 skrll Exp $");
 
 #include <sys/param.h>
+
+#include <sys/bus.h>
 #include <sys/systm.h>
 
 #include <uvm/uvm_extern.h>
-
-#include <sys/bus.h>
 
 /* Prototypes for all the bus_space structure functions */
 bs_protos(armv7_generic);
@@ -54,233 +54,236 @@ bs_protos(generic_armv4);
 #define NSWAP(n)	n
 #endif
 
+__strong_alias(arm_generic_bs_tag,armv7_generic_bs_tag);
+__strong_alias(arm_generic_a4x_bs_tag,armv7_generic_a4x_bs_tag);
+
 struct bus_space armv7_generic_bs_tag = {
 	/* cookie */
-	(void *) 0,
+	.bs_cookie = (void *) 0,
 
 	/* mapping/unmapping */
-	armv7_generic_bs_map,
-	armv7_generic_bs_unmap,
-	armv7_generic_bs_subregion,
+	.bs_map = armv7_generic_bs_map,
+	.bs_unmap = armv7_generic_bs_unmap,
+	.bs_subregion = armv7_generic_bs_subregion,
 
 	/* allocation/deallocation */
-	armv7_generic_bs_alloc,	/* not implemented */
-	armv7_generic_bs_free,	/* not implemented */
+	.bs_alloc = armv7_generic_bs_alloc,	/* not implemented */
+	.bs_free = armv7_generic_bs_free,	/* not implemented */
 
 	/* get kernel virtual address */
-	armv7_generic_bs_vaddr,
+	.bs_vaddr = armv7_generic_bs_vaddr,
 
 	/* mmap */
-	armv7_generic_bs_mmap,
+	.bs_mmap = armv7_generic_bs_mmap,
 
 	/* barrier */
-	armv7_generic_bs_barrier,
+	.bs_barrier = armv7_generic_bs_barrier,
 
 	/* read (single) */
-	generic_bs_r_1,
-	NSWAP(generic_armv4_bs_r_2),
-	NSWAP(generic_bs_r_4),
-	bs_notimpl_bs_r_8,
+	.bs_r_1 = generic_bs_r_1,
+	.bs_r_2 = NSWAP(generic_armv4_bs_r_2),
+	.bs_r_4 = NSWAP(generic_bs_r_4),
+	.bs_r_8 = bs_notimpl_bs_r_8,
 
 	/* read multiple */
-	generic_bs_rm_1,
-	NSWAP(generic_armv4_bs_rm_2),
-	NSWAP(generic_bs_rm_4),
-	bs_notimpl_bs_rm_8,
+	.bs_rm_1 = generic_bs_rm_1,
+	.bs_rm_2 = NSWAP(generic_armv4_bs_rm_2),
+	.bs_rm_4 = NSWAP(generic_bs_rm_4),
+	.bs_rm_8 = bs_notimpl_bs_rm_8,
 
 	/* read region */
-	generic_bs_rr_1,
-	NSWAP(generic_armv4_bs_rr_2),
-	NSWAP(generic_bs_rr_4),
-	bs_notimpl_bs_rr_8,
+	.bs_rr_1 = generic_bs_rr_1,
+	.bs_rr_2 = NSWAP(generic_armv4_bs_rr_2),
+	.bs_rr_4 = NSWAP(generic_bs_rr_4),
+	.bs_rr_8 = bs_notimpl_bs_rr_8,
 
 	/* write (single) */
-	generic_bs_w_1,
-	NSWAP(generic_armv4_bs_w_2),
-	NSWAP(generic_bs_w_4),
-	bs_notimpl_bs_w_8,
+	.bs_w_1 = generic_bs_w_1,
+	.bs_w_2 = NSWAP(generic_armv4_bs_w_2),
+	.bs_w_4 = NSWAP(generic_bs_w_4),
+	.bs_w_8 = bs_notimpl_bs_w_8,
 
 	/* write multiple */
-	generic_bs_wm_1,
-	NSWAP(generic_armv4_bs_wm_2),
-	NSWAP(generic_bs_wm_4),
-	bs_notimpl_bs_wm_8,
+	.bs_wm_1 = generic_bs_wm_1,
+	.bs_wm_2 = NSWAP(generic_armv4_bs_wm_2),
+	.bs_wm_4 = NSWAP(generic_bs_wm_4),
+	.bs_wm_8 = bs_notimpl_bs_wm_8,
 
 	/* write region */
-	generic_bs_wr_1,
-	NSWAP(generic_armv4_bs_wr_2),
-	NSWAP(generic_bs_wr_4),
-	bs_notimpl_bs_wr_8,
+	.bs_wr_1 = generic_bs_wr_1,
+	.bs_wr_2 = NSWAP(generic_armv4_bs_wr_2),
+	.bs_wr_4 = NSWAP(generic_bs_wr_4),
+	.bs_wr_8 = bs_notimpl_bs_wr_8,
 
 	/* set multiple */
-	bs_notimpl_bs_sm_1,
-	bs_notimpl_bs_sm_2,
-	bs_notimpl_bs_sm_4,
-	bs_notimpl_bs_sm_8,
+	.bs_sm_1 = bs_notimpl_bs_sm_1,
+	.bs_sm_2 = bs_notimpl_bs_sm_2,
+	.bs_sm_4 = bs_notimpl_bs_sm_4,
+	.bs_sm_8 = bs_notimpl_bs_sm_8,
 
 	/* set region */
-	generic_bs_sr_1,
-	NSWAP(generic_armv4_bs_sr_2),
-	bs_notimpl_bs_sr_4,
-	bs_notimpl_bs_sr_8,
+	.bs_sr_1 = generic_bs_sr_1,
+	.bs_sr_2 = NSWAP(generic_armv4_bs_sr_2),
+	.bs_sr_4 = NSWAP(generic_bs_sr_4),
+	.bs_sr_8 = bs_notimpl_bs_sr_8,
 
 	/* copy */
-	bs_notimpl_bs_c_1,
-	generic_armv4_bs_c_2,
-	bs_notimpl_bs_c_4,
-	bs_notimpl_bs_c_8,
+	.bs_c_1 = bs_notimpl_bs_c_1,
+	.bs_c_2 = generic_armv4_bs_c_2,
+	.bs_c_4 = bs_notimpl_bs_c_4,
+	.bs_c_8 = bs_notimpl_bs_c_8,
 
 #ifdef __BUS_SPACE_HAS_STREAM_METHODS
 	/* read (single) */
-	generic_bs_r_1,
-	NSWAP(generic_armv4_bs_r_2),
-	NSWAP(generic_bs_r_4),
-	bs_notimpl_bs_r_8,
+	.bs_r_1_s = generic_bs_r_1,
+	.bs_r_2_s = NSWAP(generic_armv4_bs_r_2),
+	.bs_r_4_s = NSWAP(generic_bs_r_4),
+	.bs_r_8_s = bs_notimpl_bs_r_8,
 
 	/* read multiple */
-	generic_bs_rm_1,
-	NSWAP(generic_armv4_bs_rm_2),
-	NSWAP(generic_bs_rm_4),
-	bs_notimpl_bs_rm_8,
+	.bs_rm_1_s = generic_bs_rm_1,
+	.bs_rm_2_s = NSWAP(generic_armv4_bs_rm_2),
+	.bs_rm_4_s = NSWAP(generic_bs_rm_4),
+	.bs_rm_8_s = bs_notimpl_bs_rm_8,
 
 	/* read region */
-	generic_bs_rr_1,
-	NSWAP(generic_armv4_bs_rr_2),
-	NSWAP(generic_bs_rr_4),
-	bs_notimpl_bs_rr_8,
+	.bs_rr_1_s = generic_bs_rr_1,
+	.bs_rr_2_s = NSWAP(generic_armv4_bs_rr_2),
+	.bs_rr_4_s = NSWAP(generic_bs_rr_4),
+	.bs_rr_8_s = bs_notimpl_bs_rr_8,
 
 	/* write (single) */
-	generic_bs_w_1,
-	NSWAP(generic_armv4_bs_w_2),
-	NSWAP(generic_bs_w_4),
-	bs_notimpl_bs_w_8,
+	.bs_w_1_s = generic_bs_w_1,
+	.bs_w_2_s = NSWAP(generic_armv4_bs_w_2),
+	.bs_w_4_s = NSWAP(generic_bs_w_4),
+	.bs_w_8_s = bs_notimpl_bs_w_8,
 
 	/* write multiple */
-	generic_bs_wm_1,
-	NSWAP(generic_armv4_bs_wm_2),
-	NSWAP(generic_bs_wm_4),
-	bs_notimpl_bs_wm_8,
+	.bs_wm_1_s = generic_bs_wm_1,
+	.bs_wm_2_s = NSWAP(generic_armv4_bs_wm_2),
+	.bs_wm_4_s = NSWAP(generic_bs_wm_4),
+	.bs_wm_8_s = bs_notimpl_bs_wm_8,
 
 	/* write region */
-	generic_bs_wr_1,
-	NSWAP(generic_armv4_bs_wr_2),
-	NSWAP(generic_bs_wr_4),
-	bs_notimpl_bs_wr_8,
+	.bs_wr_1_s = generic_bs_wr_1,
+	.bs_wr_2_s = NSWAP(generic_armv4_bs_wr_2),
+	.bs_wr_4_s = NSWAP(generic_bs_wr_4),
+	.bs_wr_8_s = bs_notimpl_bs_wr_8,
 #endif
 };
 
 struct bus_space armv7_generic_a4x_bs_tag = {
 	/* cookie */
-	(void *) 0,
+	.bs_cookie = (void *) 0,
 
 	/* mapping/unmapping */
-	armv7_generic_bs_map,
-	armv7_generic_bs_unmap,
-	armv7_generic_a4x_bs_subregion,
+	.bs_map = armv7_generic_bs_map,
+	.bs_unmap = armv7_generic_bs_unmap,
+	.bs_subregion = armv7_generic_a4x_bs_subregion,
 
 	/* allocation/deallocation */
-	armv7_generic_bs_alloc,	/* not implemented */
-	armv7_generic_bs_free,	/* not implemented */
+	.bs_alloc = armv7_generic_bs_alloc,	/* not implemented */
+	.bs_free = armv7_generic_bs_free,	/* not implemented */
 
 	/* get kernel virtual address */
-	armv7_generic_bs_vaddr,
+	.bs_vaddr = armv7_generic_bs_vaddr,
 
 	/* mmap */
-	armv7_generic_a4x_bs_mmap,
+	.bs_mmap = armv7_generic_a4x_bs_mmap,
 
 	/* barrier */
-	armv7_generic_bs_barrier,
+	.bs_barrier = armv7_generic_bs_barrier,
 
 	/* read (single) */
-	a4x_bs_r_1,
-	NSWAP(a4x_bs_r_2),
-	NSWAP(a4x_bs_r_4),
-	bs_notimpl_bs_r_8,
+	.bs_r_1 = a4x_bs_r_1,
+	.bs_r_2 = NSWAP(a4x_bs_r_2),
+	.bs_r_4 = NSWAP(a4x_bs_r_4),
+	.bs_r_8 = bs_notimpl_bs_r_8,
 
 	/* read multiple */
-	a4x_bs_rm_1,
-	NSWAP(a4x_bs_rm_2),
-	NSWAP(a4x_bs_rm_4),
-	bs_notimpl_bs_rm_8,
+	.bs_rm_1 = a4x_bs_rm_1,
+	.bs_rm_2 = NSWAP(a4x_bs_rm_2),
+	.bs_rm_4 = NSWAP(a4x_bs_rm_4),
+	.bs_rm_8 = bs_notimpl_bs_rm_8,
 
 	/* read region */
-	bs_notimpl_bs_rr_1,
-	bs_notimpl_bs_rr_2,
-	bs_notimpl_bs_rr_4,
-	bs_notimpl_bs_rr_8,
+	.bs_rr_1 = bs_notimpl_bs_rr_1,
+	.bs_rr_2 = bs_notimpl_bs_rr_2,
+	.bs_rr_4 = bs_notimpl_bs_rr_4,
+	.bs_rr_8 = bs_notimpl_bs_rr_8,
 
 	/* write (single) */
-	a4x_bs_w_1,
-	NSWAP(a4x_bs_w_2),
-	NSWAP(a4x_bs_w_4),
-	bs_notimpl_bs_w_8,
+	.bs_w_1 = a4x_bs_w_1,
+	.bs_w_2 = NSWAP(a4x_bs_w_2),
+	.bs_w_4 = NSWAP(a4x_bs_w_4),
+	.bs_w_8 = bs_notimpl_bs_w_8,
 
 	/* write multiple */
-	a4x_bs_wm_1,
-	NSWAP(a4x_bs_wm_2),
-	NSWAP(a4x_bs_wm_4),
-	bs_notimpl_bs_wm_8,
+	.bs_wm_1 = a4x_bs_wm_1,
+	.bs_wm_2 = NSWAP(a4x_bs_wm_2),
+	.bs_wm_4 = NSWAP(a4x_bs_wm_4),
+	.bs_wm_8 = bs_notimpl_bs_wm_8,
 
 	/* write region */
-	bs_notimpl_bs_wr_1,
-	bs_notimpl_bs_wr_2,
-	bs_notimpl_bs_wr_4,
-	bs_notimpl_bs_wr_8,
+	.bs_wr_1 = bs_notimpl_bs_wr_1,
+	.bs_wr_2 = bs_notimpl_bs_wr_2,
+	.bs_wr_4 = bs_notimpl_bs_wr_4,
+	.bs_wr_8 = bs_notimpl_bs_wr_8,
 
 	/* set multiple */
-	bs_notimpl_bs_sm_1,
-	bs_notimpl_bs_sm_2,
-	bs_notimpl_bs_sm_4,
-	bs_notimpl_bs_sm_8,
+	.bs_sm_1 = bs_notimpl_bs_sm_1,
+	.bs_sm_2 = bs_notimpl_bs_sm_2,
+	.bs_sm_4 = bs_notimpl_bs_sm_4,
+	.bs_sm_8 = bs_notimpl_bs_sm_8,
 
 	/* set region */
-	bs_notimpl_bs_sr_1,
-	bs_notimpl_bs_sr_2,
-	bs_notimpl_bs_sr_4,
-	bs_notimpl_bs_sr_8,
+	.bs_sr_1 = bs_notimpl_bs_sr_1,
+	.bs_sr_2 = bs_notimpl_bs_sr_2,
+	.bs_sr_4 = bs_notimpl_bs_sr_4,
+	.bs_sr_8 = bs_notimpl_bs_sr_8,
 
 	/* copy */
-	bs_notimpl_bs_c_1,
-	bs_notimpl_bs_c_2,
-	bs_notimpl_bs_c_4,
-	bs_notimpl_bs_c_8,
+	.bs_c_1 = bs_notimpl_bs_c_1,
+	.bs_c_2 = bs_notimpl_bs_c_2,
+	.bs_c_4 = bs_notimpl_bs_c_4,
+	.bs_c_8 = bs_notimpl_bs_c_8,
 
 #ifdef __BUS_SPACE_HAS_STREAM_METHODS
 	/* read (single) */
-	a4x_bs_r_1,
-	NSWAP(a4x_bs_r_2),
-	NSWAP(a4x_bs_r_4),
-	bs_notimpl_bs_r_8,
+	.bs_r_1_s = a4x_bs_r_1,
+	.bs_r_2_s = NSWAP(a4x_bs_r_2),
+	.bs_r_4_s = NSWAP(a4x_bs_r_4),
+	.bs_r_8_s = bs_notimpl_bs_r_8,
 
 	/* read multiple */
-	a4x_bs_rm_1,
-	NSWAP(a4x_bs_rm_2),
-	NSWAP(a4x_bs_rm_4),
-	bs_notimpl_bs_rm_8,
+	.bs_rm_1_s = a4x_bs_rm_1,
+	.bs_rm_2_s = NSWAP(a4x_bs_rm_2),
+	.bs_rm_4_s = NSWAP(a4x_bs_rm_4),
+	.bs_rm_8_s = bs_notimpl_bs_rm_8,
 
 	/* read region */
-	bs_notimpl_bs_rr_1,
-	bs_notimpl_bs_rr_2,
-	bs_notimpl_bs_rr_4,
-	bs_notimpl_bs_rr_8,
+	.bs_rr_1_s = bs_notimpl_bs_rr_1,
+	.bs_rr_2_s = bs_notimpl_bs_rr_2,
+	.bs_rr_4_s = bs_notimpl_bs_rr_4,
+	.bs_rr_8_s = bs_notimpl_bs_rr_8,
 
 	/* write (single) */
-	a4x_bs_w_1,
-	NSWAP(a4x_bs_w_2),
-	NSWAP(a4x_bs_w_4),
-	bs_notimpl_bs_w_8,
+	.bs_w_1_s = a4x_bs_w_1,
+	.bs_w_2_s = NSWAP(a4x_bs_w_2),
+	.bs_w_4_s = NSWAP(a4x_bs_w_4),
+	.bs_w_8_s = bs_notimpl_bs_w_8,
 
 	/* write multiple */
-	a4x_bs_wm_1,
-	NSWAP(a4x_bs_wm_2),
-	NSWAP(a4x_bs_wm_4),
-	bs_notimpl_bs_wm_8,
+	.bs_wm_1_s = a4x_bs_wm_1,
+	.bs_wm_2_s = NSWAP(a4x_bs_wm_2),
+	.bs_wm_4_s = NSWAP(a4x_bs_wm_4),
+	.bs_wm_8_s = bs_notimpl_bs_wm_8,
 
 	/* write region */
-	bs_notimpl_bs_wr_1,
-	bs_notimpl_bs_wr_2,
-	bs_notimpl_bs_wr_4,
-	bs_notimpl_bs_wr_8,
+	.bs_wr_1_s = bs_notimpl_bs_wr_1,
+	.bs_wr_2_s = bs_notimpl_bs_wr_2,
+	.bs_wr_4_s = bs_notimpl_bs_wr_4,
+	.bs_wr_8_s = bs_notimpl_bs_wr_8,
 #endif
 };
 
@@ -290,6 +293,7 @@ armv7_generic_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
 {
 	u_long startpa, endpa, pa;
 	const struct pmap_devmap *pd;
+	int pmapflags;
 	vaddr_t va;
 
 	if ((pd = pmap_devmap_find_pa(bpa, size)) != NULL) {
@@ -310,10 +314,13 @@ armv7_generic_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
 
 	*bshp = (bus_space_handle_t)(va + (bpa - startpa));
 
-	const int pmapflags =
-	    (flag & (BUS_SPACE_MAP_CACHEABLE|BUS_SPACE_MAP_PREFETCHABLE))
-		? 0
-		: PMAP_NOCACHE;
+	if (flag & BUS_SPACE_MAP_PREFETCHABLE)
+		pmapflags = PMAP_WRITE_COMBINE;
+	else if (flag & BUS_SPACE_MAP_CACHEABLE)
+		pmapflags = 0;
+	else
+		pmapflags = PMAP_DEV;
+
 	for (pa = startpa; pa < endpa; pa += PAGE_SIZE, va += PAGE_SIZE) {
 		pmap_kenter_pa(va, pa, VM_PROT_READ | VM_PROT_WRITE, pmapflags);
 	}
@@ -348,7 +355,7 @@ armv7_generic_bs_subregion(void *t, bus_space_handle_t bsh, bus_size_t offset,
 {
 
 	*nbshp = bsh + offset;
-	return (0);
+	return 0;
 }
 
 int
@@ -357,7 +364,7 @@ armv7_generic_a4x_bs_subregion(void *t, bus_space_handle_t bsh, bus_size_t offse
 {
 
 	*nbshp = bsh + 4 * offset;
-	return (0);
+	return 0;
 }
 
 void
@@ -365,9 +372,9 @@ armv7_generic_bs_barrier(void *t, bus_space_handle_t bsh, bus_size_t offset,
     bus_size_t len, int flags)
 {
 	flags &= BUS_SPACE_BARRIER_READ|BUS_SPACE_BARRIER_WRITE;
-	
+
 	if (flags)
-		arm_dsb();
+		dsb(sy);
 }
 
 void *
@@ -385,7 +392,7 @@ armv7_generic_bs_mmap(void *t, bus_addr_t bpa, off_t offset, int prot, int flags
 	if (flags & BUS_SPACE_MAP_PREFETCHABLE)
 		bus_flags |= ARM32_MMAP_WRITECOMBINE;
 
-	return (arm_btop(bpa + offset) | bus_flags);
+	return arm_btop(bpa + offset) | bus_flags;
 }
 
 paddr_t
@@ -396,7 +403,7 @@ armv7_generic_a4x_bs_mmap(void *t, bus_addr_t bpa, off_t offset, int prot, int f
 	if (flags & BUS_SPACE_MAP_PREFETCHABLE)
 		bus_flags |= ARM32_MMAP_WRITECOMBINE;
 
-	return (arm_btop(bpa + 4 * offset) | bus_flags);
+	return arm_btop(bpa + 4 * offset) | bus_flags;
 }
 
 int

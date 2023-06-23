@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_rfw.c,v 1.32 2015/10/03 08:27:55 dholland Exp $	*/
+/*	$NetBSD: lfs_rfw.c,v 1.36 2020/09/05 16:30:13 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2002, 2003 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_rfw.c,v 1.32 2015/10/03 08:27:55 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_rfw.c,v 1.36 2020/09/05 16:30:13 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_quota.h"
@@ -46,7 +46,6 @@ __KERNEL_RCSID(0, "$NetBSD: lfs_rfw.c,v 1.32 2015/10/03 08:27:55 dholland Exp $"
 #include <sys/kthread.h>
 #include <sys/buf.h>
 #include <sys/device.h>
-#include <sys/mbuf.h>
 #include <sys/file.h>
 #include <sys/disklabel.h>
 #include <sys/ioctl.h>
@@ -55,7 +54,6 @@ __KERNEL_RCSID(0, "$NetBSD: lfs_rfw.c,v 1.32 2015/10/03 08:27:55 dholland Exp $"
 #include <sys/pool.h>
 #include <sys/socket.h>
 #include <sys/syslog.h>
-#include <uvm/uvm_extern.h>
 #include <sys/sysctl.h>
 #include <sys/conf.h>
 #include <sys/kauth.h>
@@ -67,10 +65,7 @@ __KERNEL_RCSID(0, "$NetBSD: lfs_rfw.c,v 1.32 2015/10/03 08:27:55 dholland Exp $"
 #include <ufs/lfs/ulfsmount.h>
 #include <ufs/lfs/ulfs_extern.h>
 
-#include <uvm/uvm.h>
-#include <uvm/uvm_stat.h>
-#include <uvm/uvm_pager.h>
-#include <uvm/uvm_pdaemon.h>
+#include <uvm/uvm_extern.h>
 
 #include <ufs/lfs/lfs.h>
 #include <ufs/lfs/lfs_accessors.h>
@@ -114,7 +109,7 @@ lfs_rf_valloc(struct lfs *fs, ino_t ino, int vers, struct lwp *l,
 	 * we don't have to do anything else.  If the version number is wrong,
 	 * take appropriate action.
 	 */
-	error = VFS_VGET(fs->lfs_ivnode->v_mount, ino, &vp);
+	error = VFS_VGET(fs->lfs_ivnode->v_mount, ino, LK_EXCLUSIVE, &vp);
 	if (error == 0) {
 		DLOG((DLOG_RF, "lfs_rf_valloc[1]: ino %d vp %p\n", ino, vp));
 
@@ -143,7 +138,8 @@ lfs_rf_valloc(struct lfs *fs, ino_t ino, int vers, struct lwp *l,
 	va.va_mode = 0;
 	va.va_fileid = ino;
 	va.va_gen = vers;
-	error = vcache_new(fs->lfs_ivnode->v_mount, NULL, &va, NOCRED, &vp);
+	error = vcache_new(fs->lfs_ivnode->v_mount, NULL, &va, NOCRED, NULL,
+	    &vp);
 	if (error)
 		return error;
 	error = vn_lock(vp, LK_EXCLUSIVE);

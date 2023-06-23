@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -165,6 +165,10 @@ AcpiDbConvertToBuffer (
     UINT8                   *Buffer;
     ACPI_STATUS             Status;
 
+
+    /* Skip all preceding white space*/
+
+    AcpiUtRemoveWhitespace (&String);
 
     /* Generate the final buffer length */
 
@@ -321,8 +325,7 @@ AcpiDbConvertToObject (
     default:
 
         Object->Type = ACPI_TYPE_INTEGER;
-        Status = AcpiUtStrtoul64 (String, 16, AcpiGbl_IntegerByteWidth,
-            &Object->Integer.Value);
+        Status = AcpiUtStrtoul64 (String, &Object->Integer.Value);
         break;
     }
 

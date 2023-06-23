@@ -1,4 +1,4 @@
-/*	$NetBSD: fwohci_pci.c,v 1.43 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: fwohci_pci.c,v 1.46 2018/03/31 17:54:53 sevan Exp $	*/
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fwohci_pci.c,v 1.43 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fwohci_pci.c,v 1.46 2018/03/31 17:54:53 sevan Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -75,12 +75,14 @@ fwohci_pci_match(device_t parent, cfdata_t match, void *aux)
 
 	/*
 	 * XXX
-	 * Firewire controllers used in some G3 PowerBooks hang the system
+	 * UniNorth Firewire controller commonly found in Pismo G3 PowerBooks, 
+	 * G4 Titanium PowerBooks and some iMac G3s, hang the system
 	 * when trying to discover devices - don't attach to those for now
-	 * until someone with the right hardware can investigate
+	 * until someone with the right hardware can investigate.
+	 * These controllers are based on the Ti TSB41AB1 chipset.
 	 */
 	if ((PCI_VENDOR(pa->pa_id) == PCI_VENDOR_APPLE) &&
-	    (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_APPLE_PBG3_FW))
+	    (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_APPLE_UNINORTH_FW))
 		return 0;
 	if (PCI_CLASS(pa->pa_class) == PCI_CLASS_SERIALBUS &&
 	    PCI_SUBCLASS(pa->pa_class) == PCI_SUBCLASS_SERIALBUS_FIREWIRE &&
@@ -139,8 +141,8 @@ fwohci_pci_attach(device_t parent, device_t self, void *aux)
 		goto fail;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, ih, intrbuf, sizeof(intrbuf));
-	psc->psc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO, fwohci_intr,
-	    &psc->psc_sc);
+	psc->psc_ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO,
+	    fwohci_intr, &psc->psc_sc, device_xname(self));
 	if (psc->psc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)

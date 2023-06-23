@@ -1,4 +1,4 @@
-/*	$NetBSD: xcall.h,v 1.5 2013/02/19 09:04:53 martin Exp $	*/
+/*	$NetBSD: xcall.h,v 1.8 2019/10/06 15:11:16 uwe Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -33,7 +33,11 @@
 #define	_SYS_XCALL_H_
 
 #ifdef _KERNEL
-#define	XC_HIGHPRI	0x01	/* high priority */
+
+#include <sys/types.h>
+
+#define XC_HIGHPRI		0x01	/* high priority */
+#define XC_HIGHPRI_IPL(ipl)	(XC_HIGHPRI | xc_encode_ipl(ipl))
 
 typedef void (*xcfunc_t)(void *, void *);
 
@@ -48,6 +52,10 @@ void		xc__highpri_intr(void *);
 uint64_t	xc_broadcast(u_int, xcfunc_t, void *, void *);
 uint64_t	xc_unicast(u_int, xcfunc_t, void *, void *, struct cpu_info *);
 void		xc_wait(uint64_t);
+
+void		xc_barrier(u_int);
+
+unsigned int	xc_encode_ipl(int);
 
 #endif	/* _KERNEL */
 

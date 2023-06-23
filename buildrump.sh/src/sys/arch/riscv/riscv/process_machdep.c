@@ -1,3 +1,5 @@
+/*	$NetBSD: process_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $	*/
+
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -29,7 +31,7 @@
 
 #include <sys/cdefs.h>
 
-__RCSID("$NetBSD: process_machdep.c,v 1.1 2015/03/28 16:13:56 matt Exp $");
+__RCSID("$NetBSD: process_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/ptrace.h>
@@ -63,19 +65,14 @@ process_read_fpregs(struct lwp *l, struct fpreg *fpregs, size_t *sz)
 {
 	struct pcb * const pcb = lwp_getpcb(l);
 
-	if (l == curlwp) {
-		/* Is the process using the fpu? */
-		if (!fpu_valid_p()) {
-			memset(fpregs, 0, sizeof (*fpregs));
-			return 0;
-		}
-		fpu_save();
-	} else {
-		KASSERTMSG(l->l_pcu_cpu[PCU_FPU] == NULL,
-		    "%s: FPU of l (%p) active on %s",
-		     __func__, l, l->l_pcu_cpu[PCU_FPU]->ci_cpuname);
+	/* Is the process using the fpu? */
+	if (!fpu_valid_p(l)) {
+		memset(fpregs, 0, sizeof (*fpregs));
+		return 0;
 	}
+	fpu_save(l);
 	*fpregs = pcb->pcb_fpregs;
+
 	return 0;
 }
 
@@ -84,9 +81,7 @@ process_write_fpregs(struct lwp *l, const struct fpreg *fpregs, size_t sz)
 {
 	struct pcb * const pcb = lwp_getpcb(l);
 
-	KASSERT(l == curlwp);
-	fpu_replace();
-
+	fpu_replace(l);
 	pcb->pcb_fpregs = *fpregs;
 
 	return 0;
@@ -99,7 +94,7 @@ int
 process_set_pc(struct lwp *l, void *addr)
 {
 	//struct trapframe * const tf = l->l_md.md_utf;
-	
+
 	l->l_md.md_utf->tf_pc = (register_t)addr;
 
 	return 0;

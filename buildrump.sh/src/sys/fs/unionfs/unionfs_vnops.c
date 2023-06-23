@@ -65,6 +65,42 @@
 #endif
 
 static int
+unionfs_parsepath(void *v)
+{
+	struct vop_parsepath_args /* {
+		struct vnode *a_dvp;
+		const char *a_name;
+		size_t *a_retval;
+	} */ *ap = v;
+	struct unionfs_node *dunp;
+	struct vnode *upperdvp, *lowerdvp;
+	size_t upper, lower;
+	int error;
+
+	dunp = VTOUNIONFS(ap->a_dvp);
+	upperdvp = dunp->un_uppervp;
+	lowerdvp = dunp->un_lowervp;
+
+	error = VOP_PARSEPATH(upperdvp, ap->a_name, &upper);
+	if (error) {
+		return error;
+	}
+
+	error = VOP_PARSEPATH(lowerdvp, ap->a_name, &lower);
+	if (error) {
+		return error;
+	}
+
+	/*
+	 * If they're different, use the larger one. This is not a
+	 * comprehensive solution, but it's sufficient for the
+	 * non-default cases of parsepath that currently exist.
+	 */
+	*ap->a_retval = MAX(upper, lower);
+	return 0;
+}
+
+static int
 unionfs_lookup(void *v)
 {
 	struct vop_lookup_args *ap = v;
@@ -857,7 +893,7 @@ unionfs_fsync(void *v)
 static int
 unionfs_remove(void *v)
 {
-	struct vop_remove_args *ap = v;
+	struct vop_remove_v2_args *ap = v;
 	int		error;
 	struct unionfs_node *dunp;
 	struct unionfs_node *unp;
@@ -877,8 +913,10 @@ unionfs_remove(void *v)
 	lvp = unp->un_lowervp;
 	cnp = ap->a_cnp;
 
-	if (udvp == NULLVP)
+	if (udvp == NULLVP) {
+		vput(ap->a_vp);
 		return (EROFS);
+	}
 
 	if (uvp != NULLVP) {
 		ump = MOUNTTOUNIONFSMOUNT(ap->a_vp->v_mount);
@@ -1206,7 +1244,7 @@ unionfs_mkdir(void *v)
 static int
 unionfs_rmdir(void *v)
 {
-	struct vop_rmdir_args *ap = v;
+	struct vop_rmdir_v2_args *ap = v;
 	int		error;
 	struct unionfs_node *dunp;
 	struct unionfs_node *unp;
@@ -1226,8 +1264,10 @@ unionfs_rmdir(void *v)
 	uvp = unp->un_uppervp;
 	lvp = unp->un_lowervp;
 
-	if (udvp == NULLVP)
+	if (udvp == NULLVP) {
+		vput(ap->a_vp);
 		return (EROFS);
+	}
 
 	if (udvp == uvp)
 		return (EOPNOTSUPP);
@@ -1466,18 +1506,19 @@ unionfs_readlink(void *v)
 static int
 unionfs_inactive(void *v)
 {
-	struct vop_inactive_args *ap = v;
+	struct vop_inactive_v2_args *ap = v;
 	*ap->a_recycle = true;
-	VOP_UNLOCK(ap->a_vp);
 	return (0);
 }
 
 static int
 unionfs_reclaim(void *v)
 {
-	struct vop_reclaim_args *ap = v;
+	struct vop_reclaim_v2_args *ap = v;
 
 	/* UNIONFS_INTERNAL_DEBUG("unionfs_reclaim: enter\n"); */
+
+	VOP_UNLOCK(ap->a_vp);
 
 	unionfs_noderem(ap->a_vp);
 
@@ -1743,14 +1784,14 @@ unionfs_putpages(void *v)
 	struct vnode *vp = ap->a_vp, *tvp;
 	struct unionfs_node *unp;
 
-	KASSERT(mutex_owned(vp->v_interlock));
+	KASSERT(rw_lock_held(vp->v_uobj.vmobjlock));
 
 	unp = VTOUNIONFS(vp);
 	tvp = (unp->un_uppervp != NULLVP ? unp->un_uppervp : unp->un_lowervp);
-	KASSERT(tvp->v_interlock == vp->v_interlock);
+	KASSERT(tvp->v_uobj.vmobjlock == vp->v_uobj.vmobjlock);
 
 	if (ap->a_flags & PGO_RECLAIM) {
-		mutex_exit(vp->v_interlock);
+		rw_exit(vp->v_uobj.vmobjlock);
 		return 0;
 	}
 	return VOP_PUTPAGES(tvp, ap->a_offlo, ap->a_offhi, ap->a_flags);
@@ -1772,11 +1813,11 @@ unionfs_getpages(void *v)
 	struct vnode *vp = ap->a_vp, *tvp;
 	struct unionfs_node *unp;
 
-	KASSERT(mutex_owned(vp->v_interlock));
+	KASSERT(rw_lock_held(vp->v_uobj.vmobjlock));
 
 	unp = VTOUNIONFS(vp);
 	tvp = (unp->un_uppervp != NULLVP ? unp->un_uppervp : unp->un_lowervp);
-	KASSERT(tvp->v_interlock == vp->v_interlock);
+	KASSERT(tvp->v_uobj.vmobjlock == vp->v_uobj.vmobjlock);
 
 	if (ap->a_flags & PGO_LOCKED) {
 		return EBUSY;
@@ -1809,6 +1850,7 @@ unionfs_revoke(void *v)
 int (**unionfs_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc unionfs_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, unionfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, unionfs_lookup },		/* lookup */
 	{ &vop_create_desc, unionfs_create },		/* create */
 	{ &vop_whiteout_desc, unionfs_whiteout },	/* whiteout */
@@ -1816,6 +1858,7 @@ const struct vnodeopv_entry_desc unionfs_vnodeop_entries[] = {
 	{ &vop_open_desc, unionfs_open },		/* open */
 	{ &vop_close_desc, unionfs_close },		/* close */
 	{ &vop_access_desc, unionfs_access },		/* access */
+	{ &vop_accessx_desc, genfs_accessx },		/* accessx */
 	{ &vop_getattr_desc, unionfs_getattr },		/* getattr */
 	{ &vop_setattr_desc, unionfs_setattr },		/* setattr */
 	{ &vop_read_desc, unionfs_read },		/* read */

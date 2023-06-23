@@ -1,3 +1,5 @@
+/*	$NetBSD: sig_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $	*/
+
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -30,7 +32,7 @@
 #include <sys/cdefs.h>
 
 #ifndef COMPATNAME1
-__RCSID("$NetBSD: sig_machdep.c,v 1.1 2015/03/28 16:13:56 matt Exp $");
+__RCSID("$NetBSD: sig_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $");
 #endif
 
 #include <sys/param.h>
@@ -50,12 +52,12 @@ __RCSID("$NetBSD: sig_machdep.c,v 1.1 2015/03/28 16:13:56 matt Exp $");
 #define UCLINK_SET(uc,c)	((uc)->uc_link = (c))
 #define	COPY_SIGINFO(d,s)	((d)->sf_si._info = (s)->ksi_info)
 
-void *	
+void *
 cpu_sendsig_getframe(struct lwp *l, int signo, bool *onstack)
 {
 	struct trapframe * const tf = l->l_md.md_utf;
 	struct proc * const p = l->l_proc;
- 
+
 	/* Do we need to jump onto the signal stack? */
 	*onstack = (l->l_sigstk.ss_flags & (SS_DISABLE | SS_ONSTACK)) == 0
 	    && (SIGACTION(p, signo).sa_flags & SA_ONSTACK) != 0;
@@ -93,6 +95,7 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 
 	sf--;		// allocate sigframe
 
+	memset(&ksf, 0, sizeof(ksf));
 	COPY_SIGINFO(&ksf, ksi);
 	ksf.sf_uc.uc_flags = _UC_SIGMASK
 	    | (l->l_sigstk.ss_flags & SS_ONSTACK ? _UC_SETSTACK : _UC_CLRSTACK);

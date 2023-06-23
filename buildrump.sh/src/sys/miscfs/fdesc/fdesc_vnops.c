@@ -1,4 +1,4 @@
-/*	$NetBSD: fdesc_vnops.c,v 1.126 2015/04/20 23:03:08 riastradh Exp $	*/
+/*	$NetBSD: fdesc_vnops.c,v 1.138 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -41,13 +41,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fdesc_vnops.c,v 1.126 2015/04/20 23:03:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fdesc_vnops.c,v 1.138 2021/06/29 22:40:53 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/proc.h>
-#include <sys/kernel.h>	/* boottime */
 #include <sys/resourcevar.h>
 #include <sys/socketvar.h>
 #include <sys/filedesc.h>
@@ -105,7 +104,7 @@ int	fdesc_inactive(void *);
 int	fdesc_reclaim(void *);
 #define	fdesc_lock	genfs_lock
 #define	fdesc_unlock	genfs_unlock
-#define	fdesc_bmap	genfs_badop
+#define	fdesc_bmap	genfs_eopnotsupp
 #define	fdesc_strategy	genfs_badop
 int	fdesc_print(void *);
 int	fdesc_pathconf(void *);
@@ -120,12 +119,14 @@ static int fdesc_attr(int, struct vattr *, kauth_cred_t);
 int (**fdesc_vnodeop_p)(void *);
 const struct vnodeopv_entry_desc fdesc_vnodeop_entries[] = {
 	{ &vop_default_desc, vn_default_error },
+	{ &vop_parsepath_desc, genfs_parsepath },	/* parsepath */
 	{ &vop_lookup_desc, fdesc_lookup },		/* lookup */
 	{ &vop_create_desc, fdesc_create },		/* create */
 	{ &vop_mknod_desc, fdesc_mknod },		/* mknod */
 	{ &vop_open_desc, fdesc_open },			/* open */
 	{ &vop_close_desc, fdesc_close },		/* close */
 	{ &vop_access_desc, fdesc_access },		/* access */
+	{ &vop_accessx_desc, genfs_accessx },		/* accessx */
 	{ &vop_getattr_desc, fdesc_getattr },		/* getattr */
 	{ &vop_setattr_desc, fdesc_setattr },		/* setattr */
 	{ &vop_read_desc, fdesc_read },			/* read */
@@ -207,7 +208,7 @@ fdesc_lookup(void *v)
 	int error, ix = -1;
 	fdtab_t *dt;
 
-	dt = curlwp->l_fd->fd_dt;
+	dt = atomic_load_consume(&curlwp->l_fd->fd_dt);
 
 	if (cnp->cn_namelen == 1 && *pname == '.') {
 		*vpp = dvp;
@@ -295,9 +296,20 @@ bad:
 good:
 	KASSERT(ix != -1);
 	error = vcache_get(dvp->v_mount, &ix, sizeof(ix), vpp);
-	if (error == 0 && ix == FD_CTTY)
+	if (error)
+		return error;
+
+	/*
+	 * Prevent returning VNON nodes.
+	 * Operation fdesc_inactive() will reset the type to VNON.
+	 */
+	if (ix == FD_CTTY)
 		(*vpp)->v_type = VCHR;
-	return error;
+	else if (ix >= FD_DESC)
+		(*vpp)->v_type = VREG;
+	KASSERT((*vpp)->v_type != VNON);
+
+	return 0;
 }
 
 int
@@ -314,11 +326,13 @@ fdesc_open(void *v)
 	case Fdesc:
 		/*
 		 * XXX Kludge: set dupfd to contain the value of the
-		 * the file descriptor being sought for duplication. The error
-		 * return ensures that the vnode for this device will be
-		 * released by vn_open. Open will detect this special error and
-		 * take the actions in dupfdopen.  Other callers of vn_open or
-		 * VOP_OPEN will simply report the error.
+		 * the file descriptor being sought for duplication.
+		 * The error return ensures that the vnode for this
+		 * device will be released by vn_open. vn_open will
+		 * then detect this special error and take the actions
+		 * in fd_dupopen. Other callers of vn_open or VOP_OPEN
+		 * not prepared to deal with this situation will
+		 * report a real error.
 		 */
 		curlwp->l_dupfd = VTOFDESC(vp)->fd_fd;	/* XXX */
 		return EDUPFD;
@@ -412,6 +426,7 @@ fdesc_getattr(void *v)
 	struct vattr *vap = ap->a_vap;
 	unsigned fd;
 	int error = 0;
+	struct timeval tv;
 
 	switch (VTOFDESC(vp)->fd_type) {
 	case Froot:
@@ -454,7 +469,8 @@ fdesc_getattr(void *v)
 		vap->va_gid = 0;
 		vap->va_fsid = vp->v_mount->mnt_stat.f_fsidx.__fsid_val[0];
 		vap->va_blocksize = DEV_BSIZE;
-		vap->va_atime.tv_sec = boottime.tv_sec;
+		getmicroboottime(&tv);
+		vap->va_atime.tv_sec = tv.tv_sec;
 		vap->va_atime.tv_nsec = 0;
 		vap->va_mtime = vap->va_atime;
 		vap->va_ctime = vap->va_mtime;
@@ -566,7 +582,7 @@ fdesc_readdir(void *v)
 		break;
 	}
 
-	dt = curlwp->l_fd->fd_dt;
+	dt = atomic_load_consume(&curlwp->l_fd->fd_dt);
 
 	if (uio->uio_resid < UIO_MX)
 		return EINVAL;
@@ -589,7 +605,7 @@ fdesc_readdir(void *v)
 			return 0;
 
 		if (ap->a_ncookies) {
-			ncookies = min(ncookies, (nfdesc_targets - i));
+			ncookies = uimin(ncookies, (nfdesc_targets - i));
 			cookies = malloc(ncookies * sizeof(off_t),
 			    M_TEMP, M_WAITOK);
 			*ap->a_cookies = cookies;
@@ -628,9 +644,8 @@ fdesc_readdir(void *v)
 				*cookies++ = i + 1;
 		}
 	} else {
-		membar_consumer();
 		if (ap->a_ncookies) {
-			ncookies = min(ncookies, dt->dt_nfiles + 2);
+			ncookies = uimin(ncookies, dt->dt_nfiles + 2);
 			cookies = malloc(ncookies * sizeof(off_t),
 			    M_TEMP, M_WAITOK);
 			*ap->a_cookies = cookies;
@@ -836,7 +851,7 @@ fdesc_kqfilter(void *v)
 int
 fdesc_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
@@ -848,21 +863,22 @@ fdesc_inactive(void *v)
 	 */
 	if (fd->fd_type == Fctty || fd->fd_type == Fdesc)
 		vp->v_type = VNON;
-	VOP_UNLOCK(vp);
+
 	return (0);
 }
 
 int
 fdesc_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct fdescnode *fd = VTOFDESC(vp);
 
+	VOP_UNLOCK(vp);
+
 	vp->v_data = NULL;
-	vcache_remove(vp->v_mount, &fd->fd_ix, sizeof(fd->fd_ix));
 	kmem_free(fd, sizeof(struct fdescnode));
 
 	return (0);
@@ -903,7 +919,7 @@ fdesc_pathconf(void *v)
 		*ap->a_retval = 1;
 		return (0);
 	default:
-		return (EINVAL);
+		return genfs_pathconf(ap);
 	}
 	/* NOTREACHED */
 }

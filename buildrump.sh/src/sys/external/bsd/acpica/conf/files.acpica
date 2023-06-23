@@ -1,4 +1,4 @@
-# $NetBSD: files.acpica,v 1.14 2016/05/04 19:27:57 christos Exp $
+# $NetBSD: files.acpica,v 1.17 2019/01/05 20:40:05 christos Exp $
 
 define		acpica
 makeoptions	acpi	CPPFLAGS+="-I$S/external/bsd/acpica/dist/include"
@@ -47,6 +47,7 @@ file	dispatcher/dsmethod.c		acpica
 file	dispatcher/dsmthdat.c		acpica
 file	dispatcher/dsobject.c		acpica
 file	dispatcher/dsopcode.c		acpica
+file	dispatcher/dspkginit.c		acpica
 file	dispatcher/dsutils.c		acpica
 file	dispatcher/dswexec.c		acpica
 file	dispatcher/dswload.c		acpica
@@ -92,6 +93,7 @@ file	executer/exregion.c		acpica
 file	executer/exresnte.c		acpica
 file	executer/exresolv.c		acpica
 file	executer/exresop.c		acpica
+file	executer/exserial.c		acpica
 file	executer/exstore.c		acpica
 file	executer/exstoren.c		acpica
 file	executer/exstorob.c		acpica
@@ -201,9 +203,12 @@ file	utilities/utobject.c		acpica
 file	utilities/utosi.c		acpica
 file	utilities/utownerid.c		acpica
 file	utilities/utpredef.c		acpica
+file	utilities/utresdecode.c		acpica & acpi_debug & ddb
 file	utilities/utresrc.c		acpica
 file	utilities/utstate.c		acpica
 file	utilities/utstring.c		acpica
+file	utilities/utstrsuppt.c		acpica
+file	utilities/utstrtoul64.c		acpica
 file	utilities/uttrack.c		acpica
 file	utilities/utuuid.c		acpica
 file	utilities/utxface.c		acpica

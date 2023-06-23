@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_red.c,v 1.30 2016/04/20 08:58:48 knakahara Exp $	*/
+/*	$NetBSD: altq_red.c,v 1.32 2019/12/26 04:53:11 msaitoh Exp $	*/
 /*	$KAME: altq_red.c,v 1.20 2005/04/13 03:44:25 suz Exp $	*/
 
 /*
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.30 2016/04/20 08:58:48 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.32 2019/12/26 04:53:11 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -165,7 +165,7 @@ __KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.30 2016/04/20 08:58:48 knakahara Exp 
 #define	TH_MIN		5	/* min threshold */
 #define	TH_MAX		15	/* max threshold */
 
-#define	RED_LIMIT	60	/* default max queue lenght */
+#define	RED_LIMIT	60	/* default max queue length */
 #define	RED_STATS		/* collect statistics */
 
 /*
@@ -527,7 +527,7 @@ mark_ecn(struct mbuf *m, struct altq_pktattr *pktattr, int flags)
 	void		*hdr;
 	int		 af;
 
-	t = m_tag_find(m, PACKET_TAG_ALTQ_QID, NULL);
+	t = m_tag_find(m, PACKET_TAG_ALTQ_QID);
 	if (t != NULL) {
 		at = (struct altq_tag *)(t + 1);
 		if (at == NULL)

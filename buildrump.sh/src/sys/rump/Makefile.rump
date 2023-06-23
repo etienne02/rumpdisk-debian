@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rump,v 1.121 2016/07/09 05:52:22 matt Exp $
+#	$NetBSD: Makefile.rump,v 1.133 2021/07/07 11:51:45 martin Exp $
 #
 
 .if !defined(_RUMP_MK)
@@ -19,10 +19,26 @@ CPPFLAGS:=	-I${RUMPTOP}/include ${CPPFLAGS}
 CPPFLAGS+=	-D_RUMPKERNEL -I${RUMPTOP}/librump/rumpkern
 .endif
 
+# We are compiling the kernel code with no-delete-null-pointer-checks,
+# and compiling without it, causes issues at least on sh3 by adding
+# aborts after kern_assert on NULL pointer checks.
+CFLAGS+=    ${${ACTIVE_CC} == "gcc":? -fno-delete-null-pointer-checks :}
+
+.if ${RUMP_SANITIZE:Uno} != "no"
+CFLAGS+=	-fsanitize=${RUMP_SANITIZE}
+LDFLAGS+=	-fsanitize=${RUMP_SANITIZE}
+.endif
+
+# NULL + 0 arithmetic raises LLVM UBSan warnings, specially in sys/pslist.h
+# in the type-safe macros _PSLIST_VALIDATE_PTRS and _PSLIST_VALIDATE_CONTAINER.
+.if ${MKSANITIZER:Uno} == "yes" || ${MKLIBCSANITIZER:Uno} == "yes"
+CFLAGS+=    ${${ACTIVE_CC} == "clang":? -fno-delete-null-pointer-checks :}
+.endif
+
 # Define baseline cpu for mips ports, required for
 # rumpcomp_sync_icache() hypercall.
 .if !empty(MACHINE_ARCH:Mmips*)
-.if !empty(MACHINE_ARCH:Mmips64*)
+.if ${MACHINE_MIPS64}
 CPPFLAGS+=	-DMIPS64=1
 .else
 CPPFLAGS+=	-DMIPS1=1
@@ -32,7 +48,7 @@ CPPFLAGS+=	-DMIPS1=1
 # which NetBSD compat to build
 RUMP_NBCOMPAT?=default
 .if ${RUMP_NBCOMPAT} == "all" || ${RUMP_NBCOMPAT} == "default"
-RUMP_NBCOMPAT=	50 60 70
+RUMP_NBCOMPAT=	50 60 70 80 90
 .endif
 .if ${RUMP_NBCOMPAT} == "none"
 RUMP_NBCOMPAT=
@@ -45,9 +61,9 @@ CFLAGS+=	-ffreestanding -fno-strict-aliasing
 
 CWARNFLAGS+=	-Wno-format-zero-length -Wno-pointer-sign
 
-CPPFLAGS+=	-imacros ${RUMPTOP}/include/opt/opt_rumpkernel.h
+CPPIFLAGS+=	-imacros ${RUMPTOP}/include/opt/opt_rumpkernel.h
 .ifdef BUILDRUMP_IMACROS
-CPPFLAGS+=	-imacros ${BUILDRUMP_IMACROS}
+CPPIFLAGS+=	-imacros ${BUILDRUMP_IMACROS}
 .endif
 
 CPPFLAGS+=	-I${.CURDIR} -I.
@@ -59,8 +75,8 @@ SHLIB_MAJOR?=	0
 SHLIB_MINOR?=	0
 
 .ifdef NEED_ISYSTEM
-CPPFLAGS+=	-isystem ${RUMPTOP}/../arch
-CPPFLAGS+=	-isystem ${RUMPTOP}/..
+CPPIFLAGS+=	-isystem ${RUMPTOP}/../arch
+CPPIFLAGS+=	-isystem ${RUMPTOP}/..
 .else
 CPPFLAGS+=	-I${RUMPTOP}/../arch
 CPPFLAGS+=	-I${RUMPTOP}/..
@@ -125,8 +141,12 @@ CPPFLAGS+=	${RUMPKERN_UNDEF}
 RUMPKERNEL=	This is NetBSD and I am the rump.  Good evening.
 
 # workaround: evbppc is not a well-defined arch
-.if (${MACHINE} == "evbppc")
+.if ${MACHINE} == "evbppc"
+.  if ${MACHINE_ARCH} == "powerpc"
 CPPFLAGS+=	-DPPC_OEA
+.  else
+CPPFLAGS+=	-DPPC_OEA64
+.  endif
 .endif
 
 # If any of these files change, we need a full rebuild
@@ -149,19 +169,19 @@ RUMPCOMP_USER_WERROR = ${${_NOWERROR} == "no" :?-Werror:}
 .for rcusrc in ${RUMPCOMP_USER_SRCS:R}
 ${rcusrc}.d: ${rcusrc}.c
 	${_MKTARGET_CREATE}
-	${MKDEP} -f ${.TARGET} -- ${MKDEPFLAGS} ${CPUFLAGS} ${BUILDRUMP_CPPFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${MKDEP} -f ${.TARGET} -- ${MKDEPFLAGS} ${CPUFLAGS} ${REPROFLAGS} ${BUILDRUMP_CPPFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.o: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${REPROFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.pico: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} -fPIC -DPIC ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} -fPIC -DPIC ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${REPROFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 ${rcusrc}.po: ${rcusrc}.c
 	${_MKTARGET_COMPILE}
-	${CC} -o ${.TARGET} ${PROFFLAGS} -pg ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
+	${CC} -o ${.TARGET} ${PROFFLAGS} -pg ${DBG} ${CWARNFLAGS} ${CPUFLAGS} ${REPROFLAGS} ${RUMPCOMP_USER_WERROR} ${RUMPCOMP_USER_WARNFLAGS} ${BUILDRUMP_CPPFLAGS} ${BUILDRUMP_CFLAGS} ${RUMPCOMP_USER_CPPFLAGS} ${RUMPCOMP_USER_CFLAGS} -c ${.ALLSRC:O:u:M*${rcusrc}.c}
 
 RUMPOBJ_NORENAME+=${rcusrc}.o ${rcusrc}.pico ${rcusrc}.po
 SRCS+=${rcusrc}.c
@@ -230,7 +250,7 @@ __archivebuild: .USE
 .endif
 	for renameobj in ${RUMP_SYMREN:U${.ALLSRC:C/(${RUMPOBJ_NORENAME:ts|})//g}}; do \
 		${NM} -go $${renameobj} | ${TOOL_AWK} ' \
-		    $$NF!~/^'${_PQ}'(rump|RUMP|__|_GLOBAL_OFFSET_TABLE'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}})/ \
+		    $$NF!~/^'${_PQ}'(rump|RUMP|__|_GLOBAL_OFFSET_TABLE|\.TOC\.'${_SYMQUIRK}'${RUMP_SYM_NORENAME:D|${RUMP_SYM_NORENAME}})/ \
 		      {s=$$NF;sub(/^'${_PQ}'/, "&rumpns_", s); print $$NF, s}'\
 		    | sort | uniq  > renametab.$${renameobj}; \
 		${OBJCOPY} --preserve-dates --redefine-syms \
@@ -245,6 +265,9 @@ __archivebuild: .USE
 COMMENT?=	(no description)
 rumpdescribe: .PHONY
 	@printf '%-24s %s\n' '${LIB}' '${COMMENT}'
+
+CPPFLAGS+=	${CPPIFLAGS}
+LINTFLAGS+=	${CPPIFLAGS:S/^/-Z /}
 
 _BSD_IOCONF_MK_USER_=1
 .include <bsd.ioconf.mk>

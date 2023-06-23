@@ -1,7 +1,7 @@
-/*	$NetBSD: lockstat.c,v 1.24 2015/08/20 14:40:17 christos Exp $	*/
+/*	$NetBSD: lockstat.c,v 1.27 2020/05/23 23:42:42 ad Exp $	*/
 
 /*-
- * Copyright (c) 2006, 2007 The NetBSD Foundation, Inc.
+ * Copyright (c) 2006, 2007, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -37,10 +37,11 @@
  * Only one thread can hold the device at a time, providing a global lock.
  *
  * XXX Timings for contention on sleep locks are currently incorrect.
+ * XXX Convert this to use timecounters!
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lockstat.c,v 1.24 2015/08/20 14:40:17 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lockstat.c,v 1.27 2020/05/23 23:42:42 ad Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -71,7 +72,7 @@ __KERNEL_RCSID(0, "$NetBSD: lockstat.c,v 1.24 2015/08/20 14:40:17 christos Exp $
 #endif
 
 #define	LOCKSTAT_MINBUFS	1000
-#define	LOCKSTAT_DEFBUFS	10000
+#define	LOCKSTAT_DEFBUFS	20000
 #define	LOCKSTAT_MAXBUFS	1000000
 
 #define	LOCKSTAT_HASH_SIZE	128
@@ -282,13 +283,13 @@ lockstat_stop(lsdisable_t *ld)
 	lockstat_init_tables(NULL);
 
 	/* Run through all LWPs and clear the slate for the next run. */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	LIST_FOREACH(l, &alllwp, l_list) {
 		l->l_pfailaddr = 0;
 		l->l_pfailtime = 0;
 		l->l_pfaillock = 0;
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	if (ld == NULL)
 		return error;
@@ -327,8 +328,6 @@ lockstat_alloc(lsenable_t *le)
 	sz = sizeof(*lb) * le->le_nbufs;
 
 	lb = kmem_zalloc(sz, KM_SLEEP);
-	if (lb == NULL)
-		return (ENOMEM);
 
 	/* coverity[assert_side_effect] */
 	KASSERT(!lockstat_dev_enabled);
@@ -455,6 +454,10 @@ lockstat_close(dev_t dev, int flag, int mode, lwp_t *l)
 {
 
 	lockstat_lwp = NULL;
+	if (lockstat_dev_enabled) {
+		lockstat_stop(NULL);
+		lockstat_free();
+	}
 	__cpu_simple_unlock(&lockstat_lock);
 	return 0;
 }
@@ -492,9 +495,10 @@ lockstat_ioctl(dev_t dev, u_long cmd, void *data, int flag, lwp_t *l)
 		/*
 		 * Sanitize the arguments passed in and set up filtering.
 		 */
-		if (le->le_nbufs == 0)
-			le->le_nbufs = LOCKSTAT_DEFBUFS;
-		else if (le->le_nbufs > LOCKSTAT_MAXBUFS ||
+		if (le->le_nbufs == 0) {
+			le->le_nbufs = MIN(LOCKSTAT_DEFBUFS * ncpu,
+			    LOCKSTAT_MAXBUFS);
+		} else if (le->le_nbufs > LOCKSTAT_MAXBUFS ||
 		    le->le_nbufs < LOCKSTAT_MINBUFS) {
 			error = EINVAL;
 			break;

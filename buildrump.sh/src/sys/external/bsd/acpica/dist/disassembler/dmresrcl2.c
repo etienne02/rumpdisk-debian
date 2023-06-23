@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -54,6 +54,13 @@
         ACPI_MODULE_NAME    ("dbresrcl2")
 
 /* Local prototypes */
+
+static void
+AcpiDmCsi2SerialBusDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level);
 
 static void
 AcpiDmI2cSerialBusDescriptor (
@@ -96,7 +103,8 @@ static ACPI_RESOURCE_HANDLER        SerialBusResourceDispatch [] =
     NULL,
     AcpiDmI2cSerialBusDescriptor,
     AcpiDmSpiSerialBusDescriptor,
-    AcpiDmUartSerialBusDescriptor
+    AcpiDmUartSerialBusDescriptor,
+    AcpiDmCsi2SerialBusDescriptor
 };
 
 
@@ -203,7 +211,7 @@ AcpiDmGpioCommon (
     if (Resource->Gpio.ResSourceOffset)
     {
         DeviceName = ACPI_ADD_PTR (char,
-            Resource, Resource->Gpio.ResSourceOffset),
+            Resource, Resource->Gpio.ResSourceOffset);
         AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
     }
 
@@ -411,6 +419,112 @@ AcpiDmGpioDescriptor (
     }
 }
 
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinFunctionDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a PinFunction descriptor
+ *
+ ******************************************************************************/
+
+void
+AcpiDmPinFunctionDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    UINT16                  *PinList;
+    UINT8                   *VendorData;
+    char                    *DeviceName = NULL;
+    UINT32                  PinCount;
+    UINT32                  i;
+
+    AcpiDmIndent (Level);
+    AcpiOsPrintf ("PinFunction (%s, ",
+        AcpiGbl_ShrDecode [ACPI_GET_1BIT_FLAG (Resource->PinFunction.Flags)]);
+
+    if (Resource->PinFunction.PinConfig <= 3)
+    {
+        AcpiOsPrintf ("%s, ",
+            AcpiGbl_PpcDecode[Resource->PinFunction.PinConfig]);
+    }
+    else
+    {
+        AcpiOsPrintf ("0x%2.2X, ", Resource->PinFunction.PinConfig);
+    }
+
+    /* FunctionNumber */
+
+    AcpiOsPrintf ("0x%4.4X, ", Resource->PinFunction.FunctionNumber);
+
+    if (Resource->PinFunction.ResSourceOffset)
+    {
+        DeviceName = ACPI_ADD_PTR (char,
+            Resource, Resource->PinFunction.ResSourceOffset),
+        AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
+    }
+
+    AcpiOsPrintf (", ");
+    AcpiOsPrintf ("0x%2.2X,\n", Resource->PinFunction.ResSourceIndex);
+
+    AcpiDmIndent (Level + 1);
+
+    /* Always ResourceConsumer */
+    AcpiOsPrintf ("%s, ", AcpiGbl_ConsumeDecode [ACPI_CONSUMER]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    AcpiOsPrintf (",");
+
+    /* Dump the vendor data */
+
+    if (Resource->PinFunction.VendorLength)
+    {
+        AcpiOsPrintf ("\n");
+        AcpiDmIndent (Level + 1);
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            Resource->PinFunction.VendorOffset);
+
+        AcpiDmDumpRawDataBuffer (VendorData,
+            Resource->PinFunction.VendorLength, Level);
+    }
+
+    AcpiOsPrintf (")\n");
+
+    AcpiDmIndent (Level + 1);
+
+    /* Dump the interrupt list */
+
+    AcpiOsPrintf ("{   // Pin list\n");
+
+    PinCount = ((UINT32) (Resource->PinFunction.ResSourceOffset -
+        Resource->PinFunction.PinTableOffset)) /
+        sizeof (UINT16);
+
+    PinList = (UINT16 *) ACPI_ADD_PTR (char, Resource,
+        Resource->PinFunction.PinTableOffset);
+
+    for (i = 0; i < PinCount; i++)
+    {
+        AcpiDmIndent (Level + 2);
+        AcpiOsPrintf ("0x%4.4X%s\n", PinList[i],
+            ((i + 1) < PinCount) ? "," : "");
+    }
+
+    AcpiDmIndent (Level + 1);
+    AcpiOsPrintf ("}\n");
+}
+
 
 /*******************************************************************************
  *
@@ -464,6 +578,15 @@ AcpiDmDumpSerialBusVendorData (
             sizeof (AML_RESOURCE_UART_SERIALBUS));
         break;
 
+    case AML_RESOURCE_CSI2_SERIALBUSTYPE:
+
+        VendorLength = Resource->CommonSerialBus.TypeDataLength -
+            AML_RESOURCE_CSI2_MIN_DATA_LEN;
+
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            sizeof (AML_RESOURCE_CSI2_SERIALBUS));
+        break;
+
     default:
 
         return;
@@ -472,6 +595,75 @@ AcpiDmDumpSerialBusVendorData (
     /* Dump the vendor bytes as a RawDataBuffer object */
 
     AcpiDmDumpRawDataBuffer (VendorData, VendorLength, Level);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmCsi2SerialBusDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a CSI2 serial bus descriptor
+ *
+ ******************************************************************************/
+
+static void
+AcpiDmCsi2SerialBusDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    UINT32                  ResourceSourceOffset;
+    char                    *DeviceName;
+
+
+    /* SlaveMode, PhyType, LocalPortInstance */
+
+    AcpiDmIndent (Level);
+    AcpiOsPrintf ("Csi2Bus (%s,",
+        AcpiGbl_SmDecode [ACPI_GET_1BIT_FLAG (Resource->Csi2SerialBus.Flags)]);
+
+    AcpiOsPrintf (" 0x%2.2X, 0x%2.2X,\n",
+        Resource->Csi2SerialBus.TypeSpecificFlags & 0x03,
+        Resource->Csi2SerialBus.TypeSpecificFlags & 0xFC);
+
+    /* ResourceSource is a required field */
+
+    ResourceSourceOffset = sizeof (AML_RESOURCE_COMMON_SERIALBUS) +
+        Resource->CommonSerialBus.TypeDataLength;
+
+    AcpiDmIndent (Level + 1);
+    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset);
+    AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
+
+    /* ResourceSourceIndex, ResourceUsage */
+
+    AcpiOsPrintf (",\n");
+    AcpiDmIndent (Level + 1);
+    AcpiOsPrintf ("0x%2.2X, ", Resource->Csi2SerialBus.ResSourceIndex);
+
+    AcpiOsPrintf ("%s, ",
+        AcpiGbl_ConsumeDecode [ACPI_EXTRACT_1BIT_FLAG (Resource->Csi2SerialBus.Flags, 1)]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    /* Dump the vendor data */
+
+    AcpiOsPrintf (",\n");
+    AcpiDmIndent (Level + 1);
+    AcpiDmDumpSerialBusVendorData (Resource, Level);
+    AcpiOsPrintf (")\n");
+
+    MpSaveSerialInfo (Info->MappingOp, Resource, DeviceName);
 }
 
 
@@ -518,7 +710,7 @@ AcpiDmI2cSerialBusDescriptor (
     ResourceSourceOffset = sizeof (AML_RESOURCE_COMMON_SERIALBUS) +
         Resource->CommonSerialBus.TypeDataLength;
 
-    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset),
+    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset);
     AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
 
     /* ResourceSourceIndex, ResourceUsage */
@@ -601,7 +793,7 @@ AcpiDmSpiSerialBusDescriptor (
     ResourceSourceOffset = sizeof (AML_RESOURCE_COMMON_SERIALBUS) +
         Resource->CommonSerialBus.TypeDataLength;
 
-    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset),
+    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset);
     AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
 
     /* ResourceSourceIndex, ResourceUsage */
@@ -687,7 +879,7 @@ AcpiDmUartSerialBusDescriptor (
     ResourceSourceOffset = sizeof (AML_RESOURCE_COMMON_SERIALBUS) +
         Resource->CommonSerialBus.TypeDataLength;
 
-    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset),
+    DeviceName = ACPI_ADD_PTR (char, Resource, ResourceSourceOffset);
     AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
 
     /* ResourceSourceIndex, ResourceUsage */
@@ -729,7 +921,7 @@ AcpiDmUartSerialBusDescriptor (
  *
  * RETURN:      None
  *
- * DESCRIPTION: Decode a I2C/SPI/UART serial bus descriptor
+ * DESCRIPTION: Decode a I2C/SPI/UART/CSI2 serial bus descriptor
  *
  ******************************************************************************/
 
@@ -743,4 +935,364 @@ AcpiDmSerialBusDescriptor (
 
     SerialBusResourceDispatch [Resource->CommonSerialBus.Type] (
         Info, Resource, Length, Level);
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinConfig
+ *
+ * PARAMETERS:  PinConfigType       - Pin configuration type
+ *              PinConfigValue      - Pin configuration value
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Pretty prints PinConfig type and value.
+ *
+ ******************************************************************************/
+
+static void
+AcpiDmPinConfig(
+    UINT8                   PinConfigType,
+    UINT32                  PinConfigValue)
+{
+    if (PinConfigType <= 13)
+    {
+        AcpiOsPrintf ("0x%2.2X /* %s */, ", PinConfigType,
+            AcpiGbl_PtypDecode[PinConfigType]);
+    }
+    else
+    {
+        AcpiOsPrintf ("0x%2.2X, /* Vendor Defined */ ", PinConfigType);
+    }
+
+    /* PinConfigValue */
+
+    AcpiOsPrintf ("0x%4.4X,\n", PinConfigValue);
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinConfigDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a PinConfig descriptor
+ *
+ ******************************************************************************/
+
+void
+AcpiDmPinConfigDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    UINT16                  *PinList;
+    UINT8                   *VendorData;
+    char                    *DeviceName = NULL;
+    UINT32                  PinCount;
+    UINT32                  i;
+
+    AcpiDmIndent (Level);
+    AcpiOsPrintf ("PinConfig (%s, ",
+        AcpiGbl_ShrDecode [ACPI_GET_1BIT_FLAG (Resource->PinConfig.Flags)]);
+
+    AcpiDmPinConfig (Resource->PinConfig.PinConfigType,
+        Resource->PinConfig.PinConfigValue);
+
+    AcpiDmIndent (Level + 1);
+
+    if (Resource->PinConfig.ResSourceOffset)
+    {
+        DeviceName = ACPI_ADD_PTR (char,
+            Resource, Resource->PinConfig.ResSourceOffset),
+        AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
+    }
+
+    AcpiOsPrintf (", ");
+    AcpiOsPrintf ("0x%2.2X, ", Resource->PinConfig.ResSourceIndex);
+
+    AcpiOsPrintf ("%s, ",
+        AcpiGbl_ConsumeDecode [ACPI_EXTRACT_1BIT_FLAG (Resource->PinConfig.Flags, 1)]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    AcpiOsPrintf (",");
+
+    /* Dump the vendor data */
+
+    if (Resource->PinConfig.VendorLength)
+    {
+        AcpiOsPrintf ("\n");
+        AcpiDmIndent (Level + 1);
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            Resource->PinConfig.VendorOffset);
+
+        AcpiDmDumpRawDataBuffer (VendorData,
+            Resource->PinConfig.VendorLength, Level);
+    }
+
+    AcpiOsPrintf (")\n");
+
+    AcpiDmIndent (Level + 1);
+
+    /* Dump the interrupt list */
+
+    AcpiOsPrintf ("{   // Pin list\n");
+
+    PinCount = ((UINT32) (Resource->PinConfig.ResSourceOffset -
+        Resource->PinConfig.PinTableOffset)) /
+        sizeof (UINT16);
+
+    PinList = (UINT16 *) ACPI_ADD_PTR (char, Resource,
+        Resource->PinConfig.PinTableOffset);
+
+    for (i = 0; i < PinCount; i++)
+    {
+        AcpiDmIndent (Level + 2);
+        AcpiOsPrintf ("0x%4.4X%s\n", PinList[i],
+            ((i + 1) < PinCount) ? "," : "");
+    }
+
+    AcpiDmIndent (Level + 1);
+    AcpiOsPrintf ("}\n");
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinGroupDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a PinGroup descriptor
+ *
+ ******************************************************************************/
+
+void
+AcpiDmPinGroupDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    char                    *Label;
+    UINT16                  *PinList;
+    UINT8                   *VendorData;
+    UINT32                  PinCount;
+    UINT32                  i;
+
+    AcpiDmIndent (Level);
+    /* Always producer */
+    AcpiOsPrintf ("PinGroup (");
+
+    Label = ACPI_ADD_PTR (char,
+        Resource, Resource->PinGroup.LabelOffset),
+    AcpiUtPrintString (Label, ACPI_UINT16_MAX);
+
+    AcpiOsPrintf (", ");
+
+    AcpiOsPrintf ("%s, ",
+        AcpiGbl_ConsumeDecode [ACPI_GET_1BIT_FLAG (Resource->PinGroup.Flags)]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    AcpiOsPrintf (",");
+
+    /* Dump the vendor data */
+
+    if (Resource->PinGroup.VendorLength)
+    {
+        AcpiOsPrintf ("\n");
+        AcpiDmIndent (Level + 1);
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            Resource->PinGroup.VendorOffset);
+
+        AcpiDmDumpRawDataBuffer (VendorData,
+            Resource->PinGroup.VendorLength, Level);
+    }
+
+    AcpiOsPrintf (")\n");
+
+    AcpiDmIndent (Level + 1);
+
+    /* Dump the interrupt list */
+
+    AcpiOsPrintf ("{   // Pin list\n");
+
+    PinCount = (Resource->PinGroup.LabelOffset -
+        Resource->PinGroup.PinTableOffset) / sizeof (UINT16);
+
+    PinList = (UINT16 *) ACPI_ADD_PTR (char, Resource,
+        Resource->PinGroup.PinTableOffset);
+
+    for (i = 0; i < PinCount; i++)
+    {
+        AcpiDmIndent (Level + 2);
+        AcpiOsPrintf ("0x%4.4X%s\n", PinList[i],
+            ((i + 1) < PinCount) ? "," : "");
+    }
+
+    AcpiDmIndent (Level + 1);
+    AcpiOsPrintf ("}\n");
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinGroupFunctionDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a PinGroupFunction descriptor
+ *
+ ******************************************************************************/
+
+void
+AcpiDmPinGroupFunctionDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    UINT8                   *VendorData;
+    char                    *DeviceName = NULL;
+    char                    *Label = NULL;
+
+    AcpiDmIndent (Level);
+    AcpiOsPrintf ("PinGroupFunction (%s, ",
+        AcpiGbl_ShrDecode [ACPI_GET_1BIT_FLAG (Resource->PinGroupFunction.Flags)]);
+
+    /* FunctionNumber */
+
+    AcpiOsPrintf ("0x%4.4X, ", Resource->PinGroupFunction.FunctionNumber);
+
+    DeviceName = ACPI_ADD_PTR (char,
+        Resource, Resource->PinGroupFunction.ResSourceOffset),
+    AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
+
+    AcpiOsPrintf (", ");
+    AcpiOsPrintf ("0x%2.2X,\n", Resource->PinGroupFunction.ResSourceIndex);
+
+    AcpiDmIndent (Level + 1);
+
+    Label = ACPI_ADD_PTR (char, Resource,
+        Resource->PinGroupFunction.ResSourceLabelOffset);
+    AcpiUtPrintString (Label, ACPI_UINT16_MAX);
+
+    AcpiOsPrintf (", ");
+
+    AcpiOsPrintf ("%s, ",
+        AcpiGbl_ConsumeDecode [ACPI_EXTRACT_1BIT_FLAG (Resource->PinGroupFunction.Flags, 1)]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    AcpiOsPrintf (",");
+
+    /* Dump the vendor data */
+
+    if (Resource->PinGroupFunction.VendorLength)
+    {
+        AcpiOsPrintf ("\n");
+        AcpiDmIndent (Level + 1);
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            Resource->PinGroupFunction.VendorOffset);
+
+        AcpiDmDumpRawDataBuffer (VendorData,
+            Resource->PinGroupFunction.VendorLength, Level);
+    }
+
+    AcpiOsPrintf (")\n");
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDmPinGroupConfigDescriptor
+ *
+ * PARAMETERS:  Info                - Extra resource info
+ *              Resource            - Pointer to the resource descriptor
+ *              Length              - Length of the descriptor in bytes
+ *              Level               - Current source code indentation level
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Decode a PinGroupConfig descriptor
+ *
+ ******************************************************************************/
+
+void
+AcpiDmPinGroupConfigDescriptor (
+    ACPI_OP_WALK_INFO       *Info,
+    AML_RESOURCE            *Resource,
+    UINT32                  Length,
+    UINT32                  Level)
+{
+    UINT8                   *VendorData;
+    char                    *DeviceName = NULL;
+    char                    *Label = NULL;
+
+    AcpiDmIndent (Level);
+    AcpiOsPrintf ("PinGroupConfig (%s, ",
+        AcpiGbl_ShrDecode [ACPI_GET_1BIT_FLAG (Resource->PinGroupConfig.Flags)]);
+
+    AcpiDmPinConfig(Resource->PinGroupConfig.PinConfigType,
+        Resource->PinGroupConfig.PinConfigValue);
+
+    AcpiDmIndent (Level + 1);
+
+    DeviceName = ACPI_ADD_PTR (char,
+        Resource, Resource->PinGroupConfig.ResSourceOffset),
+    AcpiUtPrintString (DeviceName, ACPI_UINT16_MAX);
+
+    AcpiOsPrintf (", ");
+    AcpiOsPrintf ("0x%2.2X, ", Resource->PinGroupConfig.ResSourceIndex);
+
+    Label = ACPI_ADD_PTR (char, Resource,
+        Resource->PinGroupConfig.ResSourceLabelOffset);
+    AcpiUtPrintString (Label, ACPI_UINT16_MAX);
+
+    AcpiOsPrintf (", ");
+
+    AcpiOsPrintf ("%s, ",
+        AcpiGbl_ConsumeDecode [ACPI_EXTRACT_1BIT_FLAG (Resource->PinGroupConfig.Flags, 1)]);
+
+    /* Insert a descriptor name */
+
+    AcpiDmDescriptorName ();
+
+    AcpiOsPrintf (",");
+
+    /* Dump the vendor data */
+
+    if (Resource->PinGroupConfig.VendorLength)
+    {
+        AcpiOsPrintf ("\n");
+        AcpiDmIndent (Level + 1);
+        VendorData = ACPI_ADD_PTR (UINT8, Resource,
+            Resource->PinGroupConfig.VendorOffset);
+
+        AcpiDmDumpRawDataBuffer (VendorData,
+            Resource->PinGroupConfig.VendorLength, Level);
+    }
+
+    AcpiOsPrintf (")\n");
 }

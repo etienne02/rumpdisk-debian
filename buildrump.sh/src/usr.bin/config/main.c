@@ -1,4 +1,4 @@
-/*	$NetBSD: main.c,v 1.89 2015/09/04 06:01:40 uebayasi Exp $	*/
+/*	$NetBSD: main.c,v 1.100 2020/04/03 19:53:41 joerg Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: main.c,v 1.89 2015/09/04 06:01:40 uebayasi Exp $");
+__RCSID("$NetBSD: main.c,v 1.100 2020/04/03 19:53:41 joerg Exp $");
 
 #ifndef MAKE_BOOTSTRAP
 #include <sys/cdefs.h>
@@ -86,6 +86,78 @@ COPYRIGHT("@(#) Copyright (c) 1992, 1993\
 #define LINE_MAX 1024
 #endif
 
+struct devbasetq allbases;
+struct devatq alldevas;
+struct conftq allcf;
+struct devitq alldevi, allpseudo;
+struct devmtq alldevms;
+struct pspectq allpspecs;
+
+struct devi **packed;
+size_t npacked;
+
+struct locators locators;
+
+int lkmmode;
+const char *conffile;		/* source file, e.g., "GENERIC.sparc" */
+const char *machine;		/* machine type, e.g., "sparc" or "sun3" */
+const char *machinearch;	/* machine arch, e.g., "sparc" or "m68k" */
+struct	nvlist *machinesubarches;
+				/* machine subarches, e.g., "sun68k" or "hpc" */
+const char *ioconfname;		/* ioconf name, mutually exclusive to machine */
+const char *srcdir;		/* path to source directory (rel. to build) */
+const char *builddir;		/* path to build directory */
+const char *defbuilddir;	/* default build directory */
+const char *ident;		/* kernel "ident"ification string */
+int	errors;			/* counts calls to error() */
+int	minmaxusers;		/* minimum "maxusers" parameter */
+int	defmaxusers;		/* default "maxusers" parameter */
+int	maxmaxusers;		/* default "maxusers" parameter */
+int	maxusers;		/* configuration's "maxusers" parameter */
+int	maxpartitions;		/* configuration's "maxpartitions" parameter */
+int	version;		/* version of the configuration file */
+struct	nvlist *options;	/* options */
+struct	nvlist *fsoptions;	/* filesystems */
+struct	nvlist *mkoptions;	/* makeoptions */
+struct	nvlist *appmkoptions;	/* appending mkoptions */
+struct	nvlist *condmkoptions;	/* conditional makeoption table */
+struct	hashtab *devbasetab;	/* devbase lookup */
+struct	hashtab *devroottab;	/* attach at root lookup */
+struct	hashtab *devatab;	/* devbase attachment lookup */
+struct	hashtab *deaddevitab;	/* removed instances lookup */
+struct	hashtab *selecttab;	/* selects things that are "optional foo" */
+struct	hashtab *needcnttab;	/* retains names marked "needs-count" */
+struct	hashtab *opttab;	/* table of configured options */
+struct	hashtab *fsopttab;	/* table of configured file systems */
+struct	dlhash *defopttab;	/* options that have been "defopt"'d */
+struct	dlhash *defflagtab;	/* options that have been "defflag"'d */
+struct	dlhash *defparamtab;	/* options that have been "defparam"'d */
+struct	dlhash *defoptlint;	/* lint values for options */
+struct	nvhash *deffstab;	/* defined file systems */
+struct	dlhash *optfiletab;	/* "defopt"'d option .h files */
+struct	hashtab *attrtab;	/* attributes (locators, etc.) */
+struct	hashtab *attrdeptab;	/* attribute dependencies */
+struct	hashtab *bdevmtab;	/* block devm lookup */
+struct	hashtab *cdevmtab;	/* character devm lookup */
+
+int	ndevi;				/* number of devi's (before packing) */
+int	npspecs;			/* number of parent specs */
+devmajor_t maxbdevm;			/* max number of block major */
+devmajor_t maxcdevm;			/* max number of character major */
+int	do_devsw;			/* 0 if pre-devsw config */
+int	oktopackage;			/* 0 before setmachine() */
+int	devilevel;			/* used for devi->i_level */
+
+struct filelist		allfiles;	/* list of all kernel source files */
+struct filelist		allcfiles;	/* list of all .c files */
+struct filelist		allsfiles;	/* list of all .S files */
+struct filelist		allofiles;	/* list of all .o files */
+
+struct prefixlist	prefixes,	/* prefix stack */
+			allprefixes;	/* all prefixes used (after popped) */
+struct prefixlist	buildprefixes,	/* build prefix stack */
+			allbuildprefixes;/* all build prefixes used (after popped) */
+
 int	vflag;				/* verbose output */
 int	Pflag;				/* pack locators */
 int	Lflag;				/* lint config generation */
@@ -95,7 +167,7 @@ int	handling_cmdlineopts;		/* currently processing -D/-U options */
 
 int	yyparse(void);
 
-#ifndef MAKE_BOOTSTRAP
+#if !defined(MAKE_BOOTSTRAP) && defined(YYDEBUG)
 extern int yydebug;
 #endif
 int	dflag;
@@ -119,10 +191,9 @@ static	int	do_option(struct hashtab *, struct nvlist **,
 		    struct nvlist ***, const char *, const char *,
 		    const char *, struct hashtab *);
 static	int	undo_option(struct hashtab *, struct nvlist **,
-		    struct nvlist ***, const char *, const char *);
+		    struct nvlist ***, const char *, const char *, int);
 static	int	crosscheck(void);
 static	int	badstar(void);
-	int	main(int, char **);
 static	int	mkallsubdirs(void);
 static	int	mksymlinks(void);
 static	int	mkident(void);
@@ -173,7 +244,7 @@ main(int argc, char **argv)
 		switch (ch) {
 
 		case 'd':
-#ifndef MAKE_BOOTSTRAP
+#if !defined(MAKE_BOOTSTRAP) && defined(YYDEBUG)
 			yydebug = 1;
 #endif
 			dflag++;
@@ -757,7 +828,7 @@ check_dependencies(const char *thing, struct nvlist *deps)
 		} else if (OPT_OBSOLETE(dep->nv_name)) {
 			cfgerror("option `%s' dependency `%s' "
 			    "is obsolete", thing, dep->nv_name);
-		} else if (!is_declared_option(dep->nv_name)) {
+		} else if (!find_declared_option(dep->nv_name)) {
 			cfgerror("option `%s' dependency `%s' "
 			    "is an unknown option",
 			    thing, dep->nv_name);
@@ -787,14 +858,16 @@ void
 deffilesystem(struct nvlist *fses, struct nvlist *deps)
 {
 	struct nvlist *nv;
+	struct where *w;
 
 	/*
 	 * Mark these options as ones to skip when creating the Makefile.
 	 */
 	for (nv = fses; nv != NULL; nv = nv->nv_next) {
-		if (DEFINED_OPTION(nv->nv_name)) {
-			cfgerror("file system or option `%s' already defined",
-			    nv->nv_name);
+		if ((w = DEFINED_OPTION(nv->nv_name)) != NULL) {
+			cfgerror("file system or option `%s' already defined"
+			    " at %s:%hu", nv->nv_name, w->w_srcfile,
+			    w->w_srcline);
 			return;
 		}
 
@@ -879,8 +952,8 @@ find_declared_fs_option(const char *name)
  * Like find_declared_option but doesn't return what it finds, so it
  * can search both the various kinds of options and also filesystems.
  */
-int
-is_declared_option(const char *name)
+struct where *
+find_declared_option(const char *name)
 {
 	struct defoptlist *option = NULL;
 	struct nvlist *fs;
@@ -888,13 +961,13 @@ is_declared_option(const char *name)
 	if ((option = dlhash_lookup(defopttab, name)) != NULL ||
 	    (option = dlhash_lookup(defparamtab, name)) != NULL ||
 	    (option = dlhash_lookup(defflagtab, name)) != NULL) {
-		return 1;
+		return &option->dl_where;
 	}
 	if ((fs = nvhash_lookup(deffstab, name)) != NULL) {
-		return 1;
+		return &fs->nv_where;
 	}
 
-	return 0;
+	return NULL;
 }
 
 /*
@@ -909,6 +982,7 @@ defopt(struct dlhash *ht, const char *fname, struct defoptlist *opts,
 {
 	struct defoptlist *dl, *nextdl, *olddl;
 	const char *name;
+	struct where *w;
 	char buf[500];
 
 	if (fname != NULL && badfilename(fname)) {
@@ -931,15 +1005,17 @@ defopt(struct dlhash *ht, const char *fname, struct defoptlist *opts,
 		}
 
 		/* An option name can be declared at most once. */
-		if (DEFINED_OPTION(dl->dl_name)) {
-			cfgerror("file system or option `%s' already defined",
-			    dl->dl_name);
+		if ((w = DEFINED_OPTION(dl->dl_name)) != NULL) {
+			cfgerror("file system or option `%s' already defined"
+			    " at %s:%hu", dl->dl_name, w->w_srcfile,
+			    w->w_srcline);
 			return;
 		}
 
 		if (dlhash_insert(ht, dl->dl_name, dl)) {
-			cfgerror("file system or option `%s' already defined",
-			    dl->dl_name);
+			cfgerror("file system or option `%s' already defined"
+			    " at %s:%hu", dl->dl_name, dl->dl_where.w_srcfile,
+			    dl->dl_where.w_srcline);
 			return;
 		}
 
@@ -1082,13 +1158,13 @@ addoption(const char *name, const char *value)
 }
 
 void
-deloption(const char *name)
+deloption(const char *name, int nowarn)
 {
 
 	CFGDBG(4, "deselecting opt `%s'", name);
-	if (undo_option(opttab, &options, &nextopt, name, "options"))
+	if (undo_option(opttab, &options, &nextopt, name, "options", nowarn))
 		return;
-	if (undo_option(selecttab, NULL, NULL, strtolower(name), "options"))
+	if (undo_option(selecttab, NULL, NULL, strtolower(name), "options", nowarn))
 		return;
 }
 
@@ -1131,15 +1207,15 @@ addfsoption(const char *name)
 }
 
 void
-delfsoption(const char *name)
+delfsoption(const char *name, int nowarn)
 {
 	const char *n;
 
 	CFGDBG(4, "deselecting fs `%s'", name);
 	n = strtolower(name);
-	if (undo_option(fsopttab, &fsoptions, &nextfsopt, name, "file-system"))
+	if (undo_option(fsopttab, &fsoptions, &nextfsopt, name, "file-system", nowarn))
 		return;
-	if (undo_option(selecttab, NULL, NULL, n, "file-system"))
+	if (undo_option(selecttab, NULL, NULL, n, "file-system", nowarn))
 		return;
 }
 
@@ -1155,12 +1231,12 @@ addmkoption(const char *name, const char *value)
 }
 
 void
-delmkoption(const char *name)
+delmkoption(const char *name, int nowarn)
 {
 
 	CFGDBG(4, "deselecting mkopt `%s'", name);
 	(void)undo_option(mkopttab, &mkoptions, &nextmkopt, name,
-	    "makeoptions");
+	    "makeoptions", nowarn);
 }
 
 /*
@@ -1243,10 +1319,10 @@ do_option(struct hashtab *ht, struct nvlist **npp, struct nvlist ***next,
 		else
 			cfgwarn("already have %s `%s'", type, name);
 
-		if (undo_option(ht, npp, next, name, type))
+		if (undo_option(ht, npp, next, name, type, 0))
 			panic("do_option 2");
 		if (stab != NULL &&
-		    undo_option(stab, NULL, NULL, strtolower(name), type))
+		    undo_option(stab, NULL, NULL, strtolower(name), type, 0))
 			panic("do_option 3");
 
 		/* now try adding it again */
@@ -1267,7 +1343,7 @@ do_option(struct hashtab *ht, struct nvlist **npp, struct nvlist ***next,
  */
 static int
 undo_option(struct hashtab *ht, struct nvlist **npp,
-    struct nvlist ***next, const char *name, const char *type)
+    struct nvlist ***next, const char *name, const char *type, int nowarn)
 {
 	struct nvlist *nv;
 	
@@ -1275,7 +1351,7 @@ undo_option(struct hashtab *ht, struct nvlist **npp,
 		/*
 		 * -U command line option removals are always silent
 		 */
-		if (!handling_cmdlineopts)
+		if (!handling_cmdlineopts && !nowarn)
 			cfgwarn("%s `%s' is not defined", type, name);
 		return (1);
 	}
@@ -1380,8 +1456,8 @@ cfcrosscheck(struct config *cf, const char *what, struct nvlist *nv)
 				goto loop;
 		}
 		(void)fprintf(stderr,
-		    "%s:%d: %s says %s on %s, but there's no %s\n",
-		    conffile, cf->cf_lineno,
+		    "%s:%hu: %s says %s on %s, but there's no %s\n",
+		    conffile, cf->cf_where.w_srcline,
 		    cf->cf_name, what, nv->nv_str, nv->nv_str);
 		errs++;
  loop:
@@ -1869,6 +1945,33 @@ check_dead_devi(const char *key, void *value, void *aux)
 	return 0;
 }
 
+static struct devbase root;
+
+static int
+addlevelparent(struct devbase *d, struct devbase *parent)
+{
+	struct devbase *p;
+
+	if (d == parent) {
+		if (d->d_level > 1)
+			return 0;
+		return 1;
+	}
+
+	if (d->d_levelparent) {
+		if (d->d_level > 1)
+			return 0;
+		return 1;
+	}
+
+	for (p = parent; p != NULL; p = p->d_levelparent)
+		if (d == p && d->d_level > 1)
+			return 0;
+	d->d_levelparent = p ? p : &root; 
+	d->d_level++;
+	return 1;
+}
+
 static void
 do_kill_orphans(struct devbase *d, struct attr *at, struct devbase *parent,
     int state)
@@ -1879,6 +1982,9 @@ do_kill_orphans(struct devbase *d, struct attr *at, struct devbase *parent,
 	struct devi *i, *j = NULL;
 	struct pspec *p;
 	int active = 0;
+
+	if (!addlevelparent(d, parent))
+		return;
 
 	/*
 	 * A pseudo-device will always attach at root, and if it has an
@@ -1898,6 +2004,7 @@ do_kill_orphans(struct devbase *d, struct attr *at, struct devbase *parent,
 		}
 	} else {
 		int seen = 0;
+		int changed = 0;
 
 		for (i = d->d_ihead; i != NULL; i = i->i_bsame) {
 			for (j = i; j != NULL; j = j->i_alias) {
@@ -1930,22 +2037,32 @@ do_kill_orphans(struct devbase *d, struct attr *at, struct devbase *parent,
 						seen = 1;
 						continue;
 					}
+					changed |= j->i_active != state;
 					j->i_active = active = state;
-					if (p != NULL)
-						p->p_active = state;
+					if (p != NULL) {
+						if (state == DEVI_ACTIVE ||
+						    --p->p_ref == 0)
+							p->p_active = state;
+					}
+					if (state == DEVI_IGNORED) {
+						CFGDBG(5,
+						    "`%s' at '%s' ignored",
+						    d->d_name, parent ?
+						    parent->d_name : "(root)");
+					}
 				}
 			}
 		}
 		/*
 		 * If we've been there but have made no change, stop.
 		 */
-		if (seen && !active)
-			return;
-		if (!active) {
+		if (seen && active != DEVI_ACTIVE)
+			goto out;
+		if (active != DEVI_ACTIVE) {
 			struct cdd_params cdd = { d, at, parent };
 			/* Look for a matching dead devi */
 			if (ht_enumerate(deaddevitab, check_dead_devi, &cdd) &&
-			    d != parent)
+			    d != parent) {
 				/*
 				 * That device had its instances removed.
 				 * Continue the loop marking descendants
@@ -1957,16 +2074,23 @@ do_kill_orphans(struct devbase *d, struct attr *at, struct devbase *parent,
 				 * have to continue looping.
 				 */
 				active = DEVI_IGNORED;
-			else
-				return;
-		}
+				CFGDBG(5, "`%s' at '%s' ignored", d->d_name,
+				    parent ? parent->d_name : "(root)");
+
+			} else if (!changed)
+				goto out;
+		} 
 	}
 
 	for (al = d->d_attrs; al != NULL; al = al->al_next) {
 		a = al->al_this;
-		for (nv1 = a->a_devs; nv1 != NULL; nv1 = nv1->nv_next)
+		for (nv1 = a->a_devs; nv1 != NULL; nv1 = nv1->nv_next) {
 			do_kill_orphans(nv1->nv_ptr, a, d, active);
+		}
 	}
+out:
+	d->d_levelparent = NULL;
+	d->d_level--;
 }
 
 static int
@@ -2018,7 +2142,7 @@ handle_cmdline_makeoptions(void)
 	handling_cmdlineopts = 1;
 	for (p = cmdlineundefs; p; p = n) {
 		n = p->nv_next;
-		delmkoption(intern(p->nv_name));
+		delmkoption(intern(p->nv_name), 0);
 		free(__UNCONST(p->nv_name));
 		nvfree(p);
 	}
@@ -2026,7 +2150,7 @@ handle_cmdline_makeoptions(void)
 		const char *name = intern(p->nv_name);
 
 		n = p->nv_next;
-		delmkoption(name);
+		delmkoption(name, 0);
 		addmkoption(name, intern(p->nv_str));
 		free(__UNCONST(p->nv_name));
 		free(__UNCONST(p->nv_str));

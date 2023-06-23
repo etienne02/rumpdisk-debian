@@ -1,4 +1,4 @@
-/* $NetBSD: ddc.c,v 1.6 2015/07/25 15:20:49 jmcneill Exp $ */
+/* $NetBSD: ddc.c,v 1.9 2019/12/23 18:12:50 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -32,7 +32,7 @@
  */ 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ddc.c,v 1.6 2015/07/25 15:20:49 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ddc.c,v 1.9 2019/12/23 18:12:50 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -70,7 +70,7 @@ ddc_match(device_t parent, cfdata_t cf, void *aux)
 	struct i2c_attach_args *ia = aux;
 
 	if (ia->ia_addr == DDC_ADDR)
-		return 1;
+		return I2C_MATCH_ADDRESS_ONLY;
 	return 0;
 }
 
@@ -102,22 +102,22 @@ ddc_read_edid_block(i2c_tag_t tag, uint8_t *dest, size_t len, uint8_t block)
 	uint8_t wbuf[2];
 	int error;
 
-	if ((error = iic_acquire_bus(tag, I2C_F_POLL)) != 0)
+	if ((error = iic_acquire_bus(tag, 0)) != 0)
 		return error;
 
 	wbuf[0] = block >> 1;	/* start address */
 
 	if ((error = iic_exec(tag, I2C_OP_READ_WITH_STOP, DDC_ADDR, wbuf, 1,
-		edid, sizeof(edid), I2C_F_POLL)) != 0) {
-		iic_release_bus(tag, I2C_F_POLL);
+		edid, sizeof(edid), 0)) != 0) {
+		iic_release_bus(tag, 0);
 		return error;
 	}
-	iic_release_bus(tag, I2C_F_POLL);
+	iic_release_bus(tag, 0);
 
 	if (block & 1) {
-		memcpy(dest, &edid[128], min(len, 128));
+		memcpy(dest, &edid[128], uimin(len, 128));
 	} else {
-		memcpy(dest, &edid[0], min(len, 128));
+		memcpy(dest, &edid[0], uimin(len, 128));
 	}
 
 	return 0;

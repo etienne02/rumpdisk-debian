@@ -1,4 +1,4 @@
-/*	$NetBSD: umap.h,v 1.16 2008/06/28 01:34:06 rumble Exp $	*/
+/*	$NetBSD: umap.h,v 1.19 2019/08/20 21:18:10 perseant Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -51,6 +51,7 @@ struct umap_args {
 	int 		gnentries;	/* # of entries in group map array */
 	u_long 		(*mapdata)[2];	/* pointer to array of user mappings */
 	u_long 		(*gmapdata)[2];	/* pointer to array of group mappings */
+	u_long		fsid;		/* user-supplied per-fs ident */
 };
 
 #ifdef _KERNEL
@@ -64,7 +65,6 @@ struct umap_mount {
 	u_long		info_gmapdata[GMAPFILEENTRIES][2]; /*mapping data for
 	    group mapping in ficus */
 };
-#define	umapm_vfs		lm.layerm_vfs
 #define	umapm_rootvp		lm.layerm_rootvp
 #define	umapm_export		lm.layerm_export
 #define	umapm_flags		lm.layerm_flags

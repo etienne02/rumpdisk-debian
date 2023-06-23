@@ -1,4 +1,4 @@
-/*	$NetBSD: core_elf32.c,v 1.47 2016/06/27 01:46:04 christos Exp $	*/
+/*	$NetBSD: core_elf32.c,v 1.67 2021/01/02 02:13:42 rin Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -40,10 +40,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: core_elf32.c,v 1.47 2016/06/27 01:46:04 christos Exp $");
+__KERNEL_RCSID(1, "$NetBSD: core_elf32.c,v 1.67 2021/01/02 02:13:42 rin Exp $");
 
 #ifdef _KERNEL_OPT
-#include "opt_coredump.h"
 #include "opt_compat_netbsd32.h"
 #endif
 
@@ -60,12 +59,15 @@ __KERNEL_RCSID(1, "$NetBSD: core_elf32.c,v 1.47 2016/06/27 01:46:04 christos Exp
 #include <sys/ptrace.h>
 #include <sys/kmem.h>
 #include <sys/kauth.h>
+#include <sys/compat_stub.h>
 
 #include <machine/reg.h>
 
 #include <uvm/uvm_extern.h>
 
-#ifdef COREDUMP
+#ifdef COMPAT_NETBSD32
+#include <compat/netbsd32/netbsd32.h>
+#endif
 
 struct writesegs_state {
 	Elf_Phdr *psections;
@@ -98,13 +100,16 @@ static int	ELFNAMEEND(coredump_note)(struct lwp *, struct note_state *);
 /* The 'note' section names and data are always 4-byte aligned. */
 #define	ELFROUNDSIZE	4	/* XXX Should it be sizeof(Elf_Word)? */
 
+#define elf_read_lwpstatus	CONCAT(process_read_lwpstatus, ELFSIZE)
+#define elf_lwpstatus		CONCAT(process_lwpstatus, ELFSIZE)
+
 #define elf_process_read_regs	CONCAT(process_read_regs, ELFSIZE)
 #define elf_process_read_fpregs	CONCAT(process_read_fpregs, ELFSIZE)
 #define elf_reg			CONCAT(process_reg, ELFSIZE)
 #define elf_fpreg		CONCAT(process_fpreg, ELFSIZE)
 
 int
-ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
+ELFNAMEEND(real_coredump)(struct lwp *l, struct coredump_iostate *cookie)
 {
 	Elf_Ehdr ehdr;
 	Elf_Shdr shdr;
@@ -115,6 +120,7 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 	off_t notestart;
 	size_t notesize;
 	int error, i;
+	off_t offset __diagused;
 
 	struct note_state ns;
 	struct note_buf *nb;
@@ -144,7 +150,8 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 	 */
 
 	/* Pass 1: count the entries. */
-	npsections = uvm_coredump_count_segs(l->l_proc);
+	MODULE_HOOK_CALL(uvm_coredump_count_segs_hook,
+	    (l->l_proc), 0, npsections);
 	/* Allow for the PT_NOTE section. */
 	npsections++;
 
@@ -158,7 +165,10 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 #endif
 	ehdr.e_ident[EI_DATA] = ELFDEFNNAME(MACHDEP_ENDIANNESS);
 	ehdr.e_ident[EI_VERSION] = EV_CURRENT;
-	/* XXX Should be the OSABI/ABI version of the executable. */
+	/*
+	 * NetBSD sets generic SYSV OSABI and ABI version 0
+	 * Native ELF files are distinguishable with NetBSD specific notes
+	 */
 	ehdr.e_ident[EI_OSABI] = ELFOSABI_SYSV;
 	ehdr.e_ident[EI_ABIVERSION] = 0;
 
@@ -190,7 +200,8 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 #endif
 
 	/* Write out the ELF header. */
-	error = coredump_write(cookie, UIO_SYSSPACE, &ehdr, sizeof(ehdr));
+	MODULE_HOOK_CALL(coredump_write_hook, (cookie, UIO_SYSSPACE, &ehdr,
+	    sizeof(ehdr)), ENOSYS, error);
 	if (error)
 		goto out;
 
@@ -199,8 +210,8 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 		memset(&shdr, 0, sizeof(shdr));
 		shdr.sh_type = SHT_NULL;
 		shdr.sh_info = npsections;
-		error = coredump_write(cookie, UIO_SYSSPACE, &shdr,
-		    sizeof(shdr));
+		MODULE_HOOK_CALL(coredump_write_hook, (cookie, UIO_SYSSPACE,
+		    &shdr, sizeof(shdr)), ENOSYS, error);
 		if (error)
 			goto out;
 	}
@@ -215,8 +226,8 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 	ws.psections = psections;
 	ws.npsections = npsections - 1;
 	ws.p = l->l_proc;
-	error = uvm_coredump_walkmap(l->l_proc, ELFNAMEEND(coredump_getseghdrs),
-	    &ws);
+	MODULE_HOOK_CALL(uvm_coredump_walkmap_hook,
+	    (l->l_proc, ELFNAMEEND(coredump_getseghdrs), &ws), ENOSYS, error);
 	if (error)
 		goto out;
 	if (ws.npsections != 0) {
@@ -236,21 +247,25 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 	ws.psections->p_align = ELFROUNDSIZE;
 
 	/* Write the P-section headers followed by the PT_NOTE header */
-	error = coredump_write(cookie, UIO_SYSSPACE, psections, psectionssize);
+	MODULE_HOOK_CALL(coredump_write_hook, (cookie, UIO_SYSSPACE, psections,
+	    psectionssize), ENOSYS, error);
 	if (error)
 		goto out;
 
 #ifdef DIAGNOSTIC
-	if (coredump_offset(cookie) != notestart)
+	MODULE_HOOK_CALL(coredump_offset_hook, (cookie), 0, offset);
+	if (offset != notestart)
 		panic("coredump: offset %lld != notestart %lld",
-		    (long long) coredump_offset(cookie),
+		    (long long) offset,
 		    (long long) notestart);
 #endif
 
 	/* Write out the notes. */
 	for (nb = ns.ns_first; nb != NULL; nb = nb->nb_next) {
-		error = coredump_write(cookie, UIO_SYSSPACE, nb->nb_data,
-		    nb->nb_next == NULL ? ns.ns_offset : sizeof nb->nb_data);
+		MODULE_HOOK_CALL(coredump_write_hook, (cookie, UIO_SYSSPACE,
+		    nb->nb_data,
+		    nb->nb_next == NULL ? ns.ns_offset : sizeof nb->nb_data),
+		    ENOSYS, error);
 		if (error)
 			goto out;
 	}
@@ -261,15 +276,16 @@ ELFNAMEEND(coredump)(struct lwp *l, struct coredump_iostate *cookie)
 			continue;
 
 #ifdef DIAGNOSTIC
-		if (coredump_offset(cookie) != psections[i].p_offset)
+		MODULE_HOOK_CALL(coredump_offset_hook, (cookie), 0, offset);
+		if (offset != psections[i].p_offset)
 			panic("coredump: offset %lld != p_offset[%d] %lld",
-			    (long long) coredump_offset(cookie), i,
+			    (long long) offset, i,
 			    (long long) psections[i].p_filesz);
 #endif
 
-		error = coredump_write(cookie, UIO_USERSPACE,
+		MODULE_HOOK_CALL(coredump_write_hook, (cookie, UIO_USERSPACE,
 		    (void *)(vaddr_t)psections[i].p_vaddr,
-		    psections[i].p_filesz);
+		    psections[i].p_filesz), ENOSYS, error);
 		if (error)
 			goto out;
 	}
@@ -310,8 +326,19 @@ ELFNAMEEND(coredump_getseghdrs)(struct uvm_coredump_state *us)
 		int i;
 
 		end -= slen;
-		if ((error = copyin_proc(ws->p, (void *)end, buf, slen)) != 0)
-			return error;
+		if ((error = copyin_proc(ws->p, (void *)end, buf, slen)) != 0) {
+			/*
+			 * In case of any errors of scanning the segments reset
+			 * their content to a default value with zeros. This is
+			 * achieved with shortening the p_filesz parameter.
+			 *
+			 * This allows to emit core(5) files for a process
+			 * regardless of its state of mappings, such as mapping
+			 * pages after EOF in a file.
+			 */
+			realsize -= slen;
+			continue;
+		}
 
 		ep = (const long *) &buf[slen / sizeof(buf[0])];
 		for (i = 0, ep--; buf <= ep; ep--, i++) {
@@ -349,40 +376,38 @@ coredump_note_procinfo(struct lwp *l, struct note_state *ns)
 {
 	struct proc *p;
 	struct netbsd_elfcore_procinfo cpi;
-	struct lwp *l0;
-	sigset_t ss1, ss2;
 
 	p = l->l_proc;
 
 	/* First, write an elfcore_procinfo. */
 	cpi.cpi_version = NETBSD_ELFCORE_PROCINFO_VERSION;
 	cpi.cpi_cpisize = sizeof(cpi);
-	cpi.cpi_signo = p->p_sigctx.ps_signo;
-	cpi.cpi_sigcode = p->p_sigctx.ps_code;
+	cpi.cpi_signo = p->p_sigctx.ps_info._signo;
+	cpi.cpi_sigcode = p->p_sigctx.ps_info._code;
 	cpi.cpi_siglwp = p->p_sigctx.ps_lwp;
 
 	/*
-	 * XXX This should be per-LWP.
+	 * per-LWP pending signals are stored in PT_LWPSTATUS@nnn.
 	 */
-	ss1 = p->p_sigpend.sp_set;
-	sigemptyset(&ss2);
-	LIST_FOREACH(l0, &p->p_lwps, l_sibling) {
-		sigplusset(&l0->l_sigpend.sp_set, &ss1);
-		sigplusset(&l0->l_sigmask, &ss2);
-	}
-	memcpy(&cpi.cpi_sigpend, &ss1, sizeof(cpi.cpi_sigpend));
-	memcpy(&cpi.cpi_sigmask, &ss2, sizeof(cpi.cpi_sigmask));
+	memcpy(&cpi.cpi_sigpend, &p->p_sigpend.sp_set, sizeof(cpi.cpi_sigpend));
+
+	/*
+	 * Signal mask is stored on a per-LWP basis in PT_LWPSTATUS@nnn.
+	 * For compatibility purposes, cpi_sigmask is present, but zeroed.
+	 */
+	memset(&cpi.cpi_sigmask, 0, sizeof(cpi.cpi_sigmask));
+
 	memcpy(&cpi.cpi_sigignore, &p->p_sigctx.ps_sigignore,
 	    sizeof(cpi.cpi_sigignore));
 	memcpy(&cpi.cpi_sigcatch, &p->p_sigctx.ps_sigcatch,
 	    sizeof(cpi.cpi_sigcatch));
 
 	cpi.cpi_pid = p->p_pid;
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	cpi.cpi_ppid = p->p_pptr->p_pid;
 	cpi.cpi_pgrp = p->p_pgid;
 	cpi.cpi_sid = p->p_session->s_sid;
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	cpi.cpi_ruid = kauth_cred_getuid(l->l_cred);
 	cpi.cpi_euid = kauth_cred_geteuid(l->l_cred);
@@ -403,40 +428,18 @@ coredump_note_procinfo(struct lwp *l, struct note_state *ns)
 static int
 coredump_note_auxv(struct lwp *l, struct note_state *ns)
 {
-	struct ps_strings pss;
 	int error;
-	struct proc *p = l->l_proc;
-	void *uauxv, *kauxv;
 	size_t len;
+	void *kauxv;
 
-	if ((error = copyin_psstrings(p, &pss)) != 0)
+	if ((error = proc_getauxv(l->l_proc, &kauxv, &len)) != 0)
 		return error;
 
-	if (pss.ps_envstr == NULL)
-		return EIO;
-
-	len = p->p_execsw->es_arglen;
-#ifdef COMPAT_NETBSD32
-	if (p->p_flag & PK_32) {
-		uauxv = (void *)((char *)pss.ps_envstr
-		    + (pss.ps_nenvstr + 1) * sizeof(int32_t));
-		len *= sizeof(int32_t);
-	} else
-#endif
-	{
-		uauxv = (void *)(pss.ps_envstr + pss.ps_nenvstr + 1);
-		len *= sizeof(char *);
-	}
-
-	kauxv = kmem_alloc(len, KM_SLEEP);
-	error = copyin_proc(p, uauxv, kauxv, len);
-	if (error == 0) {
-		ELFNAMEEND(coredump_savenote)(ns, ELF_NOTE_NETBSD_CORE_AUXV,
-		    ELF_NOTE_NETBSD_CORE_NAME, kauxv, len);
-	}
+	ELFNAMEEND(coredump_savenote)(ns, ELF_NOTE_NETBSD_CORE_AUXV,
+	    ELF_NOTE_NETBSD_CORE_NAME, kauxv, len);
 	
 	kmem_free(kauxv, len);
-	return error;
+	return 0;
 }
 
 static int
@@ -479,37 +482,68 @@ ELFNAMEEND(coredump_notes)(struct lwp *l, struct note_state *ns)
 	return error;
 }
 
-static int
-ELFNAMEEND(coredump_note)(struct lwp *l, struct note_state *ns)
-{
-	int error;
+struct elf_coredump_note_data {
 	char name[64];
+	elf_lwpstatus els;
 	elf_reg intreg;
 #ifdef PT_GETFPREGS
 	elf_fpreg freg;
+#endif
+};
+
+static int
+ELFNAMEEND(coredump_note)(struct lwp *l, struct note_state *ns)
+{
+	struct elf_coredump_note_data *d;
+#ifdef PT_GETFPREGS
 	size_t freglen;
 #endif
+	int error;
 
-	snprintf(name, sizeof(name), "%s@%d",
+	d = kmem_alloc(sizeof(*d), KM_SLEEP);
+
+	snprintf(d->name, sizeof(d->name), "%s@%d",
 	    ELF_NOTE_NETBSD_CORE_NAME, l->l_lid);
 
-	error = elf_process_read_regs(l, &intreg);
-	if (error)
-		return (error);
+	elf_read_lwpstatus(l, &d->els);
 
-	ELFNAMEEND(coredump_savenote)(ns, PT_GETREGS, name, &intreg,
-	    sizeof(intreg));
+	ELFNAMEEND(coredump_savenote)(ns, PT_LWPSTATUS, d->name, &d->els,
+	    sizeof(d->els));
+
+	error = elf_process_read_regs(l, &d->intreg);
+	if (error)
+		goto out;
+
+	ELFNAMEEND(coredump_savenote)(ns,
+#if ELFSIZE == 32 && defined(PT32_GETREGS)
+	    PT32_GETREGS,
+#else
+	    PT_GETREGS,
+#endif
+	    d->name, &d->intreg, sizeof(d->intreg));
 
 #ifdef PT_GETFPREGS
-	freglen = sizeof(freg);
-	error = elf_process_read_fpregs(l, &freg, &freglen);
+	freglen = sizeof(d->freg);
+	error = elf_process_read_fpregs(l, &d->freg, &freglen);
 	if (error)
-		return (error);
+		goto out;
 
-	ELFNAMEEND(coredump_savenote)(ns, PT_GETFPREGS, name, &freg, freglen);
+	ELFNAMEEND(coredump_savenote)(ns,
+#  if ELFSIZE == 32 && defined(PT32_GETFPREGS)
+	    PT32_GETFPREGS,
+#  else
+	    PT_GETFPREGS,
+#  endif
+	    d->name, &d->freg, freglen);
 #endif
-	/* XXX Add hook for machdep per-LWP notes. */
-	return (0);
+
+#ifdef COREDUMP_MACHDEP_LWP_NOTES
+	COREDUMP_MACHDEP_LWP_NOTES(l, ns, d->name);
+#endif
+
+ out:
+	kmem_free(d, sizeof(*d));
+	return (error);
 }
 
 static void
@@ -524,12 +558,12 @@ save_note_bytes(struct note_state *ns, const void *data, size_t len)
 	 * All but the last buffer is full.
 	 */
 	for (;;) {
-		copylen = min(len, sizeof nb->nb_data - ns->ns_offset);
+		copylen = uimin(len, sizeof(nb->nb_data) - ns->ns_offset);
 		wp = nb->nb_data + ns->ns_offset;
 		memcpy(wp, data, copylen);
 		if (copylen == len)
 			break;
-		nb->nb_next = kmem_alloc(sizeof *nb->nb_next, KM_SLEEP);
+		nb->nb_next = kmem_alloc(sizeof(*nb->nb_next), KM_SLEEP);
 		nb = nb->nb_next;
 		ns->ns_last = nb;
 		ns->ns_count++;
@@ -538,8 +572,9 @@ save_note_bytes(struct note_state *ns, const void *data, size_t len)
 		data = (const unsigned char *)data + copylen;
 	}
 
-	while (copylen & (ELFROUNDSIZE - 1))
-	    wp[copylen++] = 0;
+	while ((copylen & (ELFROUNDSIZE - 1)) && 
+	    wp + copylen < nb->nb_data + sizeof(nb->nb_data))
+		wp[copylen++] = 0;
 
 	ns->ns_offset += copylen;
 }
@@ -558,14 +593,3 @@ ELFNAMEEND(coredump_savenote)(struct note_state *ns, unsigned int type,
 	save_note_bytes(ns, name, nhdr.n_namesz);
 	save_note_bytes(ns, data, data_len);
 }
-
-#else	/* COREDUMP */
-
-int
-ELFNAMEEND(coredump)(struct lwp *l, void *cookie)
-{
-
-	return ENOSYS;
-}
-
-#endif	/* COREDUMP */

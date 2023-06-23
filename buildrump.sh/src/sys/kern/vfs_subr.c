@@ -1,7 +1,8 @@
-/*	$NetBSD: vfs_subr.c,v 1.449 2016/05/26 11:07:33 hannken Exp $	*/
+/*	$NetBSD: vfs_subr.c,v 1.490 2021/02/04 21:07:06 jdolecek Exp $	*/
 
 /*-
- * Copyright (c) 1997, 1998, 2004, 2005, 2007, 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 1997, 1998, 2004, 2005, 2007, 2008, 2019, 2020
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -68,15 +69,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_subr.c,v 1.449 2016/05/26 11:07:33 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_subr.c,v 1.490 2021/02/04 21:07:06 jdolecek Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
 #include "opt_compat_netbsd.h"
 #include "opt_compat_43.h"
 #endif
-
-#define _VFS_VNODE_PRIVATE	/* for vcache_print(). */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -85,7 +84,8 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_subr.c,v 1.449 2016/05/26 11:07:33 hannken Exp $
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/fstrans.h>
+#include <sys/vnode_impl.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/namei.h>
@@ -119,7 +119,6 @@ const int	vttoif_tab[9] = {
 }
 
 int doforce = 1;		/* 1 => permit forcible unmounting */
-int prtactive = 0;		/* 1 => print out reclaim of active vnodes */
 
 extern struct mount *dead_rootmount;
 
@@ -156,7 +155,7 @@ vinvalbuf(struct vnode *vp, int flags, kauth_cred_t cred, struct lwp *l,
 	    (flags & V_SAVE ? PGO_CLEANIT | PGO_RECLAIM : 0);
 
 	/* XXXUBC this doesn't look at flags or slp* */
-	mutex_enter(vp->v_interlock);
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	error = VOP_PUTPAGES(vp, 0, 0, flushflags);
 	if (error) {
 		return error;
@@ -235,7 +234,7 @@ vtruncbuf(struct vnode *vp, daddr_t lbn, bool catch_p, int slptimeo)
 	voff_t off;
 
 	off = round_page((voff_t)lbn << vp->v_mount->mnt_fs_bshift);
-	mutex_enter(vp->v_interlock);
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	error = VOP_PUTPAGES(vp, off, 0, PGO_FREE | PGO_SYNCIO);
 	if (error) {
 		return error;
@@ -293,7 +292,7 @@ vflushbuf(struct vnode *vp, int flags)
 	pflags = PGO_CLEANIT | PGO_ALLPAGES |
 		(sync ? PGO_SYNCIO : 0) |
 		((flags & FSYNC_LAZY) ? PGO_LAZY : 0);
-	mutex_enter(vp->v_interlock);
+	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 	(void) VOP_PUTPAGES(vp, 0, 0, pflags);
 
 loop:
@@ -353,7 +352,7 @@ bdevvp(dev_t dev, vnode_t **vpp)
 	va.va_type = VBLK;
 	va.va_rdev = dev;
 
-	return vcache_new(dead_rootmount, NULL, &va, NOCRED, vpp);
+	return vcache_new(dead_rootmount, NULL, &va, NOCRED, NULL, vpp);
 }
 
 /*
@@ -369,7 +368,7 @@ cdevvp(dev_t dev, vnode_t **vpp)
 	va.va_type = VCHR;
 	va.va_rdev = dev;
 
-	return vcache_new(dead_rootmount, NULL, &va, NOCRED, vpp);
+	return vcache_new(dead_rootmount, NULL, &va, NOCRED, NULL, vpp);
 }
 
 /*
@@ -422,11 +421,9 @@ brelvp(struct buf *bp)
 	if (LIST_NEXT(bp, b_vnbufs) != NOLIST)
 		bufremvn(bp);
 
-	if (vp->v_uobj.uo_npages == 0 && (vp->v_iflag & VI_ONWORKLST) &&
-	    LIST_FIRST(&vp->v_dirtyblkhd) == NULL) {
-		vp->v_iflag &= ~VI_WRMAPDIRTY;
+	if ((vp->v_iflag & (VI_ONWORKLST | VI_PAGES)) == VI_ONWORKLST &&
+	    LIST_FIRST(&vp->v_dirtyblkhd) == NULL)
 		vn_syncer_remove_from_worklist(vp);
-	}
 
 	bp->b_objlock = &buffer_lock;
 	bp->b_vp = NULL;
@@ -462,12 +459,10 @@ reassignbuf(struct buf *bp, struct vnode *vp)
 	 */
 	if ((bp->b_oflags & BO_DELWRI) == 0) {
 		listheadp = &vp->v_cleanblkhd;
-		if (vp->v_uobj.uo_npages == 0 &&
-		    (vp->v_iflag & VI_ONWORKLST) &&
-		    LIST_FIRST(&vp->v_dirtyblkhd) == NULL) {
-			vp->v_iflag &= ~VI_WRMAPDIRTY;
+		if ((vp->v_iflag & (VI_ONWORKLST | VI_PAGES)) ==
+		    VI_ONWORKLST &&
+		    LIST_FIRST(&vp->v_dirtyblkhd) == NULL)
 			vn_syncer_remove_from_worklist(vp);
-		}
 	} else {
 		listheadp = &vp->v_dirtyblkhd;
 		if ((vp->v_iflag & VI_ONWORKLST) == 0) {
@@ -554,7 +549,7 @@ vdevgone(int maj, int minl, int minh, enum vtype type)
 
 #define SYNCER_MAXDELAY		32
 
-typedef TAILQ_HEAD(synclist, vnode) synclist_t;
+typedef TAILQ_HEAD(synclist, vnode_impl) synclist_t;
 
 static void	vn_syncer_add1(struct vnode *, int);
 static void	sysctl_vfs_syncfs_setup(struct sysctllog **);
@@ -569,7 +564,6 @@ time_t dirdelay  = 15;			/* time to delay syncing directories */
 time_t metadelay = 10;			/* time to delay syncing metadata */
 time_t lockdelay = 1;			/* time to delay if locking fails */
 
-kmutex_t		syncer_mutex;	/* used to freeze syncer, long term */
 static kmutex_t		syncer_data_lock; /* short term lock on data structs */
 
 static int		syncer_delayno = 0;
@@ -591,7 +585,6 @@ vn_initialize_syncerd(void)
 	for (i = 0; i < syncer_last; i++)
 		TAILQ_INIT(&syncer_workitem_pending[i]);
 
-	mutex_init(&syncer_mutex, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&syncer_data_lock, MUTEX_DEFAULT, IPL_NONE);
 }
 
@@ -626,6 +619,7 @@ static void
 vn_syncer_add1(struct vnode *vp, int delayx)
 {
 	synclist_t *slp;
+	vnode_impl_t *vip = VNODE_TO_VIMPL(vp);
 
 	KASSERT(mutex_owned(&syncer_data_lock));
 
@@ -635,17 +629,17 @@ vn_syncer_add1(struct vnode *vp, int delayx)
 		 * Note: called from sched_sync(), which will not hold
 		 * interlock, therefore we cannot modify v_iflag here.
 		 */
-		slp = &syncer_workitem_pending[vp->v_synclist_slot];
-		TAILQ_REMOVE(slp, vp, v_synclist);
+		slp = &syncer_workitem_pending[vip->vi_synclist_slot];
+		TAILQ_REMOVE(slp, vip, vi_synclist);
 	} else {
 		KASSERT(mutex_owned(vp->v_interlock));
 		vp->v_iflag |= VI_ONWORKLST;
 	}
 
-	vp->v_synclist_slot = sync_delay_slot(delayx);
+	vip->vi_synclist_slot = sync_delay_slot(delayx);
 
-	slp = &syncer_workitem_pending[vp->v_synclist_slot];
-	TAILQ_INSERT_TAIL(slp, vp, v_synclist);
+	slp = &syncer_workitem_pending[vip->vi_synclist_slot];
+	TAILQ_INSERT_TAIL(slp, vip, vi_synclist);
 }
 
 void
@@ -666,16 +660,17 @@ void
 vn_syncer_remove_from_worklist(struct vnode *vp)
 {
 	synclist_t *slp;
+	vnode_impl_t *vip = VNODE_TO_VIMPL(vp);
 
 	KASSERT(mutex_owned(vp->v_interlock));
 
-	mutex_enter(&syncer_data_lock);
 	if (vp->v_iflag & VI_ONWORKLST) {
+		mutex_enter(&syncer_data_lock);
 		vp->v_iflag &= ~VI_ONWORKLST;
-		slp = &syncer_workitem_pending[vp->v_synclist_slot];
-		TAILQ_REMOVE(slp, vp, v_synclist);
+		slp = &syncer_workitem_pending[vip->vi_synclist_slot];
+		TAILQ_REMOVE(slp, vip, vi_synclist);
+		mutex_exit(&syncer_data_lock);
 	}
-	mutex_exit(&syncer_data_lock);
 }
 
 /*
@@ -687,7 +682,7 @@ vfs_syncer_add_to_worklist(struct mount *mp)
 	static int start, incr, next;
 	int vdelay;
 
-	KASSERT(mutex_owned(&mp->mnt_updating));
+	KASSERT(mutex_owned(mp->mnt_updating));
 	KASSERT((mp->mnt_iflag & IMNT_ONWORKLIST) == 0);
 
 	/*
@@ -718,7 +713,7 @@ void
 vfs_syncer_remove_from_worklist(struct mount *mp)
 {
 
-	KASSERT(mutex_owned(&mp->mnt_updating));
+	KASSERT(mutex_owned(mp->mnt_updating));
 	KASSERT((mp->mnt_iflag & IMNT_ONWORKLIST) != 0);
 
 	mp->mnt_iflag &= ~IMNT_ONWORKLIST;
@@ -735,18 +730,15 @@ lazy_sync_vnode(struct vnode *vp)
 	KASSERT(mutex_owned(&syncer_data_lock));
 
 	synced = false;
-	/* We are locking in the wrong direction. */
-	if (mutex_tryenter(vp->v_interlock)) {
+	if (vcache_tryvget(vp) == 0) {
 		mutex_exit(&syncer_data_lock);
-		if (vget(vp, LK_NOWAIT, false /* !wait */) == 0) {
-			if (vn_lock(vp, LK_EXCLUSIVE | LK_NOWAIT) == 0) {
-				synced = true;
-				(void) VOP_FSYNC(vp, curlwp->l_cred,
-				    FSYNC_LAZY, 0, 0);
-				vput(vp);
-			} else
-				vrele(vp);
-		}
+		if (vn_lock(vp, LK_EXCLUSIVE | LK_NOWAIT) == 0) {
+			synced = true;
+			(void) VOP_FSYNC(vp, curlwp->l_cred,
+			    FSYNC_LAZY, 0, 0);
+			vput(vp);
+		} else
+			vrele(vp);
 		mutex_enter(&syncer_data_lock);
 	}
 	return synced;
@@ -758,34 +750,30 @@ lazy_sync_vnode(struct vnode *vp)
 void
 sched_sync(void *arg)
 {
+	mount_iterator_t *iter;
 	synclist_t *slp;
+	struct vnode_impl *vi;
 	struct vnode *vp;
-	struct mount *mp, *nmp;
+	struct mount *mp;
 	time_t starttime;
 	bool synced;
 
 	for (;;) {
-		mutex_enter(&syncer_mutex);
-
 		starttime = time_second;
 
 		/*
 		 * Sync mounts whose dirty time has expired.
 		 */
-		mutex_enter(&mountlist_lock);
-		for (mp = TAILQ_FIRST(&mountlist); mp != NULL; mp = nmp) {
+		mountlist_iterator_init(&iter);
+		while ((mp = mountlist_iterator_trynext(iter)) != NULL) {
 			if ((mp->mnt_iflag & IMNT_ONWORKLIST) == 0 ||
 			    mp->mnt_synclist_slot != syncer_delayno) {
-				nmp = TAILQ_NEXT(mp, mnt_list);
 				continue;
 			}
 			mp->mnt_synclist_slot = sync_delay_slot(sync_delay(mp));
-			if (vfs_busy(mp, &nmp))
-				continue;
 			VFS_SYNC(mp, MNT_LAZY, curlwp->l_cred);
-			vfs_unbusy(mp, false, &nmp);
 		}
-		mutex_exit(&mountlist_lock);
+		mountlist_iterator_destroy(iter);
 
 		mutex_enter(&syncer_data_lock);
 
@@ -797,14 +785,16 @@ sched_sync(void *arg)
 		if (syncer_delayno >= syncer_last)
 			syncer_delayno = 0;
 
-		while ((vp = TAILQ_FIRST(slp)) != NULL) {
+		while ((vi = TAILQ_FIRST(slp)) != NULL) {
+			vp = VIMPL_TO_VNODE(vi);
 			synced = lazy_sync_vnode(vp);
 
 			/*
 			 * XXX The vnode may have been recycled, in which
 			 * case it may have a new identity.
 			 */
-			if (TAILQ_FIRST(slp) == vp) {
+			vi = TAILQ_FIRST(slp);
+			if (vi != NULL && VIMPL_TO_VNODE(vi) == vp) {
 				/*
 				 * Put us back on the worklist.  The worklist
 				 * routine will remove us from our current
@@ -832,7 +822,6 @@ sched_sync(void *arg)
 				    synced ? syncdelay : lockdelay);
 			}
 		}
-		mutex_exit(&syncer_mutex);
 
 		/*
 		 * If it has taken us less than a second to process the
@@ -963,8 +952,9 @@ sysctl_kern_vnode(SYSCTLFN_ARGS)
 {
 	char *where = oldp;
 	size_t *sizep = oldlenp;
-	struct mount *mp, *nmp;
+	struct mount *mp;
 	vnode_t *vp, vbuf;
+	mount_iterator_t *iter;
 	struct vnode_iterator *marker;
 	char *bp = where;
 	char *ewhere;
@@ -984,17 +974,14 @@ sysctl_kern_vnode(SYSCTLFN_ARGS)
 	ewhere = where + *sizep;
 
 	sysctl_unlock();
-	mutex_enter(&mountlist_lock);
-	for (mp = TAILQ_FIRST(&mountlist); mp != NULL; mp = nmp) {
-		if (vfs_busy(mp, &nmp)) {
-			continue;
-		}
+	mountlist_iterator_init(&iter);
+	while ((mp = mountlist_iterator_next(iter)) != NULL) {
 		vfs_vnode_iterator_init(mp, &marker);
 		while ((vp = vfs_vnode_iterator_next(marker, NULL, NULL))) {
 			if (bp + VPTRSZ + VNODESZ > ewhere) {
 				vrele(vp);
 				vfs_vnode_iterator_destroy(marker);
-				vfs_unbusy(mp, false, NULL);
+				mountlist_iterator_destroy(iter);
 				sysctl_relock();
 				*sizep = bp - where;
 				return (ENOMEM);
@@ -1004,7 +991,7 @@ sysctl_kern_vnode(SYSCTLFN_ARGS)
 			    (error = copyout(&vbuf, bp + VPTRSZ, VNODESZ))) {
 				vrele(vp);
 				vfs_vnode_iterator_destroy(marker);
-				vfs_unbusy(mp, false, NULL);
+				mountlist_iterator_destroy(iter);
 				sysctl_relock();
 				return (error);
 			}
@@ -1012,9 +999,8 @@ sysctl_kern_vnode(SYSCTLFN_ARGS)
 			bp += VPTRSZ + VNODESZ;
 		}
 		vfs_vnode_iterator_destroy(marker);
-		vfs_unbusy(mp, false, &nmp);
 	}
-	mutex_exit(&mountlist_lock);
+	mountlist_iterator_destroy(iter);
 	sysctl_relock();
 
 	*sizep = bp - where;
@@ -1058,13 +1044,80 @@ vattr_null(struct vattr *vap)
 	vap->va_bytes = VNOVAL;
 }
 
+/*
+ * Vnode state to string.
+ */
+const char *
+vstate_name(enum vnode_state state)
+{
+
+	switch (state) {
+	case VS_ACTIVE:
+		return "ACTIVE";
+	case VS_MARKER:
+		return "MARKER";
+	case VS_LOADING:
+		return "LOADING";
+	case VS_LOADED:
+		return "LOADED";
+	case VS_BLOCKED:
+		return "BLOCKED";
+	case VS_RECLAIMING:
+		return "RECLAIMING";
+	case VS_RECLAIMED:
+		return "RECLAIMED";
+	default:
+		return "ILLEGAL";
+	}
+}
+
+/*
+ * Print a description of a vnode (common part).
+ */
+static void
+vprint_common(struct vnode *vp, const char *prefix,
+    void (*pr)(const char *, ...) __printflike(1, 2))
+{
+	int n;
+	char bf[96];
+	const uint8_t *cp;
+	vnode_impl_t *vip;
+	const char * const vnode_tags[] = { VNODE_TAGS };
+	const char * const vnode_types[] = { VNODE_TYPES };
+	const char vnode_flagbits[] = VNODE_FLAGBITS;
+
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 #define ARRAY_PRINT(idx, arr) \
     ((unsigned int)(idx) < ARRAY_SIZE(arr) ? (arr)[(idx)] : "UNKNOWN")
 
-const char * const vnode_tags[] = { VNODE_TAGS };
-const char * const vnode_types[] = { VNODE_TYPES };
-const char vnode_flagbits[] = VNODE_FLAGBITS;
+	vip = VNODE_TO_VIMPL(vp);
+
+	snprintb(bf, sizeof(bf),
+	    vnode_flagbits, vp->v_iflag | vp->v_vflag | vp->v_uflag);
+
+	(*pr)("vnode %p flags %s\n", vp, bf);
+	(*pr)("%stag %s(%d) type %s(%d) mount %p typedata %p\n", prefix,
+	    ARRAY_PRINT(vp->v_tag, vnode_tags), vp->v_tag,
+	    ARRAY_PRINT(vp->v_type, vnode_types), vp->v_type,
+	    vp->v_mount, vp->v_mountedhere);
+	(*pr)("%susecount %d writecount %d holdcount %d\n", prefix,
+	    vrefcnt(vp), vp->v_writecount, vp->v_holdcnt);
+	(*pr)("%ssize %" PRIx64 " writesize %" PRIx64 " numoutput %d\n",
+	    prefix, vp->v_size, vp->v_writesize, vp->v_numoutput);
+	(*pr)("%sdata %p lock %p\n", prefix, vp->v_data, &vip->vi_lock);
+
+	(*pr)("%sstate %s key(%p %zd)", prefix, vstate_name(vip->vi_state),
+	    vip->vi_key.vk_mount, vip->vi_key.vk_key_len);
+	n = vip->vi_key.vk_key_len;
+	cp = vip->vi_key.vk_key;
+	while (n-- > 0)
+		(*pr)(" %02x", *cp++);
+	(*pr)("\n");
+	(*pr)("%slrulisthd %p\n", prefix, vip->vi_lrulisthd);
+
+#undef ARRAY_PRINT
+#undef ARRAY_SIZE
+}
 
 /*
  * Print out a description of a vnode.
@@ -1072,41 +1125,14 @@ const char vnode_flagbits[] = VNODE_FLAGBITS;
 void
 vprint(const char *label, struct vnode *vp)
 {
-	char bf[96];
-	int flag;
-
-	flag = vp->v_iflag | vp->v_vflag | vp->v_uflag;
-	snprintb(bf, sizeof(bf), vnode_flagbits, flag);
 
 	if (label != NULL)
 		printf("%s: ", label);
-	printf("vnode @ %p, flags (%s)\n\ttag %s(%d), type %s(%d), "
-	    "usecount %d, writecount %d, holdcount %d\n"
-	    "\tfreelisthd %p, mount %p, data %p lock %p\n",
-	    vp, bf, ARRAY_PRINT(vp->v_tag, vnode_tags), vp->v_tag,
-	    ARRAY_PRINT(vp->v_type, vnode_types), vp->v_type,
-	    vp->v_usecount, vp->v_writecount, vp->v_holdcnt,
-	    vp->v_freelisthd, vp->v_mount, vp->v_data, &vp->v_lock);
-	vcache_print(vp, "\t", printf);
+	vprint_common(vp, "\t", printf);
 	if (vp->v_data != NULL) {
 		printf("\t");
 		VOP_PRINT(vp);
 	}
-}
-
-/* Deprecated. Kept for KPI compatibility. */
-int
-vaccess(enum vtype type, mode_t file_mode, uid_t uid, gid_t gid,
-    mode_t acc_mode, kauth_cred_t cred)
-{
-
-#ifdef DIAGNOSTIC
-	printf("vaccess: deprecated interface used.\n");
-#endif /* DIAGNOSTIC */
-
-	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(acc_mode,
-	    type, file_mode), NULL /* This may panic. */, NULL,
-	    genfs_can_access(type, file_mode, uid, gid, acc_mode, cred));
 }
 
 /*
@@ -1154,6 +1180,8 @@ copy_statvfs_info(struct statvfs *sbp, const struct mount *mp)
 	    sizeof(sbp->f_mntonname));
 	(void)memcpy(sbp->f_mntfromname, mp->mnt_stat.f_mntfromname,
 	    sizeof(sbp->f_mntfromname));
+	(void)memcpy(sbp->f_mntfromlabel, mp->mnt_stat.f_mntfromlabel,
+	    sizeof(sbp->f_mntfromlabel));
 	sbp->f_namemax = mbp->f_namemax;
 }
 
@@ -1225,11 +1253,87 @@ set_statvfs_info(const char *onp, int ukon, const char *fromp, int ukfrom,
 	return 0;
 }
 
-void
-vfs_timestamp(struct timespec *ts)
-{
+/*
+ * Knob to control the precision of file timestamps:
+ *
+ *   0 = seconds only; nanoseconds zeroed.
+ *   1 = seconds and nanoseconds, accurate within 1/HZ.
+ *   2 = seconds and nanoseconds, truncated to microseconds.
+ * >=3 = seconds and nanoseconds, maximum precision.
+ */
+enum { TSP_SEC, TSP_HZ, TSP_USEC, TSP_NSEC };
 
-	nanotime(ts);
+int vfs_timestamp_precision __read_mostly = TSP_NSEC;
+
+void
+vfs_timestamp(struct timespec *tsp)
+{
+	struct timeval tv;
+
+	switch (vfs_timestamp_precision) {
+	case TSP_SEC:
+		tsp->tv_sec = time_second;
+		tsp->tv_nsec = 0;
+		break;
+	case TSP_HZ:
+		getnanotime(tsp);
+		break;
+	case TSP_USEC:
+		microtime(&tv);
+		TIMEVAL_TO_TIMESPEC(&tv, tsp);
+		break;
+	case TSP_NSEC:
+	default:
+		nanotime(tsp);
+		break;
+	}
+}
+
+/*
+ * The purpose of this routine is to remove granularity from accmode_t,
+ * reducing it into standard unix access bits - VEXEC, VREAD, VWRITE,
+ * VADMIN and VAPPEND.
+ *
+ * If it returns 0, the caller is supposed to continue with the usual
+ * access checks using 'accmode' as modified by this routine.  If it
+ * returns nonzero value, the caller is supposed to return that value
+ * as errno.
+ *
+ * Note that after this routine runs, accmode may be zero.
+ */
+int
+vfs_unixify_accmode(accmode_t *accmode)
+{
+	/*
+	 * There is no way to specify explicit "deny" rule using
+	 * file mode or POSIX.1e ACLs.
+	 */
+	if (*accmode & VEXPLICIT_DENY) {
+		*accmode = 0;
+		return (0);
+	}
+
+	/*
+	 * None of these can be translated into usual access bits.
+	 * Also, the common case for NFSv4 ACLs is to not contain
+	 * either of these bits. Caller should check for VWRITE
+	 * on the containing directory instead.
+	 */
+	if (*accmode & (VDELETE_CHILD | VDELETE))
+		return (EPERM);
+
+	if (*accmode & VADMIN_PERMS) {
+		*accmode &= ~VADMIN_PERMS;
+		*accmode |= VADMIN;
+	}
+
+	/*
+	 * There is no way to deny VREAD_ATTRIBUTES, VREAD_ACL
+	 * or VSYNCHRONIZE using file mode or POSIX.1e ACL.
+	 */
+	*accmode &= ~(VSTAT_PERMS | VSYNCHRONIZE);
+
+	return (0);
 }
 
 time_t	rootfstime;			/* recorded root fs time, if known */
@@ -1300,14 +1404,14 @@ VFS_UNMOUNT(struct mount *mp, int a)
 }
 
 int
-VFS_ROOT(struct mount *mp, struct vnode **a)
+VFS_ROOT(struct mount *mp, int lktype, struct vnode **a)
 {
 	int error;
 
 	if ((mp->mnt_iflag & IMNT_MPSAFE) == 0) {
 		KERNEL_LOCK(1, NULL);
 	}
-	error = (*(mp->mnt_op->vfs_root))(mp, a);
+	error = (*(mp->mnt_op->vfs_root))(mp, lktype, a);
 	if ((mp->mnt_iflag & IMNT_MPSAFE) == 0) {
 		KERNEL_UNLOCK_ONE(NULL);
 	}
@@ -1364,14 +1468,14 @@ VFS_SYNC(struct mount *mp, int a, struct kauth_cred *b)
 }
 
 int
-VFS_FHTOVP(struct mount *mp, struct fid *a, struct vnode **b)
+VFS_FHTOVP(struct mount *mp, struct fid *a, int b, struct vnode **c)
 {
 	int error;
 
 	if ((mp->mnt_iflag & IMNT_MPSAFE) == 0) {
 		KERNEL_LOCK(1, NULL);
 	}
-	error = (*(mp->mnt_op->vfs_fhtovp))(mp, a, b);
+	error = (*(mp->mnt_op->vfs_fhtovp))(mp, a, b, c);
 	if ((mp->mnt_iflag & IMNT_MPSAFE) == 0) {
 		KERNEL_UNLOCK_ONE(NULL);
 	}
@@ -1453,7 +1557,7 @@ vfs_buf_print(struct buf *bp, int full, void (*pr)(const char *, ...))
 
 	snprintb(bf, sizeof(bf),
 	    buf_flagbits, bp->b_flags | bp->b_oflags | bp->b_cflags);
-	(*pr)("  error %d flags 0x%s\n", bp->b_error, bf);
+	(*pr)("  error %d flags %s\n", bp->b_error, bf);
 
 	(*pr)("  bufsize 0x%lx bcount 0x%lx resid 0x%lx\n",
 		  bp->b_bufsize, bp->b_bcount, bp->b_resid);
@@ -1465,27 +1569,10 @@ vfs_buf_print(struct buf *bp, int full, void (*pr)(const char *, ...))
 void
 vfs_vnode_print(struct vnode *vp, int full, void (*pr)(const char *, ...))
 {
-	char bf[256];
 
 	uvm_object_printit(&vp->v_uobj, full, pr);
-	snprintb(bf, sizeof(bf),
-	    vnode_flagbits, vp->v_iflag | vp->v_vflag | vp->v_uflag);
-	(*pr)("\nVNODE flags %s\n", bf);
-	(*pr)("mp %p numoutput %d size 0x%llx writesize 0x%llx\n",
-	      vp->v_mount, vp->v_numoutput, vp->v_size, vp->v_writesize);
-
-	(*pr)("data %p writecount %ld holdcnt %ld\n",
-	      vp->v_data, vp->v_writecount, vp->v_holdcnt);
-
-	(*pr)("tag %s(%d) type %s(%d) mount %p typedata %p\n",
-	      ARRAY_PRINT(vp->v_tag, vnode_tags), vp->v_tag,
-	      ARRAY_PRINT(vp->v_type, vnode_types), vp->v_type,
-	      vp->v_mount, vp->v_mountedhere);
-
-	(*pr)("v_lock %p\n", &vp->v_lock);
-
-	vcache_print(vp, "", pr);
-
+	(*pr)("\n");
+	vprint_common(vp, "", pr);
 	if (full) {
 		struct buf *bp;
 
@@ -1501,6 +1588,29 @@ vfs_vnode_print(struct vnode *vp, int full, void (*pr)(const char *, ...))
 			vfs_buf_print(bp, full, pr);
 		}
 	}
+}
+
+void
+vfs_vnode_lock_print(void *vlock, int full, void (*pr)(const char *, ...))
+{
+	struct mount *mp;
+	vnode_impl_t *vip;
+
+	for (mp = _mountlist_next(NULL); mp; mp = _mountlist_next(mp)) {
+		TAILQ_FOREACH(vip, &mp->mnt_vnodelist, vi_mntvnodes) {
+			if (&vip->vi_lock == vlock ||
+			    VIMPL_TO_VNODE(vip)->v_interlock == vlock)
+				vfs_vnode_print(VIMPL_TO_VNODE(vip), full, pr);
+		}
+	}
+}
+
+void
+vfs_mount_print_all(int full, void (*pr)(const char *, ...))
+{
+	struct mount *mp;
+	for (mp = _mountlist_next(NULL); mp; mp = _mountlist_next(mp))
+		vfs_mount_print(mp, full, pr);
 }
 
 void
@@ -1520,8 +1630,7 @@ vfs_mount_print(struct mount *mp, int full, void (*pr)(const char *, ...))
 	snprintb(sbuf, sizeof(sbuf), __IMNT_FLAG_BITS, mp->mnt_iflag);
 	(*pr)("iflag = %s\n", sbuf);
 
-	(*pr)("refcnt = %d unmounting @ %p updating @ %p\n", mp->mnt_refcnt,
-	    &mp->mnt_unmounting, &mp->mnt_updating);
+	(*pr)("refcnt = %d updating @ %p\n", mp->mnt_refcnt, mp->mnt_updating);
 
 	(*pr)("statvfs cache:\n");
 	(*pr)("\tbsize = %lu\n",mp->mnt_stat.f_bsize);
@@ -1558,9 +1667,11 @@ vfs_mount_print(struct mount *mp, int full, void (*pr)(const char *, ...))
 
 	{
 		int cnt = 0;
-		struct vnode *vp;
+		vnode_t *vp;
+		vnode_impl_t *vip;
 		(*pr)("locked vnodes =");
-		TAILQ_FOREACH(vp, &mp->mnt_vnodelist, v_mntvnodes) {
+		TAILQ_FOREACH(vip, &mp->mnt_vnodelist, vi_mntvnodes) {
+			vp = VIMPL_TO_VNODE(vip);
 			if (VOP_ISLOCKED(vp)) {
 				if ((++cnt % 6) == 0) {
 					(*pr)(" %p,\n\t", vp);
@@ -1574,10 +1685,12 @@ vfs_mount_print(struct mount *mp, int full, void (*pr)(const char *, ...))
 
 	if (full) {
 		int cnt = 0;
-		struct vnode *vp;
+		vnode_t *vp;
+		vnode_impl_t *vip;
 		(*pr)("all vnodes =");
-		TAILQ_FOREACH(vp, &mp->mnt_vnodelist, v_mntvnodes) {
-			if (!TAILQ_NEXT(vp, v_mntvnodes)) {
+		TAILQ_FOREACH(vip, &mp->mnt_vnodelist, vi_mntvnodes) {
+			vp = VIMPL_TO_VNODE(vip);
+			if (!TAILQ_NEXT(vip, vi_mntvnodes)) {
 				(*pr)(" %p", vp);
 			} else if ((++cnt % 6) == 0) {
 				(*pr)(" %p,\n\t", vp);
@@ -1585,7 +1698,7 @@ vfs_mount_print(struct mount *mp, int full, void (*pr)(const char *, ...))
 				(*pr)(" %p,", vp);
 			}
 		}
-		(*pr)("\n", vp);
+		(*pr)("\n");
 	}
 }
 
@@ -1597,23 +1710,18 @@ void printlockedvnodes(void);
 void
 printlockedvnodes(void)
 {
-	struct mount *mp, *nmp;
-	struct vnode *vp;
+	struct mount *mp;
+	vnode_t *vp;
+	vnode_impl_t *vip;
 
 	printf("Locked vnodes\n");
-	mutex_enter(&mountlist_lock);
-	for (mp = TAILQ_FIRST(&mountlist); mp != NULL; mp = nmp) {
-		if (vfs_busy(mp, &nmp)) {
-			continue;
-		}
-		TAILQ_FOREACH(vp, &mp->mnt_vnodelist, v_mntvnodes) {
+	for (mp = _mountlist_next(NULL); mp; mp = _mountlist_next(mp)) {
+		TAILQ_FOREACH(vip, &mp->mnt_vnodelist, vi_mntvnodes) {
+			vp = VIMPL_TO_VNODE(vip);
 			if (VOP_ISLOCKED(vp))
 				vprint(NULL, vp);
 		}
-		mutex_enter(&mountlist_lock);
-		vfs_unbusy(mp, false, &nmp);
 	}
-	mutex_exit(&mountlist_lock);
 }
 
 #endif /* DDB || DEBUGPRINT */

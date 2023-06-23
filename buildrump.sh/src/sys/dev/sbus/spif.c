@@ -1,4 +1,4 @@
-/*	$NetBSD: spif.c,v 1.31 2014/07/25 08:10:38 dholland Exp $	*/
+/*	$NetBSD: spif.c,v 1.34 2021/08/07 16:19:15 thorpej Exp $	*/
 /*	$OpenBSD: spif.c,v 1.12 2003/10/03 16:44:51 miod Exp $	*/
 
 /*
@@ -41,7 +41,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spif.c,v 1.31 2014/07/25 08:10:38 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spif.c,v 1.34 2021/08/07 16:19:15 thorpej Exp $");
 
 #include "spif.h"
 #if NSPIF > 0
@@ -278,8 +278,8 @@ spif_attach(device_t parent, device_t self, void *aux)
 	printf(": rev %x chiprev %x osc %sMHz\n",
 	    sc->sc_rev, sc->sc_rev2, clockfreq(sc->sc_osc));
 
-	(void)config_found(self, stty_match, NULL);
-	(void)config_found(self, sbpp_match, NULL);
+	(void)config_found(self, stty_match, NULL, CFARGS_NONE);
+	(void)config_found(self, sbpp_match, NULL, CFARGS_NONE);
 
 	return;
 
@@ -320,10 +320,7 @@ stty_attach(device_t parent, device_t dev, void *aux)
 		sp->sp_sc = sc;
 		sp->sp_channel = port;
 
-		sp->sp_rbuf = malloc(STTY_RBUF_SIZE, M_DEVBUF, M_NOWAIT);
-		if(sp->sp_rbuf == NULL)
-			break;
-
+		sp->sp_rbuf = malloc(STTY_RBUF_SIZE, M_DEVBUF, M_WAITOK);
 		sp->sp_rend = sp->sp_rbuf + STTY_RBUF_SIZE;
 	}
 

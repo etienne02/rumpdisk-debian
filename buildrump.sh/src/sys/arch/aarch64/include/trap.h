@@ -1,8 +1,3 @@
-#ifdef __aarch64__
+/*	$NetBSD: trap.h,v 1.3 2020/05/10 11:04:09 skrll Exp $	*/
 
-#elif defined(__arm__)
-
-#include <arm/asm.h>
-
-#endif
-
+/* This file is intentionally empty */

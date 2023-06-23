@@ -1,4 +1,4 @@
-/*	$NetBSD: lan9118.c,v 1.22 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: lan9118.c,v 1.36 2020/01/29 14:53:40 thorpej Exp $	*/
 /*
  * Copyright (c) 2008 KIYOHARA Takashi
  * All rights reserved.
@@ -25,7 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lan9118.c,v 1.22 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lan9118.c,v 1.36 2020/01/29 14:53:40 thorpej Exp $");
 
 /*
  * The LAN9118 Family
@@ -73,11 +73,11 @@ __KERNEL_RCSID(0, "$NetBSD: lan9118.c,v 1.22 2016/06/10 13:27:13 ozaki-r Exp $")
 
 #ifdef SMSH_DEBUG
 #define DPRINTF(x)	if (smsh_debug) printf x
-#define DPRINTFN(n,x)	if (smsh_debug >= (n)) printf x
+#define DPRINTFN(n, x)	if (smsh_debug >= (n)) printf x
 int smsh_debug = SMSH_DEBUG;
 #else
 #define DPRINTF(x)
-#define DPRINTFN(n,x)
+#define DPRINTFN(n, x)
 #endif
 
 
@@ -90,12 +90,12 @@ static void lan9118_watchdog(struct ifnet *);
 static int lan9118_ifm_change(struct ifnet *);
 static void lan9118_ifm_status(struct ifnet *, struct ifmediareq *);
 
-static int lan9118_miibus_readreg(device_t, int, int);
-static void lan9118_miibus_writereg(device_t, int, int, int);
+static int lan9118_miibus_readreg(device_t, int, int, uint16_t *);
+static int lan9118_miibus_writereg(device_t, int, int, uint16_t);
 static void lan9118_miibus_statchg(struct ifnet *);
 
-static uint16_t lan9118_mii_readreg(struct lan9118_softc *, int, int);
-static void lan9118_mii_writereg(struct lan9118_softc *, int, int, uint16_t);
+static int lan9118_mii_readreg(struct lan9118_softc *, int, int, uint16_t *);
+static int lan9118_mii_writereg(struct lan9118_softc *, int, int, uint16_t);
 static uint32_t lan9118_mac_readreg(struct lan9118_softc *, int);
 static void lan9118_mac_writereg(struct lan9118_softc *, int, uint32_t);
 
@@ -156,7 +156,8 @@ int
 lan9118_attach(struct lan9118_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ec.ec_if;
-	uint32_t val;
+	struct mii_data *mii = &sc->sc_mii;
+	uint32_t val, irq_cfg;
 	int timo, i;
 
 	if (sc->sc_flags & LAN9118_FLAGS_SWAP)
@@ -206,6 +207,14 @@ lan9118_attach(struct lan9118_softc *sc)
 	aprint_normal_dev(sc->sc_dev, "MAC address %s\n",
 	    ether_sprintf(sc->sc_enaddr));
 
+	/* Set IRQ config */
+	irq_cfg = 0;
+	if (sc->sc_flags & LAN9118_FLAGS_IRQ_ACTHI)
+		irq_cfg |= LAN9118_IRQ_CFG_IRQ_POL;
+	if (sc->sc_flags & LAN9118_FLAGS_IRQ_PP)
+		irq_cfg |= LAN9118_IRQ_CFG_IRQ_TYPE;
+	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_IRQ_CFG, irq_cfg);
+
 	KASSERT(LAN9118_TX_FIF_SZ >= 2 && LAN9118_TX_FIF_SZ < 15);
 	sc->sc_afc_cfg = afc_cfg[LAN9118_TX_FIF_SZ];
 
@@ -224,18 +233,19 @@ lan9118_attach(struct lan9118_softc *sc)
 	sc->sc_ec.ec_capabilities |= ETHERCAP_VLAN_MTU;
 #endif
 
-	ifmedia_init(&sc->sc_mii.mii_media, 0,
+	sc->sc_ec.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, 0,
 	    lan9118_ifm_change, lan9118_ifm_status);
-	sc->sc_mii.mii_ifp = ifp;
-	sc->sc_mii.mii_readreg = lan9118_miibus_readreg;
-	sc->sc_mii.mii_writereg = lan9118_miibus_writereg;
-	sc->sc_mii.mii_statchg = lan9118_miibus_statchg;
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = lan9118_miibus_readreg;
+	mii->mii_writereg = lan9118_miibus_writereg;
+	mii->mii_statchg = lan9118_miibus_statchg;
 
 	/*
 	 * Number of instance of Internal PHY is always 0.  External PHY
 	 * number that above.
 	 */
-	mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff, 1, MII_OFFSET_ANY, 0);
+	mii_attach(sc->sc_dev, mii, 0xffffffff, 1, MII_OFFSET_ANY, 0);
 
 	if (sc->sc_id == LAN9118_ID_9115 || sc->sc_id == LAN9118_ID_9117 ||
 	    sc->sc_id == LAN9218_ID_9215 || sc->sc_id == LAN9218_ID_9217) {
@@ -262,18 +272,19 @@ lan9118_attach(struct lan9118_softc *sc)
 			delay(1);	/* Once wait more 5 cycle */
 
 			/* Call mii_attach, avoid at phy1. */
-			mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff,
+			mii_attach(sc->sc_dev, mii, 0xffffffff,
 			    0, MII_OFFSET_ANY, 0);
 			for (i = 2; i < MII_NPHY; i++)
-				mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff,
+				mii_attach(sc->sc_dev, mii, 0xffffffff,
 				    i, MII_OFFSET_ANY, 0);
 		}
 	}
 
-	ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER | IFM_AUTO);
+	ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, sc->sc_enaddr);
 
 	callout_init(&sc->sc_tick, 0);
@@ -297,7 +308,8 @@ lan9118_intr(void *arg)
 		bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_STS,
 		    int_sts);
 		int_en =
-		    bus_space_read_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_EN);
+		    bus_space_read_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_EN) |
+		    LAN9118_INT_SW_INT;
 
 		DPRINTFN(3, ("%s: int_sts=0x%x, int_en=0x%x\n",
 		    __func__, int_sts, int_en));
@@ -305,6 +317,7 @@ lan9118_intr(void *arg)
 		if (!(int_sts & int_en))
 			break;
 		datum = int_sts;
+		handled = 1;
 
 #if 0	/* not yet... */
 		if (int_sts & LAN9118_INT_PHY_INT) { /* PHY */
@@ -315,25 +328,25 @@ lan9118_intr(void *arg)
 		}
 #endif
 		if (int_sts & LAN9118_INT_RXE) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			aprint_error_ifnet(ifp, "Receive Error\n");
 		}
-		if (int_sts & LAN9118_INT_TSFL) /* TX Status FIFO Level */
+		if (int_sts & (LAN9118_INT_TSFL|LAN9118_INT_SW_INT)) /* TX Status FIFO Level */
 			lan9118_txintr(sc);
 		if (int_sts & LAN9118_INT_RXDF_INT) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			aprint_error_ifnet(ifp, "RX Dropped Frame Interrupt\n");
 		}
 		if (int_sts & LAN9118_INT_RSFF) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			aprint_error_ifnet(ifp, "RX Status FIFO Full\n");
 		}
 		if (int_sts & LAN9118_INT_RSFL) /* RX Status FIFO Level */
-			 lan9118_rxintr(sc);
+			lan9118_rxintr(sc);
 	}
 
-	if (!IFQ_IS_EMPTY(&ifp->if_snd))
-		lan9118_start(ifp);
+	if (handled)
+		if_schedule_deferred_start(ifp);
 
 	rnd_add_uint32(&sc->rnd_source, datum);
 
@@ -347,7 +360,7 @@ lan9118_start(struct ifnet *ifp)
 	struct lan9118_softc *sc = ifp->if_softc;
 	struct mbuf *m0, *m;
 	unsigned tdfree, totlen, dso;
-	uint32_t txa, txb;
+	uint32_t txa, txb, int_en;
 	uint8_t *p;
 	int n;
 
@@ -390,7 +403,7 @@ lan9118_start(struct ifnet *ifp)
 				/* Copy mbuf chain. */
 				MGETHDR(m, M_DONTWAIT, MT_DATA);
 				if (m == NULL)
-					goto discard;   /* discard packet */
+					goto discard;	/* discard packet */
 				MCLGET(m, M_DONTWAIT);
 				if ((m->m_flags & M_EXT) == 0) {
 					m_freem(m);
@@ -445,20 +458,30 @@ discard:
 		/*
 		 * Pass the packet to any BPF listeners.
 		 */
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		m_freem(m0);
 	}
-	if (totlen > 0)
+
+	if (totlen > 0) {
 		ifp->if_timer = 5;
+
+		/*
+		 * Trigger a software interrupt to catch any missed completion
+		 * interrupts.
+		 */
+		int_en = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
+		    LAN9118_INT_EN);
+		int_en |= LAN9118_INT_SW_INT;
+		bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_EN,
+		    int_en);
+	}
 }
 
 static int
 lan9118_ioctl(struct ifnet *ifp, u_long command, void *data)
 {
 	struct lan9118_softc *sc = ifp->if_softc;
-	struct ifreq *ifr = data;
-	struct mii_data *mii = &sc->sc_mii;
 	int s, error = 0;
 
 	s = splnet();
@@ -468,26 +491,20 @@ lan9118_ioctl(struct ifnet *ifp, u_long command, void *data)
 		DPRINTFN(2, ("%s: IFFLAGS\n", __func__));
 		if ((error = ifioctl_common(ifp, command, data)) != 0)
 			break;
-		switch (ifp->if_flags & (IFF_UP|IFF_RUNNING)) {
+		switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 		case IFF_RUNNING:
 			lan9118_stop(ifp, 0);
 			break;
 		case IFF_UP:
 			lan9118_init(ifp);
 			break;
-		case IFF_UP|IFF_RUNNING:
+		case IFF_UP | IFF_RUNNING:
 			lan9118_set_filter(sc);
 			break;
 		default:
 			break;
 		}
 		error = 0;
-		break;
-
-	case SIOCGIFMEDIA:
-	case SIOCSIFMEDIA:
-		DPRINTFN(2, ("%s: MEDIA\n", __func__));
-		error = ifmedia_ioctl(ifp, ifr, &mii->mii_media, command);
 		break;
 
 	default:
@@ -514,7 +531,7 @@ lan9118_init(struct ifnet *ifp)
 {
 	struct lan9118_softc *sc = ifp->if_softc;
 	struct ifmedia *ifm = &sc->sc_mii.mii_media;
-	uint32_t reg, hw_cfg, mac_cr;
+	uint32_t reg, hw_cfg, mac_cr, irq_cfg;
 	int timo, s;
 
 	DPRINTFN(2, ("%s\n", __func__));
@@ -581,15 +598,17 @@ lan9118_init(struct ifnet *ifp)
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_HW_CFG, hw_cfg);
 
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_GPIO_CFG,
-	    LAN9118_GPIO_CFG_LEDX_EN(2)  |
-	    LAN9118_GPIO_CFG_LEDX_EN(1)  |
-	    LAN9118_GPIO_CFG_LEDX_EN(0)  |
+	    LAN9118_GPIO_CFG_LEDX_EN(2)	 |
+	    LAN9118_GPIO_CFG_LEDX_EN(1)	 |
+	    LAN9118_GPIO_CFG_LEDX_EN(0)	 |
 	    LAN9118_GPIO_CFG_GPIOBUFN(2) |
 	    LAN9118_GPIO_CFG_GPIOBUFN(1) |
 	    LAN9118_GPIO_CFG_GPIOBUFN(0));
 
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_IRQ_CFG,
-	    LAN9118_IRQ_CFG_IRQ_EN);
+	irq_cfg = bus_space_read_4(sc->sc_iot, sc->sc_ioh, LAN9118_IRQ_CFG);
+	irq_cfg |= LAN9118_IRQ_CFG_IRQ_EN;
+	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_IRQ_CFG, irq_cfg);
+
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_STS,
 	    bus_space_read_4(sc->sc_iot, sc->sc_ioh, LAN9118_INT_STS));
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_FIFO_INT,
@@ -599,10 +618,10 @@ lan9118_init(struct ifnet *ifp)
 	    LAN9118_INT_PHY_INT | /* PHY */
 	    LAN9118_INT_PME_INT | /* Power Management Event */
 #endif
-	    LAN9118_INT_RXE     | /* Receive Error */
-	    LAN9118_INT_TSFL    | /* TX Status FIFO Level */
+	    LAN9118_INT_RXE	| /* Receive Error */
+	    LAN9118_INT_TSFL	| /* TX Status FIFO Level */
 	    LAN9118_INT_RXDF_INT| /* RX Dropped Frame Interrupt */
-	    LAN9118_INT_RSFF    | /* RX Status FIFO Full */
+	    LAN9118_INT_RSFF	| /* RX Status FIFO Full */
 	    LAN9118_INT_RSFL);	  /* RX Status FIFO Level */
 
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LAN9118_RX_CFG,
@@ -672,7 +691,7 @@ lan9118_watchdog(struct ifnet *ifp)
 	lan9118_txintr(sc);
 
 	aprint_error_ifnet(ifp, "watchdog timeout\n");
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	lan9118_init(ifp);
 }
@@ -741,16 +760,16 @@ lan9118_ifm_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 
 
 static int
-lan9118_miibus_readreg(device_t dev, int phy, int reg)
+lan9118_miibus_readreg(device_t dev, int phy, int reg, uint16_t *val)
 {
 
-	return lan9118_mii_readreg(device_private(dev), phy, reg);
+	return lan9118_mii_readreg(device_private(dev), phy, reg, val);
 }
-static void
-lan9118_miibus_writereg(device_t dev, int phy, int reg, int val)
+static int
+lan9118_miibus_writereg(device_t dev, int phy, int reg, uint16_t val)
 {
 
-	lan9118_mii_writereg(device_private(dev), phy, reg, val);
+	return lan9118_mii_writereg(device_private(dev), phy, reg, val);
 }
 
 static void
@@ -771,8 +790,8 @@ lan9118_miibus_statchg(struct ifnet *ifp)
 }
 
 
-static uint16_t
-lan9118_mii_readreg(struct lan9118_softc *sc, int phy, int reg)
+static int
+lan9118_mii_readreg(struct lan9118_softc *sc, int phy, int reg, uint16_t *val)
 {
 	uint32_t acc;
 
@@ -782,10 +801,11 @@ lan9118_mii_readreg(struct lan9118_softc *sc, int phy, int reg)
 	lan9118_mac_writereg(sc, LAN9118_MII_ACC, acc);
 	while (lan9118_mac_readreg(sc, LAN9118_MII_ACC) &
 	    LAN9118_MII_ACC_MIIBZY);
-	return lan9118_mac_readreg(sc, LAN9118_MII_DATA);
+	*val = lan9118_mac_readreg(sc, LAN9118_MII_DATA) & 0xffff;
+	return 0;
 }
 
-static void
+static int
 lan9118_mii_writereg(struct lan9118_softc *sc, int phy, int reg, uint16_t val)
 {
 	uint32_t acc;
@@ -798,6 +818,8 @@ lan9118_mii_writereg(struct lan9118_softc *sc, int phy, int reg, uint16_t val)
 	lan9118_mac_writereg(sc, LAN9118_MII_ACC, acc);
 	while (lan9118_mac_readreg(sc, LAN9118_MII_ACC) &
 	    LAN9118_MII_ACC_MIIBZY);
+
+	return 0;
 }
 
 static uint32_t
@@ -844,9 +866,10 @@ lan9118_mac_writereg(struct lan9118_softc *sc, int reg, uint32_t val)
 static void
 lan9118_set_filter(struct lan9118_softc *sc)
 {
+	struct ethercom *ec = &sc->sc_ec;
 	struct ether_multistep step;
 	struct ether_multi *enm;
-	struct ifnet *ifp = &sc->sc_ec.ec_if;
+	struct ifnet *ifp = &ec->ec_if;
 	uint32_t mac_cr, h, hashes[2] = { 0, 0 };
 
 	mac_cr = lan9118_mac_readreg(sc, LAN9118_MAC_CR);
@@ -864,7 +887,8 @@ lan9118_set_filter(struct lan9118_softc *sc)
 	if (ifp->if_flags & IFF_ALLMULTI)
 		mac_cr |= LAN9118_MAC_CR_MCPAS;
 	else {
-		ETHER_FIRST_MULTI(step, &sc->sc_ec, enm);
+		ETHER_LOCK(ec);
+		ETHER_FIRST_MULTI(step, ec, enm);
 		while (enm != NULL) {
 			if (memcmp(enm->enm_addrlo, enm->enm_addrhi,
 			    ETHER_ADDR_LEN) != 0) {
@@ -889,6 +913,7 @@ lan9118_set_filter(struct lan9118_softc *sc)
 			mac_cr |= LAN9118_MAC_CR_HPFILT;
 			ETHER_NEXT_MULTI(step, enm);
 		}
+		ETHER_UNLOCK(ec);
 		if (mac_cr & LAN9118_MAC_CR_HPFILT) {
 			lan9118_mac_writereg(sc, LAN9118_HASHH, hashes[1]);
 			lan9118_mac_writereg(sc, LAN9118_HASHL, hashes[0]);
@@ -943,7 +968,7 @@ lan9118_rxintr(struct lan9118_softc *sc)
 				aprint_error_dev(sc->sc_dev, "CRC Error\n");
 
 dropit:
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			/*
 			 * Receive Data FIFO Fast Forward
 			 * When performing a fast-forward, there must be at
@@ -991,15 +1016,8 @@ dropit:
 		    roundup(pad + pktlen, sizeof(uint32_t)) >> 2);
 		m->m_data += pad;
 
-		ifp->if_ipackets++;
 		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = (pktlen - ETHER_CRC_LEN);
-
-		/*
-		 * Pass this up to any BPF listeners, but only
-		 * pass if up the stack if it's for us.
-		 */
-		bpf_mtap(ifp, m);
 
 		/* Pass it on. */
 		if_percpuq_enqueue(ifp->if_percpuq, m);
@@ -1036,7 +1054,7 @@ lan9118_txintr(struct lan9118_softc *sc)
 				    "Late Collision\n");
 			if (tx_status & LAN9118_TXS_ECOL) {
 				/* Rearch 16 collision */
-				ifp->if_collisions += 16;
+				if_statadd(ifp, if_collisions, 16);
 				aprint_error_dev(sc->sc_dev,
 				    "Excessive Collision\n");
 			}
@@ -1049,9 +1067,9 @@ lan9118_txintr(struct lan9118_softc *sc)
 				    "Excessive Deferral\n");
 			if (tx_status & LAN9118_TXS_DEFERRED)
 				aprint_error_dev(sc->sc_dev, "Deferred\n");
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 		} else
-			ifp->if_opackets++;
+			if_statinc(ifp, if_opackets);
 	}
 
 	tdfree = LAN9118_TX_FIFO_INF_TDFREE(tx_fifo_inf);

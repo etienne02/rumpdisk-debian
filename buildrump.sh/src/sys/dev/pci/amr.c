@@ -1,4 +1,4 @@
-/*	$NetBSD: amr.c,v 1.61 2016/07/14 04:19:27 msaitoh Exp $	*/
+/*	$NetBSD: amr.c,v 1.67 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2003 The NetBSD Foundation, Inc.
@@ -64,7 +64,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amr.c,v 1.61 2016/07/14 04:19:27 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: amr.c,v 1.67 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -79,6 +79,7 @@ __KERNEL_RCSID(0, "$NetBSD: amr.c,v 1.61 2016/07/14 04:19:27 msaitoh Exp $");
 #include <sys/kauth.h>
 #include <sys/mutex.h>
 #include <sys/condvar.h>
+#include <sys/module.h>
 
 #include <machine/endian.h>
 #include <sys/bus.h>
@@ -91,6 +92,8 @@ __KERNEL_RCSID(0, "$NetBSD: amr.c,v 1.61 2016/07/14 04:19:27 msaitoh Exp $");
 
 #include "locators.h"
 
+#include "ioconf.h"
+
 static void	amr_attach(device_t, device_t, void *);
 static void	amr_ccb_dump(struct amr_softc *, struct amr_ccb *);
 static void	*amr_enquire(struct amr_softc *, u_int8_t, u_int8_t, u_int8_t,
@@ -99,6 +102,7 @@ static int	amr_init(struct amr_softc *, const char *,
 			 struct pci_attach_args *pa);
 static int	amr_intr(void *);
 static int	amr_match(device_t, cfdata_t, void *);
+static int	amr_rescan(device_t, const char *, const int *);
 static int	amr_print(void *, const char *);
 static void	amr_shutdown(void *);
 static void	amr_teardown(struct amr_softc *);
@@ -115,8 +119,8 @@ static dev_type_open(amropen);
 static dev_type_close(amrclose);
 static dev_type_ioctl(amrioctl);
 
-CFATTACH_DECL_NEW(amr, sizeof(struct amr_softc),
-    amr_match, amr_attach, NULL, NULL);
+CFATTACH_DECL3_NEW(amr, sizeof(struct amr_softc),
+    amr_match, amr_attach, NULL, NULL, amr_rescan, NULL, 0);
 
 const struct cdevsw amr_cdevsw = {
 	.d_open = amropen,
@@ -268,16 +272,14 @@ static void
 amr_attach(device_t parent, device_t self, void *aux)
 {
 	struct pci_attach_args *pa;
-	struct amr_attach_args amra;
 	const struct amr_pci_type *apt;
 	struct amr_softc *amr;
 	pci_chipset_tag_t pc;
 	pci_intr_handle_t ih;
 	const char *intrstr;
 	pcireg_t reg;
-	int rseg, i, j, size, rv, memreg, ioreg;
+	int rseg, i, size, rv, memreg, ioreg;
 	struct amr_ccb *ac;
-	int locs[AMRCF_NLOCS];
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	aprint_naive(": RAID controller\n");
@@ -339,7 +341,8 @@ amr_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	amr->amr_ih = pci_intr_establish(pc, ih, IPL_BIO, amr_intr, amr);
+	amr->amr_ih = pci_intr_establish_xname(pc, ih, IPL_BIO, amr_intr, amr,
+	    device_xname(self));
 	if (amr->amr_ih == NULL) {
 		aprint_error("can't establish interrupt");
 		if (intrstr != NULL)
@@ -409,14 +412,14 @@ amr_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Allocate and initalise the command control blocks.
 	 */
-	ac = malloc(sizeof(*ac) * AMR_MAX_CMDS, M_DEVBUF, M_NOWAIT | M_ZERO);
+	ac = malloc(sizeof(*ac) * AMR_MAX_CMDS, M_DEVBUF, M_WAITOK | M_ZERO);
 	amr->amr_ccbs = ac;
 	SLIST_INIT(&amr->amr_ccb_freelist);
 	TAILQ_INIT(&amr->amr_ccb_active);
 	amr->amr_flags |= AMRF_CCBS;
 
 	if (amr_max_xfer == 0) {
-		amr_max_xfer = min(((AMR_MAX_SEGS - 1) * PAGE_SIZE), MAXPHYS);
+		amr_max_xfer = uimin(((AMR_MAX_SEGS - 1) * PAGE_SIZE), MAXPHYS);
 		amr_max_segs = (amr_max_xfer + (PAGE_SIZE * 2) - 1) / PAGE_SIZE;
 	}
 
@@ -461,7 +464,7 @@ amr_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Retrieve parameters, and tell the world about us.
 	 */
-	amr->amr_enqbuf = malloc(AMR_ENQUIRY_BUFSIZE, M_DEVBUF, M_NOWAIT);
+	amr->amr_enqbuf = malloc(AMR_ENQUIRY_BUFSIZE, M_DEVBUF, M_WAITOK);
 	amr->amr_flags |= AMRF_ENQBUF;
 	amr->amr_maxqueuecnt = i;
 	aprint_normal(": AMI RAID ");
@@ -475,7 +478,7 @@ amr_attach(device_t parent, device_t self, void *aux)
 	 * driver doesn't trust the controller's reported value, and lockups
 	 * have been seen when we do.
 	 */
-	amr->amr_maxqueuecnt = min(amr->amr_maxqueuecnt, AMR_MAX_CMDS);
+	amr->amr_maxqueuecnt = uimin(amr->amr_maxqueuecnt, AMR_MAX_CMDS);
 	if (amr->amr_maxqueuecnt > i)
 		amr->amr_maxqueuecnt = i;
 
@@ -484,16 +487,7 @@ amr_attach(device_t parent, device_t self, void *aux)
 		amr_sdh = shutdownhook_establish(amr_shutdown, NULL);
 
 	/* Attach sub-devices. */
-	for (j = 0; j < amr->amr_numdrives; j++) {
-		if (amr->amr_drive[j].al_size == 0)
-			continue;
-		amra.amra_unit = j;
-
-		locs[AMRCF_UNIT] = j;
-
-		amr->amr_drive[j].al_dv = config_found_sm_loc(amr->amr_dv,
-			"amr", locs, &amra, amr_print, config_stdsubmatch);
-	}
+	amr_rescan(self, NULL, NULL);
 
 	SIMPLEQ_INIT(&amr->amr_ccb_queue);
 
@@ -514,6 +508,33 @@ amr_attach(device_t parent, device_t self, void *aux)
  		    rv);
  	else
  		amr->amr_flags |= AMRF_THREAD;
+}
+
+static int
+amr_rescan(device_t self, const char *ifattr, const int *ulocs)
+{
+	int j;
+	int locs[AMRCF_NLOCS];
+	struct amr_attach_args amra;
+	struct amr_softc *amr;
+
+	amr = device_private(self);
+	for (j = 0; j < amr->amr_numdrives; j++) {
+		if (amr->amr_drive[j].al_dv)
+			continue;
+		if (amr->amr_drive[j].al_size == 0)
+			continue;
+		amra.amra_unit = j;
+
+		locs[AMRCF_UNIT] = j;
+
+		amr->amr_drive[j].al_dv =
+		    config_found(amr->amr_dv, &amra, amr_print,
+				 CFARGS(.submatch = config_stdsubmatch,
+					.iattr = ifattr,
+					.locators = locs));
+	}
+	return 0;
 }
 
 /*
@@ -1534,4 +1555,34 @@ amrioctl(dev_t dev, u_long cmd, void *data, int flag,
 out:
 	free(dp, M_DEVBUF);
 	return (error);
+}
+
+MODULE(MODULE_CLASS_DRIVER, amr, "pci");
+
+#ifdef _MODULE
+#include "ioconf.c"
+#endif
+
+static int
+amr_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_init_component(cfdriver_ioconf_amr,
+		    cfattach_ioconf_amr, cfdata_ioconf_amr);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_fini_component(cfdriver_ioconf_amr,
+		    cfattach_ioconf_amr, cfdata_ioconf_amr);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+
+	return error;
 }

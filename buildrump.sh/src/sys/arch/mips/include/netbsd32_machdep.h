@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_machdep.h,v 1.4 2015/05/17 18:52:37 matt Exp $	*/
+/*	$NetBSD: netbsd32_machdep.h,v 1.7 2021/05/23 23:24:45 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #ifndef _MACHINE_NETBSD32_H_
-#define _MACHINE_NETBSD32_H_
+#define	_MACHINE_NETBSD32_H_
 
 #include <sys/types.h>
 
@@ -40,9 +40,21 @@
 #define	NETBSD32_POINTER_TYPE			int32_t
 typedef struct { NETBSD32_POINTER_TYPE i32; }	netbsd32_pointer_t;
 
-#define NETBSD32_INT64_ALIGN
+#define	NETBSD32_INT64_ALIGN
 
 typedef netbsd32_pointer_t			netbsd32_sigcontextp_t;
+
+/* Support varying ABI names for netbsd32/ABI */
+extern const char machine_archo32[];
+#if defined(__mips_n64)
+extern const char machine_archn32[];
+#define	PROC_MACHINE_ARCH32(P)	((P)->p_md.md_abi == _MIPS_BSD_API_O32) ? \
+	__UNCONST(machine_archo32) : ((P)->p_md.md_abi == _MIPS_BSD_API_N32) ? \
+	__UNCONST(machine_archn32) : machine_arch
+#else
+#define	PROC_MACHINE_ARCH32(P)	((P)->p_md.md_abi == _MIPS_BSD_API_O32) ? \
+	__UNCONST(machine_archo32) : machine_arch
+#endif
 
 /*
  * The sigcode is ABI neutral.
@@ -68,7 +80,5 @@ struct mips_cachectl_args32 {
 	netbsd32_size_t nbytes;
 	int ctl;
 };
-
-int cpu_machinearch32(SYSCTLFN_PROTO);
 
 #endif /* _MACHINE_NETBSD32_H_ */

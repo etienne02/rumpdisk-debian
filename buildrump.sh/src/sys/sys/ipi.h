@@ -1,4 +1,4 @@
-/*	$NetBSD: ipi.h,v 1.3 2015/01/18 23:16:35 rmind Exp $	*/
+/*	$NetBSD: ipi.h,v 1.5 2020/09/08 16:00:35 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -60,6 +60,7 @@ typedef struct {
 #define	IPI_BITWORDS	(IPI_MAXREG >> IPI_BITW_SHIFT)
 
 void	ipi_sysinit(void);
+void	ipi_percpu_init(void);
 void	ipi_cpu_handler(void);
 void	cpu_ipi(struct cpu_info *);
 
@@ -68,11 +69,12 @@ u_int	ipi_register(ipi_func_t, void *);
 void	ipi_unregister(u_int);
 void	ipi_trigger(u_int, struct cpu_info *);
 void	ipi_trigger_multi(u_int, const kcpuset_t *);
+void	ipi_trigger_broadcast(u_int, bool);
 
 /* Public interface: synchronous IPIs. */
 void	ipi_unicast(ipi_msg_t *, struct cpu_info *);
 void	ipi_multicast(ipi_msg_t *, const kcpuset_t *);
-void	ipi_broadcast(ipi_msg_t *);
+void	ipi_broadcast(ipi_msg_t *, bool);
 void	ipi_wait(ipi_msg_t *);
 
 #endif

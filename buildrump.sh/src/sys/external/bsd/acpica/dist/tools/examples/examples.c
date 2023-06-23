@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -104,9 +104,6 @@ RegionInit (
 static void
 ExecuteMAIN (void);
 
-static void
-ExecuteOSI (void);
-
 ACPI_STATUS
 InitializeAcpiTables (
     void);
@@ -155,7 +152,7 @@ main (
     ACPI_EXCEPTION   ((AE_INFO, AE_AML_OPERAND_TYPE,
         "Example ACPICA exception message"));
 
-    ExecuteOSI ();
+    ExecuteOSI (NULL, 0);
     ExecuteMAIN ();
     return (0);
 }
@@ -432,8 +429,10 @@ InstallHandlers (void)
  *
  *****************************************************************************/
 
-static void
-ExecuteOSI (void)
+ACPI_STATUS
+ExecuteOSI (
+    char                    *OsiString,
+    UINT64                  ExpectedResult)
 {
     ACPI_STATUS             Status;
     ACPI_OBJECT_LIST        ArgList;
@@ -461,7 +460,7 @@ ExecuteOSI (void)
     if (ACPI_FAILURE (Status))
     {
         ACPI_EXCEPTION ((AE_INFO, Status, "While executing _OSI"));
-        return;
+        return (AE_OK);
     }
 
     /* Ensure that the return object is large enough */
@@ -469,7 +468,7 @@ ExecuteOSI (void)
     if (ReturnValue.Length < sizeof (ACPI_OBJECT))
     {
         AcpiOsPrintf ("Return value from _OSI method too small, %.8X\n",
-            ReturnValue.Length);
+            (UINT32) ReturnValue.Length);
         goto ErrorExit;
     }
 
@@ -490,6 +489,7 @@ ErrorExit:
     /* Free a buffer created via ACPI_ALLOCATE_BUFFER */
 
     AcpiOsFree (ReturnValue.Pointer);
+    return (AE_OK);
 }
 
 

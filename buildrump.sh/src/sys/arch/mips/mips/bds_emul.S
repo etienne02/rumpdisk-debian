@@ -1,4 +1,4 @@
-/*	$NetBSD: bds_emul.S,v 1.8 2015/06/09 22:50:50 matt Exp $	*/
+/*	$NetBSD: bds_emul.S,v 1.10 2019/04/06 03:06:26 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -101,8 +101,8 @@ bcemul_optbl:
 	PTR_WORD bcemul_sigill			# 030 LDL (*)
 	PTR_WORD bcemul_sigill			# 031 LDR (*)
 #else
-	PTR_WORD _C_LABEL(mips_emul_daddi)	# 030 DADDI (*)
-	PTR_WORD _C_LABEL(mips_emul_daddiu)	# 031 DADDIU (*)
+	PTR_WORD bcemul_daddi			# 030 DADDI (*)
+	PTR_WORD bcemul_daddiu			# 031 DADDIU (*)
 	PTR_WORD _C_LABEL(mips_emul_ldl)	# 032 LDL (*)
 	PTR_WORD _C_LABEL(mips_emul_ldr)	# 033 LDR (*)
 #endif
@@ -191,7 +191,7 @@ bcemul_uimmed_prologue:
 #ifndef __mips_o32
 bcemul_daddi:
 	bal	bcemul_immed_prologue
-	daddiu	t0, v0, v1
+	dadd	t0, v0, v1
 	b	bcemul_check_add_overflow
 #endif
 
@@ -594,7 +594,7 @@ bcemul_done:
 	REG_PROLOGUE
 	REG_L	a0, TF_REG_EPC(s0)
 	REG_EPILOGUE
-	jal	_C_LABEL(ufetch_uint32)
+	jal	_C_LABEL(mips_ufetch32)
 
 	/* Calculate branch destination */
 	sll	t0, v0, 16

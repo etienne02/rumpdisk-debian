@@ -1,4 +1,4 @@
-/*	$NetBSD: umass_quirks.c,v 1.99 2016/07/01 12:16:35 skrll Exp $	*/
+/*	$NetBSD: umass_quirks.c,v 1.102 2020/06/19 11:52:42 flxd Exp $	*/
 
 /*
  * Copyright (c) 2001, 2004 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: umass_quirks.c,v 1.99 2016/07/01 12:16:35 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: umass_quirks.c,v 1.102 2020/06/19 11:52:42 flxd Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -73,32 +73,6 @@ Static void umass_fixup_sony(struct umass_softc *);
  * - mycroft
  */
 Static const struct umass_quirk umass_quirks[] = {
-	/*
-	 * The following 3 In-System Design adapters use a non-standard ATA
-	 * over BBB protocol.  Force this protocol by quirk entries.
-	 */
-	{ { USB_VENDOR_INSYSTEM, USB_PRODUCT_INSYSTEM_ADAPTERV2 },
-	  UMASS_WPROTO_BBB, UMASS_CPROTO_ISD_ATA,
-	  0,
-	  0,
-	  UMATCH_VENDOR_PRODUCT,
-	  NULL, NULL
-	},
-	{ { USB_VENDOR_INSYSTEM, USB_PRODUCT_INSYSTEM_ATAPI },
-	  UMASS_WPROTO_BBB, UMASS_CPROTO_ISD_ATA,
-	  0,
-	  0,
-	  UMATCH_VENDOR_PRODUCT,
-	  NULL, NULL
-	},
-	{ { USB_VENDOR_INSYSTEM, USB_PRODUCT_INSYSTEM_DRIVEV2_5 },
-	  UMASS_WPROTO_BBB, UMASS_CPROTO_ISD_ATA,
-	  0,
-	  0,
-	  UMATCH_VENDOR_PRODUCT,
-	  NULL, NULL
-	},
-
 	{ { USB_VENDOR_INSYSTEM, USB_PRODUCT_INSYSTEM_USBCABLE },
 	  UMASS_WPROTO_CBI, UMASS_CPROTO_ATAPI,
 	  0,
@@ -356,6 +330,19 @@ Static const struct umass_quirk umass_quirks[] = {
 	  UMATCH_VENDOR_PRODUCT,
 	  NULL, NULL
 	},
+
+	/*
+	 * Fix Alcor multi-card readers in many HP machines (like net-tops).
+	 * FreeBSD applies the no-sync-cache quirk for /all/ Alcor usb devices
+	 * as well as a no-test-unit-ready quirk. Mine works without the latter.
+	 */
+	{ { USB_VENDOR_ALCOR, USB_PRODUCT_ALCOR_AU6366 },
+	  UMASS_WPROTO_UNSPEC, UMASS_CPROTO_UNSPEC,
+	  0,
+	  PQUIRK_NOSYNCCACHE,
+	  UMATCH_VENDOR_PRODUCT,
+	  NULL, NULL
+	},
 };
 
 const struct umass_quirk *
@@ -373,8 +360,8 @@ umass_init_insystem(struct umass_softc *sc)
 
 	err = usbd_set_interface(sc->sc_iface, 1);
 	if (err) {
-		DPRINTFM(UDMASS_USB, "sc %p: could not switch to Alt Interface 1",
-		    sc, 0, 0, 0);
+		DPRINTFM(UDMASS_USB, "sc %#jx: could not switch to Alt "
+		    "Interface 1", (uintptr_t)sc, 0, 0, 0);
 		return err;
 	}
 

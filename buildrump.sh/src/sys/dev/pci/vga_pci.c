@@ -1,4 +1,4 @@
-/*	$NetBSD: vga_pci.c,v 1.55 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: vga_pci.c,v 1.58 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1995, 1996 Carnegie-Mellon University.
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vga_pci.c,v 1.55 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vga_pci.c,v 1.58 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -230,6 +230,16 @@ vga_pci_attach(device_t parent, device_t self, void *aux)
 			    "WARNING: strange BAR @ 0x%02x\n", reg);
 	}
 
+	/*
+	 * Disable INTx interrupts, there is no specific chipset driver for
+	 * this PCI device. Else unhandled display adapter interrupts
+	 * might freeze the CPU.
+	 */
+	pcireg_t cmd  = pci_conf_read(pa->pa_pc, pa->pa_tag,
+	    PCI_COMMAND_STATUS_REG);
+	pci_conf_write(pa->pa_pc, pa->pa_tag, PCI_COMMAND_STATUS_REG,
+	    cmd | PCI_COMMAND_INTERRUPT_DISABLE);
+
 	/* XXX Expansion ROM? */
 
 	vga_common_attach(sc, pa->pa_iot, pa->pa_memt, WSDISPLAY_TYPE_PCIVGA,
@@ -250,7 +260,8 @@ vga_pci_attach(device_t parent, device_t self, void *aux)
 	 */
 	if (!pmf_device_register(self, NULL, vga_pci_resume))
 		aprint_error_dev(self, "couldn't establish power handler\n");
-	config_found_ia(self, "drm", aux, vga_drm_print);
+	config_found(self, aux, vga_drm_print,
+	    CFARGS(.iattr = "drm"));
 }
 
 static int
@@ -258,7 +269,8 @@ vga_pci_rescan(device_t self, const char *ifattr, const int *locators)
 {
 	struct vga_pci_softc *psc = device_private(self);
 
-	config_found_ia(self, "drm", &psc->sc_paa, vga_drm_print);
+	config_found(self, &psc->sc_paa, vga_drm_print,
+	    CFARGS(.iattr = "drm"));
 
 	return 0;
 }

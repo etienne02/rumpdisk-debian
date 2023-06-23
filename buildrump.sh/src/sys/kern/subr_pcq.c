@@ -1,7 +1,7 @@
-/*	$NetBSD: subr_pcq.c,v 1.9 2015/01/08 23:39:57 riastradh Exp $	*/
+/*	$NetBSD: subr_pcq.c,v 1.13 2021/02/08 09:31:05 wiz Exp $	*/
 
 /*-
- * Copyright (c) 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2009, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_pcq.c,v 1.9 2015/01/08 23:39:57 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_pcq.c,v 1.13 2021/02/08 09:31:05 wiz Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -124,7 +124,7 @@ pcq_put(pcq_t *pcq, void *item)
 	/*
 	 * Synchronization activity to wake up the consumer will ensure
 	 * that the update to pcq_items[] is visible before the wakeup
-	 * arrives.  So, we do not need an additonal memory barrier here.
+	 * arrives.  So, we do not need an additional memory barrier here.
 	 */
 	return true;
 }
@@ -148,7 +148,7 @@ pcq_peek(pcq_t *pcq)
 /*
  * pcq_get: remove and return the next item for consumption or NULL if empty.
  *
- * => The caller must prevent concurrent gets from occuring.
+ * => The caller must prevent concurrent gets from occurring.
  */
 void *
 pcq_get(pcq_t *pcq)
@@ -180,7 +180,7 @@ pcq_get(pcq_t *pcq)
 
 	/*
 	 * Ensure that update to pcq_items[] becomes globally visible
-	 * before the update to pcq_pc.  If it were reodered to occur
+	 * before the update to pcq_pc.  If it were reordered to occur
 	 * after it, we could in theory wipe out a modification made
 	 * to pcq_items[] by pcq_put().
 	 */
@@ -201,13 +201,12 @@ pcq_create(size_t nitems, km_flag_t kmflags)
 {
 	pcq_t *pcq;
 
-	KASSERT(nitems > 0 || nitems <= PCQ_MAXLEN);
+	KASSERT(nitems > 0 && nitems <= PCQ_MAXLEN);
 
 	pcq = kmem_zalloc(offsetof(pcq_t, pcq_items[nitems]), kmflags);
-	if (pcq == NULL) {
-		return NULL;
+	if (pcq != NULL) {
+		pcq->pcq_nitems = nitems;
 	}
-	pcq->pcq_nitems = nitems;
 	return pcq;
 }
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: sdmmcvar.h,v 1.21 2015/11/29 23:38:47 jmcneill Exp $	*/
+/*	$NetBSD: sdmmcvar.h,v 1.36 2021/03/13 23:22:44 mlelstv Exp $	*/
 /*	$OpenBSD: sdmmcvar.h,v 1.13 2009/01/09 10:55:22 jsg Exp $	*/
 
 /*
@@ -49,6 +49,12 @@ struct sdmmc_csd {
 	/* ... */
 };
 
+struct sdmmc_ext_csd {
+	uint8_t	rev;
+	uint8_t	rst_n_function;	/* RST_n_FUNCTION */
+	uint32_t cache_size;
+};
+
 struct sdmmc_cid {
 	int	mid;		/* manufacturer identification number */
 	int	oid;		/* OEM/product identification number */
@@ -83,8 +89,6 @@ do {									\
 	(xtask)->sc = NULL;						\
 } while (/*CONSTCOND*/0)
 
-#define sdmmc_task_pending(xtask) ((xtask)->onqueue)
-
 struct sdmmc_command {
 	struct sdmmc_task c_task;	/* task queue entry */
 	uint16_t	 c_opcode;	/* SD or MMC command index */
@@ -117,6 +121,11 @@ struct sdmmc_command {
 #define SCF_RSP_SPI_BSY	(1U << 13)
 /* Probing */
 #define SCF_TOUT_OK	(1U << 14)	/* command timeout expected */
+/* Command hints */
+#define SCF_XFER_SDHC	(1U << 15)	/* card is SDHC */
+#define SCF_POLL	(1U << 16)	/* polling required */
+#define SCF_NEED_BOUNCE	(1U << 17)	/* (driver) transfer requires bounce buffer */
+#define SCF_NO_STOP	(1U << 18)	/* don't enable automatic stop CMD12 */
 /* response types */
 #define SCF_RSP_R0	0	/* none */
 #define SCF_RSP_R1	(SCF_RSP_PRESENT|SCF_RSP_CRC|SCF_RSP_IDX)
@@ -175,9 +184,11 @@ struct sdmmc_function {
 	uint16_t rca;			/* relative card address */
 	int interface;			/* SD/MMC:0, SDIO:standard interface */
 	int width;			/* bus width */
+	u_int blklen;			/* block length */
 	int flags;
 #define SFF_ERROR		0x0001	/* function is poo; ignore it */
 #define SFF_SDHC		0x0002	/* SD High Capacity card */
+#define SFF_CACHE_ENABLED	0x0004	/* cache enabled */
 	SIMPLEQ_ENTRY(sdmmc_function) sf_list;
 	/* SD card I/O function members */
 	int number;			/* I/O function number or -1 */
@@ -185,6 +196,7 @@ struct sdmmc_function {
 	struct sdmmc_cis cis;		/* decoded CIS */
 	/* SD/MMC memory card members */
 	struct sdmmc_csd csd;		/* decoded CSD value */
+	struct sdmmc_ext_csd ext_csd;	/* decoded EXT_CSD value */
 	struct sdmmc_cid cid;		/* decoded CID value */
 	sdmmc_response raw_cid;		/* temp. storage for decoding */
 	uint32_t raw_scr[2];
@@ -222,21 +234,26 @@ struct sdmmc_softc {
 #define SMF_UHS_MODE		0x10000	/* host in UHS mode */
 
 	uint32_t sc_caps;		/* host capability */
-#define SMC_CAPS_AUTO_STOP	0x0001	/* send CMD12 automagically by host */
-#define SMC_CAPS_4BIT_MODE	0x0002	/* 4-bits data bus width */
-#define SMC_CAPS_DMA		0x0004	/* DMA transfer */
-#define SMC_CAPS_SPI_MODE	0x0008	/* SPI mode */
-#define SMC_CAPS_POLL_CARD_DET	0x0010	/* Polling card detect */
-#define SMC_CAPS_SINGLE_ONLY	0x0020	/* only single read/write */
-#define SMC_CAPS_8BIT_MODE	0x0040	/* 8-bits data bus width */
-#define SMC_CAPS_MULTI_SEG_DMA	0x0080	/* multiple segment DMA transfer */
-#define SMC_CAPS_SD_HIGHSPEED	0x0100	/* SD high-speed timing */
-#define SMC_CAPS_MMC_HIGHSPEED	0x0200	/* MMC high-speed timing */
-#define SMC_CAPS_UHS_SDR50	0x1000	/* UHS SDR50 timing */
-#define SMC_CAPS_UHS_SDR104	0x2000	/* UHS SDR104 timing */
-#define SMC_CAPS_UHS_DDR50	0x4000	/* UHS DDR50 timing */
-#define SMC_CAPS_UHS_MASK	0x7000
-#define SMC_CAPS_MMC_HS200	0x8000	/* eMMC HS200 timing */
+#define SMC_CAPS_AUTO_STOP	__BIT(0)	/* send CMD12 automagically by host */
+#define SMC_CAPS_4BIT_MODE	__BIT(1)	/* 4-bits data bus width */
+#define SMC_CAPS_DMA		__BIT(2)	/* DMA transfer */
+#define SMC_CAPS_SPI_MODE	__BIT(3)	/* SPI mode */
+#define SMC_CAPS_POLL_CARD_DET	__BIT(4)	/* Polling card detect */
+#define SMC_CAPS_SINGLE_ONLY	__BIT(5)	/* only single read/write */
+#define SMC_CAPS_8BIT_MODE	__BIT(6)	/* 8-bits data bus width */
+#define SMC_CAPS_MULTI_SEG_DMA	__BIT(7)	/* multiple segment DMA transfer */
+#define SMC_CAPS_SD_HIGHSPEED	__BIT(8)	/* SD high-speed timing */
+#define SMC_CAPS_MMC_HIGHSPEED	__BIT(9)	/* MMC high-speed timing */
+#define SMC_CAPS_MMC_DDR52	__BIT(10)	/* MMC HS DDR52 timing */
+/*				__BIT(11)	*/
+#define SMC_CAPS_UHS_SDR50	__BIT(12)	/* UHS SDR50 timing */
+#define SMC_CAPS_UHS_SDR104	__BIT(13)	/* UHS SDR104 timing */
+#define SMC_CAPS_UHS_DDR50	__BIT(14)	/* UHS DDR50 timing */
+#define SMC_CAPS_UHS_MASK	(SMC_CAPS_UHS_SDR50 \
+				    | SMC_CAPS_UHS_SDR104 \
+				    | SMC_CAPS_UHS_DDR50)
+#define SMC_CAPS_MMC_HS200	__BIT(15)	/* eMMC HS200 timing */
+#define SMC_CAPS_POLLING	__BIT(30)	/* driver supports cmd polling */
 
 	/* function */
 	int sc_function_count;		/* number of I/O functions (SDIO) */
@@ -249,6 +266,7 @@ struct sdmmc_softc {
 	TAILQ_HEAD(, sdmmc_task) sc_tskq;   /* task thread work queue */
 	struct kmutex sc_tskq_mtx;
 	struct kcondvar sc_tskq_cv;
+	struct sdmmc_task *sc_curtask;
 
 	/* discover task */
 	struct sdmmc_task sc_discover_task; /* card attach/detach task */
@@ -256,7 +274,6 @@ struct sdmmc_softc {
 
 	/* interrupt task */
 	struct sdmmc_task sc_intr_task;	/* card interrupt task */
-	struct kmutex sc_intr_task_mtx;
 	TAILQ_HEAD(, sdmmc_intr_handler) sc_intrq; /* interrupt handlers */
 
 	u_int sc_clkmin;		/* host min bus clock */
@@ -273,6 +290,8 @@ struct sdmmc_softc {
 	struct evcnt sc_ev_xfer_aligned[8]; /* aligned xfer counts */
 	struct evcnt sc_ev_xfer_unaligned; /* unaligned xfer count */
 	struct evcnt sc_ev_xfer_error;	/* error xfer count */
+
+	uint32_t sc_max_seg;		/* maximum segment size */
 };
 
 /*
@@ -307,7 +326,7 @@ extern int sdmmcdebug;
 #endif
 
 void	sdmmc_add_task(struct sdmmc_softc *, struct sdmmc_task *);
-void	sdmmc_del_task(struct sdmmc_task *);
+bool	sdmmc_del_task(struct sdmmc_softc *, struct sdmmc_task *, kmutex_t *);
 
 struct	sdmmc_function *sdmmc_function_alloc(struct sdmmc_softc *);
 void	sdmmc_function_free(struct sdmmc_function *);
@@ -339,16 +358,20 @@ void	sdmmc_dump_data(const char *, void *, size_t);
 int	sdmmc_io_enable(struct sdmmc_softc *);
 void	sdmmc_io_scan(struct sdmmc_softc *);
 int	sdmmc_io_init(struct sdmmc_softc *, struct sdmmc_function *);
+int	sdmmc_io_set_blocklen(struct sdmmc_function *, int);
 uint8_t sdmmc_io_read_1(struct sdmmc_function *, int);
 uint16_t sdmmc_io_read_2(struct sdmmc_function *, int);
 uint32_t sdmmc_io_read_4(struct sdmmc_function *, int);
 int	sdmmc_io_read_multi_1(struct sdmmc_function *, int, u_char *, int);
+int	sdmmc_io_read_region_1(struct sdmmc_function *, int, u_char *, int);
 void	sdmmc_io_write_1(struct sdmmc_function *, int, uint8_t);
 void	sdmmc_io_write_2(struct sdmmc_function *, int, uint16_t);
 void	sdmmc_io_write_4(struct sdmmc_function *, int, uint32_t);
 int	sdmmc_io_write_multi_1(struct sdmmc_function *, int, u_char *, int);
+int	sdmmc_io_write_region_1(struct sdmmc_function *, int, u_char *, int);
 int	sdmmc_io_function_enable(struct sdmmc_function *);
 void	sdmmc_io_function_disable(struct sdmmc_function *);
+int	sdmmc_io_function_abort(struct sdmmc_function *);
 
 int	sdmmc_read_cis(struct sdmmc_function *, struct sdmmc_cis *);
 void	sdmmc_print_cis(struct sdmmc_function *);
@@ -365,5 +388,9 @@ int	sdmmc_mem_read_block(struct sdmmc_function *, uint32_t, u_char *,
 	    size_t);
 int	sdmmc_mem_write_block(struct sdmmc_function *, uint32_t, u_char *,
 	    size_t);
+int	sdmmc_mem_discard(struct sdmmc_function *, uint32_t, uint32_t);
+int	sdmmc_mem_flush_cache(struct sdmmc_function *, bool);
+
+void	sdmmc_pause(u_int, kmutex_t *);
 
 #endif	/* _SDMMCVAR_H_ */

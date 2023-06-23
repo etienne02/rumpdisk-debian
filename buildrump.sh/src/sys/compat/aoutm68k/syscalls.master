@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.37 2011/03/07 19:26:35 bouyer Exp $
+	$NetBSD: syscalls.master,v 1.44 2019/06/18 01:39:01 christos Exp $
 
 ;	@(#)syscalls.master	8.2 (Berkeley) 1/13/94
 
@@ -41,6 +41,7 @@
 #include "opt_compat_netbsd.h"
 #include "opt_sysv.h"
 #include "opt_compat_43.h"
+#include "opt_quota.h"
 #endif
 
 #include <sys/param.h>
@@ -212,8 +213,8 @@
 66	NOARGS		{ int|sys||vfork(void); }
 67	OBSOL		vread
 68	OBSOL		vwrite
-69	NOARGS		{ int|sys||sbrk(intptr_t incr); }
-70	NOARGS		{ int|sys||sstk(int incr); }
+69	OBSOL		sbrk
+70	OBSOL		sstk
 #if defined(COMPAT_43) || !defined(_KERNEL)
 71	NOARGS		{ int|compat_43_sys||mmap(void *addr, size_t len, \
 			    int prot, int flags, int fd, long pos); } ommap
@@ -271,7 +272,11 @@
 94	UNIMPL		setdopt
 95	NOARGS		{ int|sys||fsync(int fd); }
 96	NOARGS		{ int|sys||setpriority(int which, int who, int prio); }
+#if defined(COMPAT_30) || !defined(_KERNEL)
 97	NOARGS		{ int|compat_30_sys||socket(int domain, int type, int protocol); }
+#else
+97	EXCL		compat_30_sys_socket
+#endif
 98	NOARGS		{ int|sys||connect(int s, const struct sockaddr *name, \
 			    int namelen); }
 #if defined(COMPAT_43) || !defined(_KERNEL)
@@ -402,14 +407,21 @@
 146	EXCL		compat_43_sys_killpg
 #endif
 147	NOARGS		{ int|sys||setsid(void); }
+#if defined(QUOTA) || !defined(_KERNEL_OPT)
 148	NOARGS		{ int|compat_50_sys||quotactl(const char *path, \
 			    int cmd, int uid, void *arg); }
-#if defined(COMPAT_43) || !defined(_KERNEL)
+#else
+148	EXCL		compat_50_sys_quotactl
+#endif
+#if (defined(QUOTA) && defined(COMPAT_43)) || !defined(_KERNEL_OPT)
 149	NOARGS		{ int|compat_43_sys||quota(void); } oquota
+#else
+149	EXCL		compat_43_sys_quota
+#endif
+#if defined(COMPAT_43) || !defined(_KERNEL_OPT)
 150	NOARGS		{ int|compat_43_sys||getsockname(int fdec, void *asa, \
 			    int *alen); } ogetsockname
 #else
-149	EXCL		compat_43_sys_quota
 150	EXCL		compat_43_sys_getsockname
 #endif
 
@@ -442,8 +454,12 @@
 #endif
 159	UNIMPL
 160	UNIMPL
+#if defined(COMPAT_30) || !defined(_KERNEL)
 161	NOARGS		{ int|compat_30_sys||getfh(const char *fname, \
 			    struct compat_30_fhandle *fhp); }
+#else
+161	EXCL		compat_30_sys_getfh
+#endif
 #if defined(COMPAT_09) || !defined(_KERNEL)
 162	NOARGS		{ int|compat_09_sys||getdomainname(char *domainname, \
 			    int len); } ogetdomainname
@@ -726,8 +742,12 @@
 #endif
 296	NOARGS		{ int|sys||__getcwd(char *bufp, size_t length); }
 297	NOARGS		{ int|sys||fchroot(int fd); }
+#if defined(COMPAT_30) || ! defined(_KERNEL)
 298	NOARGS		{ int|compat_30_sys||fhopen(const \
 			    struct compat_30_fhandle *fhp, int flags); }
+#else
+298	EXCL		compat_30_sys_fhopen
+#endif
 299	STD		{ int|aoutm68k_sys||fhstat(const struct \
 			    compat_30_fhandle *fhp, \
 			    struct aoutm68k_stat *sb); }

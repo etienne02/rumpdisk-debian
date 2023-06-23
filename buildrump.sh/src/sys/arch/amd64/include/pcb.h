@@ -1,6 +1,6 @@
-/*	$NetBSD: pcb.h,v 1.25 2014/02/20 18:19:10 dsl Exp $	*/
+/*	$NetBSD: pcb.h,v 1.32 2020/03/17 17:18:49 maxv Exp $	*/
 
-/*-
+/*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -29,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*-
+/*
  * Copyright (c) 1990 The Regents of the University of California.
  * All rights reserved.
  *
@@ -73,13 +73,18 @@
 #ifdef __x86_64__
 
 #include <x86/cpu_extended_state.h>
+#include <amd64/reg.h>
 
 #define	NIOPORTS	1024		/* # of ports we allow to be mapped */
 
+/*
+ * IMPORTANT NOTE: this structure, including the variable-sized FPU state at
+ * the end, must fit within one page.
+ */
 struct pcb {
 	int	  pcb_flags;
-#define	PCB_USER_LDT	0x01		/* has user-set LDT */
-#define	PCB_COMPAT32	0x02
+#define	PCB_COMPAT32	0x01
+#define	PCB_DBREGS	0x02
 	u_int	  pcb_cr0;		/* saved image of CR0 */
 	uint64_t pcb_rsp0;
 	uint64_t pcb_cr2;		/* page fault address (CR2) */
@@ -89,15 +94,18 @@ struct pcb {
 	void     *pcb_onfault;		/* copyin/out fault recovery */
 	uint64_t  pcb_fs;
 	uint64_t  pcb_gs;
+	struct dbreg *pcb_dbregs;
+	uint16_t pcb_fpu_dflt_cw;
 	int pcb_iopl;
 
-	uint32_t pcb_unused[11];		/* unused */
+	uint32_t pcb_unused[8];		/* unused */
 
-	struct cpu_info *pcb_fpcpu;	/* cpu holding our fp state. */
 	union savefpu	pcb_savefpu __aligned(64); /* floating point state */
 	/* **** DO NOT ADD ANYTHING HERE **** */
 };
+#ifndef __lint__
 __CTASSERT(sizeof(struct pcb) - sizeof (union savefpu) ==  128);
+#endif
 
 #else	/*	__x86_64__	*/
 

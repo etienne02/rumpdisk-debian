@@ -1,4 +1,4 @@
-/*      $NetBSD: sdtemp.c,v 1.31 2016/07/28 09:11:13 msaitoh Exp $        */
+/*      $NetBSD: sdtemp.c,v 1.40 2021/06/13 09:47:36 mlelstv Exp $        */
 
 /*
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sdtemp.c,v 1.31 2016/07/28 09:11:13 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sdtemp.c,v 1.40 2021/06/13 09:47:36 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -115,6 +115,8 @@ sdtemp_dev_table[] = {
 	"Giantec GT34TS02" },
     { MAXIM_MANUFACTURER_ID, MAX_6604_DEVICE_ID,     MAX_6604_MASK,	  NULL,
 	"Maxim MAX6604" },
+    { MAXIM_MANUFACTURER_ID, MAX_6604_2_DEVICE_ID,   MAX_6604_MASK,	  NULL,
+	"Maxim MAX6604" },
     { MCP_MANUFACTURER_ID,  MCP_9804_DEVICE_ID,	     MCP_9804_MASK,	  CMCP,
 	"Microchip Tech MCP9804" },
     { MCP_MANUFACTURER_ID,  MCP_9805_DEVICE_ID,	     MCP_9805_MASK,	  NULL,
@@ -125,6 +127,8 @@ sdtemp_dev_table[] = {
 	"Microchip Tech MCP98243" },
     { MCP_MANUFACTURER_ID,  MCP_98244_DEVICE_ID,     MCP_98244_MASK,	  CMCP,
 	"Microchip Tech MCP98244" },
+    { MCP2_MANUFACTURER_ID, MCP2_EMC1501_DEVICE_ID,  MCP2_EMC1501_MASK,	  NULL,
+	"Microchip Tech EMC1501" },
     { ADT_MANUFACTURER_ID,  ADT_7408_DEVICE_ID,	     ADT_7408_MASK,	  NULL,
 	"Analog Devices ADT7408" },
     { NXP_MANUFACTURER_ID,  NXP_SE98_DEVICE_ID,	     NXP_SE98_MASK,	  NULL,
@@ -147,8 +151,6 @@ sdtemp_dev_table[] = {
 	"Catalyst CAT34TS02C" },
     { CAT_MANUFACTURER_ID,  CAT_34TS04_DEVICE_ID,    CAT_34TS04_MASK,	  NULL,
 	"Catalyst CAT34TS04" },
-    { IDT_MANUFACTURER_ID,  IDT_TSE2002GB2_DEVICE_ID,IDT_TSE2002GB2_MASK, CIDT,
-	"Integrated Device Technology TSE2002GB2" },
     { IDT_MANUFACTURER_ID,  IDT_TSE2004GB2_DEVICE_ID,IDT_TSE2004GB2_MASK, NULL,
 	"Integrated Device Technology TSE2004GB2" },
     { IDT_MANUFACTURER_ID,  IDT_TS3000B3_DEVICE_ID,  IDT_TS3000B3_MASK,	  CIDT,
@@ -212,8 +214,13 @@ sdtemp_match(device_t parent, cfdata_t cf, void *aux)
 	if ((ia->ia_addr & SDTEMP_ADDRMASK) != SDTEMP_ADDR)
 		return 0;
 
-	/* Verify that we can read the manufacturer ID, Device ID and the capability */
-	iic_acquire_bus(sc.sc_tag, 0);
+	/*
+	 * Verify that we can read the manufacturer ID, Device ID and the
+	 * capability
+	 */
+	error = iic_acquire_bus(sc.sc_tag, 0);
+	if (error)
+		return 0;
 	error = sdtemp_read_16(&sc, SDTEMP_REG_MFG_ID,  &mfgid) |
 		sdtemp_read_16(&sc, SDTEMP_REG_DEV_REV, &devid) |
 		sdtemp_read_16(&sc, SDTEMP_REG_CAPABILITY, &cap);
@@ -232,13 +239,13 @@ sdtemp_match(device_t parent, cfdata_t cf, void *aux)
 	}
 
 	/*
-	 * Check by SDTEMP_IS_TSE2004AV() might not be enough, so check the alarm
-	 * capability, too.
+	 * Check by SDTEMP_IS_TSE2004AV() might not be enough, so check the
+	 * alarm capability, too.
 	 */
 	if ((cap & SDTEMP_CAP_HAS_ALARM) == 0)
 		return 0;
 
-	return 1;
+	return I2C_MATCH_ADDRESS_AND_PROBE;
 }
 
 static void
@@ -253,7 +260,10 @@ sdtemp_attach(device_t parent, device_t self, void *aux)
 	sc->sc_address = ia->ia_addr;
 	sc->sc_dev = self;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	error = iic_acquire_bus(sc->sc_tag, 0);
+	if (error)
+		return;
+
 	if ((error = sdtemp_read_16(sc, SDTEMP_REG_MFG_ID,  &mfgid)) != 0 ||
 	    (error = sdtemp_read_16(sc, SDTEMP_REG_DEV_REV, &devid)) != 0) {
 		iic_release_bus(sc->sc_tag, 0);
@@ -295,7 +305,7 @@ sdtemp_attach(device_t parent, device_t self, void *aux)
 	 * IDT's devices and some Microchip's devices have the resolution
 	 * register in the vendor specific registers area. The devices'
 	 * resolution bits in the capability register are not the maximum
-	 * resolution but the current vaule of the setting.
+	 * resolution but the current value of the setting.
 	 */
 	if (sdtemp_dev_table[i].sdtemp_config != NULL)
 		sdtemp_dev_table[i].sdtemp_config(sc);
@@ -340,11 +350,7 @@ sdtemp_attach(device_t parent, device_t self, void *aux)
 	sc->sc_sme->sme_get_limits = sdtemp_get_limits;
 	sc->sc_sme->sme_set_limits = sdtemp_set_limits;
 
-	sc->sc_sensor = kmem_zalloc(sizeof(envsys_data_t), KM_NOSLEEP);
-	if (!sc->sc_sensor) {
-		aprint_error_dev(self, "unable to allocate sc_sensor\n");
-		goto bad2;
-	}
+	sc->sc_sensor = kmem_zalloc(sizeof(envsys_data_t), KM_SLEEP);
 
 	/* Initialize sensor data. */
 	sc->sc_sensor->units =  ENVSYS_STEMP;
@@ -398,8 +404,8 @@ sdtemp_attach(device_t parent, device_t self, void *aux)
 
 bad:
 	kmem_free(sc->sc_sensor, sizeof(envsys_data_t));
-bad2:
 	sysmon_envsys_destroy(sc->sc_sme);
+	sc->sc_sme = NULL;
 }
 
 static int
@@ -426,7 +432,9 @@ sdtemp_get_limits(struct sysmon_envsys *sme, envsys_data_t *edata,
 	uint16_t lim;
 
 	*props = 0;
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0) != 0)
+		return;
+
 	if (sdtemp_read_16(sc, SDTEMP_REG_LOWER_LIM, &lim) == 0 && lim != 0) {
 		limits->sel_warnmin = sdtemp_decode_temp(sc, lim);
 		*props |= PROP_WARNMIN;
@@ -456,7 +464,9 @@ sdtemp_set_limits(struct sysmon_envsys *sme, envsys_data_t *edata,
 		limits = &sc->sc_deflims;
 		props  = &sc->sc_defprops;
 	}
-	iic_acquire_bus(sc->sc_tag, 0);
+	if (iic_acquire_bus(sc->sc_tag, 0) != 0)
+		return;
+
 	if (*props & PROP_WARNMIN) {
 		val = __UK2C(limits->sel_warnmin);
 		(void)sdtemp_write_16(sc, SDTEMP_REG_LOWER_LIM,
@@ -568,7 +578,12 @@ sdtemp_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 	uint16_t val;
 	int error;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	error = iic_acquire_bus(sc->sc_tag, 0);
+	if (error) {
+		edata->state = ENVSYS_SINVALID;
+		return;
+	}
+
 	error = sdtemp_read_16(sc, SDTEMP_REG_AMBIENT_TEMP, &val);
 	iic_release_bus(sc->sc_tag, 0);
 
@@ -596,7 +611,7 @@ sdtemp_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 }
 
 /*
- * power management functions
+ * Power management functions
  *
  * We go into "shutdown" mode at suspend time, and return to normal
  * mode upon resume.  This reduces power consumption by disabling
@@ -610,7 +625,10 @@ sdtemp_pmf_suspend(device_t dev, const pmf_qual_t *qual)
 	int error;
 	uint16_t config;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	error = iic_acquire_bus(sc->sc_tag, 0);
+	if (error != 0)
+		return false;
+
 	error = sdtemp_read_16(sc, SDTEMP_REG_CONFIG, &config);
 	if (error == 0) {
 		config |= SDTEMP_CONFIG_SHUTDOWN_MODE;
@@ -627,7 +645,10 @@ sdtemp_pmf_resume(device_t dev, const pmf_qual_t *qual)
 	int error;
 	uint16_t config;
 
-	iic_acquire_bus(sc->sc_tag, 0);
+	error = iic_acquire_bus(sc->sc_tag, 0);
+	if (error != 0)
+		return false;
+
 	error = sdtemp_read_16(sc, SDTEMP_REG_CONFIG, &config);
 	if (error == 0) {
 		config &= ~SDTEMP_CONFIG_SHUTDOWN_MODE;

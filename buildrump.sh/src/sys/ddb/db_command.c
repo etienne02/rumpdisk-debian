@@ -1,7 +1,8 @@
-/*	$NetBSD: db_command.c,v 1.147 2016/04/13 00:47:02 ozaki-r Exp $	*/
+/*	$NetBSD: db_command.c,v 1.178 2021/08/21 23:00:31 andvar Exp $	*/
 
 /*
- * Copyright (c) 1996, 1997, 1998, 1999, 2002, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 1996, 1997, 1998, 1999, 2002, 2009, 2019
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -60,11 +61,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_command.c,v 1.147 2016/04/13 00:47:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_command.c,v 1.178 2021/08/21 23:00:31 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_aio.h"
 #include "opt_ddb.h"
+#include "opt_fdt.h"
 #include "opt_kgdb.h"
 #include "opt_mqueue.h"
 #include "opt_inet.h"
@@ -89,9 +91,10 @@ __KERNEL_RCSID(0, "$NetBSD: db_command.c,v 1.147 2016/04/13 00:47:02 ozaki-r Exp
 #include <sys/buf.h>
 #include <sys/module.h>
 #include <sys/kernhist.h>
-
-/*include queue macros*/
+#include <sys/socketvar.h>
 #include <sys/queue.h>
+
+#include <dev/cons.h>
 
 #include <ddb/ddb.h>
 
@@ -99,6 +102,11 @@ __KERNEL_RCSID(0, "$NetBSD: db_command.c,v 1.147 2016/04/13 00:47:02 ozaki-r Exp
 #include <uvm/uvm_ddb.h>
 
 #include <net/route.h>
+
+#ifdef FDT
+#include <dev/fdt/fdtvar.h>
+#include <dev/fdt/fdt_ddb.h>
+#endif
 
 /*
  * Results of command search.
@@ -190,7 +198,11 @@ static void	db_event_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_fncall(db_expr_t, bool, db_expr_t, const char *);
 static void     db_help_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_lock_print_cmd(db_expr_t, bool, db_expr_t, const char *);
+static void	db_show_all_locks(db_expr_t, bool, db_expr_t, const char *);
+static void	db_show_lockstats(db_expr_t, bool, db_expr_t, const char *);
+static void	db_show_all_freelists(db_expr_t, bool, db_expr_t, const char *);
 static void	db_mount_print_cmd(db_expr_t, bool, db_expr_t, const char *);
+static void	db_show_all_mount(db_expr_t, bool, db_expr_t, const char *);
 static void	db_mbuf_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_map_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_namecache_print_cmd(db_expr_t, bool, db_expr_t,
@@ -201,6 +213,7 @@ static void	db_show_all_pages(db_expr_t, bool, db_expr_t, const char *);
 static void	db_pool_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_reboot_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_sifting_cmd(db_expr_t, bool, db_expr_t, const char *);
+static void	db_socket_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_stack_trace_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_sync_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_whatis_cmd(db_expr_t, bool, db_expr_t, const char *);
@@ -209,29 +222,19 @@ static void	db_uvmexp_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void	db_kernhist_print_cmd(db_expr_t, bool, db_expr_t, const char *);
 #endif
 static void	db_vnode_print_cmd(db_expr_t, bool, db_expr_t, const char *);
+static void	db_vnode_lock_print_cmd(db_expr_t, bool, db_expr_t,
+		    const char *);
 static void	db_vmem_print_cmd(db_expr_t, bool, db_expr_t, const char *);
+#ifdef FDT
+static void	db_fdt_print_cmd(db_expr_t, bool, db_expr_t, const char *);
+#endif
 
 static const struct db_command db_show_cmds[] = {
-	/*added from all sub cmds*/
-	{ DDB_ADD_CMD("callout",  db_show_callout,
-	    0 ,"List all used callout functions.",NULL,NULL) },
-	{ DDB_ADD_CMD("pages",	db_show_all_pages,
-	    0 ,"List all used memory pages.",NULL,NULL) },
-	{ DDB_ADD_CMD("proc",	db_show_proc,
-	    0 ,"Print process information.",NULL,NULL) },
-	{ DDB_ADD_CMD("procs",	db_show_all_procs,
-	    0 ,"List all processes.",NULL,NULL) },
-	{ DDB_ADD_CMD("pools",	db_show_all_pools,
-	    0 ,"Show all pools",NULL,NULL) },
-#ifdef AIO
-	/*added from all sub cmds*/
-	{ DDB_ADD_CMD("aio_jobs",	db_show_aio_jobs,	0,
-	    "Show aio jobs",NULL,NULL) },
-#endif
 	{ DDB_ADD_CMD("all",	NULL,
 	    CS_COMPAT, NULL,NULL,NULL) },
-#if defined(INET)
-	{ DDB_ADD_CMD("routes",	db_show_routes,		0,NULL,NULL,NULL) },
+#ifdef AIO
+	{ DDB_ADD_CMD("aio_jobs",	db_show_aio_jobs,	0,
+	    "Show aio jobs",NULL,NULL) },
 #endif
 #ifdef _KERNEL
 	{ DDB_ADD_CMD("breaks",	db_listbreak_cmd, 	0,
@@ -239,58 +242,93 @@ static const struct db_command db_show_cmds[] = {
 #endif
 	{ DDB_ADD_CMD("buf",	db_buf_print_cmd,	0,
 	    "Print the struct buf at address.", "[/f] address",NULL) },
+	/* added from all sub cmds */
+	{ DDB_ADD_CMD("callout",  db_show_callout,
+	    0 ,"List all used callout functions.",NULL,NULL) },
+	{ DDB_ADD_CMD("devices", db_show_all_devices,	0,NULL,NULL,NULL) },
 	{ DDB_ADD_CMD("event",	db_event_print_cmd,	0,
 	    "Print all the non-zero evcnt(9) event counters.", "[/fitm]",NULL) },
+#ifdef FDT
+	{ DDB_ADD_CMD("fdt", db_fdt_print_cmd, 0,
+	    "Show FDT information", NULL, NULL) },
+#endif
 	{ DDB_ADD_CMD("files", db_show_files_cmd,	0,
 	    "Print the files open by process at address",
 	    "[/f] address", NULL) },
+	{ DDB_ADD_CMD("freelists",	db_show_all_freelists,
+	    0 ,"Show all freelists", NULL, NULL) },
+#ifdef KERNHIST
+	{ DDB_ADD_CMD("kernhist", db_kernhist_print_cmd, 0,
+	    "Print the UVM history logs.",
+	    NULL,NULL) },
+#endif
+	/* added from all sub cmds */
+	{ DDB_ADD_CMD("locks",	db_show_all_locks,
+	    0 ,"Show all held locks", "[/t]", NULL) },
 	{ DDB_ADD_CMD("lock",	db_lock_print_cmd,	0,NULL,NULL,NULL) },
+	{ DDB_ADD_CMD("lockstats",
+				db_show_lockstats,	0,
+	    "Print statistics of locks", NULL, NULL) },
 	{ DDB_ADD_CMD("map",	db_map_print_cmd,	0,
 	    "Print the vm_map at address.", "[/f] address",NULL) },
+	{ DDB_ADD_CMD("mbuf",	db_mbuf_print_cmd,	0,NULL,NULL,
+	    "-c prints all mbuf chains") },
 	{ DDB_ADD_CMD("module", db_show_module_cmd,	0,
 	    "Print kernel modules", NULL, NULL) },
+	{ DDB_ADD_CMD("mount",	db_show_all_mount,	0,
+	    "Print all mount structures.", "[/f]", NULL) },
 	{ DDB_ADD_CMD("mount",	db_mount_print_cmd,	0,
 	    "Print the mount structure at address.", "[/f] address",NULL) },
 #ifdef MQUEUE
 	{ DDB_ADD_CMD("mqueue", db_show_mqueue_cmd,	0,
 	    "Print the message queues", NULL, NULL) },
 #endif
-	{ DDB_ADD_CMD("mbuf",	db_mbuf_print_cmd,	0,NULL,NULL,
-	    "-c prints all mbuf chains") },
 	{ DDB_ADD_CMD("ncache",	db_namecache_print_cmd,	0,
 	    "Dump the namecache list.", "address",NULL) },
 	{ DDB_ADD_CMD("object",	db_object_print_cmd,	0,
 	    "Print the vm_object at address.", "[/f] address",NULL) },
 	{ DDB_ADD_CMD("page",	db_page_print_cmd,	0,
 	    "Print the vm_page at address.", "[/f] address",NULL) },
+	{ DDB_ADD_CMD("pages",	db_show_all_pages,
+	    0 ,"List all used memory pages.",NULL,NULL) },
 	{ DDB_ADD_CMD("panic",	db_show_panic,	0,
 	    "Print the current panic string",NULL,NULL) },
 	{ DDB_ADD_CMD("pool",	db_pool_print_cmd,	0,
 	    "Print the pool at address.", "[/clp] address",NULL) },
+	/* added from all sub cmds */
+	{ DDB_ADD_CMD("pools",	db_show_all_pools,
+	    0 ,"Show all pools",NULL,NULL) },
+	{ DDB_ADD_CMD("proc",	db_show_proc,
+	    0 ,"Print process information.",NULL,NULL) },
+	/* added from all sub cmds */
+	{ DDB_ADD_CMD("procs",	db_show_all_procs,
+	    0 ,"List all processes.",NULL,NULL) },
 	{ DDB_ADD_CMD("registers",	db_show_regs,		0,
 	    "Display the register set.", "[/u]",NULL) },
+#if defined(INET)
+	{ DDB_ADD_CMD("routes",	db_show_routes,		0,NULL,NULL,NULL) },
+#endif
 	{ DDB_ADD_CMD("sched_qs",	db_show_sched_qs,	0,
 	    "Print the state of the scheduler's run queues.",
 	    NULL,NULL) },
+	{ DDB_ADD_CMD("socket",	db_socket_print_cmd,	0,NULL,NULL,NULL) },
 	{ DDB_ADD_CMD("uvmexp",	db_uvmexp_print_cmd, 0,
 	    "Print a selection of UVM counters and statistics.",
 	    NULL,NULL) },
-#ifdef KERNHIST
-	{ DDB_ADD_CMD("kernhist", db_kernhist_print_cmd, 0,
-	    "Print the UVM history logs.",
-	    NULL,NULL) },
-#endif
-	{ DDB_ADD_CMD("vnode",	db_vnode_print_cmd,	0,
-	    "Print the vnode at address.", "[/f] address",NULL) },
 	{ DDB_ADD_CMD("vmem", db_vmem_print_cmd,	0,
 	    "Print the vmem usage.", "[/a] address", NULL) },
 	{ DDB_ADD_CMD("vmems", db_show_all_vmems,	0,
 	    "Show all vmems.", NULL, NULL) },
+	{ DDB_ADD_CMD("vnode",	db_vnode_print_cmd,	0,
+	    "Print the vnode at address.", "[/f] address",NULL) },
+	{ DDB_ADD_CMD("vnode_lock",	db_vnode_lock_print_cmd,	0,
+	    "Print the vnode having that address as v_lock.",
+	    "[/f] address",NULL) },
 #ifdef _KERNEL
 	{ DDB_ADD_CMD("watches",	db_listwatch_cmd, 	0,
 	    "Display all watchpoints.", NULL,NULL) },
 #endif
-	{ DDB_ADD_CMD(NULL,		NULL,			0,NULL,NULL,NULL) }
+	{ DDB_END_CMD },
 };
 
 static const struct db_command db_command_table[] = {
@@ -383,7 +421,7 @@ static const struct db_command db_command_table[] = {
 	{ DDB_ADD_CMD("x",		db_examine_cmd,		CS_SET_DOT,
 	    "Display the address locations.",
 	    "[/modifier] address[,count]",NULL) },
-	{ DDB_ADD_CMD(NULL, 	NULL,		   0, NULL, NULL, NULL) }
+	{ DDB_END_CMD },
 };
 
 static const struct db_command	*db_last_command = NULL;
@@ -441,7 +479,7 @@ db_init_commands(void)
  * Add command table to the specified list
  * Arg:
  * int type specifies type of command table DDB_SHOW_CMD|DDB_BASE_CMD|DDB_MAC_CMD
- * *cmd_tbl poiter to static allocated db_command table
+ * *cmd_tbl pointer to static allocated db_command table
  *
  * Command table must be NULL terminated array of struct db_command
  */
@@ -449,7 +487,7 @@ int
 db_register_tbl(uint8_t type, const struct db_command *cmd_tbl)
 {
 	struct db_cmd_tbl_en *list_ent;
-	
+
 	/* empty list - ignore */
 	if (cmd_tbl->name == 0)
 		return 0;
@@ -526,7 +564,14 @@ db_unregister_tbl(uint8_t type,const struct db_command *cmd_tbl)
 	return ENOENT;
 }
 
-/* This function is called from machine trap code. */
+#ifndef _KERNEL
+#define	cnpollc(c)	__nothing
+#endif
+
+/*
+ * This function is called via db_trap() or directly from
+ * machine trap code.
+ */
 void
 db_command_loop(void)
 {
@@ -563,7 +608,9 @@ db_command_loop(void)
 		if (db_print_position() != 0)
 			db_printf("\n");
 		db_output_line = 0;
+		cnpollc(1);
 		(void) db_read_line();
+		cnpollc(0);
 		db_command(&db_last_command);
 	}
 
@@ -790,21 +837,23 @@ db_read_command(void)
 }
 
 /*
- * Parse command line and execute apropriate function.
+ * Parse command line and execute appropriate function.
  */
 static void
 db_command(const struct db_command **last_cmdp)
 {
-	const struct db_command *command;
 	static db_expr_t last_count = 0;
-	db_expr_t	addr, count;
-	char		modif[TOK_STRING_SIZE];
-	
-	int			t;
-	bool		have_addr = false;
+
+	int t;
+	const struct db_command *command;
+	db_expr_t addr, count;
+	bool have_addr;
+	char modif[TOK_STRING_SIZE];
 
 	command = NULL;
-	
+	have_addr = false;
+	count = -1;
+
 	t = db_read_token();
 	if ((t == tEOL) || (t == tCOMMA)) {
 		/*
@@ -825,7 +874,6 @@ db_command(const struct db_command **last_cmdp)
 			}
 		} else
 			count = last_count;
-		have_addr = false;
 		modif[0] = '\0';
 		db_skip_to_eol();
 
@@ -872,7 +920,6 @@ db_command(const struct db_command **last_cmdp)
 				have_addr = true;
 			} else {
 				addr = (db_expr_t) db_dot;
-				have_addr = false;
 			}
 
 			t = db_read_token();
@@ -884,7 +931,6 @@ db_command(const struct db_command **last_cmdp)
 				}
 			} else {
 				db_unread_token(t);
-				count = -1;
 			}
 			if ((command->flag & CS_MORE) == 0) {
 				db_skip_to_eol();
@@ -981,6 +1027,8 @@ db_map_print_cmd(db_expr_t addr, bool have_addr, db_expr_t count,
 		addr = (db_expr_t)(uintptr_t)db_read_ptr("kernel_map");
 
 	uvm_map_printit((struct vm_map *)(uintptr_t) addr, full, db_printf);
+#else
+	db_kernelonly();
 #endif	/* XXX CRASH(8) */
 }
 
@@ -997,6 +1045,8 @@ db_object_print_cmd(db_expr_t addr, bool have_addr,
 
 	uvm_object_printit((struct uvm_object *)(uintptr_t) addr, full,
 	    db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1012,6 +1062,8 @@ db_page_print_cmd(db_expr_t addr, bool have_addr,
 		full = true;
 
 	uvm_page_printit((struct vm_page *)(uintptr_t) addr, full, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1023,6 +1075,8 @@ db_show_all_pages(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL /* XXX CRASH(8) */
 	uvm_page_printall(db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1038,6 +1092,8 @@ db_buf_print_cmd(db_expr_t addr, bool have_addr,
 		full = true;
 
 	vfs_buf_print((struct buf *)(uintptr_t) addr, full, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1111,6 +1167,25 @@ db_vnode_print_cmd(db_expr_t addr, bool have_addr,
 		full = true;
 
 	vfs_vnode_print((struct vnode *)(uintptr_t) addr, full, db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+
+/*ARGSUSED*/
+static void
+db_vnode_lock_print_cmd(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+#ifdef _KERNEL /* XXX CRASH(8) */
+	bool full = false;
+
+	if (modif[0] == 'f')
+		full = true;
+
+	vfs_vnode_lock_print((struct vnode *)(uintptr_t) addr, full, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1122,6 +1197,8 @@ db_vmem_print_cmd(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL /* XXX CRASH(8) */
 	vmem_print((uintptr_t) addr, modif, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1139,6 +1216,21 @@ db_mount_print_cmd(db_expr_t addr, bool have_addr,
 #endif
 }
 
+static void
+db_show_all_mount(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
+{
+#ifdef _KERNEL	/* XXX CRASH(8) */
+	bool full = false;
+
+	if (modif[0] == 'f')
+		full = true;
+
+	vfs_mount_print_all(full, db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+
 /*ARGSUSED*/
 static void
 db_mbuf_print_cmd(db_expr_t addr, bool have_addr,
@@ -1147,6 +1239,8 @@ db_mbuf_print_cmd(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL /* XXX CRASH(8) */
 	m_print((const struct mbuf *)(uintptr_t) addr, modif, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1158,6 +1252,8 @@ db_pool_print_cmd(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL /* XXX CRASH(8) */
 	pool_printit((struct pool *)(uintptr_t) addr, modif, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1169,6 +1265,8 @@ db_namecache_print_cmd(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL /* XXX CRASH(8) */
 	namecache_print((struct vnode *)(uintptr_t) addr, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1180,6 +1278,21 @@ db_uvmexp_print_cmd(db_expr_t addr, bool have_addr,
 
 #ifdef _KERNEL	/* XXX CRASH(8) */
 	uvmexp_print(db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+
+/*ARGSUSED */
+static void
+db_socket_print_cmd(db_expr_t addr, bool have_addr, db_expr_t count,
+    const char *modif)
+{
+
+#ifdef _KERNEL	/* XXX CRASH(8) */
+	socket_print(modif, db_printf);
+#else
+	db_kernelonly();
 #endif
 }
 
@@ -1190,7 +1303,13 @@ db_kernhist_print_cmd(db_expr_t addr, bool have_addr,
     db_expr_t count, const char *modif)
 {
 
-	kernhist_print((void *)(uintptr_t)addr, db_printf);
+	if (!have_addr)
+		addr = 0;
+
+	if (count == -1)
+		count = 0;
+
+	kernhist_print((void *)(uintptr_t)addr, count, modif, db_printf);
 }
 #endif
 
@@ -1200,10 +1319,65 @@ db_lock_print_cmd(db_expr_t addr, bool have_addr,
     db_expr_t count, const char *modif)
 {
 
+	lockdebug_lock_print(have_addr ? (void *)(uintptr_t)addr : NULL,
+	    db_printf);
+}
+
+static void
+db_show_all_locks(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+
 #ifdef _KERNEL	/* XXX CRASH(8) */
-	lockdebug_lock_print((void *)(uintptr_t)addr, db_printf);
+	lockdebug_show_all_locks(db_printf, modif);
+#else
+	db_kernelonly();
 #endif
 }
+
+static void
+db_show_all_freelists(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+
+#ifdef _KERNEL	/* XXX CRASH(8) */
+	uvm_page_print_freelists(db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+
+static void
+db_show_lockstats(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+
+#ifdef _KERNEL	/* XXX CRASH(8) */
+	lockdebug_show_lockstats(db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+
+#ifdef FDT
+/*ARGSUSED*/
+static void
+db_fdt_print_cmd(db_expr_t addr, bool have_addr,
+    db_expr_t count, const char *modif)
+{
+#ifdef _KERNEL /* XXX CRASH(8) */
+	bool full = false;
+
+	if (modif[0] == 'f')
+		full = true;
+
+	fdt_print(have_addr ? (void *)(uintptr_t)addr : fdtbus_get_data(),
+	    full, db_printf);
+#else
+	db_kernelonly();
+#endif
+}
+#endif
 
 /*
  * Call random function:
@@ -1265,7 +1439,7 @@ db_fncall(db_expr_t addr, bool have_addr,
 			 args[5], args[6], args[7], args[8], args[9]);
 	db_printf("%s\n", db_num_to_str(retval));
 #else	/* _KERNEL */
-	db_printf("This command can only be used in-kernel.\n");
+	db_kernelonly();
 #endif	/* _KERNEL */
 }
 
@@ -1289,10 +1463,14 @@ db_reboot_cmd(db_expr_t addr, bool have_addr,
 	 * called from cpu_reboot.
 	 */
 	db_recover = 0;
+	/* Avoid all mutex errors */
+	lockdebug_dismiss();
 	panicstr = "reboot forced via kernel debugger";
-	cpu_reboot((int)bootflags, NULL);
+	/* Make it possible to break into the debugger again */
+	spl0();
+	kern_reboot((int)bootflags, NULL);
 #else	/* _KERNEL */
-	db_printf("This command can only be used in-kernel.\n");
+	db_kernelonly();
 #endif	/* _KERNEL */
 }
 
@@ -1357,9 +1535,9 @@ db_sync_cmd(db_expr_t addr, bool have_addr,
 	 */
 	db_recover = 0;
 	panicstr = "dump forced via kernel debugger";
-	cpu_reboot(RB_DUMP, NULL);
+	kern_reboot(RB_DUMP, NULL);
 #else	/* _KERNEL */
-	db_printf("This command can only be used in-kernel.\n");
+	db_kernelonly();
 #endif	/* _KERNEL */
 }
 
@@ -1378,5 +1556,7 @@ db_whatis_cmd(db_expr_t address, bool have_addr,
 	vmem_whatis(addr, db_printf);
 	uvm_whatis(addr, db_printf);
 	module_whatis(addr, db_printf);
+#else
+	db_kernelonly();
 #endif
 }

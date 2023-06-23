@@ -1,107 +1,51 @@
-/* $NetBSD: asm.h,v 1.1 2014/08/10 05:47:37 matt Exp $ */
-
-/*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
- * All rights reserved.
- *
- * This code is derived from software contributed to The NetBSD Foundation
- * by Matt Thomas of 3am Software Foundry.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
- * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
- * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
- * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
+/* $NetBSD: asm.h,v 1.9 2020/08/02 06:58:16 maxv Exp $ */
 
 #ifndef _AARCH64_ASM_H_
 #define _AARCH64_ASM_H_
 
-#ifdef __aarch64__
-
-#define	__BIT(n)	(1 << (n))
-#define __BITS(hi,lo)	((~((~0)<<((hi)+1)))&((~0)<<(lo)))
-
-#define _C_LABEL(x)	x
-#define	_ASM_LABEL(x)	x
-
-#define __CONCAT(x,y)	x ## y
-#define __STRING(x)	#x
-
-#ifndef _ALIGN_TEXT
-# define _ALIGN_TEXT .align 2
+#if defined(_KERNEL_OPT)
+#include "opt_cpuoptions.h"
 #endif
-
-#ifndef _TEXT_SECTION
-#define _TEXT_SECTION	.text
-#endif
-#define _ASM_TYPE_FUNCTION	@function
-#define _ASM_TYPE_OBJECT	@object
-#define _ENTRY(x) \
-	_TEXT_SECTION; _ALIGN_TEXT; .globl x; .type x,_ASM_TYPE_FUNCTION; x:
-#define	_END(x)		.size x,.-x
-
-#ifdef GPROF
-# define _PROF_PROLOGUE	\
-	mov x9, x30; bl __mcount
-#else
-# define _PROF_PROLOGUE
-#endif
-
-#define	ENTRY(y)		_ENTRY(_C_LABEL(y)); _PROF_PROLOGUE
-#define	ENTRY_NP(y)		_ENTRY(_C_LABEL(y))
-#define	END(y)			_END(_C_LABEL(y))
-#define	END(y)			_END(_C_LABEL(y))
-#define	ASENTRY(y)		_ENTRY(_ASM_LABEL(y)); _PROF_PROLOGUE
-#define	ASENTRY_NP(y)		_ENTRY(_ASM_LABEL(y))
-#define	ASEND(y)		_END(_ASM_LABEL(y))
-
-#define	ASMSTR		.asciz
-
-#ifdef __PIC__
-#define	GOTREF(x)		:got:x
-#define GOTLO12(x)		:got_lo12:x
-#else
-#define GOTREF(x)		x
-#define GOTLO12(x)		:lo12:x
-#endif
-
-#define RCSID(x)	.pushsection ".ident"; .asciz x; .popsection
-
-#define	WEAK_ALIAS(alias,sym)						\
-	.weak alias;							\
-	alias = sym
-
-/*
- * STRONG_ALIAS: create a strong alias.
- */
-#define STRONG_ALIAS(alias,sym)						\
-	.globl alias;							\
-	alias = sym
-
-#define	WARN_REFERENCES(sym,msg)					\
-	.pushsection .gnu.warning. ## sym;				\
-	.ascii msg;							\
-	.popsection
-
-#elif defined(__arm__)
 
 #include <arm/asm.h>
+
+#ifdef __aarch64__
+
+#ifdef __ASSEMBLER__
+.macro	adrl 	reg, addr
+	adrp	\reg, \addr
+	add	\reg, \reg, #:lo12:\addr
+.endm
+#endif
+
+#define	fp	x29
+#define	lr	x30
+
+/*
+ * Add a speculation barrier after the 'eret'.
+ * Some aarch64 cpus speculatively execute instructions after 'eret',
+ * and this potentiates side-channel attacks.
+ */
+#define	ERET	\
+	eret; dsb sy; isb
+
+/*
+ * ARMv8 options to be made available for the compiler to use. Should be
+ * inserted at the beginning of the ASM files that need them.
+ *
+ * The options are:
+ *  - PAN, needed for the compiler to recognize the PAN register.
+ *  - PAC, needed for the compiler to recognize the key registers.
+ */
+#ifdef ARMV83_PAC
+#define ARMV8_DEFINE_OPTIONS	\
+	.arch armv8.3-a
+#elif defined(ARMV81_PAN)
+#define ARMV8_DEFINE_OPTIONS	\
+	.arch armv8.1-a
+#else
+#define ARMV8_DEFINE_OPTIONS	/* nothing */
+#endif
 
 #endif
 

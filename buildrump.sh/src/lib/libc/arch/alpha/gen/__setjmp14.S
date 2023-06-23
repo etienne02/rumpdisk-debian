@@ -1,4 +1,4 @@
-/* $NetBSD: __setjmp14.S,v 1.7 2014/01/23 03:08:50 christos Exp $ */
+/* $NetBSD: __setjmp14.S,v 1.9 2021/07/06 12:38:40 thorpej Exp $ */
 
 /*
  * Copyright (c) 1994, 1995 Carnegie-Mellon University.
@@ -46,16 +46,16 @@
 LEAF(__setjmp14, 1)
 	LDGP(pv)
 	stq	ra, SC_PC(a0)			/* sc_pc = return address */
-	stq	s0, (SC_REGS+_REG_S0)(a0)	/* saved bits of sc_regs */
-	stq	s1, (SC_REGS+_REG_S1)(a0)
-	stq	s2, (SC_REGS+_REG_S2)(a0)
-	stq	s3, (SC_REGS+_REG_S3)(a0)
-	stq	s4, (SC_REGS+_REG_S4)(a0)
-	stq	s5, (SC_REGS+_REG_S5)(a0)
-	stq	s6, (SC_REGS+_REG_S6)(a0)
-	stq	ra, (SC_REGS+_REG_RA)(a0)
-	stq	sp, (SC_REGS+_REG_SP)(a0)
-	stq	gp, (SC_REGS+_REG_GP)(a0)
+	stq	s0, (SC_REGS+_REG_S0*8)(a0)	/* saved bits of sc_regs */
+	stq	s1, (SC_REGS+_REG_S1*8)(a0)
+	stq	s2, (SC_REGS+_REG_S2*8)(a0)
+	stq	s3, (SC_REGS+_REG_S3*8)(a0)
+	stq	s4, (SC_REGS+_REG_S4*8)(a0)
+	stq	s5, (SC_REGS+_REG_S5*8)(a0)
+	stq	s6, (SC_REGS+_REG_S6*8)(a0)
+	stq	ra, (SC_REGS+_REG_RA*8)(a0)
+	stq	sp, (SC_REGS+_REG_SP*8)(a0)
+	stq	gp, (SC_REGS+_REG_GP*8)(a0)
 
 	/*
 	 * get signal information
@@ -68,13 +68,13 @@ LEAF(__setjmp14, 1)
 	lda	a2, SC_MASK(s0)			/* point to mask in sc */
 	CALL(__sigprocmask14)
 
-	lda	sp, -24(sp)			/* sizeof struct sigaltstack */
+	lda	sp, -32(sp)	/* roundup(sizeof(struct sigaltstack), 16) */
 	mov	zero, a0
 	mov	sp, a1
 	CALL(__sigaltstack14)
 	ldl	t0, 16(sp)			/* offset of ss_flags */
-	lda	sp, 24(sp)			/* sizeof struct sigaltstack */
-	ldq	ra, (SC_REGS+_REG_RA)(s0)	/* restore return address */
+	lda	sp, 32(sp)			/* pop the sigaltstack */
+	ldq	ra, (SC_REGS+_REG_RA*8)(s0)	/* restore return address */
 	blt	v0, botch			/* check for error */
 	and	t0, 0x1, t0			/* get SA_ONSTACK flag */
 	stq	t0, SC_ONSTACK(s0)		/* and save it in sc_onstack */
@@ -82,10 +82,10 @@ LEAF(__setjmp14, 1)
 	 * Restore old s0 and a0, and continue saving registers
 	 */
 	mov	s0, a0
-	ldq	s0, (SC_REGS+_REG_S0)(a0)
+	ldq	s0, (SC_REGS+_REG_S0*8)(a0)
 
 	ldq	t0, magic		 	/* sigcontext magic number */
-	stq	t0, (SC_REGS+_REG_UNIQUE)(a0)	/* magic in sc_regs[31] */
+	stq	t0, (SC_REGS+_REG_UNIQUE*8)(a0)	/* magic in sc_regs[31] */
 	/* Too bad we can't check if we actually used FP */
 	ldiq	t0, 1
 	stq	t0, SC_OWNEDFP(a0)		/* say we've used FP.  */

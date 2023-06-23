@@ -1,4 +1,4 @@
-/*	$NetBSD: strchr.c,v 1.5 2011/08/31 15:48:32 plunky Exp $	*/
+/*	$NetBSD: strchr.c,v 1.7 2020/04/07 08:07:58 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)index.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: strchr.c,v 1.5 2011/08/31 15:48:32 plunky Exp $");
+__RCSID("$NetBSD: strchr.c,v 1.7 2020/04/07 08:07:58 skrll Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -46,12 +46,15 @@ __RCSID("$NetBSD: strchr.c,v 1.5 2011/08/31 15:48:32 plunky Exp $");
 #include <lib/libkern/libkern.h>
 #endif
 
+#if defined(KASAN)
+#undef strchr
+#endif
+
 __strong_alias(index, strchr)
 char *
 strchr(const char *p, int ch)
 {
 	const char cmp = ch;
-	_DIAGASSERT(p != NULL);
 
 	for (;; ++p) {
 		if (*p == cmp) {

@@ -1,6 +1,8 @@
-/* $NetBSD: cryptodev_internal.h,v 1.1 2011/02/19 16:26:34 drochner Exp $ */
+/* $NetBSD: cryptodev_internal.h,v 1.3 2017/06/02 09:46:57 knakahara Exp $ */
 
 /* exported to compat code, not for consumers */
+
+extern kmutex_t cryptodev_mtx;
 
 struct csession;
 int cryptodev_op(struct csession *, struct crypt_op *, struct lwp *);

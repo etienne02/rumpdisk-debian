@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic_xor_64.S,v 1.3 2014/03/04 16:15:28 matt Exp $	*/
+/*	$NetBSD: atomic_xor_64.S,v 1.7 2021/07/28 07:32:20 skrll Exp $	*/
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -30,10 +30,10 @@
 
 #include "atomic_op_asm.h"
 
-#ifdef _ARM_ARCH_6
+#if defined(_ARM_ARCH_6)
 
 ENTRY_NP(_atomic_xor_64_nv)
-	push	{r3,r4}			/* save temporary */
+	push	{r3, r4}		/* save temporary */
 #ifndef __ARM_EABI__
 	mov	r3, r2
 	mov	r2, r1
@@ -45,18 +45,13 @@ ENTRY_NP(_atomic_xor_64_nv)
 	strexd	r4, r0, r1, [ip]	/* try to store */
 	cmp	r4, #0			/*   succeed? */
 	bne	1b			/*     no, try again? */
-#ifdef _ARM_ARCH_7
-	dmb
-#else
-	mcr	p15, 0, r4, c7, c10, 5	/* data memory barrier */
-#endif
-	pop	{r3,r4}			/* restore temporary */
+	pop	{r3, r4}		/* restore temporary */
 	RET				/* return new value */
 END(_atomic_xor_64_nv)
 
 STRONG_ALIAS(_atomic_xor_64,_atomic_xor_64_nv)
 ATOMIC_OP_ALIAS(atomic_xor_64_nv,_atomic_xor_64_nv)
 ATOMIC_OP_ALIAS(atomic_xor_64,_atomic_xor_64)
-CRT_ALIAS(__sync_xor_and_fetch_8,_atomic_xor_64)
+CRT_ALIAS(__sync_xor_and_fetch_8,_atomic_xor_64_nv)
 
 #endif /* _ARM_ARCH_6 */

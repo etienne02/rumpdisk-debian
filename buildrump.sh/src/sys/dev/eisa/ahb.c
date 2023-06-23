@@ -1,4 +1,4 @@
-/*	$NetBSD: ahb.c,v 1.64 2016/07/14 04:00:45 msaitoh Exp $	*/
+/*	$NetBSD: ahb.c,v 1.70 2021/08/07 16:19:10 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -46,7 +46,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahb.c,v 1.64 2016/07/14 04:00:45 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahb.c,v 1.70 2021/08/07 16:19:10 thorpej Exp $");
 
 #include "opt_ddb.h"
 
@@ -58,7 +58,6 @@ __KERNEL_RCSID(0, "$NetBSD: ahb.c,v 1.64 2016/07/14 04:00:45 msaitoh Exp $");
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/proc.h>
 
@@ -108,10 +107,11 @@ struct ahb_softc {
 /*
  * Offset of an ECB from the beginning of the ECB DMA mapping.
  */
-#define	AHB_ECB_OFF(e)	(((u_long)(e)) - ((u_long)&sc->sc_ecbs[0]))
+#define	AHB_ECB_OFF(e)	(((uintptr_t)(e)) - ((uintptr_t)&sc->sc_ecbs[0]))
 
 struct ahb_probe_data {
 	int sc_irq;
+	int sc_ist;
 	int sc_scsi_dev;
 };
 
@@ -120,7 +120,7 @@ static void	ahb_send_immed(struct ahb_softc *, u_int32_t, struct ahb_ecb *);
 static int	ahbintr(void *);
 static void	ahb_free_ecb(struct ahb_softc *, struct ahb_ecb *);
 static struct	ahb_ecb *ahb_get_ecb(struct ahb_softc *);
-static struct	ahb_ecb *ahb_ecb_phys_kv(struct ahb_softc *, physaddr);
+static struct	ahb_ecb *ahb_ecb_lookup(struct ahb_softc *, uint32_t);
 static void	ahb_done(struct ahb_softc *, struct ahb_ecb *);
 static int	ahb_find(bus_space_tag_t, bus_space_handle_t,
 		    struct ahb_probe_data *);
@@ -142,6 +142,14 @@ CFATTACH_DECL_NEW(ahb, sizeof(struct ahb_softc),
 
 #define	AHB_ABORT_TIMEOUT	2000	/* time to wait for abort (mSec) */
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "ADP0000",	.data = EISA_PRODUCT_ADP0000 },
+	{ .compat = "ADP0001",	.data = EISA_PRODUCT_ADP0001 },
+	{ .compat = "ADP0002",	.data = EISA_PRODUCT_ADP0002 },
+	{ .compat = "ADP0400",	.data = EISA_PRODUCT_ADP0400 },
+	DEVICE_COMPAT_EOL
+};
+
 /*
  * Check the slots looking for a board we recognise
  * If we find one, note its address (slot) and call
@@ -155,11 +163,7 @@ ahbmatch(device_t parent, cfdata_t match, void *aux)
 	bus_space_handle_t ioh;
 	int rv;
 
-	/* must match one of our known ID strings */
-	if (strcmp(ea->ea_idstring, "ADP0000") &&
-	    strcmp(ea->ea_idstring, "ADP0001") &&
-	    strcmp(ea->ea_idstring, "ADP0002") &&
-	    strcmp(ea->ea_idstring, "ADP0400"))
+	if (!eisa_compatible_match(ea, compat_data))
 		return (0);
 
 	if (bus_space_map(iot,
@@ -182,11 +186,12 @@ ahbattach(device_t parent, device_t self, void *aux)
 {
 	struct eisa_attach_args *ea = aux;
 	struct ahb_softc *sc = device_private(self);
+	const struct device_compatible_entry *dce;
 	bus_space_tag_t iot = ea->ea_iot;
 	bus_space_handle_t ioh;
 	eisa_chipset_tag_t ec = ea->ea_ec;
 	eisa_intr_handle_t ih;
-	const char *model, *intrstr;
+	const char *intrstr;
 	struct ahb_probe_data apd;
 	struct scsipi_adapter *adapt = &sc->sc_adapter;
 	struct scsipi_channel *chan = &sc->sc_channel;
@@ -194,18 +199,11 @@ ahbattach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 
-	if (!strcmp(ea->ea_idstring, "ADP0000"))
-		model = EISA_PRODUCT_ADP0000;
-	else if (!strcmp(ea->ea_idstring, "ADP0001"))
-		model = EISA_PRODUCT_ADP0001;
-	else if (!strcmp(ea->ea_idstring, "ADP0002"))
-		model = EISA_PRODUCT_ADP0002;
-	else if (!strcmp(ea->ea_idstring, "ADP0400"))
-		model = EISA_PRODUCT_ADP0400;
-	else
-		model = "unknown model!";
+	dce = eisa_compatible_lookup(ea, compat_data);
+	KASSERT(dce != NULL);
+
 	aprint_naive("\n");
-	aprint_normal(": %s\n", model);
+	aprint_normal(": %s\n", (const char *)dce->data);
 
 	if (bus_space_map(iot,
 	    EISA_SLOT_ADDR(ea->ea_slot) + AHB_EISA_SLOT_OFFSET,
@@ -253,7 +251,7 @@ ahbattach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	intrstr = eisa_intr_string(ec, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = eisa_intr_establish(ec, ih, IST_LEVEL, IPL_BIO,
+	sc->sc_ih = eisa_intr_establish(ec, ih, apd.sc_ist, IPL_BIO,
 	    ahbintr, sc);
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(sc->sc_dev, "couldn't establish interrupt");
@@ -262,13 +260,16 @@ ahbattach(device_t parent, device_t self, void *aux)
 		aprint_error("\n");
 		return;
 	}
-	if (intrstr != NULL)
-		aprint_normal_dev(sc->sc_dev, "interrupting at %s\n", intrstr);
+	if (intrstr != NULL) {
+		aprint_normal_dev(sc->sc_dev,
+		    "interrupting at %s (%s trigger)\n", intrstr,
+		    apd.sc_ist == IST_EDGE ? "edge" : "level");
+	}
 
 	/*
 	 * ask the adapter what subunits are present
 	 */
-	config_found(self, &sc->sc_channel, scsiprint);
+	config_found(self, &sc->sc_channel, scsiprint, CFARGS_NONE);
 }
 
 /*
@@ -292,12 +293,7 @@ ahb_send_mbox(struct ahb_softc *sc, int opcode, struct ahb_ecb *ecb)
 		Debugger();
 	}
 
-	/*
-	 * don't know if this will work.
-	 * XXX WHAT DOES THIS COMMENT MEAN?!  --thorpej
-	 */
-	bus_space_write_4(iot, ioh, MBOXOUT0,
-	    sc->sc_dmamap_ecb->dm_segs[0].ds_addr + AHB_ECB_OFF(ecb));
+	bus_space_write_4(iot, ioh, MBOXOUT0, ecb->ecb_dma_addr);
 	bus_space_write_1(iot, ioh, ATTN, opcode |
 		ecb->xs->xs_periph->periph_target);
 
@@ -307,7 +303,7 @@ ahb_send_mbox(struct ahb_softc *sc, int opcode, struct ahb_ecb *ecb)
 }
 
 /*
- * Function to  send an immediate type command to the adapter
+ * Function to send an immediate type command to the adapter
  */
 static void
 ahb_send_immed(struct ahb_softc *sc, u_int32_t cmd, struct ahb_ecb *ecb)
@@ -327,7 +323,7 @@ ahb_send_immed(struct ahb_softc *sc, u_int32_t cmd, struct ahb_ecb *ecb)
 		Debugger();
 	}
 
-	bus_space_write_4(iot, ioh, MBOXOUT0, cmd);	/* don't know this will work */
+	bus_space_write_4(iot, ioh, MBOXOUT0, cmd);
 	bus_space_write_1(iot, ioh, G2CNTRL, G2CNTRL_SET_HOST_READY);
 	bus_space_write_1(iot, ioh, ATTN, OP_IMMED |
 		ecb->xs->xs_periph->periph_target);
@@ -377,7 +373,7 @@ ahbintr(void *arg)
 		case AHB_ECB_OK:
 		case AHB_ECB_RECOVERED:
 		case AHB_ECB_ERR:
-			ecb = ahb_ecb_phys_kv(sc, mboxval);
+			ecb = ahb_ecb_lookup(sc, mboxval);
 			if (!ecb) {
 				aprint_error_dev(sc->sc_dev,
 				    "BAD ECB RETURNED!\n");
@@ -452,13 +448,14 @@ ahb_init_ecb(struct ahb_softc *sc, struct ahb_ecb *ecb)
 		return (error);
 	}
 
+	ecb->ecb_dma_addr = sc->sc_dmamap_ecb->dm_segs[0].ds_addr +
+	    AHB_ECB_OFF(ecb);
+
 	/*
 	 * put in the phystokv hash table
 	 * Never gets taken out.
 	 */
-	ecb->hashkey = sc->sc_dmamap_ecb->dm_segs[0].ds_addr +
-	    AHB_ECB_OFF(ecb);
-	hashnum = ECB_HASH(ecb->hashkey);
+	hashnum = ECB_HASH(ecb->ecb_dma_addr);
 	ecb->nexthash = sc->sc_ecbhash[hashnum];
 	sc->sc_ecbhash[hashnum] = ecb;
 	ahb_reset_ecb(sc, ecb);
@@ -508,16 +505,16 @@ ahb_get_ecb(struct ahb_softc *sc)
 }
 
 /*
- * given a physical address, find the ecb that it corresponds to.
+ * Lookup and return the ECB that has the specified DMA address.
  */
 static struct ahb_ecb *
-ahb_ecb_phys_kv(struct ahb_softc *sc, physaddr ecb_phys)
+ahb_ecb_lookup(struct ahb_softc *sc, uint32_t ecb_phys)
 {
 	int hashnum = ECB_HASH(ecb_phys);
 	struct ahb_ecb *ecb = sc->sc_ecbhash[hashnum];
 
 	while (ecb) {
-		if (ecb->hashkey == ecb_phys)
+		if (ecb->ecb_dma_addr == ecb_phys)
 			break;
 		ecb = ecb->nexthash;
 	}
@@ -611,7 +608,7 @@ ahb_find(bus_space_tag_t iot, bus_space_handle_t ioh,
     struct ahb_probe_data *sc)
 {
 	u_char intdef;
-	int i, irq, busid;
+	int i, irq, ist, busid;
 	int wait = 1000;	/* 1 sec enough? */
 
 	bus_space_write_1(iot, ioh, PORTADDR, PORTADDR_ENHANCED);
@@ -678,6 +675,21 @@ ahb_find(bus_space_tag_t iot, bus_space_handle_t ioh,
 		return EIO;
 	}
 
+	/*
+	 * On EISA, edge triggered interrupts are signalled by the rising
+	 * edge of the interrupt signal, while level tiggered interrupts
+	 * are signalled so long as the interrupt signal is driven low.
+	 *
+	 * So, if the controller is configured for active-high interrupts,
+	 * that is "edge trigger" in our parlance, while active-low would
+	 * be "level trigger".
+	 */
+	if (intdef & INTHIGH) {
+		ist = IST_EDGE;
+	} else {
+		ist = IST_LEVEL;
+	}
+
 	bus_space_write_1(iot, ioh, INTDEF, (intdef | INTEN));	/* make sure we can interrupt */
 
 	/* who are we on the scsi bus? */
@@ -686,6 +698,7 @@ ahb_find(bus_space_tag_t iot, bus_space_handle_t ioh,
 	/* if we want to return data, do so now */
 	if (sc) {
 		sc->sc_irq = irq;
+		sc->sc_ist = ist;
 		sc->sc_scsi_dev = busid;
 	}
 
@@ -849,11 +862,11 @@ ahb_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 		ecb->opt2 = periph->periph_lun | ECB_NRB;
 		memcpy(&ecb->scsi_cmd, xs->cmd,
 		    ecb->scsi_cmd_length = xs->cmdlen);
-		ecb->sense_ptr = sc->sc_dmamap_ecb->dm_segs[0].ds_addr +
-		    AHB_ECB_OFF(ecb) + offsetof(struct ahb_ecb, ecb_sense);
+		ecb->sense_ptr = ecb->ecb_dma_addr +
+		    offsetof(struct ahb_ecb, ecb_sense);
 		ecb->req_sense_length = sizeof(ecb->ecb_sense);
-		ecb->status = sc->sc_dmamap_ecb->dm_segs[0].ds_addr +
-		    AHB_ECB_OFF(ecb) + offsetof(struct ahb_ecb, ecb_status);
+		ecb->status = ecb->ecb_dma_addr +
+		    offsetof(struct ahb_ecb, ecb_status);
 		ecb->ecb_status.host_stat = 0x00;
 		ecb->ecb_status.target_stat = 0x00;
 
@@ -909,17 +922,16 @@ ahb_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 				    ecb->dmamap_xfer->dm_segs[seg].ds_len;
 			}
 
-			ecb->data_addr = sc->sc_dmamap_ecb->dm_segs[0].ds_addr +
-			    AHB_ECB_OFF(ecb) +
+			ecb->data_addr = ecb->ecb_dma_addr +
 			    offsetof(struct ahb_ecb, ahb_dma);
 			ecb->data_length = ecb->dmamap_xfer->dm_nsegs *
 			    sizeof(struct ahb_dma_seg);
 			ecb->opt1 |= ECB_S_G;
 		} else {	/* No data xfer, use non S/G values */
-			ecb->data_addr = (physaddr)0;
+			ecb->data_addr = 0;
 			ecb->data_length = 0;
 		}
-		ecb->link_addr = (physaddr)0;
+		ecb->link_addr = 0;
 
 		bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamap_ecb,
 		    AHB_ECB_OFF(ecb), sizeof(struct ahb_ecb),

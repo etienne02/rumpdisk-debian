@@ -1,4 +1,4 @@
-/* $NetBSD: com_acpi.c,v 1.33 2016/07/11 11:31:50 msaitoh Exp $ */
+/* $NetBSD: com_acpi.c,v 1.42 2021/03/25 05:33:59 rin Exp $ */
 
 /*
  * Copyright (c) 2002 Jared D. McNeill <jmcneill@invisible.ca>
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com_acpi.c,v 1.33 2016/07/11 11:31:50 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com_acpi.c,v 1.42 2021/03/25 05:33:59 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -34,10 +34,9 @@ __KERNEL_RCSID(0, "$NetBSD: com_acpi.c,v 1.33 2016/07/11 11:31:50 msaitoh Exp $"
 #include <sys/termios.h>
 
 #include <dev/acpi/acpivar.h>
+#include <dev/acpi/acpi_intr.h>
 
 #include <dev/ic/comvar.h>
-
-#include <dev/isa/isadmavar.h>
 
 static int	com_acpi_match(device_t, cfdata_t , void *);
 static void	com_acpi_attach(device_t, device_t, void *);
@@ -54,16 +53,38 @@ CFATTACH_DECL_NEW(com_acpi, sizeof(struct com_acpi_softc), com_acpi_match,
  * Supported device IDs
  */
 
-static const char * const com_acpi_ids[] = {
-	"PNP0500",	/* Standard PC COM port */
-	"PNP0501",	/* 16550A-compatible COM port */
-	"PNP0510",	/* Generic IRDA-compatible device */
-	"PNP0511",	/* Generic IRDA-compatible device */
-	"IBM0071",	/* IBM ThinkPad IRDA device */
-	"SMCF010",	/* SMC SuperIO IRDA device */
-	"NSC6001",	/* NSC IRDA device */
-	"FUJ02E6",	/* Fujitsu Serial Pen Tablet */
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	/* Standard PC COM port */
+	{ .compat = "PNP0500",		.value = COM_TYPE_NORMAL },
+
+	/* 16550A-compatible COM port */
+	{ .compat = "PNP0501",		.value = COM_TYPE_NORMAL },
+
+	/* Generic IRDA-compatible device */
+	{ .compat = "PNP0510",		.value = COM_TYPE_NORMAL },
+
+	/* Generic IRDA-compatible device */
+	{ .compat = "PNP0511",		.value = COM_TYPE_NORMAL },
+
+	/* IBM ThinkPad IRDA device */
+	{ .compat = "IBM0071",		.value = COM_TYPE_NORMAL },
+
+	/* SMC SuperIO IRDA device */
+	{ .compat = "SMCF010",		.value = COM_TYPE_NORMAL },
+
+	/* NSC IRDA device */
+	{ .compat = "NSC6001",		.value = COM_TYPE_NORMAL },
+
+	/* Fujitsu Serial Pen Tablet */
+	{ .compat = "FUJ02E6",		.value = COM_TYPE_NORMAL },
+
+	/* Hisilicon UART */
+	{ .compat = "HISI0031",		.value = COM_TYPE_DW_APB },
+
+	/* Designware APB UART */
+	{ .compat = "8250dw",		.value = COM_TYPE_DW_APB },
+
+	DEVICE_COMPAT_EOL
 };
 
 /*
@@ -74,10 +95,7 @@ com_acpi_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct acpi_attach_args *aa = aux;
 
-	if (aa->aa_node->ad_type != ACPI_TYPE_DEVICE)
-		return 0;
-
-	return acpi_match_hid(aa->aa_node->ad_devinfo,com_acpi_ids);
+	return acpi_compatible_match(aa, compat_data);
 }
 
 /*
@@ -89,6 +107,7 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 	struct com_acpi_softc *asc = device_private(self);
 	struct com_softc *sc = &asc->sc_com;
 	struct acpi_attach_args *aa = aux;
+	const struct device_compatible_entry *dce;
 	struct acpi_resources res;
 	struct acpi_io *io;
 	struct acpi_mem *mem;
@@ -98,6 +117,7 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 	bus_addr_t base;
 	bus_size_t size;
 	ACPI_STATUS rv;
+	ACPI_INTEGER clock_freq;
 
 	sc->sc_dev = self;
 
@@ -138,22 +158,37 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 			aprint_error_dev(self, "can't map i/o space\n");
 			goto out;
 		}
-	COM_INIT_REGS(sc->sc_regs, iot, ioh, base);
+	com_init_regs(&sc->sc_regs, iot, ioh, base);
 
 	aprint_normal("%s", device_xname(self));
 
-	if (com_probe_subr(&sc->sc_regs) == 0) {
-		aprint_error(": com probe failed\n");
-		goto out;
+	dce = acpi_compatible_lookup(aa, compat_data);
+	KASSERT(dce != NULL);
+
+	sc->sc_type = dce->value;
+
+	if (sc->sc_type == COM_TYPE_DW_APB) {
+		sc->sc_poll_ticks = 1;	/* XXX */
+	} else {
+		if (com_probe_subr(&sc->sc_regs) == 0) {
+			aprint_error(": com probe failed\n");
+			goto out;
+		}
 	}
 
-	sc->sc_frequency = 115200 * 16;
+	rv = acpi_dsd_integer(aa->aa_node->ad_handle, "clock-frequency",
+	    &clock_freq);
+	if (ACPI_SUCCESS(rv))
+		sc->sc_frequency = clock_freq;
+	else
+		sc->sc_frequency = 115200 * 16;
 
 	com_attach_subr(sc);
 
-	asc->sc_ih = isa_intr_establish(aa->aa_ic, irq->ar_irq,
-	    (irq->ar_type == ACPI_EDGE_SENSITIVE) ? IST_EDGE : IST_LEVEL,
-	    IPL_SERIAL, comintr, sc);
+	if (sc->sc_poll_ticks == 0)
+		asc->sc_ih = acpi_intr_establish(self,
+		    (uint64_t)(uintptr_t)aa->aa_node->ad_handle,
+		    IPL_SERIAL, true, comintr, sc, device_xname(self));
 
 	if (!pmf_device_register(self, NULL, com_resume))
 		aprint_error_dev(self, "couldn't establish a power handler\n");

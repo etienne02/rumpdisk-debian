@@ -1,4 +1,4 @@
-/* $NetBSD: dwc_gmac_var.h,v 1.6 2014/11/22 18:31:03 jmcneill Exp $ */
+/* $NetBSD: dwc_gmac_var.h,v 1.16 2019/09/13 07:55:06 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 2013, 2014 The NetBSD Foundation, Inc.
@@ -29,6 +29,20 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef _KERNEL_OPT
+#include "opt_net_mpsafe.h"
+#endif
+
+/* Use DWCGMAC_MPSAFE inside the front-ends for interrupt handlers.  */
+#ifdef NET_MPSAFE
+#define DWCGMAC_MPSAFE	1
+#endif
+
+#ifdef DWCGMAC_MPSAFE
+#define DWCGMAC_FDT_INTR_MPSAFE FDT_INTR_MPSAFE
+#else
+#define DWCGMAC_FDT_INTR_MPSAFE 0
+#endif
 
 /*
  * We could use 1024 DMA descriptors to fill up an 8k page (each is 16 byte).
@@ -46,7 +60,23 @@
 
 #define		AWGE_MAX_PACKET		0x7ff
 
+struct dwc_gmac_dev_dmadesc;
 
+struct dwc_gmac_desc_methods {
+	void (*tx_init_flags)(struct dwc_gmac_dev_dmadesc *);
+	void (*tx_set_owned_by_dev)(struct dwc_gmac_dev_dmadesc *);
+	int  (*tx_is_owned_by_dev)(struct dwc_gmac_dev_dmadesc *);
+	void (*tx_set_len)(struct dwc_gmac_dev_dmadesc *, int);
+	void (*tx_set_first_frag)(struct dwc_gmac_dev_dmadesc *);
+	void (*tx_set_last_frag)(struct dwc_gmac_dev_dmadesc *);
+
+	void (*rx_init_flags)(struct dwc_gmac_dev_dmadesc *);
+	void (*rx_set_owned_by_dev)(struct dwc_gmac_dev_dmadesc *);
+	int  (*rx_is_owned_by_dev)(struct dwc_gmac_dev_dmadesc *);
+	void (*rx_set_len)(struct dwc_gmac_dev_dmadesc *, int);
+	uint32_t  (*rx_get_len)(struct dwc_gmac_dev_dmadesc *);
+	int  (*rx_has_error)(struct dwc_gmac_dev_dmadesc *);
+};
 
 struct dwc_gmac_rx_data {
 	bus_dmamap_t	rd_map;
@@ -64,6 +94,7 @@ struct dwc_gmac_tx_ring {
 	struct dwc_gmac_dev_dmadesc	*t_desc;    /* VA of TX ring start */
 	struct dwc_gmac_tx_data	t_data[AWGE_TX_RING_COUNT];
 	int				t_cur, t_next, t_queued;
+	kmutex_t			t_mtx;
 };
 
 struct dwc_gmac_rx_ring {
@@ -79,6 +110,8 @@ struct dwc_gmac_softc {
 	bus_space_tag_t sc_bst;
 	bus_space_handle_t sc_bsh;
 	bus_dma_tag_t sc_dmat;
+	uint32_t sc_flags;
+#define	DWC_GMAC_FORCE_THRESH_DMA_MODE	0x01	/* force DMA to use threshold mode */
 	struct ethercom sc_ec;
 	struct mii_data sc_mii;
 	kmutex_t sc_mdio_lock;
@@ -86,9 +119,18 @@ struct dwc_gmac_softc {
 	bus_dma_segment_t sc_dma_ring_seg;	/* and TX ring */
 	struct dwc_gmac_rx_ring sc_rxq;
 	struct dwc_gmac_tx_ring sc_txq;
-	short sc_if_flags;			/* shadow of ether flags */
+	const struct dwc_gmac_desc_methods *sc_descm;
+	u_short sc_if_flags;			/* shadow of ether flags */
 	uint16_t sc_mii_clk;
+	bool sc_stopping;
+	krndsource_t rnd_source;
+	kmutex_t *sc_lock;			/* lock for softc operations */
+
+	struct if_percpuq *sc_ipq;		/* softint-based input queues */
+
+	void (*sc_set_speed)(struct dwc_gmac_softc *, int);
 };
 
-void dwc_gmac_attach(struct dwc_gmac_softc*, uint32_t /*mii_clk*/);
+int dwc_gmac_attach(struct dwc_gmac_softc*, int /*phy_id*/,
+    uint32_t /*mii_clk*/);
 int dwc_gmac_intr(struct dwc_gmac_softc*);

@@ -1,4 +1,4 @@
-/*	$NetBSD: scsipiconf.h,v 1.123 2016/05/02 19:18:29 christos Exp $	*/
+/*	$NetBSD: scsipiconf.h,v 1.130 2019/03/28 10:44:29 kardel Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2004 The NetBSD Foundation, Inc.
@@ -54,6 +54,7 @@ typedef	int	boolean;
 
 #include <sys/callout.h>
 #include <sys/queue.h>
+#include <sys/condvar.h>
 #include <dev/scsipi/scsi_spc.h>
 #include <dev/scsipi/scsipi_debug.h>
 
@@ -188,7 +189,7 @@ struct scsipi_inquiry_pattern;
 struct scsipi_adapter {
 	device_t adapt_dev;	/* pointer to adapter's device */
 	int	adapt_nchannels;	/* number of adapter channels */
-	int	adapt_refcnt;		/* adapter's reference count */
+	volatile int	adapt_refcnt;		/* adapter's reference count */
 	int	adapt_openings;		/* total # of command openings */
 	int	adapt_max_periph;	/* max openings per periph */
 	int	adapt_flags;
@@ -203,23 +204,22 @@ struct scsipi_adapter {
 			struct disk_parms *, u_long);
 	int	(*adapt_accesschk)(struct scsipi_periph *,
 			struct scsipi_inquiry_pattern *);
+
+	kmutex_t adapt_mtx;
+	volatile int	adapt_running;	/* how many users of mutex */
 };
-#endif
 
 /* adapt_flags */
 #define SCSIPI_ADAPT_POLL_ONLY	0x01 /* Adaptor can't do interrupts. */
+#define SCSIPI_ADAPT_MPSAFE     0x02 /* Adaptor doesn't need kernel lock */
 
-#define	scsipi_adapter_minphys(chan, bp)				\
-	(*(chan)->chan_adapter->adapt_minphys)((bp))
-
-#define	scsipi_adapter_request(chan, req, arg)				\
-	(*(chan)->chan_adapter->adapt_request)((chan), (req), (arg))
-
-#define	scsipi_adapter_ioctl(chan, cmd, data, flag, p)			\
-	(*(chan)->chan_adapter->adapt_ioctl)((chan), (cmd), (data), (flag), (p))
-
-#define	scsipi_adapter_enable(chan, enable)				\
-	(*(chan)->chan_adapt->adapt_enable)((chan), (enable))
+void scsipi_adapter_minphys(struct scsipi_channel *, struct buf *);
+void scsipi_adapter_request(struct scsipi_channel *,
+	scsipi_adapter_req_t, void *);
+int scsipi_adapter_ioctl(struct scsipi_channel *, u_long,
+	void *, int, struct proc *);
+int scsipi_adapter_enable(struct scsipi_adapter *, int);
+#endif
 
 
 /*
@@ -289,6 +289,7 @@ struct scsipi_channel {
 
 	int	chan_defquirks;		/* default device's quirks */
 
+	struct lwp *chan_dthread;	/* discovery thread */
 	struct lwp *chan_thread;	/* completion thread */
 	int	chan_tflags;		/* flags for the completion thread */
 
@@ -307,7 +308,17 @@ struct scsipi_channel {
 	/* callback we may have to call after forking the kthread */
 	void (*chan_init_cb)(struct scsipi_channel *, void *);
 	void *chan_init_cb_arg;
+
+	kcondvar_t chan_cv_comp;
+	kcondvar_t chan_cv_thr;
+	kcondvar_t chan_cv_xs;
+
+#define chan_cv_complete(ch) (&(ch)->chan_cv_comp)
+#define chan_cv_thread(ch) (&(ch)->chan_cv_thr)
 };
+
+#define chan_running(ch) ((ch)->chan_adapter->adapt_running)
+#define chan_mtx(ch) (&(ch)->chan_adapter->adapt_mtx)
 #endif
 
 /* chan_flags */
@@ -341,8 +352,27 @@ struct scsipi_channel {
  */
 #define	PERIPH_NTAGWORDS	((256 / 8) / sizeof(u_int32_t))
 
-
 #ifdef _KERNEL
+/*
+ * scsipi_opcodes:
+ *      This optionally allocated structure documents
+ *      valid opcodes and timeout values for the respective
+ *      opcodes overriding the requested timeouts.
+ *      It is created when SCSI_MAINTENANCE_IN/
+ *      RSOC_REPORT_SUPPORTED_OPCODES can provide information
+ *      at attach time.
+ */
+struct scsipi_opcodes 
+{
+	struct scsipi_opinfo
+	{
+		long          ti_timeout;	/* timeout in seconds (> 0 => VALID) */
+		unsigned long ti_flags;
+#define SCSIPI_TI_VALID  0x0001	        /* valid op code */
+#define SCSIPI_TI_LOGGED 0x8000	        /* override logged during debug */
+	} opcode_info[0x100];
+};
+
 /*
  * scsipi_periph:
  *
@@ -390,6 +420,9 @@ struct scsipi_periph {
 
 	int	periph_qfreeze;		/* queue freeze count */
 
+	/* available opcodes and timeout information */
+	struct scsipi_opcodes *periph_opcs;
+	
 	/* Bitmap of free command tags. */
 	u_int32_t periph_freetags[PERIPH_NTAGWORDS];
 
@@ -401,6 +434,9 @@ struct scsipi_periph {
 	/* xfer which has a pending CHECK_CONDITION */
 	struct scsipi_xfer *periph_xscheck;
 
+	kcondvar_t periph_cv;
+#define periph_cv_periph(p) (&(p)->periph_cv)
+#define periph_cv_active(p) (&(p)->periph_cv)
 };
 #endif
 
@@ -464,8 +500,10 @@ struct scsipi_periph {
 #define PQUIRK_CAP_WIDE16	0x00100000	/* SCSI device with ST wide op*/
 #define PQUIRK_CAP_NODT		0x00200000	/* signals DT, but can't. */
 #define PQUIRK_START		0x00400000	/* needs start before tur */
-
-
+#define	PQUIRK_NOFUA		0x00800000	/* does not grok FUA */
+#define PQUIRK_NOREPSUPPOPC     0x01000000      /* does not grok
+						   REPORT SUPPORTED OPCODES
+						   to fetch device timeouts */
 /*
  * Error values an adapter driver may return
  */
@@ -482,6 +520,7 @@ typedef enum {
 	XS_REQUEUE		/* requeue this command */
 } scsipi_xfer_result_t;
 
+#ifdef _KERNEL
 /*
  * Each scsipi transaction is fully described by one of these structures
  * It includes information about the source of the command and also the
@@ -544,7 +583,10 @@ struct scsipi_xfer {
 
 	struct	scsipi_generic cmdstore
 	    __aligned(4);		/* stash the command in here */
+
+#define xs_cv(xs) (&(xs)->xs_periph->periph_channel->chan_cv_xs)
 };
+#endif
 
 /*
  * scsipi_xfer control flags
@@ -635,6 +677,7 @@ struct scsi_quirk_inquiry_pattern {
 
 #ifdef _KERNEL
 void	scsipi_init(void);
+void	scsipi_ioctl_init(void);
 void	scsipi_load_verbose(void);
 int	scsipi_command(struct scsipi_periph *, struct scsipi_generic *, int,
 	    u_char *, int, int, int, struct buf *, int);
@@ -661,7 +704,10 @@ void	scsipi_user_done(struct scsipi_xfer *);
 int	scsipi_interpret_sense(struct scsipi_xfer *);
 void	scsipi_wait_drain(struct scsipi_periph *);
 void	scsipi_kill_pending(struct scsipi_periph *);
+void    scsipi_get_opcodeinfo(struct scsipi_periph *periph);
+void    scsipi_free_opcodeinfo(struct scsipi_periph *periph);
 struct scsipi_periph *scsipi_alloc_periph(int);
+void	scsipi_free_periph(struct scsipi_periph *);
 
 /* Function pointers for scsiverbose module */
 extern int	(*scsipi_print_sense)(struct scsipi_xfer *, int);
@@ -692,6 +738,8 @@ void	scsipi_remove_periph(struct scsipi_channel *,
 	    struct scsipi_periph *);
 struct scsipi_periph *scsipi_lookup_periph(struct scsipi_channel *,
 	    int, int);
+struct scsipi_periph *scsipi_lookup_periph_locked(struct scsipi_channel *,
+	    int, int);
 int	scsipi_target_detach(struct scsipi_channel *, int, int, int);
 
 int	scsipi_adapter_addref(struct scsipi_adapter *);
@@ -704,6 +752,9 @@ void	scsipi_channel_timed_thaw(void *);
 void	scsipi_periph_freeze(struct scsipi_periph *, int);
 void	scsipi_periph_thaw(struct scsipi_periph *, int);
 void	scsipi_periph_timed_thaw(void *);
+
+void	scsipi_periph_freeze_locked(struct scsipi_periph *, int);
+void	scsipi_periph_thaw_locked(struct scsipi_periph *, int);
 
 int	scsipi_sync_period_to_factor(int);
 int	scsipi_sync_factor_to_period(int);
@@ -781,10 +832,10 @@ _4btol(const u_int8_t *bytes)
 {
 	u_int32_t rv;
 
-	rv = (bytes[0] << 24) |
-	     (bytes[1] << 16) |
-	     (bytes[2] << 8) |
-	     bytes[3];
+	rv = ((u_int32_t)bytes[0] << 24) |
+	     ((u_int32_t)bytes[1] << 16) |
+	     ((u_int32_t)bytes[2] << 8) |
+	     (u_int32_t)bytes[3];
 	return (rv);
 }
 
@@ -870,10 +921,10 @@ _4ltol(const u_int8_t *bytes)
 {
 	u_int32_t rv;
 
-	rv = bytes[0] |
-	     (bytes[1] << 8) |
-	     (bytes[2] << 16) |
-	     (bytes[3] << 24);
+	rv = (u_int32_t)bytes[0] |
+	     ((u_int32_t)bytes[1] << 8) |
+	     ((u_int32_t)bytes[2] << 16) |
+	     ((u_int32_t)bytes[3] << 24);
 	return (rv);
 }
 

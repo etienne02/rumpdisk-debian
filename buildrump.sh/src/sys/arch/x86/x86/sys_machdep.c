@@ -1,11 +1,11 @@
-/*	$NetBSD: sys_machdep.c,v 1.29 2015/10/23 18:53:26 christos Exp $	*/
+/*	$NetBSD: sys_machdep.c,v 1.56 2020/06/19 16:20:22 maxv Exp $	*/
 
-/*-
- * Copyright (c) 1998, 2007, 2009 The NetBSD Foundation, Inc.
+/*
+ * Copyright (c) 1998, 2007, 2009, 2017 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Charles M. Hannum, and by Andrew Doran.
+ * by Charles M. Hannum, by Andrew Doran, and by Maxime Villard.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,15 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_machdep.c,v 1.29 2015/10/23 18:53:26 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_machdep.c,v 1.56 2020/06/19 16:20:22 maxv Exp $");
 
 #include "opt_mtrr.h"
-#include "opt_perfctrs.h"
 #include "opt_user_ldt.h"
 #include "opt_compat_netbsd.h"
-#ifdef i386
-#include "opt_vm86.h"
-#endif
 #include "opt_xen.h"
 
 #include <sys/param.h>
@@ -67,52 +63,27 @@ __KERNEL_RCSID(0, "$NetBSD: sys_machdep.c,v 1.29 2015/10/23 18:53:26 christos Ex
 #include <machine/sysarch.h>
 #include <machine/mtrr.h>
 
-#ifdef __x86_64__
-/* Need to be checked. */
-#undef	USER_LDT
-#undef	PERFCTRS
-#undef	IOPERM
+#if defined(__x86_64__) || defined(XENPV)
+#undef	IOPERM	/* not implemented */
 #else
-#if defined(XEN)
-#undef	IOPERM
-#else /* defined(XEN) */
 #define	IOPERM
-#endif /* defined(XEN) */
 #endif
 
-#ifdef VM86
-#include <machine/vm86.h>
-#endif
-
-#ifdef PERFCTRS
-#include <machine/pmc.h>
+#if defined(XENPV) && defined(USER_LDT)
+#error "USER_LDT not supported on XENPV"
 #endif
 
 extern struct vm_map *kernel_map;
 
-int x86_get_ioperm(struct lwp *, void *, register_t *);
-int x86_set_ioperm(struct lwp *, void *, register_t *);
-int x86_get_mtrr(struct lwp *, void *, register_t *);
-int x86_set_mtrr(struct lwp *, void *, register_t *);
-int x86_set_sdbase32(void *, char, lwp_t *, bool);
+static int x86_get_ioperm(struct lwp *, void *, register_t *);
+static int x86_set_ioperm(struct lwp *, void *, register_t *);
+static int x86_set_sdbase32(void *, char, lwp_t *, bool);
 int x86_set_sdbase(void *, char, lwp_t *, bool);
-int x86_get_sdbase32(void *, char);
+static int x86_get_sdbase32(void *, char);
 int x86_get_sdbase(void *, char);
 
-#if defined(USER_LDT) && defined(LDT_DEBUG)
-static void x86_print_ldt(int, const struct segment_descriptor *);
-
-static void
-x86_print_ldt(int i, const struct segment_descriptor *d)
-{
-	printf("[%d] lolimit=0x%x, lobase=0x%x, type=%u, dpl=%u, p=%u, "
-	    "hilimit=0x%x, xx=%x, def32=%u, gran=%u, hibase=0x%x\n",
-	    i, d->sd_lolimit, d->sd_lobase, d->sd_type, d->sd_dpl, d->sd_p,
-	    d->sd_hilimit, d->sd_xx, d->sd_def32, d->sd_gran, d->sd_hibase);
-}
-#endif
-
-int
+#ifdef i386
+static int
 x86_get_ldt(struct lwp *l, void *args, register_t *retval)
 {
 #ifndef USER_LDT
@@ -125,7 +96,7 @@ x86_get_ldt(struct lwp *l, void *args, register_t *retval)
 	if ((error = copyin(args, &ua, sizeof(ua))) != 0)
 		return error;
 
-	if (ua.num < 0 || ua.num > 8192)
+	if (ua.num < 0 || ua.num > MAX_USERLDT_SLOTS)
 		return EINVAL;
 
 	cp = malloc(ua.num * sizeof(union descriptor), M_TEMP, M_WAITOK);
@@ -141,6 +112,7 @@ x86_get_ldt(struct lwp *l, void *args, register_t *retval)
 	return error;
 #endif
 }
+#endif
 
 int
 x86_get_ldt1(struct lwp *l, struct x86_get_ldt_args *ua, union descriptor *cp)
@@ -154,45 +126,47 @@ x86_get_ldt1(struct lwp *l, struct x86_get_ldt_args *ua, union descriptor *cp)
 	int nldt, num;
 	union descriptor *lp;
 
+#ifdef __x86_64__
+	const size_t min_ldt_size = LDT_SIZE;
+#else
+	const size_t min_ldt_size = NLDT * sizeof(union descriptor);
+#endif
+
 	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_LDT_GET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
-#ifdef	LDT_DEBUG
-	printf("x86_get_ldt: start=%d num=%d descs=%p\n", ua->start,
-	    ua->num, ua->desc);
-#endif
+	if (ua->start < 0 || ua->num < 0 ||
+	    ua->start > MAX_USERLDT_SLOTS || ua->num > MAX_USERLDT_SLOTS ||
+	    ua->start + ua->num > MAX_USERLDT_SLOTS)
+		return EINVAL;
 
-	if (ua->start < 0 || ua->num < 0 || ua->start > 8192 || ua->num > 8192 ||
-	    ua->start + ua->num > 8192)
-		return (EINVAL);
+	if (ua->start * sizeof(union descriptor) < min_ldt_size)
+		return EINVAL;
 
 	mutex_enter(&cpu_lock);
 
 	if (pmap->pm_ldt != NULL) {
-		nldt = pmap->pm_ldt_len / sizeof(*lp);
+		nldt = MAX_USERLDT_SIZE / sizeof(*lp);
 		lp = pmap->pm_ldt;
 	} else {
+#ifdef __x86_64__
+		nldt = LDT_SIZE / sizeof(*lp);
+#else
 		nldt = NLDT;
-		lp = ldt;
+#endif
+		lp = (union descriptor *)ldtstore;
 	}
 
 	if (ua->start > nldt) {
 		mutex_exit(&cpu_lock);
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	lp += ua->start;
-	num = min(ua->num, nldt - ua->start);
+	num = uimin(ua->num, nldt - ua->start);
 	ua->num = num;
-#ifdef LDT_DEBUG
-	{
-		int i;
-		for (i = 0; i < num; i++)
-			x86_print_ldt(i, &lp[i].sd);
-	}
-#endif
 
 	memcpy(cp, lp, num * sizeof(union descriptor));
 	mutex_exit(&cpu_lock);
@@ -201,7 +175,8 @@ x86_get_ldt1(struct lwp *l, struct x86_get_ldt_args *ua, union descriptor *cp)
 #endif
 }
 
-int
+#ifdef i386
+static int
 x86_set_ldt(struct lwp *l, void *args, register_t *retval)
 {
 #ifndef USER_LDT
@@ -212,15 +187,12 @@ x86_set_ldt(struct lwp *l, void *args, register_t *retval)
 	int error;
 
 	if ((error = copyin(args, &ua, sizeof(ua))) != 0)
-		return (error);
+		return error;
 
-	if (ua.num < 0 || ua.num > 8192)
+	if (ua.num < 0 || ua.num > MAX_USERLDT_SLOTS)
 		return EINVAL;
 
-	descv = malloc(sizeof (*descv) * ua.num, M_TEMP, M_NOWAIT);
-	if (descv == NULL)
-		return ENOMEM;
-
+	descv = malloc(sizeof (*descv) * ua.num, M_TEMP, M_WAITOK);
 	error = copyin(ua.desc, descv, sizeof (*descv) * ua.num);
 	if (error == 0)
 		error = x86_set_ldt1(l, &ua, descv);
@@ -230,6 +202,7 @@ x86_set_ldt(struct lwp *l, void *args, register_t *retval)
 	return error;
 #endif
 }
+#endif
 
 int
 x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
@@ -241,41 +214,39 @@ x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
 	int error, i, n, old_sel, new_sel;
 	struct proc *p = l->l_proc;
 	pmap_t pmap = p->p_vmspace->vm_map.pmap;
-	size_t old_len, new_len;
 	union descriptor *old_ldt, *new_ldt;
+
+#ifdef __x86_64__
+	const size_t min_ldt_size = LDT_SIZE;
+#else
+	const size_t min_ldt_size = NLDT * sizeof(union descriptor);
+#endif
 
 	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_LDT_SET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
-	if (ua->start < 0 || ua->num < 0 || ua->start > 8192 || ua->num > 8192 ||
-	    ua->start + ua->num > 8192)
-		return (EINVAL);
+	if (ua->start < 0 || ua->num < 0 ||
+	    ua->start > MAX_USERLDT_SLOTS || ua->num > MAX_USERLDT_SLOTS ||
+	    ua->start + ua->num > MAX_USERLDT_SLOTS)
+		return EINVAL;
+
+	if (ua->start * sizeof(union descriptor) < min_ldt_size)
+		return EINVAL;
 
 	/* Check descriptors for access violations. */
 	for (i = 0; i < ua->num; i++) {
 		union descriptor *desc = &descv[i];
 
+#ifdef __x86_64__
+		if (desc->sd.sd_long != 0)
+			return EACCES;
+#endif
+
 		switch (desc->sd.sd_type) {
 		case SDT_SYSNULL:
 			desc->sd.sd_p = 0;
-			break;
-		case SDT_SYS286CGT:
-		case SDT_SYS386CGT:
-			/*
-			 * Only allow call gates targeting a segment
-			 * in the LDT or a user segment in the fixed
-			 * part of the gdt.  Segments in the LDT are
-			 * constrained (below) to be user segments.
-			 */
-			if (desc->gd.gd_p != 0 &&
-			    !ISLDT(desc->gd.gd_selector) &&
-			    ((IDXSEL(desc->gd.gd_selector) >= NGDT) ||
-			     (gdt[IDXSEL(desc->gd.gd_selector)].sd.sd_dpl !=
-				 SEL_UPL))) {
-				return EACCES;
-			}
 			break;
 		case SDT_MEMEC:
 		case SDT_MEMEAC:
@@ -299,13 +270,7 @@ x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
 		case SDT_MEMERA:
 			break;
 		default:
-			/*
-			 * Make sure that unknown descriptor types are
-			 * not marked present.
-			 */
-			if (desc->sd.sd_p != 0)
-				return EACCES;
-			break;
+			return EACCES;
 		}
 
 		if (desc->sd.sd_p != 0) {
@@ -316,38 +281,24 @@ x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
 	}
 
 	/*
-	 * Install selected changes.  We perform a copy, write, swap dance
-	 * here to ensure that all updates happen atomically.
+	 * Install selected changes.
 	 */
 
 	/* Allocate a new LDT. */
-	for (;;) {
-		new_len = (ua->start + ua->num) * sizeof(union descriptor);
-		new_len = max(new_len, pmap->pm_ldt_len);
-		new_len = max(new_len, NLDT * sizeof(union descriptor));
-		new_len = round_page(new_len);
-		new_ldt = (union descriptor *)uvm_km_alloc(kernel_map,
-		    new_len, 0, UVM_KMF_WIRED | UVM_KMF_ZERO);
-		mutex_enter(&cpu_lock);
-		if (pmap->pm_ldt_len <= new_len) {
-			break;
-		}
-		mutex_exit(&cpu_lock);
-		uvm_km_free(kernel_map, (vaddr_t)new_ldt, new_len,
-		    UVM_KMF_WIRED);
-	}
+	new_ldt = (union descriptor *)uvm_km_alloc(kernel_map,
+	    MAX_USERLDT_SIZE, 0, UVM_KMF_WIRED | UVM_KMF_ZERO | UVM_KMF_WAITVA);
+
+	mutex_enter(&cpu_lock);
 
 	/* Copy existing entries, if any. */
 	if (pmap->pm_ldt != NULL) {
 		old_ldt = pmap->pm_ldt;
-		old_len = pmap->pm_ldt_len;
 		old_sel = pmap->pm_ldt_sel;
-		memcpy(new_ldt, old_ldt, old_len);
+		memcpy(new_ldt, old_ldt, MAX_USERLDT_SIZE);
 	} else {
 		old_ldt = NULL;
-		old_len = 0;
 		old_sel = -1;
-		memcpy(new_ldt, ldt, NLDT * sizeof(union descriptor));
+		memcpy(new_ldt, ldtstore, min_ldt_size);
 	}
 
 	/* Apply requested changes. */
@@ -356,18 +307,19 @@ x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
 	}
 
 	/* Allocate LDT selector. */
-	new_sel = ldt_alloc(new_ldt, new_len);
+	new_sel = ldt_alloc(new_ldt, MAX_USERLDT_SIZE);
 	if (new_sel == -1) {
 		mutex_exit(&cpu_lock);
-		uvm_km_free(kernel_map, (vaddr_t)new_ldt, new_len,
+		uvm_km_free(kernel_map, (vaddr_t)new_ldt, MAX_USERLDT_SIZE,
 		    UVM_KMF_WIRED);
 		return ENOMEM;
 	}
 
 	/* All changes are now globally visible.  Swap in the new LDT. */
-	pmap->pm_ldt = new_ldt;
-	pmap->pm_ldt_len = new_len;
-	pmap->pm_ldt_sel = new_sel;
+	atomic_store_relaxed(&pmap->pm_ldt_sel, new_sel);
+	/* membar_store_store for pmap_fork() to read these unlocked safely */
+	membar_producer();
+	atomic_store_relaxed(&pmap->pm_ldt, new_ldt);
 
 	/* Switch existing users onto new LDT. */
 	pmap_ldt_sync(pmap);
@@ -375,10 +327,13 @@ x86_set_ldt1(struct lwp *l, struct x86_set_ldt_args *ua,
 	/* Free existing LDT (if any). */
 	if (old_ldt != NULL) {
 		ldt_free(old_sel);
-		uvm_km_free(kernel_map, (vaddr_t)old_ldt, old_len,
+		/* exit the mutex before free */
+		mutex_exit(&cpu_lock);
+		uvm_km_free(kernel_map, (vaddr_t)old_ldt, MAX_USERLDT_SIZE,
 		    UVM_KMF_WIRED);
+	} else {
+		mutex_exit(&cpu_lock);
 	}
-	mutex_exit(&cpu_lock);
 
 	return error;
 #endif
@@ -389,7 +344,7 @@ x86_iopl(struct lwp *l, void *args, register_t *retval)
 {
 	int error;
 	struct x86_iopl_args ua;
-#ifdef XEN
+#ifdef XENPV
 	int iopl;
 #else
 	struct trapframe *tf = l->l_md.md_regs;
@@ -398,28 +353,27 @@ x86_iopl(struct lwp *l, void *args, register_t *retval)
 	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_IOPL,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
 	if ((error = copyin(args, &ua, sizeof(ua))) != 0)
 		return error;
 
-#ifdef XEN
+#ifdef XENPV
 	if (ua.iopl)
 		iopl = SEL_UPL;
 	else
 		iopl = SEL_KPL;
 
     {
-	struct physdev_op physop;
 	struct pcb *pcb;
 
 	pcb = lwp_getpcb(l);
 	pcb->pcb_iopl = iopl;
 
 	/* Force the change at ring 0. */
-	physop.cmd = PHYSDEVOP_SET_IOPL;
-	physop.u.set_iopl.iopl = iopl;
-	HYPERVISOR_physdev_op(&physop);
+	struct physdev_set_iopl set_iopl;
+	set_iopl.iopl = iopl;
+	HYPERVISOR_physdev_op(PHYSDEVOP_set_iopl, &set_iopl);
     }
 #elif defined(__x86_64__)
 	if (ua.iopl)
@@ -436,7 +390,7 @@ x86_iopl(struct lwp *l, void *args, register_t *retval)
 	return 0;
 }
 
-int
+static int
 x86_get_ioperm(struct lwp *l, void *args, register_t *retval)
 {
 #ifdef IOPERM
@@ -449,10 +403,10 @@ x86_get_ioperm(struct lwp *l, void *args, register_t *retval)
 	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_IOPERM_GET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
 	if ((error = copyin(args, &ua, sizeof(ua))) != 0)
-		return (error);
+		return error;
 
 	iomap = pcb->pcb_iomap;
 	if (iomap == NULL) {
@@ -469,7 +423,7 @@ x86_get_ioperm(struct lwp *l, void *args, register_t *retval)
 #endif
 }
 
-int
+static int
 x86_set_ioperm(struct lwp *l, void *args, register_t *retval)
 {
 #ifdef IOPERM
@@ -483,10 +437,10 @@ x86_set_ioperm(struct lwp *l, void *args, register_t *retval)
   	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_IOPERM_SET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
 	if ((error = copyin(args, &ua, sizeof(ua))) != 0)
-		return (error);
+		return error;
 
 	new = kmem_alloc(IOMAPSIZE, KM_SLEEP);
 	error = copyin(ua.iomap, new, IOMAPSIZE);
@@ -500,11 +454,13 @@ x86_set_ioperm(struct lwp *l, void *args, register_t *retval)
 		kmem_free(old, IOMAPSIZE);
 	}
 
+	CTASSERT(offsetof(struct cpu_tss, iomap) -
+	    offsetof(struct cpu_tss, tss) == IOMAP_VALIDOFF);
+
 	kpreempt_disable();
 	ci = curcpu();
-	memcpy(ci->ci_iomap, pcb->pcb_iomap, sizeof(ci->ci_iomap));
-	ci->ci_tss.tss_iobase =
-	    ((uintptr_t)ci->ci_iomap - (uintptr_t)&ci->ci_tss) << 16;
+	memcpy(ci->ci_tss->iomap, pcb->pcb_iomap, IOMAPSIZE);
+	ci->ci_tss->tss.tss_iobase = IOMAP_VALIDOFF << 16;
 	kpreempt_enable();
 
 	return error;
@@ -513,7 +469,7 @@ x86_set_ioperm(struct lwp *l, void *args, register_t *retval)
 #endif
 }
 
-int
+static int
 x86_get_mtrr(struct lwp *l, void *args, register_t *retval)
 {
 #ifdef MTRR
@@ -526,7 +482,7 @@ x86_get_mtrr(struct lwp *l, void *args, register_t *retval)
  	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_MTRR_GET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
 	error = copyin(args, &ua, sizeof ua);
 	if (error != 0)
@@ -548,7 +504,7 @@ x86_get_mtrr(struct lwp *l, void *args, register_t *retval)
 #endif
 }
 
-int
+static int
 x86_set_mtrr(struct lwp *l, void *args, register_t *retval)
 {
 #ifdef MTRR
@@ -561,7 +517,7 @@ x86_set_mtrr(struct lwp *l, void *args, register_t *retval)
  	error = kauth_authorize_machdep(l->l_cred, KAUTH_MACHDEP_MTRR_SET,
 	    NULL, NULL, NULL, NULL);
 	if (error)
-		return (error);
+		return error;
 
 	error = copyin(args, &ua, sizeof ua);
 	if (error != 0)
@@ -591,7 +547,7 @@ x86_set_mtrr(struct lwp *l, void *args, register_t *retval)
 #define segment_descriptor mem_segment_descriptor
 #endif
 
-int
+static int
 x86_set_sdbase32(void *arg, char which, lwp_t *l, bool direct)
 {
 	struct trapframe *tf = l->l_md.md_regs;
@@ -626,9 +582,6 @@ x86_set_sdbase32(void *arg, char which, lwp_t *l, bool direct)
 		    sizeof(struct segment_descriptor));
 		if (l == curlwp) {
 			update_descriptor(&curcpu()->ci_gdt[GUFS_SEL], &usd);
-#ifdef __x86_64__
-			setfs(GSEL(GUFS_SEL, SEL_UPL));
-#endif
 		}
 		tf->tf_fs = GSEL(GUFS_SEL, SEL_UPL);
 	} else /* which == 'g' */ {
@@ -636,13 +589,8 @@ x86_set_sdbase32(void *arg, char which, lwp_t *l, bool direct)
 		    sizeof(struct segment_descriptor));
 		if (l == curlwp) {
 			update_descriptor(&curcpu()->ci_gdt[GUGS_SEL], &usd);
-#ifdef __x86_64__
-#ifndef XEN
+#if defined(__x86_64__) && defined(XENPV)
 			setusergs(GSEL(GUGS_SEL, SEL_UPL));
-#else
-			HYPERVISOR_set_segment_base(SEGBASE_GS_USER_SEL,
-						    GSEL(GUGS_SEL, SEL_UPL));
-#endif
 #endif
 		}
 		tf->tf_gs = GSEL(GUGS_SEL, SEL_UPL);
@@ -698,7 +646,7 @@ x86_set_sdbase(void *arg, char which, lwp_t *l, bool direct)
 #endif
 }
 
-int
+static int
 x86_get_sdbase32(void *arg, char which)
 {
 	struct segment_descriptor *sd;
@@ -763,6 +711,10 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap, register_t *retva
 		error = x86_iopl(l, SCARG(uap, parms), retval);
 		break;
 
+#ifdef i386
+	/*
+	 * On amd64, this is done via netbsd32_sysarch.
+	 */
 	case X86_GET_LDT: 
 		error = x86_get_ldt(l, SCARG(uap, parms), retval);
 		break;
@@ -770,6 +722,7 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap, register_t *retva
 	case X86_SET_LDT: 
 		error = x86_set_ldt(l, SCARG(uap, parms), retval);
 		break;
+#endif
 
 	case X86_GET_IOPERM: 
 		error = x86_get_ioperm(l, SCARG(uap, parms), retval);
@@ -785,35 +738,6 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap, register_t *retva
 	case X86_SET_MTRR:
 		error = x86_set_mtrr(l, SCARG(uap, parms), retval);
 		break;
-
-#ifdef VM86
-	case X86_VM86:
-		error = x86_vm86(l, SCARG(uap, parms), retval);
-		break;
-	case X86_OLD_VM86:
-		error = compat_16_x86_vm86(l, SCARG(uap, parms), retval);
-		break;
-#endif
-
-#ifdef PERFCTRS
-	case X86_PMC_INFO:
-		KERNEL_LOCK(1, NULL);
-		error = pmc_info(l, SCARG(uap, parms), retval);
-		KERNEL_UNLOCK_ONE(NULL);
-		break;
-
-	case X86_PMC_STARTSTOP:
-		KERNEL_LOCK(1, NULL);
-		error = pmc_startstop(l, SCARG(uap, parms), retval);
-		KERNEL_UNLOCK_ONE(NULL);
-		break;
-
-	case X86_PMC_READ:
-		KERNEL_LOCK(1, NULL);
-		error = pmc_read(l, SCARG(uap, parms), retval);
-		KERNEL_UNLOCK_ONE(NULL);
-		break;
-#endif
 
 	case X86_SET_FSBASE:
 		error = x86_set_sdbase(SCARG(uap, parms), 'f', curlwp, false);
@@ -835,7 +759,7 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap, register_t *retva
 		error = EINVAL;
 		break;
 	}
-	return (error);
+	return error;
 }
 
 int

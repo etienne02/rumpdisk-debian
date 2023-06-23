@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_var.h,v 1.114 2016/06/21 03:28:27 ozaki-r Exp $	*/
+/*	$NetBSD: ip_var.h,v 1.133 2021/02/03 18:13:13 roy Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -46,14 +46,18 @@ struct ipovly {
 	u_int16_t ih_len;		/* protocol length */
 	struct	  in_addr ih_src;	/* source internet address */
 	struct	  in_addr ih_dst;	/* destination internet address */
-} __packed;
+};
+#ifdef __CTASSERT
+__CTASSERT(sizeof(struct ipovly) == 20);
+#endif
 
 /*
  * IP Flow structure
  */
 struct ipflow {
-	LIST_ENTRY(ipflow) ipf_list;	/* next in active list */
-	LIST_ENTRY(ipflow) ipf_hash;	/* next ipflow in bucket */
+	TAILQ_ENTRY(ipflow) ipf_list;	/* next in active list */
+	TAILQ_ENTRY(ipflow) ipf_hash;	/* next ipflow in bucket */
+	size_t ipf_hashidx;		/* own hash index of ipflowtable[] */
 	struct in_addr ipf_dst;		/* destination address */
 	struct in_addr ipf_src;		/* source address */
 	uint8_t ipf_tos;		/* type-of-service */
@@ -66,35 +70,17 @@ struct ipflow {
 };
 
 /*
- * IP sequence queue structure.
- *
- * XXX -- The following explains why the ipqe_m field is here, for TCP's use:
- * We want to avoid doing m_pullup on incoming packets but that
- * means avoiding dtom on the tcp reassembly code.  That in turn means
- * keeping an mbuf pointer in the reassembly queue (since we might
- * have a cluster).  As a quick hack, the source & destination
- * port numbers (which are no longer needed once we've located the
- * tcpcb) are overlayed with an mbuf pointer.
+ * TCP sequence queue structure.
  */
 TAILQ_HEAD(ipqehead, ipqent);
 struct ipqent {
 	TAILQ_ENTRY(ipqent) ipqe_q;
-	union {
-		struct ip	*_ip;
-		struct tcpiphdr *_tcp;
-	} _ipqe_u1;
-	struct mbuf	*ipqe_m;	/* point to first mbuf */
-	struct mbuf	*ipre_mlast;	/* point to last mbuf */
-	u_int8_t	ipqe_mff;	/* for IP fragmentation */
-	/*
-	 * The following are used in TCP reassembly
-	 */
+	struct mbuf *ipqe_m;
 	TAILQ_ENTRY(ipqent) ipqe_timeq;
 	u_int32_t ipqe_seq;
 	u_int32_t ipqe_len;
 	u_int32_t ipqe_flags;
 };
-#define	ipqe_tcp	_ipqe_u1._tcp
 
 /*
  * Structure stored in mbuf in inpcb.ip_options
@@ -120,6 +106,12 @@ struct ip_moptions {
 	u_int8_t  imo_multicast_loop;	/* 1 => hear sends if a member */
 	u_int16_t imo_num_memberships;	/* no. memberships this socket */
 	struct	  in_multi *imo_membership[IP_MAX_MEMBERSHIPS];
+};
+
+struct ip_pktopts {
+	struct sockaddr_in ippo_laddr;	/* source address */
+	struct ip_moptions *ippo_imo;	/* inp->inp_moptions or &ippo_imobuf */
+	struct ip_moptions ippo_imobuf;	/* use when IP_PKTINFO */
 };
 
 /*
@@ -156,8 +148,19 @@ struct ip_moptions {
 #define	IP_STAT_TOOLONG		27	/* ip length > max ip packet size */
 #define	IP_STAT_NOGIF		28	/* no match gif found */
 #define	IP_STAT_BADADDR		29	/* invalid address on header */
+#define	IP_STAT_NOL2TP		30	/* no match l2tp found */
+#define	IP_STAT_NOIPSEC		31	/* no match ipsec(4) found */
+#define	IP_STAT_PFILDROP_IN	32	/* dropped by pfil (PFIL_IN) */
+#define	IP_STAT_PFILDROP_OUT	33	/* dropped by pfil (PFIL_OUT) */
+#define	IP_STAT_IPSECDROP_IN	34	/* dropped by IPsec SP check */
+#define	IP_STAT_IPSECDROP_OUT	35	/* dropped by IPsec SP check */
+#define	IP_STAT_IFDROP		36	/* dropped due to interface state */
+#define	IP_STAT_TIMXCEED	37	/* time to live exceeded */
+#define	IP_STAT_IFNOADDR	38	/* interface has no IP address */
+#define	IP_STAT_RTREJECT	39	/* rejected by route */
+#define	IP_STAT_BCASTDENIED	40	/* broadcast prohibited */
 
-#define	IP_NSTATS		30
+#define	IP_NSTATS		41
 
 #ifdef _KERNEL
 
@@ -180,6 +183,7 @@ __CTASSERT(SO_BROADCAST ==	0x0020);
 
 #define	IP_IGMP_MCAST		0x0040		/* IGMP for mcast join/leave */
 #define	IP_MTUDISC		0x0400		/* Path MTU Discovery; set DF */
+#define	IP_ROUTETOIFINDEX	0x0800	/* force route imo_multicast_if_index */
 
 extern struct domain inetdomain;
 extern const struct pr_usrreqs rip_usrreqs;
@@ -205,17 +209,19 @@ void	ip_init(void);
 void	in_init(void);
 
 int	 ip_ctloutput(int, struct socket *, struct sockopt *);
+int	 ip_setpktopts(struct mbuf *, struct ip_pktopts *, int *,
+	    struct inpcb *, kauth_cred_t);
 void	 ip_drain(void);
 void	 ip_drainstub(void);
 void	 ip_freemoptions(struct ip_moptions *);
 int	 ip_optcopy(struct ip *, struct ip *);
 u_int	 ip_optlen(struct inpcb *);
 int	 ip_output(struct mbuf *, struct mbuf *, struct route *, int,
-	    struct ip_moptions *, struct socket *);
+	    struct ip_moptions *, struct inpcb *);
 int	 ip_fragment(struct mbuf *, struct ifnet *, u_long);
 
 void	 ip_reass_init(void);
-int	 ip_reass_packet(struct mbuf **, struct ip *);
+int	 ip_reass_packet(struct mbuf **);
 void	 ip_reass_slowtimo(void);
 void	 ip_reass_drain(void);
 
@@ -224,14 +230,14 @@ void	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
 void	 ip_slowtimo(void);
 void	 ip_fasttimo(void);
 struct mbuf *
-	 ip_srcroute(void);
+	 ip_srcroute(struct mbuf *);
 int	 ip_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 void	 ip_statinc(u_int);
 void *	 rip_ctlinput(int, const struct sockaddr *, void *);
 int	 rip_ctloutput(int, struct socket *, struct sockopt *);
 void	 rip_init(void);
-void	 rip_input(struct mbuf *, ...);
-int	 rip_output(struct mbuf *, struct inpcb *);
+void	 rip_input(struct mbuf *, int, int);
+int	 rip_output(struct mbuf *, struct inpcb *, struct mbuf *, struct lwp *);
 int	 rip_usrreq(struct socket *,
 	    int, struct mbuf *, struct mbuf *, struct mbuf *, struct lwp *);
 
@@ -244,7 +250,7 @@ int	ip_if_output(struct ifnet * const, struct mbuf * const,
 /* IP Flow interface. */
 void	ipflow_init(void);
 void	ipflow_poolinit(void);
-void	ipflow_create(const struct route *, struct mbuf *);
+void	ipflow_create(struct route *, struct mbuf *);
 void	ipflow_slowtimo(void);
 int	ipflow_invalidate_all(int);
 

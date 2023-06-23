@@ -1,4 +1,4 @@
-/*	$NetBSD: valz_acpi.c,v 1.7 2015/10/05 15:57:50 christos Exp $	*/
+/*	$NetBSD: valz_acpi.c,v 1.9 2021/01/29 15:49:55 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -74,7 +74,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: valz_acpi.c,v 1.7 2015/10/05 15:57:50 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: valz_acpi.c,v 1.9 2021/01/29 15:49:55 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -231,9 +231,9 @@ struct valz_acpi_softc {
 	struct acpi_devnode *sc_node;	/* our ACPI devnode */
 };
 
-static const char * const valz_acpi_hids[] = {
-	"TOS6208",
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "TOS6208" },
+	DEVICE_COMPAT_EOL
 };
 
 static int	valz_acpi_match(device_t, cfdata_t, void *);
@@ -274,10 +274,7 @@ valz_acpi_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct acpi_attach_args *aa = aux;
 
-	if (aa->aa_node->ad_type != ACPI_TYPE_DEVICE)
-		return (0);
-
-	return (acpi_match_hid(aa->aa_node->ad_devinfo, valz_acpi_hids));
+	return acpi_compatible_match(aa, compat_data);
 }
 
 /*
@@ -336,7 +333,7 @@ valz_acpi_notify_handler(ACPI_HANDLE handle, uint32_t notify, void *context)
 		break;
 
 	default:
-		aprint_error_dev(sc->sc_dev,
+		aprint_debug_dev(sc->sc_dev,
 		    "unknown notify 0x%02X\n", notify);
 		break;
 	}

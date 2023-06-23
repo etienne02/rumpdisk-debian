@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -94,15 +94,14 @@ AcpiExDoDebugObject (
         return_VOID;
     }
 
-    /* Null string or newline -- don't emit the line header */
+    /* Newline -- don't emit the line header */
 
     if (SourceDesc &&
         (ACPI_GET_DESCRIPTOR_TYPE (SourceDesc) == ACPI_DESC_TYPE_OPERAND) &&
         (SourceDesc->Common.Type == ACPI_TYPE_STRING))
     {
-        if ((SourceDesc->String.Length == 0) ||
-                ((SourceDesc->String.Length == 1) &&
-                (*SourceDesc->String.Pointer == '\n')))
+        if ((SourceDesc->String.Length == 1) &&
+            (*SourceDesc->String.Pointer == '\n'))
         {
             AcpiOsPrintf ("\n");
             return_VOID;
@@ -127,11 +126,11 @@ AcpiExDoDebugObject (
             Timer = ((UINT32) AcpiOsGetTimer () / 10);
             Timer &= 0x03FFFFFF;
 
-            AcpiOsPrintf ("[ACPI Debug T=0x%8.8X] %*s", Timer, Level, " ");
+            AcpiOsPrintf ("ACPI Debug: T=0x%8.8X %*s", Timer, Level, " ");
         }
         else
         {
-            AcpiOsPrintf ("[ACPI Debug] %*s", Level, " ");
+            AcpiOsPrintf ("ACPI Debug: %*s", Level, " ");
         }
     }
 

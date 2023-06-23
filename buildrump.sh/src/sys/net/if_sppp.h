@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sppp.h,v 1.28 2015/09/06 06:01:01 dholland Exp $	*/
+/*	$NetBSD: if_sppp.h,v 1.36 2021/05/14 08:41:25 yamaguchi Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -40,10 +40,12 @@
 #define	SPPP_AUTHPROTO_NONE	0
 #define SPPP_AUTHPROTO_PAP	1
 #define SPPP_AUTHPROTO_CHAP	2
+#define SPPP_AUTHPROTO_NOCHG	3
 
 #define SPPP_AUTHFLAG_NOCALLOUT		1	/* do not require authentication on */
 						/* callouts */
 #define SPPP_AUTHFLAG_NORECHALLENGE	2	/* do not re-challenge CHAP */
+#define SPPP_AUTHFLAG_PASSIVEAUTHPROTO	4	/* use authproto proposed by peer */
 
 struct spppauthcfg {
 	char	ifname[IFNAMSIZ];	/* pppoe interface name */
@@ -74,7 +76,7 @@ struct sppplcpcfg {
 
 /*
  * Don't change the order of this.  Ordering the phases this way allows
- * for a comparision of ``pp_phase >= PHASE_AUTHENTICATE'' in order to
+ * for a comparison of ``pp_phase >= PHASE_AUTHENTICATE'' in order to
  * know whether LCP is up.
  */
 #define	SPPP_PHASE_DEAD		0
@@ -151,6 +153,7 @@ struct spppkeepalivesettings {
 	u_int	maxalive;		/* number of LCP echo req. w/o reply */
 	time_t	max_noreceive;		/* (sec.) grace period before we start
 					   sending LCP echo requests. */
+	u_int	alive_interval;		/* number of keepalive between echo req. */
 };
 struct spppkeepalivesettings50 {
 	char	ifname[IFNAMSIZ];	/* pppoe interface name */
@@ -164,6 +167,83 @@ struct spppkeepalivesettings50 {
 #define	__SPPPGETKEEPALIVE50	_IOWR('i', 133, struct spppkeepalivesettings50)
 
 /* 134 already used! */
+
+/* states are named and numbered according to RFC 1661 */
+#define SPPP_STATE_INITIAL	0
+#define SPPP_STATE_STARTING	1
+#define SPPP_STATE_CLOSED	2
+#define SPPP_STATE_STOPPED	3
+#define SPPP_STATE_CLOSING	4
+#define SPPP_STATE_STOPPING	5
+#define SPPP_STATE_REQ_SENT	6
+#define SPPP_STATE_ACK_RCVD	7
+#define SPPP_STATE_ACK_SENT	8
+#define SPPP_STATE_OPENED	9
+
+#define SPPP_LCP_OPT_MRU		__BIT(1)
+#define SPPP_LCP_OPT_ASYNC_MAP		__BIT(2)
+#define SPPP_LCP_OPT_AUTH_PROTO		__BIT(3)
+#define SPPP_LCP_OPT_QUAL_PROTO		__BIT(4)
+#define SPPP_LCP_OPT_MAGIC		__BIT(5)
+#define SPPP_LCP_OPT_RESERVED		__BIT(6)
+#define SPPP_LCP_OPT_PROTO_COMP		__BIT(7)
+#define SPPP_LCP_OPT_ADDR_COMP		__BIT(8)
+#define SPPP_LCP_OPT_FCS_ALTS		__BIT(9)
+#define SPPP_LCP_OPT_SELF_DESC_PAD	__BIT(10)
+#define SPPP_LCP_OPT_CALL_BACK		__BIT(13)
+#define SPPP_LCP_OPT_COMPOUND_FRMS	__BIT(15)
+#define SPPP_LCP_OPT_MP_MRRU		__BIT(17)
+#define SPPP_LCP_OPT_MP_SSNHF		__BIT(18)
+#define SPPP_LCP_OPT_MP_EID		__BIT(19)
+
+/* #define SPPP_OPT_ADDRESSES	__BIT(0) */
+#define SPPP_IPCP_OPT_COMPRESSION	__BIT(1)
+#define SPPP_IPCP_OPT_ADDRESS		__BIT(2)
+#define SPPP_IPCP_OPT_PRIMDNS		__BIT(3)
+#define SPPP_IPCP_OPT_SECDNS		__BIT(4)
+
+#define SPPP_IPV6CP_OPT_IFID		__BIT(1)
+#define SPPP_IPV6CP_OPT_COMPRESSION	__BIT(2)
+
+struct sppplcpstatus {
+	char	ifname[IFNAMSIZ];
+	int	state;
+	int	timeout;
+	u_long	opts;
+	u_long	magic;
+	u_long	mru;
+};
+
+#define SPPPGETLCPSTATUS	_IOWR('i', 135, struct sppplcpstatus)
+
+struct spppipcpstatus {
+	char		ifname[IFNAMSIZ];
+	int		state;
+	u_long		opts;
+	u_int32_t	myaddr;
+};
+
+#define SPPPGETIPCPSTATUS	_IOWR('i', 136, struct spppipcpstatus)
+
+struct spppipv6cpstatus {
+	char		ifname[IFNAMSIZ];
+	int		state;
+	u_long		opts;
+	u_int8_t	my_ifid[8];
+	u_int8_t	his_ifid[8];
+};
+
+#define SPPPGETIPV6CPSTATUS	_IOWR('i', 137, struct spppipv6cpstatus)
+
+#define SPPP_NCP_IPCP		__BIT(0)
+#define SPPP_NCP_IPV6CP		__BIT(1)
+struct spppncpcfg {
+	char		ifname[IFNAMSIZ];
+	u_int		ncp_flags;
+};
+
+#define SPPPGETNCPCFG		_IOWR('i', 138, struct spppncpcfg)
+#define SPPPSETNCPCFG		_IOW('i', 139, struct spppncpcfg)
 
 #endif /* !_NET_IF_SPPP_H_ */
 

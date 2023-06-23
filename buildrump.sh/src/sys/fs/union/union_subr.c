@@ -1,4 +1,4 @@
-/*	$NetBSD: union_subr.c,v 1.73 2015/04/20 19:36:55 riastradh Exp $	*/
+/*	$NetBSD: union_subr.c,v 1.79 2020/08/18 09:44:07 hannken Exp $	*/
 
 /*
  * Copyright (c) 1994
@@ -72,7 +72,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: union_subr.c,v 1.73 2015/04/20 19:36:55 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: union_subr.c,v 1.79 2020/08/18 09:44:07 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -104,7 +104,8 @@ static u_long uhash_mask;		/* size of hash table - 1 */
 
 static kmutex_t uhash_lock;
 
-void union_updatevp(struct union_node *, struct vnode *, struct vnode *);
+static void union_newupper(struct union_node *, struct vnode *);
+static void union_newlower(struct union_node *, struct vnode *);
 static void union_ref(struct union_node *);
 static void union_rele(struct union_node *);
 static int union_do_lookup(struct vnode *, struct componentname *, kauth_cred_t,    const char *);
@@ -160,71 +161,28 @@ union_done(void)
 }
 
 void
-union_updatevp(struct union_node *un, struct vnode *uppervp,
-	struct vnode *lowervp)
+union_newlower(struct union_node *un, struct vnode *lowervp)
 {
 	int ohash = UNION_HASH(un->un_uppervp, un->un_lowervp);
-	int nhash = UNION_HASH(uppervp, lowervp);
-	int docache = (lowervp != NULLVP || uppervp != NULLVP);
-	bool un_unlock;
+	int nhash = UNION_HASH(un->un_uppervp, lowervp);
+
+	if (un->un_lowervp == lowervp)
+		return;
 
 	KASSERT(VOP_ISLOCKED(UNIONTOV(un)) == LK_EXCLUSIVE);
+	KASSERT(un->un_lowervp == NULL);
 
 	mutex_enter(&uhash_lock);
 
-	if (!docache || ohash != nhash) {
-		if (un->un_cflags & UN_CACHED) {
-			un->un_cflags &= ~UN_CACHED;
-			LIST_REMOVE(un, un_cache);
-		}
+	if (ohash != nhash && (un->un_cflags & UN_CACHED)) {
+		un->un_cflags &= ~UN_CACHED;
+		LIST_REMOVE(un, un_cache);
 	}
-
-	if (un->un_lowervp != lowervp) {
-		if (un->un_lowervp) {
-			vrele(un->un_lowervp);
-			if (un->un_path) {
-				free(un->un_path, M_TEMP);
-				un->un_path = 0;
-			}
-			if (un->un_dirvp) {
-				vrele(un->un_dirvp);
-				un->un_dirvp = NULLVP;
-			}
-		}
-		un->un_lowervp = lowervp;
-		mutex_enter(&un->un_lock);
-		un->un_lowersz = VNOVAL;
-		mutex_exit(&un->un_lock);
-	}
-
-	if (un->un_uppervp != uppervp) {
-		if (un->un_uppervp) {
-			un_unlock = false;
-			vrele(un->un_uppervp);
-		} else
-			un_unlock = true;
-
-		mutex_enter(&un->un_lock);
-		un->un_uppervp = uppervp;
-		mutex_exit(&un->un_lock);
-		if (un_unlock) {
-			struct vop_unlock_args ap;
-
-			ap.a_vp = UNIONTOV(un);
-			genfs_unlock(&ap);
-		}
-		mutex_enter(&un->un_lock);
-		un->un_uppersz = VNOVAL;
-		mutex_exit(&un->un_lock);
-		/* Update union vnode interlock. */
-		if (uppervp != NULL) {
-			mutex_obj_hold(uppervp->v_interlock);
-			uvm_obj_setlock(&UNIONTOV(un)->v_uobj,
-			    uppervp->v_interlock);
-		}
-	}
-
-	if (docache && (ohash != nhash)) {
+	mutex_enter(&un->un_lock);
+	un->un_lowervp = lowervp;
+	un->un_lowersz = VNOVAL;
+	mutex_exit(&un->un_lock);
+	if (ohash != nhash) {
 		LIST_INSERT_HEAD(&uhashtbl[nhash], un, un_cache);
 		un->un_cflags |= UN_CACHED;
 	}
@@ -233,17 +191,58 @@ union_updatevp(struct union_node *un, struct vnode *uppervp,
 }
 
 void
-union_newlower(struct union_node *un, struct vnode *lowervp)
-{
-
-	union_updatevp(un, un->un_uppervp, lowervp);
-}
-
-void
 union_newupper(struct union_node *un, struct vnode *uppervp)
 {
+	int ohash = UNION_HASH(un->un_uppervp, un->un_lowervp);
+	int nhash = UNION_HASH(uppervp, un->un_lowervp);
+	struct vop_lock_args lock_ap;
+	struct vop_unlock_args unlock_ap;
+	int error __diagused;
 
-	union_updatevp(un, uppervp, un->un_lowervp);
+	if (un->un_uppervp == uppervp)
+		return;
+
+	KASSERT(VOP_ISLOCKED(UNIONTOV(un)) == LK_EXCLUSIVE);
+	KASSERT(un->un_uppervp == NULL);
+
+	/*
+	 * We have to transfer the vnode lock from the union vnode to
+	 * the upper vnode.  Lock the upper vnode first.  We cannot use
+	 * VOP_LOCK() here as it would break the fstrans state.
+	 */
+	lock_ap.a_desc = VDESC(vop_lock);
+	lock_ap.a_vp = uppervp;
+	lock_ap.a_flags = LK_EXCLUSIVE;
+	error = VCALL(lock_ap.a_vp,  VOFFSET(vop_lock), &lock_ap);
+	KASSERT(error == 0);
+
+	mutex_enter(&uhash_lock);
+
+	if (ohash != nhash && (un->un_cflags & UN_CACHED)) {
+		un->un_cflags &= ~UN_CACHED;
+		LIST_REMOVE(un, un_cache);
+	}
+	mutex_enter(&un->un_lock);
+	un->un_uppervp = uppervp;
+	un->un_uppersz = VNOVAL;
+	/*
+	 * With the upper vnode in place unlock the union vnode to
+	 * finalize the lock transfer.
+	 */
+	unlock_ap.a_desc = VDESC(vop_unlock);
+	unlock_ap.a_vp = UNIONTOV(un);
+	genfs_unlock(&unlock_ap);
+	/* Update union vnode interlock & vmobjlock. */
+	vshareilock(UNIONTOV(un), uppervp);
+	rw_obj_hold(uppervp->v_uobj.vmobjlock);
+	uvm_obj_setlock(&UNIONTOV(un)->v_uobj, uppervp->v_uobj.vmobjlock);
+	mutex_exit(&un->un_lock);
+	if (ohash != nhash) {
+		LIST_INSERT_HEAD(&uhashtbl[nhash], un, un_cache);
+		un->un_cflags |= UN_CACHED;
+	}
+
+	mutex_exit(&uhash_lock);
 }
 
 /*
@@ -379,11 +378,6 @@ union_allocvp(
 		lowervp = NULLVP;
 	}
 
-	if (!docache) {
-		un = NULL;
-		goto found;
-	}
-
 	/*
 	 * If both uppervp and lowervp are not NULL we have to
 	 * search union nodes with one vnode as NULL too.
@@ -394,6 +388,11 @@ union_allocvp(
 	} else {
 		hash[1] = UNION_HASH(uppervp, NULLVP);
 		hash[2] = UNION_HASH(NULLVP, lowervp);
+	}
+
+	if (!docache) {
+		un = NULL;
+		goto found;
 	}
 
 loop:
@@ -481,6 +480,7 @@ found:
 	un->un_dircache = 0;
 	un->un_openl = 0;
 	un->un_cflags = 0;
+	un->un_hooknode = false;
 
 	un->un_uppersz = VNOVAL;
 	un->un_lowersz = VNOVAL;
@@ -539,8 +539,6 @@ union_freevp(struct vnode *vp)
 	un->un_uppersz = VNOVAL;
 	un->un_lowersz = VNOVAL;
 
-	vcache_remove(vp->v_mount, &un, sizeof(un));
-
 	/* Detach union node from vnode. */
 	mutex_enter(vp->v_interlock);
 	vp->v_data = NULL;
@@ -576,8 +574,9 @@ union_loadvnode(struct mount *mp, struct vnode *vp,
 	if (svp->v_type == VCHR || svp->v_type == VBLK)
 		spec_node_init(vp, svp->v_rdev);
 
-	mutex_obj_hold(svp->v_interlock);
-	uvm_obj_setlock(&vp->v_uobj, svp->v_interlock);
+	vshareilock(vp, svp);
+	rw_obj_hold(svp->v_uobj.vmobjlock);
+	uvm_obj_setlock(&vp->v_uobj, svp->v_uobj.vmobjlock);
 
 	/* detect the root vnode (and aliases) */
 	if ((un->un_uppervp == um->um_uppervp) &&
@@ -696,7 +695,6 @@ union_copyup(struct union_node *un, int docopy, kauth_cred_t cred,
 	if (error)
 		return (error);
 
-	KASSERT(VOP_ISLOCKED(uvp) == LK_EXCLUSIVE);
 	union_newupper(un, uvp);
 
 	lvp = un->un_lowervp;
@@ -936,6 +934,7 @@ union_vn_create(struct vnode **vpp, struct union_node *un, struct lwp *l)
 	}
 
 	vp->v_writecount++;
+	VOP_UNLOCK(vp);
 	*vpp = vp;
 	return 0;
 }
@@ -1069,7 +1068,7 @@ union_dircache(struct vnode *vp, struct lwp *l)
 	} else {
 		vpp = dircache;
 		do {
-			if (*vpp++ == VTOUNION(vp)->un_uppervp)
+			if (*vpp++ == VTOUNION(vp)->un_lowervp)
 				break;
 		} while (*vpp != NULLVP);
 	}
@@ -1078,10 +1077,12 @@ union_dircache(struct vnode *vp, struct lwp *l)
 		goto out;
 
 	vref(*vpp);
-	error = union_allocvp(&nvp, vp->v_mount, NULLVP, NULLVP, 0, *vpp, NULLVP, 0);
+	error = union_allocvp(&nvp, vp->v_mount, NULLVP, NULLVP, 0,
+	    NULLVP, *vpp, 0);
 	if (!error) {
 		vn_lock(nvp, LK_EXCLUSIVE | LK_RETRY);
 		VTOUNION(vp)->un_dircache = 0;
+		VTOUNION(nvp)->un_hooknode = true;
 		VTOUNION(nvp)->un_dircache = dircache;
 	}
 
@@ -1139,10 +1140,6 @@ union_check_rmdir(struct union_node *un, kauth_cred_t cred)
 	}
 	dirlen = va.va_blocksize;
 	dirbuf = kmem_alloc(dirlen, KM_SLEEP);
-	if (dirbuf == NULL) {
-		VOP_UNLOCK(un->un_lowervp);
-		return ENOMEM;
-	}
 	/* error = 0; */
 	eofflag = 0;
 	auio.uio_offset = 0;

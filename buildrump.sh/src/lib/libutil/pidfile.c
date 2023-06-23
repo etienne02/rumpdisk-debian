@@ -1,4 +1,4 @@
-/*	$NetBSD: pidfile.c,v 1.14 2016/04/12 20:40:43 roy Exp $	*/
+/*	$NetBSD: pidfile.c,v 1.16 2021/08/01 15:29:29 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2016 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: pidfile.c,v 1.14 2016/04/12 20:40:43 roy Exp $");
+__RCSID("$NetBSD: pidfile.c,v 1.16 2021/08/01 15:29:29 andvar Exp $");
 #endif
 
 #include <sys/param.h>
@@ -130,7 +130,7 @@ pidfile_varrun_path(char *path, size_t len, const char *bname)
 }
 
 /* Returns the process ID inside path on success, otherwise -1.
- * If no path is given, use the last pidfile path, othewise the default one. */
+ * If no path is given, use the last pidfile path, otherwise the default one. */
 pid_t
 pidfile_read(const char *path)
 {
@@ -205,7 +205,7 @@ pidfile_lock(const char *path)
 			if (errno == EAGAIN) {
 				/* The pidfile is locked, return the process ID
 				 * it contains.
-				 * If sucessful, set errno to EEXIST. */
+				 * If successful, set errno to EEXIST. */
 				if ((pid = pidfile_read(path)) != -1)
 					errno = EEXIST;
 			} else

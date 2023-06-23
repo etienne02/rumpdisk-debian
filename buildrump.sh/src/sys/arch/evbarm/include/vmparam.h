@@ -1,4 +1,4 @@
-/*	$NetBSD: vmparam.h,v 1.29 2015/02/23 20:34:38 joerg Exp $	*/
+/*	$NetBSD: vmparam.h,v 1.33 2019/03/27 17:15:29 christos Exp $	*/
 
 /*
  * Copyright (c) 1988 The Regents of the University of California.
@@ -32,7 +32,11 @@
 #ifndef	_EVBARM_VMPARAM_H_
 #define	_EVBARM_VMPARAM_H_
 
-#if defined(_KERNEL) || defined(_KMEMUSER)
+#ifdef __aarch64__
+
+#include <aarch64/vmparam.h>
+
+#else
 
 #include <arm/arm32/vmparam.h>
 
@@ -75,16 +79,18 @@
 #define	VM_PHYSSEG_STRAT	VM_PSTRAT_BSEARCH
 
 /*
- * we support 2 free lists:
+ * we support 3 free lists:
  *
  *	- DEFAULT for all systems
- *	- ISADMA for the ISA DMA range on Sharks only
+ *	- ISADMA for the ISA DMA range (could be unused)
+ *	- DIRECTMAP for systems with direct KVA mapped pages
  */
 
-#define	VM_NFREELIST		2
+#define	VM_NFREELIST		3
 #define	VM_FREELIST_DEFAULT	0
 #define	VM_FREELIST_ISADMA	1
+#define	VM_FREELIST_DIRECTMAP	2
 
-#endif /* _KERNEL || _KMEMUSER */
+#endif
 
 #endif	/* _EVBARM_VMPARAM_H_ */

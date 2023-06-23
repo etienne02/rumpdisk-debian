@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -90,24 +90,21 @@ AcpiHwLegacySleep (
         return_ACPI_STATUS (Status);
     }
 
-    /* Clear all fixed and general purpose status bits */
+    /* Disable all GPEs */
 
-    Status = AcpiHwClearAcpiStatus ();
-    if (ACPI_FAILURE (Status))
-    {
-        return_ACPI_STATUS (Status);
-    }
-
-    /*
-     * 1) Disable/Clear all GPEs
-     * 2) Enable all wakeup GPEs
-     */
     Status = AcpiHwDisableAllGpes ();
     if (ACPI_FAILURE (Status))
     {
         return_ACPI_STATUS (Status);
     }
+    Status = AcpiHwClearAcpiStatus();
+    if (ACPI_FAILURE(Status))
+    {
+        return_ACPI_STATUS(Status);
+    }
     AcpiGbl_SystemAwakeAndRunning = FALSE;
+
+    /* Enable all wakeup GPEs */
 
     Status = AcpiHwEnableAllWakeupGpes ();
     if (ACPI_FAILURE (Status))
@@ -158,6 +155,16 @@ AcpiHwLegacySleep (
     /* Flush caches, as per ACPI specification */
 
     ACPI_FLUSH_CPU_CACHE ();
+
+    Status = AcpiOsEnterSleep (SleepState, Pm1aControl, Pm1bControl);
+    if (Status == AE_CTRL_TERMINATE)
+    {
+        return_ACPI_STATUS (AE_OK);
+    }
+    if (ACPI_FAILURE (Status))
+    {
+        return_ACPI_STATUS (Status);
+    }
 
     /* Write #2: Write both SLP_TYP + SLP_EN */
 
@@ -309,7 +316,7 @@ AcpiHwLegacyWake (
      * might get fired there
      *
      * Restore the GPEs:
-     * 1) Disable/Clear all GPEs
+     * 1) Disable all GPEs
      * 2) Enable all runtime GPEs
      */
     Status = AcpiHwDisableAllGpes ();
@@ -347,6 +354,16 @@ AcpiHwLegacyWake (
 
     (void) AcpiWriteBitRegister(
             AcpiGbl_FixedEventInfo[ACPI_EVENT_POWER_BUTTON].StatusRegisterId,
+            ACPI_CLEAR_STATUS);
+
+    /* Enable sleep button */
+
+    (void) AcpiWriteBitRegister (
+            AcpiGbl_FixedEventInfo[ACPI_EVENT_SLEEP_BUTTON].EnableRegisterId,
+            ACPI_ENABLE_EVENT);
+
+    (void) AcpiWriteBitRegister (
+            AcpiGbl_FixedEventInfo[ACPI_EVENT_SLEEP_BUTTON].StatusRegisterId,
             ACPI_CLEAR_STATUS);
 
     AcpiHwExecuteSleepMethod (__UNCONST(METHOD_PATHNAME__SST), ACPI_SST_WORKING);

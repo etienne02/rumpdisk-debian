@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_nat6.c,v 1.9 2015/10/06 10:21:08 prlw1 Exp $	*/
+/*	$NetBSD: ip_nat6.c,v 1.12 2021/02/10 00:28:55 christos Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -87,7 +87,6 @@ extern struct ifnet vpnif;
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 #include "netinet/ip_compat.h"
-#include <netinet/tcpip.h>
 #include "netinet/ip_fil.h"
 #include "netinet/ip_nat.h"
 #include "netinet/ip_frag.h"
@@ -383,7 +382,7 @@ ipf_nat6_hostmap(ipf_nat_softc_t *softn, ipnat_t *np, i6addr_t *src,
 	hv += dst->i6[2];
 	hv += dst->i6[1];
 	hv += dst->i6[0];
-	hv %= HOSTMAP_SIZE;
+	hv %= softn->ipf_nat_hostmap_sz;
 	for (hm = softn->ipf_hm_maptable[hv]; hm; hm = hm->hm_next)
 		if (IP6_EQ(&hm->hm_osrc6, src) &&
 		    IP6_EQ(&hm->hm_odst6, dst) &&
@@ -2471,8 +2470,8 @@ ipf_nat6_lookupredir(ipf_main_softc_t *softc, natlookup_t *np)
 				}
 			}
 
-			np->nl_realip6 = nat->nat_ndst6.in6;
-			np->nl_realport = nat->nat_ndport;
+			np->nl_realip6 = nat->nat_odst6.in6;
+			np->nl_realport = nat->nat_odport;
 		}
  	}
 

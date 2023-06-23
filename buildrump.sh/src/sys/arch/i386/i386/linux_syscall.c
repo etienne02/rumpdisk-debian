@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_syscall.c,v 1.52 2015/03/07 18:50:01 christos Exp $	*/
+/*	$NetBSD: linux_syscall.c,v 1.54 2018/08/10 21:44:58 pgoyette Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000 The NetBSD Foundation, Inc.
@@ -30,11 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_syscall.c,v 1.52 2015/03/07 18:50:01 christos Exp $");
-
-#if defined(_KERNEL_OPT)
-#include "opt_vm86.h"
-#endif
+__KERNEL_RCSID(0, "$NetBSD: linux_syscall.c,v 1.54 2018/08/10 21:44:58 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -57,6 +53,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux_syscall.c,v 1.52 2015/03/07 18:50:01 christos 
 
 static void linux_syscall(struct trapframe *);
 extern struct sysent linux_sysent[];
+extern const uint32_t linux_sysent_nomodbits[];
 
 void
 linux_syscall_intern(struct proc *p)

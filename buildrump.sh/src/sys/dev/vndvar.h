@@ -1,4 +1,4 @@
-/*	$NetBSD: vndvar.h,v 1.35 2015/09/06 06:00:59 dholland Exp $	*/
+/*	$NetBSD: vndvar.h,v 1.38 2018/10/07 11:51:26 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -98,6 +98,8 @@ struct vnd_ioctl {
 #define	VNDIOF_HASGEOM	0x01		/* use specified geometry */
 #define	VNDIOF_READONLY	0x02		/* as read-only device */
 #define	VNDIOF_FORCE	0x04		/* force close */
+#define	VNDIOF_FILEIO	0x08		/* have to use read/write */
+#define	VNDIOF_COMP	0x0400		/* must stay the same as VNF_COMP */
 
 #ifdef _KERNEL
 
@@ -111,6 +113,7 @@ struct vnd_softc {
 	int		 sc_flags;	/* flags */
 	uint64_t	 sc_size;	/* size of vnd */
 	struct vnode	*sc_vp;		/* vnode */
+	u_int		 sc_iosize;	/* smallest I/O size for backend */
 	kauth_cred_t	 sc_cred;	/* credentials */
 	int		 sc_maxactive;	/* max # of active requests */
 	struct bufq_state *sc_tab;	/* transfer queue */
@@ -147,8 +150,7 @@ struct vnd_softc {
 #define VNF_USE_VN_RDWR	0x1000	/* have to use vn_rdwr() */
 
 /* structure of header in a compressed file */
-struct vnd_comp_header
-{
+struct vnd_comp_header {
 	char preamble[128];
 	u_int32_t block_size;
 	u_int32_t num_blocks;

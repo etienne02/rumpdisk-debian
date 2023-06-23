@@ -1,4 +1,4 @@
-/*	$NetBSD: hpckbd.c,v 1.30 2012/10/27 17:18:17 chs Exp $ */
+/*	$NetBSD: hpckbd.c,v 1.37 2021/08/07 16:19:11 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1999-2001 The NetBSD Foundation, Inc.
@@ -30,11 +30,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hpckbd.c,v 1.30 2012/10/27 17:18:17 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hpckbd.c,v 1.37 2021/08/07 16:19:11 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
+#include <sys/malloc.h>
 
 #include <sys/tty.h>
 
@@ -182,7 +183,8 @@ hpckbd_attach(device_t parent, device_t self, void *aux)
 	wa.keymap = &hpckbd_keymapdata;
 	wa.accessops = &hpckbd_accessops;
 	wa.accesscookie = sc->sc_core;
-	sc->sc_core->hc_wskbddev = config_found(self, &wa, wskbddevprint);
+	sc->sc_core->hc_wskbddev = config_found(self, &wa, wskbddevprint,
+	    CFARGS_NONE);
 
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "unable to establish power handler\n");
@@ -259,6 +261,13 @@ hpckbd_getevent(struct hpckbd_core* hc, u_int *type, int *data)
 	return (1);
 }
 
+
+#if defined(hpcsh) || defined(hpcmips)
+/*
+ * XXX: Use the old wrong code for now as hpcsh and hpcmips attach
+ * console very early when malloc(9) is not yet available.  It is
+ * convenient to be able to do early DDB on wscons.
+ */
 void
 hpckbd_keymap_setup(struct hpckbd_core *hc,
 		    const keysym_t *map, int mapsize)
@@ -271,9 +280,9 @@ hpckbd_keymap_setup(struct hpckbd_core *hc,
 	 * XXX The way this is done is really wrong.  The __UNCONST()
 	 * is a hint as to what is wrong.  This actually ends up modifying
 	 * initialized data which is marked "const".
-	 * The reason we get away with it here is apparently that text
-	 * and read-only data gets mapped read/write on the platforms
-	 * using this code.
+	 *
+	 * The reason we get away with it here is that on sh3 and mips
+	 * the kernel is directly mapped.
 	 */
 	desc = (struct wscons_keydesc *)__UNCONST(hpckbd_keymapdata.keydesc);
 	for (i = 0; desc[i].name != 0; i++) {
@@ -285,6 +294,44 @@ hpckbd_keymap_setup(struct hpckbd_core *hc,
 
 	return;
 }
+
+#else
+
+void
+hpckbd_keymap_setup(struct hpckbd_core *hc,
+		    const keysym_t *map, int mapsize)
+{
+	int i;
+	const struct wscons_keydesc *desc;
+	static struct wscons_keydesc *ndesc = NULL;
+
+	/* 
+	 * fix keydesc table. Since it is const data, we must 
+	 * copy it once before changingg it.
+	 */
+
+	if (ndesc == NULL) {
+		size_t sz;
+
+		for (sz = 0; hpckbd_keymapdata.keydesc[sz].name != 0; sz++);
+
+		ndesc = malloc(sz * sizeof(*ndesc), M_DEVBUF, M_WAITOK);
+		memcpy(ndesc, hpckbd_keymapdata.keydesc, sz * sizeof(*ndesc));
+
+		hpckbd_keymapdata.keydesc = ndesc;
+	}
+
+	desc = hpckbd_keymapdata.keydesc;
+	for (i = 0; desc[i].name != 0; i++) {
+		if ((desc[i].name & KB_MACHDEP) && desc[i].map == NULL) {
+			ndesc[i].map = map;
+			ndesc[i].map_size = mapsize;
+		}
+	}
+
+	return;
+}
+#endif
 
 void
 hpckbd_keymap_lookup(struct hpckbd_core *hc)

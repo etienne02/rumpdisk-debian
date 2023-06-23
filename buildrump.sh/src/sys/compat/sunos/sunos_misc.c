@@ -1,4 +1,4 @@
-/*	$NetBSD: sunos_misc.c,v 1.170 2015/10/23 19:40:11 maxv Exp $	*/
+/*	$NetBSD: sunos_misc.c,v 1.176 2019/10/26 11:34:48 christos Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunos_misc.c,v 1.170 2015/10/23 19:40:11 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunos_misc.c,v 1.176 2019/10/26 11:34:48 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -277,8 +277,12 @@ sunos_sys_mount(struct lwp *l, const struct sunos_sys_mount_args *uap, register_
 		}
 		na.timeo = sna.timeo;
 		na.retrans = sna.retrans;
-		na.hostname = /* (char *)(u_long) */ sna.hostname;
-
+#ifdef __arch64__
+		/* XXX */
+		na.hostname = (char *)(intptr_t)sna.hostname;
+#else
+		na.hostname = sna.hostname;
+#endif
 		return do_sys_mount(l, "nfs", UIO_SYSSPACE,
 		    SCARG(uap, dir), nflags, &na,
 		    UIO_SYSSPACE, sizeof na, &dummy);
@@ -383,7 +387,7 @@ sunos_sys_getdents(struct lwp *l, const struct sunos_sys_getdents_args *uap, reg
 		goto out1;
 	}
 
-	buflen = min(MAXBSIZE, SCARG(uap, nbytes));
+	buflen = uimin(MAXBSIZE, SCARG(uap, nbytes));
 	buf = malloc(buflen, M_TEMP, M_WAITOK);
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	off = fp->f_offset;
@@ -414,8 +418,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic("sunos_getdents");
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if ((*cookie >> 32) != 0) {
 			compat_offseterr(vp, "sunos_getdents");
 			error = EINVAL;
@@ -563,7 +569,7 @@ sunos_sys_setsockopt(struct lwp *l, const struct sunos_sys_setsockopt_args *uap,
 			name = ipoptxlat[name - SUNOS_IP_MULTICAST_IF];
 		}
 	}
-	if (SCARG(uap, valsize) > MLEN) {
+	if ((unsigned)SCARG(uap, valsize) > MLEN) {
 		error = EINVAL;
 		goto out;
 	}
@@ -647,15 +653,13 @@ sunos_sys_uname(struct lwp *l, const struct sunos_sys_uname_args *uap, register_
 
 	memset(&sut, 0, sizeof(sut));
 
-	memcpy(sut.sysname, ostype, sizeof(sut.sysname) - 1);
-	memcpy(sut.nodename, hostname, sizeof(sut.nodename));
-	sut.nodename[sizeof(sut.nodename)-1] = '\0';
-	memcpy(sut.release, osrelease, sizeof(sut.release) - 1);
-	memcpy(sut.version, "1", sizeof(sut.version) - 1);
-	memcpy(sut.machine, machine, sizeof(sut.machine) - 1);
+	strlcpy(sut.sysname, ostype, sizeof(sut.sysname));
+	strlcpy(sut.nodename, hostname, sizeof(sut.nodename));
+	strlcpy(sut.release, osrelease, sizeof(sut.release));
+	strlcpy(sut.version, "1", sizeof(sut.version));
+	strlcpy(sut.machine, machine, sizeof(sut.machine));
 
-	return copyout((void *)&sut, (void *)SCARG(uap, name),
-	    sizeof(struct sunos_utsname));
+	return copyout(&sut, SCARG(uap, name), sizeof(sut));
 }
 
 int
@@ -1011,6 +1015,7 @@ sunos_sys_reboot(struct lwp *l, const struct sunos_sys_reboot_args *uap, registe
 	struct sunos_howto_conv *convp;
 	int error, bsd_howto, sun_howto;
 	char *bootstr;
+	char bs[128];
 
 	if ((error = kauth_authorize_system(l->l_cred, KAUTH_SYSTEM_REBOOT,
 	    0, NULL, NULL, NULL)) != 0)
@@ -1034,8 +1039,6 @@ sunos_sys_reboot(struct lwp *l, const struct sunos_sys_reboot_args *uap, registe
 	 * next booted kernel.
 	 */
 	if (sun_howto & SUNOS_RB_STRING) {
-		char bs[128];
-
 		error = copyinstr(SCARG(uap, bootstr), bs, sizeof(bs), 0);
 
 		if (error)

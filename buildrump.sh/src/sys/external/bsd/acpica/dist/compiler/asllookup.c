@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -144,9 +144,9 @@ LkIsObjectUsed (
             if ((MethodLocals[i].Flags & ASL_LOCAL_INITIALIZED) &&
                 (!(MethodLocals[i].Flags & ASL_LOCAL_REFERENCED)))
             {
-                sprintf (MsgBuffer, "Local%u", i);
+                sprintf (AslGbl_MsgBuffer, "Local%u", i);
                 AslError (ASL_WARNING, ASL_MSG_LOCAL_NOT_USED,
-                    MethodLocals[i].Op, MsgBuffer);
+                    MethodLocals[i].Op, AslGbl_MsgBuffer);
             }
         }
 
@@ -163,9 +163,9 @@ LkIsObjectUsed (
                 if ((MethodArgs[i].Flags & ASL_ARG_INITIALIZED) &&
                     (!(MethodArgs[i].Flags & ASL_ARG_REFERENCED)))
                 {
-                    sprintf (MsgBuffer, "Arg%u", i);
+                    sprintf (AslGbl_MsgBuffer, "Arg%u", i);
                     AslError (ASL_WARNING, ASL_MSG_ARG_AS_LOCAL_NOT_USED,
-                        MethodArgs[i].Op, MsgBuffer);
+                        MethodArgs[i].Op, AslGbl_MsgBuffer);
                 }
             }
             else
@@ -178,9 +178,9 @@ LkIsObjectUsed (
                 if ((Node->Name.Ascii[0] != '_') &&
                     (!(MethodArgs[i].Flags & ASL_ARG_REFERENCED)))
                 {
-                    sprintf (MsgBuffer, "Arg%u", i);
+                    sprintf (AslGbl_MsgBuffer, "Arg%u", i);
                     AslError (ASL_REMARK, ASL_MSG_ARG_NOT_USED,
-                        MethodArgs[i].Op, MsgBuffer);
+                        MethodArgs[i].Op, AslGbl_MsgBuffer);
                 }
             }
         }
@@ -228,10 +228,10 @@ LkIsObjectUsed (
              * Issue a remark even if it is a reserved name (starts
              * with an underscore).
              */
-            snprintf (MsgBuffer, sizeof(MsgBuffer), "Name [%4.4s] is within a method [%4.4s]",
+            snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "Name [%4.4s] is within a method [%4.4s]",
                 Node->Name.Ascii, Next->Name.Ascii);
             AslError (ASL_REMARK, ASL_MSG_NOT_REFERENCED,
-                LkGetNameOp (Node->Op), MsgBuffer);
+                LkGetNameOp (Node->Op), AslGbl_MsgBuffer);
             return (AE_OK);
         }
 
@@ -305,7 +305,7 @@ LkGetNameOp (
         /* Name must appear as the last parameter */
 
         NameOp = Op->Asl.Child;
-        while (!(NameOp->Asl.CompileFlags & NODE_IS_NAME_DECLARATION))
+        while (!(NameOp->Asl.CompileFlags & OP_IS_NAME_DECLARATION))
         {
             NameOp = NameOp->Asl.Next;
         }

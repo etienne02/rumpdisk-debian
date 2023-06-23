@@ -1,4 +1,4 @@
-/*	$NetBSD: pci.c,v 1.151 2016/01/23 17:09:51 macallan Exp $	*/
+/*	$NetBSD: pci.c,v 1.161 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1995, 1996, 1997, 1998
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pci.c,v 1.151 2016/01/23 17:09:51 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pci.c,v 1.161 2021/08/07 16:19:14 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_pci.h"
@@ -51,6 +51,7 @@ __KERNEL_RCSID(0, "$NetBSD: pci.c,v 1.151 2016/01/23 17:09:51 macallan Exp $");
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
+#include <dev/pci/ppbvar.h>
 
 #include <net/if.h>
 
@@ -266,6 +267,27 @@ pciprint(void *aux, const char *pnp)
 	return UNCONF;
 }
 
+static devhandle_t
+pci_bus_get_child_devhandle(struct pci_softc *sc, pcitag_t tag)
+{
+	struct pci_bus_get_child_devhandle_args args = {
+		.pc = sc->sc_pc,
+		.tag = tag,
+	};
+
+	if (device_call(sc->sc_dev, "pci-bus-get-child-devhandle",
+			&args) != 0) {
+		/*
+		 * The call is either not supported or the requested
+		 * device was not found in the platform device tree.
+		 * Return an invalid handle.
+		 */
+		devhandle_invalidate(&args.devhandle);
+	}
+
+	return args.devhandle;
+}
+
 int
 pci_probe_device(struct pci_softc *sc, pcitag_t tag,
     int (*match)(const struct pci_attach_args *),
@@ -287,13 +309,7 @@ pci_probe_device(struct pci_softc *sc, pcitag_t tag,
 	if (sc->PCI_SC_DEVICESC(device, function).c_dev != NULL && !match)
 		return 0;
 
-	bhlcr = pci_conf_read(pc, tag, PCI_BHLC_REG);
-	if (PCI_HDRTYPE_TYPE(bhlcr) > 2)
-		return 0;
-
 	id = pci_conf_read(pc, tag, PCI_ID_REG);
-	/* csr = pci_conf_read(pc, tag, PCI_COMMAND_STATUS_REG); */
-	pciclass = pci_conf_read(pc, tag, PCI_CLASS_REG);
 
 	/* Invalid vendor ID value? */
 	if (PCI_VENDOR(id) == PCI_VENDOR_INVALID)
@@ -301,6 +317,13 @@ pci_probe_device(struct pci_softc *sc, pcitag_t tag,
 	/* XXX Not invalid, but we've done this ~forever. */
 	if (PCI_VENDOR(id) == 0)
 		return 0;
+
+	bhlcr = pci_conf_read(pc, tag, PCI_BHLC_REG);
+	if (PCI_HDRTYPE_TYPE(bhlcr) > 2)
+		return 0;
+
+	/* csr = pci_conf_read(pc, tag, PCI_COMMAND_STATUS_REG); */
+	pciclass = pci_conf_read(pc, tag, PCI_CLASS_REG);
 
 	/* Collect memory range info */
 	memset(sc->PCI_SC_DEVICESC(device, function).c_range, 0,
@@ -413,6 +436,8 @@ pci_probe_device(struct pci_softc *sc, pcitag_t tag,
 	}
 	pa.pa_intrline = PCI_INTERRUPT_LINE(intr);
 
+	devhandle_t devhandle = pci_bus_get_child_devhandle(sc, pa.pa_tag);
+
 #ifdef __HAVE_PCI_MSI_MSIX
 	if (pci_get_ht_capability(pc, tag, PCI_HT_CAP_MSIMAP, &off, &cap)) {
 		/*
@@ -459,8 +484,10 @@ pci_probe_device(struct pci_softc *sc, pcitag_t tag,
 		else
 			c->c_psok = false;
 
-		c->c_dev = config_found_sm_loc(sc->sc_dev, "pci", locs, &pa,
-					     pciprint, config_stdsubmatch);
+		c->c_dev = config_found(sc->sc_dev, &pa, pciprint,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs,
+			   .devhandle = devhandle));
 
 		ret = (c->c_dev != NULL);
 	}
@@ -692,7 +719,41 @@ pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 	uint8_t devs[32];
 	int i, n;
 
+	device_t bridgedev;
+	bool arien = false;
+	bool downstream_port = false;
+
+	/* Check PCIe ARI and port type */
+	bridgedev = device_parent(sc->sc_dev);
+	if (device_is_a(bridgedev, "ppb")) {
+		struct ppb_softc *ppbsc = device_private(bridgedev);
+		pci_chipset_tag_t ppbpc = ppbsc->sc_pc;
+		pcitag_t ppbtag = ppbsc->sc_tag;
+		pcireg_t pciecap, capreg, reg;
+
+		if (pci_get_capability(ppbpc, ppbtag, PCI_CAP_PCIEXPRESS,
+		    &pciecap, &capreg) != 0) {
+			switch (PCIE_XCAP_TYPE(capreg)) {
+			case PCIE_XCAP_TYPE_ROOT:
+			case PCIE_XCAP_TYPE_DOWN:
+			case PCIE_XCAP_TYPE_PCI2PCIE:
+				downstream_port = true;
+				break;
+			}
+
+			reg = pci_conf_read(ppbpc, ppbtag, pciecap
+			    + PCIE_DCSR2);
+			if ((reg & PCIE_DCSR2_ARI_FWD) != 0)
+				arien = true;
+		}
+	}
+
 	n = pci_bus_devorder(sc->sc_pc, sc->sc_bus, devs, __arraycount(devs));
+	if (downstream_port) {
+		/* PCIe downstream ports only have a single child device */
+		n = 1;
+	}
+
 	for (i = 0; i < n; i++) {
 		device = devs[i];
 
@@ -701,10 +762,6 @@ pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 			continue;
 
 		tag = pci_make_tag(pc, sc->sc_bus, device, 0);
-
-		bhlcr = pci_conf_read(pc, tag, PCI_BHLC_REG);
-		if (PCI_HDRTYPE_TYPE(bhlcr) > 2)
-			continue;
 
 		id = pci_conf_read(pc, tag, PCI_ID_REG);
 
@@ -715,6 +772,10 @@ pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 		if (PCI_VENDOR(id) == 0)
 			continue;
 
+		bhlcr = pci_conf_read(pc, tag, PCI_BHLC_REG);
+		if (PCI_HDRTYPE_TYPE(bhlcr) > 2)
+			continue;
+
 		qd = pci_lookup_quirkdata(PCI_VENDOR(id), PCI_PRODUCT(id));
 
 		if (qd != NULL &&
@@ -723,6 +784,8 @@ pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 		else if (qd != NULL &&
 		      (qd->quirks & PCI_QUIRK_MONOFUNCTION) != 0)
 			nfunctions = 1;
+		else if (arien)
+			nfunctions = 8; /* Scan all if ARI is enabled */
 		else
 			nfunctions = PCI_HDRTYPE_MULTIFN(bhlcr) ? 8 : 1;
 
@@ -858,7 +921,70 @@ pci_conf_capture(pci_chipset_tag_t pc, pcitag_t tag,
 	for (off = 0; off < 16; off++)
 		pcs->reg[off] = pci_conf_read(pc, tag, (off * 4));
 
-	return;
+	/* For PCI-X */
+	if (pci_get_capability(pc, tag, PCI_CAP_PCIX, &off, NULL) != 0)
+		pcs->x_csr = pci_conf_read(pc, tag, off + PCIX_CMD);
+
+	/* For PCIe */
+	if (pci_get_capability(pc, tag, PCI_CAP_PCIEXPRESS, &off, NULL) != 0) {
+		pcireg_t xcap = pci_conf_read(pc, tag, off + PCIE_XCAP);
+		unsigned int devtype;
+
+		devtype = PCIE_XCAP_TYPE(xcap);
+		pcs->e_dcr = (uint16_t)pci_conf_read(pc, tag, off + PCIE_DCSR);
+
+		if (PCIE_HAS_LINKREGS(devtype))
+			pcs->e_lcr = (uint16_t)pci_conf_read(pc, tag,
+			    off + PCIE_LCSR);
+
+		if ((xcap & PCIE_XCAP_SI) != 0)
+			pcs->e_slcr = (uint16_t)pci_conf_read(pc, tag,
+			    off + PCIE_SLCSR);
+
+		if (PCIE_HAS_ROOTREGS(devtype))
+			pcs->e_rcr = (uint16_t)pci_conf_read(pc, tag,
+			    off + PCIE_RCR);
+
+		if (__SHIFTOUT(xcap, PCIE_XCAP_VER_MASK) >= 2) {
+			pcs->e_dcr2 = (uint16_t)pci_conf_read(pc, tag,
+			    off + PCIE_DCSR2);
+
+			if (PCIE_HAS_LINKREGS(devtype))
+				pcs->e_lcr2 = (uint16_t)pci_conf_read(pc, tag,
+			    off + PCIE_LCSR2);
+
+			/* XXX PCIE_SLCSR2 (It's reserved by the PCIe spec) */
+		}
+	}
+
+	/* For MSI */
+	if (pci_get_capability(pc, tag, PCI_CAP_MSI, &off, NULL) != 0) {
+		bool bit64, pvmask;
+
+		pcs->msi_ctl = pci_conf_read(pc, tag, off + PCI_MSI_CTL);
+
+		bit64 = pcs->msi_ctl & PCI_MSI_CTL_64BIT_ADDR;
+		pvmask = pcs->msi_ctl & PCI_MSI_CTL_PERVEC_MASK;
+
+		/* Address */
+		pcs->msi_maddr = pci_conf_read(pc, tag, off + PCI_MSI_MADDR);
+		if (bit64)
+			pcs->msi_maddr64_hi = pci_conf_read(pc, tag,
+			    off + PCI_MSI_MADDR64_HI);
+
+		/* Data */
+		pcs->msi_mdata = pci_conf_read(pc, tag,
+		    off + (bit64 ? PCI_MSI_MDATA64 : PCI_MSI_MDATA));
+
+		/* Per-vector masking */
+		if (pvmask)
+			pcs->msi_mask = pci_conf_read(pc, tag,
+			    off + (bit64 ? PCI_MSI_MASK64 : PCI_MSI_MASK));
+	}
+
+	/* For MSI-X */
+	if (pci_get_capability(pc, tag, PCI_CAP_MSIX, &off, NULL) != 0)
+		pcs->msix_ctl = pci_conf_read(pc, tag, off + PCI_MSIX_CTL);
 }
 
 void
@@ -874,7 +1000,80 @@ pci_conf_restore(pci_chipset_tag_t pc, pcitag_t tag,
 			pci_conf_write(pc, tag, (off * 4), pcs->reg[off]);
 	}
 
-	return;
+	/* For PCI-X */
+	if (pci_get_capability(pc, tag, PCI_CAP_PCIX, &off, NULL) != 0)
+		pci_conf_write(pc, tag, off + PCIX_CMD, pcs->x_csr);
+
+	/* For PCIe */
+	if (pci_get_capability(pc, tag, PCI_CAP_PCIEXPRESS, &off, NULL) != 0) {
+		pcireg_t xcap = pci_conf_read(pc, tag, off + PCIE_XCAP);
+		unsigned int devtype;
+
+		devtype = PCIE_XCAP_TYPE(xcap);
+		pci_conf_write(pc, tag, off + PCIE_DCSR, pcs->e_dcr);
+
+		/*
+		 * PCIe capability is variable sized. To not to write the next
+		 * area, check the existence of each register.
+		 */
+		if (PCIE_HAS_LINKREGS(devtype))
+			pci_conf_write(pc, tag, off + PCIE_LCSR, pcs->e_lcr);
+
+		if ((xcap & PCIE_XCAP_SI) != 0)
+			pci_conf_write(pc, tag, off + PCIE_SLCSR, pcs->e_slcr);
+
+		if (PCIE_HAS_ROOTREGS(devtype))
+			pci_conf_write(pc, tag, off + PCIE_RCR, pcs->e_rcr);
+
+		if (__SHIFTOUT(xcap, PCIE_XCAP_VER_MASK) >= 2) {
+			pci_conf_write(pc, tag, off + PCIE_DCSR2, pcs->e_dcr2);
+
+			if (PCIE_HAS_LINKREGS(devtype))
+				pci_conf_write(pc, tag, off + PCIE_LCSR2,
+				    pcs->e_lcr2);
+
+			/* XXX PCIE_SLCSR2 (It's reserved by the PCIe spec) */
+		}
+	}
+
+	/* For MSI */
+	if (pci_get_capability(pc, tag, PCI_CAP_MSI, &off, NULL) != 0) {
+		pcireg_t reg;
+		bool bit64, pvmask;
+
+		/* First, drop Enable bit in case it's already set. */
+		reg = pci_conf_read(pc, tag, off + PCI_MSI_CTL);
+		pci_conf_write(pc, tag, off + PCI_MSI_CTL,
+		    reg & ~PCI_MSI_CTL_MSI_ENABLE);
+
+		bit64 = pcs->msi_ctl & PCI_MSI_CTL_64BIT_ADDR;
+		pvmask = pcs->msi_ctl & PCI_MSI_CTL_PERVEC_MASK;
+
+		/* Address */
+		pci_conf_write(pc, tag, off + PCI_MSI_MADDR, pcs->msi_maddr);
+
+		if (bit64)
+			pci_conf_write(pc, tag,
+			    off + PCI_MSI_MADDR64_HI, pcs->msi_maddr64_hi);
+
+		/* Data */
+		pci_conf_write(pc, tag,
+		    off + (bit64 ? PCI_MSI_MDATA64 : PCI_MSI_MDATA),
+		    pcs->msi_mdata);
+
+		/* Per-vector masking */
+		if (pvmask)
+			pci_conf_write(pc, tag,
+			    off + (bit64 ? PCI_MSI_MASK64 : PCI_MSI_MASK),
+			    pcs->msi_mask);
+
+		/* Write CTRL register in the end */
+		pci_conf_write(pc, tag, off + PCI_MSI_CTL, pcs->msi_ctl);
+	}
+
+	/* For MSI-X */
+	if (pci_get_capability(pc, tag, PCI_CAP_MSIX, &off, NULL) != 0)
+		pci_conf_write(pc, tag, off + PCI_MSIX_CTL, pcs->msix_ctl);
 }
 
 /*
@@ -1062,16 +1261,36 @@ pci_child_suspend(device_t dv, const pmf_qual_t *qual)
 	return true;
 }
 
+static void
+pci_pme_check_and_clear(device_t dv, pci_chipset_tag_t pc, pcitag_t tag,
+    int off)
+{
+	pcireg_t pmcsr;
+
+	pmcsr = pci_conf_read(pc, tag, off + PCI_PMCSR);
+
+	if (pmcsr & PCI_PMCSR_PME_STS) {
+		/* Clear W1C bit */
+		pmcsr |= PCI_PMCSR_PME_STS;
+		pci_conf_write(pc, tag, off + PCI_PMCSR, pmcsr);
+		aprint_verbose_dev(dv, "Clear PME# now\n");
+	}
+}
+
 static bool
 pci_child_resume(device_t dv, const pmf_qual_t *qual)
 {
 	struct pci_child_power *priv = device_pmf_bus_private(dv);
 
-	if (priv->p_has_pm &&
-	    pci_set_powerstate_int(priv->p_pc, priv->p_tag,
-	    PCI_PMCSR_STATE_D0, priv->p_pm_offset, priv->p_pm_cap)) {
-		aprint_error_dev(dv, "unsupported state, continuing.\n");
-		return false;
+	if (priv->p_has_pm) {
+		if (pci_set_powerstate_int(priv->p_pc, priv->p_tag,
+		    PCI_PMCSR_STATE_D0, priv->p_pm_offset, priv->p_pm_cap)) {
+			aprint_error_dev(dv,
+			    "unsupported state, continuing.\n");
+			return false;
+		}
+		pci_pme_check_and_clear(dv, priv->p_pc, priv->p_tag,
+		    priv->p_pm_offset);
 	}
 
 	pci_conf_restore(priv->p_pc, priv->p_tag, &priv->p_pciconf);
@@ -1127,6 +1346,7 @@ pci_child_register(device_t child)
 		priv->p_has_pm = true;
 		priv->p_pm_offset = off;
 		priv->p_pm_cap = reg;
+		pci_pme_check_and_clear(child, priv->p_pc, priv->p_tag, off);
 	} else {
 		priv->p_has_pm = false;
 		priv->p_pm_offset = -1;

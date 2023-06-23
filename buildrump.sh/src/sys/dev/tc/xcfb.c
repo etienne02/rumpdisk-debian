@@ -1,4 +1,4 @@
-/* $NetBSD: xcfb.c,v 1.55 2012/01/11 21:12:37 macallan Exp $ */
+/* $NetBSD: xcfb.c,v 1.59 2021/08/07 16:19:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xcfb.c,v 1.55 2012/01/11 21:12:37 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xcfb.c,v 1.59 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -225,13 +225,7 @@ xcfbattach(device_t parent, device_t self, void *aux)
 		sc->nscreens = 1;
 	}
 	else {
-		ri = malloc(sizeof(struct rasops_info), M_DEVBUF, M_NOWAIT);
-		if (ri == NULL) {
-			printf(": can't alloc memory\n");
-			return;
-		}
-		memset(ri, 0, sizeof(struct rasops_info));
-
+		ri = malloc(sizeof(struct rasops_info), M_DEVBUF, M_WAITOK | M_ZERO);
 		ri->ri_hw = (void *)ioasic_base;
 		xcfb_common_init(ri);
 		sc->sc_ri = ri;
@@ -251,7 +245,7 @@ xcfbattach(device_t parent, device_t self, void *aux)
 	waa.accessops = &xcfb_accessops;
 	waa.accesscookie = sc;
 
-	config_found(self, &waa, wsemuldisplaydevprint);
+	config_found(self, &waa, wsemuldisplaydevprint, CFARGS_NONE);
 }
 
 static void
@@ -595,7 +589,7 @@ set_cursor(struct xcfb_softc *sc, struct wsdisplay_cursor *p)
 		index = p->cmap.index;
 		count = p->cmap.count;
 
-		if (index >= 2 || index + count > 2)
+		if (index >= 2 || count > 2 - index)
 			return (EINVAL);
 		error = copyin(p->cmap.red, &r[index], count);
 		if (error)

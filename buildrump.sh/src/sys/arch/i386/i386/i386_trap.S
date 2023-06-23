@@ -1,4 +1,4 @@
-/*	$NetBSD: i386_trap.S,v 1.5 2014/02/12 23:24:09 dsl Exp $	*/
+/*	$NetBSD: i386_trap.S,v 1.22 2020/05/02 18:49:57 bouyer Exp $	*/
 
 /*
  * Copyright 2002 (c) Wasabi Systems, Inc.
@@ -35,7 +35,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*-
+/*
  * Copyright (c) 1998, 2007, 2009 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -66,7 +66,7 @@
 
 #if 0
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: i386_trap.S,v 1.5 2014/02/12 23:24:09 dsl Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i386_trap.S,v 1.22 2020/05/02 18:49:57 bouyer Exp $");
 #endif
 
 /*
@@ -78,40 +78,95 @@ __KERNEL_RCSID(0, "$NetBSD: i386_trap.S,v 1.5 2014/02/12 23:24:09 dsl Exp $");
  * (possibly the next clock tick).  Thus, we disable interrupt before checking,
  * and only enable them again on the final `iret' or before calling the AST
  * handler.
- */ 
+ */
 
-#define TRAP(a)			pushl $(a) ; jmp _C_LABEL(alltraps)
-#define ZTRAP(a)		pushl $0 ; TRAP(a)
-
-#ifdef IPKDB
-#define BPTTRAP(a)	pushl $0; pushl $(a); jmp _C_LABEL(bpttraps)
-#else
-#define BPTTRAP(a)	ZTRAP(a)
-#endif
-
+#define TRAP(a)		pushl $(a) ; jmp _C_LABEL(alltraps)
+#define ZTRAP(a)	pushl $0 ; TRAP(a)
 
 	.text
 IDTVEC(trap00)
 	ZTRAP(T_DIVIDE)
 IDTVEC_END(trap00)
+
+/*
+ * Handle the SS shadow, CVE-2018-8897.
+ *
+ * We scan the IDT to determine if we hit an entry point. If so, we leave
+ * without restoring the segregs, because we could fault while doing that.
+ */
 IDTVEC(trap01)
-	BPTTRAP(T_TRCTRAP)
-IDTVEC_END(trap01)
-IDTVEC(trap02)
-	pushl $0
-	pushl $(T_NMI)
+#ifndef XENPV
+	pushl	$0
+	pushl	$T_TRCTRAP
 	INTRENTRY
+
+	testb	$SEL_UPL,TF_CS(%esp)
+	jnz	.Lnormal_dbentry
+
+	pushl	%esp
+	call	ss_shadow
+	addl	$4,%esp
+
+	cmpl	$1,%eax
+	jne	.Lnormal_dbentry
+
+	/* SS shadow, ignore the exception. */
+	xorl	%eax,%eax
+	movl	%eax,%dr6
+
+	/* INTRFASTEXIT, but without segregs. */
+	movl	TF_EDI(%esp),%edi
+	movl	TF_ESI(%esp),%esi
+	movl	TF_EBP(%esp),%ebp
+	movl	TF_EBX(%esp),%ebx
+	movl	TF_EDX(%esp),%edx
+	movl	TF_ECX(%esp),%ecx
+	movl	TF_EAX(%esp),%eax
+	addl	$(TF_PUSHSIZE+8),%esp
+	iret
+
+.Lnormal_dbentry:
+	STI(%eax)
 	jmp _C_LABEL(calltrap)
+#else
+	ZTRAP(T_TRCTRAP)
+#endif
+IDTVEC_END(trap01)
+
+/*
+ * Non Maskable Interrupts are a special case: they can be triggered even
+ * with interrupts disabled, and once triggered they block further NMIs
+ * until an 'iret' instruction is executed.
+ *
+ * Therefore we don't enable interrupts, because the CPU could switch to
+ * another LWP, call 'iret' and unintentionally leave the NMI mode.
+ */
+IDTVEC(trap02)
+	pushl	$0
+	pushl	$(T_NMI)
+	INTRENTRY
+
+	addl	$1,CPUVAR(NTRAP)	/* statistical info */
+	adcl	$0,CPUVAR(NTRAP)+4
+	pushl	%esp
+	call	_C_LABEL(trap)
+	addl	$4,%esp
+
+	INTRFASTEXIT
 IDTVEC_END(trap02)
+
 IDTVEC(trap03)
-	BPTTRAP(T_BPTFLT)
+	ZTRAP(T_BPTFLT)
 IDTVEC_END(trap03)
+
 IDTVEC(trap04)
 	ZTRAP(T_OFLOW)
 IDTVEC_END(trap04)
+
 IDTVEC(trap05)
 	ZTRAP(T_BOUND)
 IDTVEC_END(trap05)
+
 /*
  * Privileged instruction fault.
  */
@@ -119,27 +174,26 @@ IDTVEC_END(trap05)
 	SUPERALIGN_TEXT
 IDTVEC(trap06)
 	/* Check if there is no DTrace hook registered. */
-	cmpl	$0,dtrace_invop_jump_addr
+	cmpl	$0,%ss:dtrace_invop_jump_addr
 	je	norm_ill
 
 	/* Check if this is a user fault. */
 	/* XXX this was 0x0020 in FreeBSD */
-	cmpl	$GSEL(GCODE_SEL, SEL_KPL), 4(%esp)   /* Check code segment. */
+	cmpl	$GSEL(GCODE_SEL, SEL_KPL),4(%esp) /* Check code segment. */
 
 	/* If so, just handle it as a normal trap. */
 	jne	norm_ill
-              
+
 	/*
 	 * This is a kernel instruction fault that might have been caused
 	 * by a DTrace provider.
 	 */
-	pushal				/* Push all registers onto the stack. */
 
 	/*
 	 * Set our jump address for the jump back in the event that
 	 * the exception wasn't caused by DTrace at all.
 	 */
-	movl	$norm_ill, dtrace_invop_calltrap_addr
+	movl	$norm_ill,dtrace_invop_calltrap_addr
 
 	/* Jump to the code hooked in by DTrace. */
 	jmpl	*dtrace_invop_jump_addr
@@ -155,8 +209,9 @@ IDTVEC(trap06)
 	ZTRAP(T_PRIVINFLT)
 IDTVEC_END(trap06)
 #endif
+
 IDTVEC(trap07)
-	pushl	$0			# dummy error code
+	pushl	$0			/* dummy error code */
 	pushl	$T_DNA
 	INTRENTRY
 #ifdef DIAGNOSTIC
@@ -165,28 +220,35 @@ IDTVEC(trap07)
 	pushl	%esp
 	call	_C_LABEL(fpudna)
 	addl	$4,%esp
-	jmp	_C_LABEL(trapreturn)
+	jmp	.Lalltraps_checkusr
 IDTVEC_END(trap07)
+
 IDTVEC(trap08)
 	TRAP(T_DOUBLEFLT)
 IDTVEC_END(trap08)
+
 IDTVEC(trap09)
 	ZTRAP(T_FPOPFLT)
 IDTVEC_END(trap09)
+
 IDTVEC(trap0a)
 	TRAP(T_TSSFLT)
 IDTVEC_END(trap0a)
+
 IDTVEC(trap0b)
 	TRAP(T_SEGNPFLT)
 IDTVEC_END(trap0b)
+
 IDTVEC(trap0c)
 	TRAP(T_STKFLT)
 IDTVEC_END(trap0c)
+
 IDTVEC(trap0d)
 	TRAP(T_PROTFLT)
 IDTVEC_END(trap0d)
+
 IDTVEC(trap0e)
-#ifndef XEN
+#ifndef XENPV
 	pushl	$T_PAGEFLT
 	INTRENTRY
 	STI(%eax)
@@ -198,9 +260,9 @@ IDTVEC(trap0e)
 	jne	calltrap
 	movb	$T_PRIVINFLT,TF_TRAPNO(%esp)
 	jmp	calltrap
-#else /* !XEN */
+#else
 	TRAP(T_PAGEFLT)
-#endif /* !XEN */
+#endif
 IDTVEC_END(trap0e)
 
 IDTVEC(intrspurious)
@@ -209,18 +271,18 @@ IDTVEC(trap0f)
 	 * The Pentium Pro local APIC may erroneously call this vector for a
 	 * default IR7.  Just ignore it.
 	 *
-	 * (The local APIC does this when CPL is raised while it's on the 
-	 * way to delivering an interrupt.. presumably enough has been set 
+	 * (The local APIC does this when CPL is raised while it's on the
+	 * way to delivering an interrupt.. presumably enough has been set
 	 * up that it's inconvenient to abort delivery completely..)
 	 */
-	pushl	$0			# dummy error code
+	pushl	$0			/* dummy error code */
 	pushl	$T_ASTFLT
 	INTRENTRY
 	STI(%eax)
 #ifdef DIAGNOSTIC
 	movl	CPUVAR(ILEVEL),%ebx
 #endif
-	jmp	_C_LABEL(trapreturn)
+	jmp	.Lalltraps_checkusr
 IDTVEC_END(trap0f)
 IDTVEC_END(intrspurious)
 
@@ -230,18 +292,19 @@ IDTVEC(trap10)
 	 * error.  It would be better to handle npx interrupts as traps but
 	 * this is difficult for nested interrupts.
 	 */
-	pushl	$0			# dummy error code
+	pushl	$0			/* dummy error code */
 	pushl	$T_ARITHTRAP
 .Ldo_fputrap:
 	INTRENTRY
 	movl	CPUVAR(ILEVEL),%ebx
 	pushl	%esp
-	addl	$1,CPUVAR(NTRAP)	# statistical info
+	addl	$1,CPUVAR(NTRAP)	/* statistical info */
 	adcl	$0,CPUVAR(NTRAP)+4
 	call	_C_LABEL(fputrap)
 	addl	$4,%esp
-	jmp	_C_LABEL(trapreturn)
+	jmp	.Lalltraps_checkusr
 IDTVEC_END(trap10)
+
 IDTVEC(trap11)
 	TRAP(T_ALIGNFLT)
 IDTVEC_END(trap11)
@@ -249,8 +312,9 @@ IDTVEC_END(trap11)
 IDTVEC(trap12)
 	ZTRAP(T_MCA)
 IDTVEC_END(trap12)
+
 IDTVEC(trap13)
-	pushl	$0			# dummy error code
+	pushl	$0			/* dummy error code */
 	pushl	$T_XMM
 	jmp	.Ldo_fputrap
 IDTVEC_END(trap13)
@@ -281,13 +345,8 @@ IDTVEC_END(trap17)
 IDTVEC_END(trap16)
 IDTVEC_END(trap15)
 IDTVEC_END(trap14)
-#ifndef XEN
 IDTVEC_END(trap13)
 IDTVEC_END(trap12)
-#else
-IDTVEC_END(trap13)
-IDTVEC_END(trap12)
-#endif
 IDTVEC_END(trap11)
 
 IDTVEC(exceptions)
@@ -309,7 +368,7 @@ IDTVEC(exceptions)
 	.long	_C_LABEL(Xtrap1e), _C_LABEL(Xtrap1f)
 IDTVEC_END(exceptions)
 
- 
+
 IDTVEC(tss_trap08)
 1:
 	str	%ax
@@ -332,43 +391,41 @@ IDTVEC_END(tss_trap08)
  * Typically the code will have raised a SIGSEGV which will be actioned
  * by the code below.
  */
-	.type	_C_LABEL(trap_return_fault_return), @function
+	.type	_C_LABEL(trap_return_fault_return),@function
 LABEL(trap_return_fault_return)
 	mov	4(%esp),%esp	/* frame for user return */
-	jmp	_C_LABEL(trapreturn)
+	jmp	.Lalltraps_checkusr
 END(trap_return_fault_return)
 
 /* LINTSTUB: Ignore */
-NENTRY(alltraps)
+ENTRY(alltraps)
 	INTRENTRY
 	STI(%eax)
+
 calltrap:
 #ifdef DIAGNOSTIC
 	movl	CPUVAR(ILEVEL),%ebx
-#endif /* DIAGNOSTIC */
-	addl	$1,CPUVAR(NTRAP)	# statistical info
+#endif
+	addl	$1,CPUVAR(NTRAP)	/* statistical info */
 	adcl	$0,CPUVAR(NTRAP)+4
 	pushl	%esp
 	call	_C_LABEL(trap)
 	addl	$4,%esp
-_C_LABEL(trapreturn):	.globl	trapreturn
+
+.Lalltraps_checkusr:
 	testb	$CHK_UPL,TF_CS(%esp)
 	jnz	.Lalltraps_checkast
-#ifdef VM86
-	testl	$PSL_VM,TF_EFLAGS(%esp)
-	jz	6f
-#else
 	jmp	6f
-#endif
+
 .Lalltraps_checkast:
 	/* Check for ASTs on exit to user mode. */
 	CLI(%eax)
 	CHECK_ASTPENDING(%eax)
 	jz	3f
-5:	CLEAR_ASTPENDING(%eax)
+	CLEAR_ASTPENDING(%eax)
 	STI(%eax)
 	movl	$T_ASTFLT,TF_TRAPNO(%esp)
-	addl	$1,CPUVAR(NTRAP)	# statistical info
+	addl	$1,CPUVAR(NTRAP)	/* statistical info */
 	adcl	$0,CPUVAR(NTRAP)+4
 	pushl	%esp
 	call	_C_LABEL(trap)
@@ -376,35 +433,47 @@ _C_LABEL(trapreturn):	.globl	trapreturn
 	jmp	.Lalltraps_checkast	/* re-check ASTs */
 3:	CHECK_DEFERRED_SWITCH
 	jnz	9f
-#ifdef XEN
+
+	HANDLE_DEFERRED_FPU
+
+#ifdef XENPV
 	STIC(%eax)
-	jz      6f
-	call    _C_LABEL(stipending)
-	testl   %eax,%eax
-	jz      6f
+	jz	22f
+	call	_C_LABEL(stipending)
+	testl	%eax,%eax
+	jz	22f
 	/* process pending interrupts */
 	CLI(%eax)
-	movl    CPUVAR(ILEVEL), %ebx
-	movl    $.Lalltraps_resume, %esi # address to resume loop at
+	movl	CPUVAR(ILEVEL),%ebx
+	movl	$.Lalltraps_resume,%esi /* address to resume loop at */
 .Lalltraps_resume:
-	movl    %ebx,%eax               # get cpl
-	movl    CPUVAR(IUNMASK)(,%eax,4),%eax
-	andl    CPUVAR(IPENDING),%eax   # any non-masked bits left?
-	jz	7f
-	bsrl    %eax,%eax
-	btrl    %eax,CPUVAR(IPENDING)
-	movl    CPUVAR(ISOURCES)(,%eax,4),%eax
-	jmp     *IS_RESUME(%eax)
-7:      movl    %ebx, CPUVAR(ILEVEL) #restore cpl
-	jmp     _C_LABEL(trapreturn)
+	movl	%ebx,%eax		/* get cpl */
+	movl	CPUVAR(IUNMASK)(,%eax,4),%eax
+	andl	CPUVAR(IPENDING),%eax	/* any non-masked bits left? */
+	jz	11f
+	bsrl	%eax,%eax
+	btrl	%eax,CPUVAR(IPENDING)
+	movl	CPUVAR(ISOURCES)(,%eax,4),%eax
+	jmp	*IS_RESUME(%eax)
+11:	movl	%ebx,CPUVAR(ILEVEL)	/* restore cpl */
+	jmp	.Lalltraps_checkusr
+22:
 #endif /* XEN */
-#ifndef DIAGNOSTIC
-6:	INTRFASTEXIT
-#else
-6:	cmpl	CPUVAR(ILEVEL),%ebx
-	jne	3f
+
+6:
+#ifdef DIAGNOSTIC
+	cmpl	CPUVAR(ILEVEL),%ebx
+	jne	.Lspl_error
+#endif
 	INTRFASTEXIT
-3:	STI(%eax)
+
+9:	STI(%eax)
+	call	_C_LABEL(pmap_load)
+	jmp	.Lalltraps_checkast	/* re-check ASTs */
+
+#ifdef DIAGNOSTIC
+.Lspl_error:
+	STI(%eax)
 	pushl	$4f
 	call	_C_LABEL(panic)
 	addl	$4,%esp
@@ -413,8 +482,5 @@ _C_LABEL(trapreturn):	.globl	trapreturn
 	addl	$4,%esp
 	jmp	.Lalltraps_checkast	/* re-check ASTs */
 4:	.asciz	"SPL NOT LOWERED ON TRAP EXIT\n"
-#endif /* DIAGNOSTIC */
-9:	STI(%eax)
-	call	_C_LABEL(pmap_load)
-	jmp	.Lalltraps_checkast	/* re-check ASTs */
+#endif
 END(alltraps)

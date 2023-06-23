@@ -1,4 +1,4 @@
-/*	$NetBSD: memecc.c,v 1.16 2013/10/19 19:40:23 mrg Exp $	*/
+/*	$NetBSD: memecc.c,v 1.18 2021/01/24 07:36:54 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: memecc.c,v 1.16 2013/10/19 19:40:23 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: memecc.c,v 1.18 2021/01/24 07:36:54 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -55,8 +55,6 @@ struct memecc_softc *memecc_sc;
 static void	memecc_attach(device_t, device_t, void *);
 static int	memecc_match(device_t, cfdata_t, void *);
 static int	memecc_error(void);
-
-extern int (*memerr_handler)(void);
 
 CFATTACH_DECL_NEW(eccmemctl, sizeof(struct memecc_softc),
     memecc_match, memecc_attach, NULL, NULL);
@@ -114,7 +112,7 @@ memecc_attach(device_t parent, device_t self, void *aux)
 }
 
 /*
- * Called if the MEMORY ERROR bit is set after a level 25 interrupt.
+ * Called if the MEMORY ERROR bit is set after a level 15 interrupt.
  */
 int
 memecc_error(void)

@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_reconutil.c,v 1.35 2013/09/15 12:48:58 martin Exp $	*/
+/*	$NetBSD: rf_reconutil.c,v 1.38 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -31,7 +31,7 @@
  ********************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_reconutil.c,v 1.35 2013/09/15 12:48:58 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_reconutil.c,v 1.38 2021/07/23 00:54:45 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -73,11 +73,11 @@ rf_MakeReconControl(RF_RaidReconDesc_t *reconDesc,
 
 	/* make and zero the global reconstruction structure and the per-disk
 	 * structure */
-	RF_Malloc(reconCtrlPtr, sizeof(RF_ReconCtrl_t), (RF_ReconCtrl_t *));
+	reconCtrlPtr = RF_Malloc(sizeof(*reconCtrlPtr));
 
 	/* note: this zeros the perDiskInfo */
-	RF_Malloc(reconCtrlPtr->perDiskInfo, raidPtr->numCol *
-		  sizeof(RF_PerDiskReconCtrl_t), (RF_PerDiskReconCtrl_t *));
+	reconCtrlPtr->perDiskInfo = RF_Malloc(raidPtr->numCol *
+	    sizeof(*reconCtrlPtr->perDiskInfo));
 	reconCtrlPtr->reconDesc = reconDesc;
 	reconCtrlPtr->fcol = fcol;
 	reconCtrlPtr->spareCol = scol;
@@ -109,7 +109,7 @@ rf_MakeReconControl(RF_RaidReconDesc_t *reconDesc,
          * Not all distributed sparing archs need dynamic mappings
          */
 	if (lp->InstallSpareTable) {
-		retcode = rf_InstallSpareTable(raidPtr, 0, fcol);
+		retcode = rf_InstallSpareTable(raidPtr, fcol);
 		if (retcode) {
 			RF_PANIC();	/* XXX fix this */
 		}
@@ -231,8 +231,8 @@ rf_MakeReconBuffer(RF_Raid_t *raidPtr, RF_RowCol_t col, RF_RbufType_t type)
 	RF_ReconBuffer_t *t;
 	u_int   recon_buffer_size = rf_RaidAddressToByte(raidPtr, layoutPtr->SUsPerRU * layoutPtr->sectorsPerStripeUnit);
 
-	t = pool_get(&rf_pools.reconbuffer, PR_WAITOK);
-	RF_Malloc(t->buffer, recon_buffer_size, (void *));
+	t = pool_get(&raidPtr->pools.reconbuffer, PR_WAITOK);
+	t->buffer = RF_Malloc(recon_buffer_size);
 	t->raidPtr = raidPtr;
 	t->col = col;
 	t->priority = RF_IO_RECON_PRIORITY;
@@ -253,7 +253,7 @@ rf_FreeReconBuffer(RF_ReconBuffer_t *rbuf)
 	recon_buffer_size = rf_RaidAddressToByte(raidPtr, raidPtr->Layout.SUsPerRU * raidPtr->Layout.sectorsPerStripeUnit);
 
 	RF_Free(rbuf->buffer, recon_buffer_size);
-	pool_put(&rf_pools.reconbuffer, rbuf);
+	pool_put(&raidPtr->pools.reconbuffer, rbuf);
 }
 
 #if RF_DEBUG_RECON

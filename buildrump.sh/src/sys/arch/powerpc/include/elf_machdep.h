@@ -1,4 +1,4 @@
-/*	$NetBSD: elf_machdep.h,v 1.12 2014/03/07 04:11:07 matt Exp $	*/
+/*	$NetBSD: elf_machdep.h,v 1.16 2019/12/08 21:46:03 uwe Exp $	*/
 
 #ifndef _POWERPC_ELF_MACHDEP_H_
 #define _POWERPC_ELF_MACHDEP_H_
@@ -16,12 +16,13 @@
 #define	ELF32_MACHDEP_ID	EM_PPC
 #define	ELF64_MACHDEP_ID	EM_PPC64
 
-#ifndef ARCH_ELFSIZE
+
 #ifdef _LP64
+#define KERN_ELFSIZE		64
 #define ARCH_ELFSIZE		64	/* MD native binary size */
 #else
+#define KERN_ELFSIZE		32
 #define ARCH_ELFSIZE		32	/* MD native binary size */
-#endif
 #endif
 
 /* Specify the value of _GLOBAL_OFFSET_TABLE_ */
@@ -70,7 +71,7 @@
 // 
 // #lo(x) = (x & 0xffff)
 // #hi(x) = ((x >> 16) & 0xffff)
-// #ha(x) = (((x >> 16) + ((x & 0x80000) == 0x8000)) & 0xffff)
+// #ha(x) = (((x >> 16) + ((x & 0x8000) == 0x8000)) & 0xffff)
 // #higher(x) = ((x >> 32) & 0xffff)
 // #highera(x) =
 //    (((x >> 32) + ((x & 0xffff8000) == 0xffff8000)) & 0xffff)
@@ -197,6 +198,9 @@
 #define	R_PPC_DTPREL16_HIGHERA	104	// #highera(@dtprel)
 #define	R_PPC_DTPREL16_HIGHEST	105	// #highest(@dtprel)
 #define	R_PPC_DTPREL16_HIGHESTA	106	// #highesta(@dtprel)
+
+/* Indirect-function support */
+#define	R_PPC_IRELATIVE		248
 
 /* Used for the secure-plt PIC code sequences */
 #define	R_PPC_REL16		249	// S + A - P

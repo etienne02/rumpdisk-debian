@@ -1,4 +1,4 @@
-/*	$NetBSD: elf_machdep.h,v 1.11 2013/11/14 12:11:13 martin Exp $	*/
+/*	$NetBSD: elf_machdep.h,v 1.14 2017/11/06 03:47:48 christos Exp $	*/
 
 #define ELF32_MACHDEP_ENDIANNESS	ELFDATA2MSB
 #define	ELF32_MACHDEP_ID_CASES						\
@@ -8,7 +8,6 @@
 
 #define	ELF64_MACHDEP_ENDIANNESS	ELFDATA2MSB
 #define	ELF64_MACHDEP_ID_CASES						\
-		case EM_SPARC32PLUS:					\
 		case EM_SPARCV9:					\
 			break;
 
@@ -16,8 +15,10 @@
 #define	ELF64_MACHDEP_ID	EM_SPARCV9
 
 #ifdef __arch64__
+#define	KERN_ELFSIZE		64
 #define ARCH_ELFSIZE		64	/* MD native binary size */
 #else
+#define	KERN_ELFSIZE		32
 #define ARCH_ELFSIZE		32	/* MD native binary size */
 #endif
 
@@ -137,5 +138,8 @@ void sparc64_elf_mcmodel_check(struct exec_package*, const char *, size_t);
 #define R_SPARC_TLS_DTPOFF64	77
 #define R_SPARC_TLS_TPOFF32	78
 #define R_SPARC_TLS_TPOFF64	79
+
+#define R_SPARC_JMP_IREL	248
+#define R_SPARC_IRELATIVE	249
 
 #define R_TYPE(name)		__CONCAT(R_SPARC_,name)

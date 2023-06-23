@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.241 2016/07/11 18:54:32 skrll Exp $	*/
+/*	$NetBSD: trap.c,v 1.261 2021/04/07 02:59:01 simonb Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,10 +39,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.241 2016/07/11 18:54:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.261 2021/04/07 02:59:01 simonb Exp $");
 
 #include "opt_cputype.h"	/* which mips CPU levels do we support? */
 #include "opt_ddb.h"
+#include "opt_dtrace.h"
 #include "opt_kgdb.h"
 #include "opt_multiprocessor.h"
 
@@ -82,6 +83,16 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.241 2016/07/11 18:54:32 skrll Exp $");
 #include <sys/kgdb.h>
 #endif
 
+#ifdef KDTRACE_HOOKS
+#include <sys/dtrace_bsd.h>
+
+/* Not used for now, but needed for dtrace/fbt modules */
+dtrace_doubletrap_func_t	dtrace_doubletrap_func = NULL;
+dtrace_trap_func_t		dtrace_trap_func = NULL;
+
+int				(* dtrace_invop_jump_addr)(struct trapframe *);
+#endif /* KDTRACE_HOOKS */
+
 const char * const trap_names[] = {
 	"external interrupt",
 	"TLB modification",
@@ -120,21 +131,27 @@ const char * const trap_names[] = {
 void trap(uint32_t, uint32_t, vaddr_t, vaddr_t, struct trapframe *);
 void ast(void);
 
+#ifdef TRAP_SIGDEBUG
+static void sigdebug(const struct trapframe *, const ksiginfo_t *, int,
+    vaddr_t);
+#define SIGDEBUG(a, b, c, d) sigdebug(a, b, c, d)
+#else
+#define SIGDEBUG(a, b, c, d)
+#endif
+
 /*
  * fork syscall returns directly to user process via lwp_trampoline(),
  * which will be called the very first time when child gets running.
  */
 void
-child_return(void *arg)
+md_child_return(struct lwp *l)
 {
-	struct lwp *l = arg;
 	struct trapframe *utf = l->l_md.md_utf;
 
 	utf->tf_regs[_R_V0] = 0;
 	utf->tf_regs[_R_V1] = 1;
 	utf->tf_regs[_R_A3] = 0;
 	userret(l);
-	ktrsysret(SYS_fork, 0, 0);
 }
 
 #ifdef MIPS3_PLUS
@@ -153,7 +170,6 @@ void
 trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
     struct trapframe *tf)
 {
-	int type;
 	struct lwp * const l = curlwp;
 	struct proc * const p = curproc;
 	struct trapframe * const utf = l->l_md.md_utf;
@@ -162,7 +178,10 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 	ksiginfo_t ksi;
 	extern void fswintrberr(void);
 	void *onfault;
-	int rv;
+	InstFmt insn;
+	uint32_t instr;
+	int type;
+	int rv = 0;
 
 	KSI_INIT_TRAP(&ksi);
 
@@ -177,6 +196,30 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		type |= T_USER;
 		LWP_CACHE_CREDS(l, p);
 	}
+
+#ifdef KDTRACE_HOOKS
+	/*
+	 * A trap can occur while DTrace executes a probe. Before
+	 * executing the probe, DTrace blocks re-scheduling and sets
+	 * a flag in its per-cpu flags to indicate that it doesn't
+	 * want to fault. On returning from the probe, the no-fault
+	 * flag is cleared and finally re-scheduling is enabled.
+	 *
+	 * If the DTrace kernel module has registered a trap handler,
+	 * call it and if it returns non-zero, assume that it has
+	 * handled the trap and modified the trap frame so that this
+	 * function can return normally.
+	 */
+	/*
+	 * XXXDTRACE: add pid probe handler here (if ever)
+	 */
+	if (!USERMODE(status)) {
+		if ((dtrace_trap_func != NULL) &&
+		    ((*dtrace_trap_func)(tf, type) != 0)) {
+			return;
+		}
+	}
+#endif /* KDTRACE_HOOKS */
 
 	switch (type) {
 	default:
@@ -281,8 +324,8 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 			}
 		}
 		UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
-		UVMHIST_LOG(maphist, "%ctlbmod(va=%#lx, pc=%#lx, tf=%p)",
-		    user_p ? 'u' : 'k', vaddr, pc, tf);
+		UVMHIST_LOG(maphist, "%ctlbmod(va=%#lx, pc=%#lx, tf=%#jx)",
+		    user_p ? 'u' : 'k', vaddr, pc, (uintptr_t)tf);
 		if (!pte_modified_p(pte)) {
 			pte |= mips_pg_m_bit();
 #ifdef MULTIPROCESSOR
@@ -298,10 +341,20 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		vaddr = trunc_page(vaddr);
 		int ok = pmap_tlb_update_addr(pmap, vaddr, pte, 0);
 		kpreempt_enable();
-		if (ok != 1)
+		if (ok != 1) {
+#if 0 /* PMAP_FAULTINFO? */
+			/*
+			 * Since we don't block interrupts here,
+			 * this can legitimately happen if we get
+			 * a TLB miss that's serviced in an interrupt
+			 * hander that happens to randomly evict the
+			 * TLB entry we're concerned about.
+			 */
 			printf("pmap_tlb_update_addr(%p,%#"
-			    PRIxVADDR",%#"PRIxPTE", 0) returned %d",
+			    PRIxVADDR",%#"PRIxPTE", 0) returned %d\n",
 			    pmap, vaddr, pte_value(pte), ok);
+#endif
+		}
 		paddr_t pa = pte_to_paddr(pte);
 		KASSERTMSG(uvm_pageismanaged(pa),
 		    "%#"PRIxVADDR" pa %#"PRIxPADDR, vaddr, pa);
@@ -322,11 +375,6 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		 */
 		if (pcb->pcb_onfault == NULL) {
 			goto dopanic;
-		}
-		/* check for fuswintr() or suswintr() getting a page fault */
-		if (pcb->pcb_onfault == (void *)fswintrberr) {
-			tf->tf_regs[_R_PC] = (intptr_t)pcb->pcb_onfault;
-			return; /* KERN */
 		}
 		goto pagefault;
 	case T_TLB_LD_MISS+T_USER:
@@ -372,8 +420,15 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		if (p->p_pid == pfi->pfi_lastpid && va == pfi->pfi_faultaddr) {
 			if (++pfi->pfi_repeats > 4) {
 				tlb_asid_t asid = tlb_get_asid();
-				pt_entry_t *ptep = pfi->pfi_faultpte;
-				printf("trap: fault #%u (%s/%s) for %#"PRIxVADDR" (%#"PRIxVADDR") at pc %#"PRIxVADDR" curpid=%u/%u ptep@%p=%#"PRIxPTE")\n", pfi->pfi_repeats, trap_names[TRAPTYPE(cause)], trap_names[pfi->pfi_faulttype], va, vaddr, pc, map->pmap->pm_pai[0].pai_asid, asid, ptep, ptep ? pte_value(*ptep) : 0);
+				pt_entry_t *ptep = pfi->pfi_faultptep;
+				printf("trap: fault #%u (%s/%s) for %#"
+				    PRIxVADDR" (%#"PRIxVADDR") at pc %#"
+				    PRIxVADDR" curpid=%u/%u ptep@%p=%#"
+				    PRIxPTE")\n", pfi->pfi_repeats,
+				    trap_names[TRAPTYPE(cause)],
+				    trap_names[pfi->pfi_faulttype], va,
+				    vaddr, pc, map->pmap->pm_pai[0].pai_asid,
+				    asid, ptep, ptep ? pte_value(*ptep) : 0);
 				if (pfi->pfi_repeats >= 4) {
 					cpu_Debugger();
 				} else {
@@ -384,18 +439,14 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 			pfi->pfi_lastpid = p->p_pid;
 			pfi->pfi_faultaddr = va;
 			pfi->pfi_repeats = 0;
-			pfi->pfi_faultpte = NULL;
+			pfi->pfi_faultptep = NULL;
 			pfi->pfi_faulttype = TRAPTYPE(cause);
 		}
 #endif /* PMAP_FAULTINFO */
 
 		onfault = pcb->pcb_onfault;
 		pcb->pcb_onfault = NULL;
-		if (p->p_emul->e_fault) {
-			rv = (*p->p_emul->e_fault)(p, va, ftype);
-		} else {
-			rv = uvm_fault(map, va, ftype);
-		}
+		rv = uvm_fault(map, va, ftype);
 		pcb->pcb_onfault = onfault;
 
 #if defined(VMFAULT_TRACE)
@@ -421,10 +472,10 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		if (rv == 0) {
 #ifdef PMAP_FAULTINFO
 			if (pfi->pfi_repeats == 0) {
-				pfi->pfi_faultpte =
+				pfi->pfi_faultptep =
 				    pmap_pte_lookup(map->pmap, va);
 			}
-			KASSERT(*(pt_entry_t *)pfi->pfi_faultpte);
+			KASSERT(*(pt_entry_t *)pfi->pfi_faultptep);
 #endif
 			if (type & T_USER) {
 				userret(l);
@@ -433,21 +484,27 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		}
 		if ((type & T_USER) == 0)
 			goto copyfault;
-		if (rv == ENOMEM) {
-			printf("UVM: pid %d (%s), uid %d killed: out of swap\n",
-			       p->p_pid, p->p_comm,
-			       l->l_cred ?
-			       kauth_cred_geteuid(l->l_cred) : (uid_t) -1);
+
+		KSI_INIT_TRAP(&ksi);
+		switch (rv) {
+		case EINVAL:
+			ksi.ksi_signo = SIGBUS;
+			ksi.ksi_code = BUS_ADRERR;
+			break;
+		case EACCES:
+			ksi.ksi_signo = SIGSEGV;
+			ksi.ksi_code = SEGV_ACCERR;
+			break;
+		case ENOMEM:
 			ksi.ksi_signo = SIGKILL;
-			ksi.ksi_code = 0;
-		} else {
-			if (rv == EACCES) {
-				ksi.ksi_signo = SIGBUS;
-				ksi.ksi_code = BUS_OBJERR;
-			} else {
-				ksi.ksi_signo = SIGSEGV;
-				ksi.ksi_code = SEGV_MAPERR;
-			}
+			printf("UVM: pid %d.%d (%s), uid %d killed: "
+			    "out of swap\n", p->p_pid, l->l_lid, p->p_comm,
+			    l->l_cred ? kauth_cred_geteuid(l->l_cred) : -1);
+			break;
+		default:
+			ksi.ksi_signo = SIGSEGV;
+			ksi.ksi_code = SEGV_MAPERR;
+			break;
 		}
 		ksi.ksi_trap = type & ~T_USER;
 		ksi.ksi_addr = (void *)vaddr;
@@ -495,8 +552,15 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		}
 		break; /* SIGNAL */
 
-	case T_WATCH:
 	case T_BREAK:
+#ifdef KDTRACE_HOOKS
+		if ((dtrace_invop_jump_addr != NULL) &&
+		    (dtrace_invop_jump_addr(tf) == 0)) {
+			return;
+		}
+#endif /* KDTRACE_HOOKS */
+		/* FALLTHROUGH */
+	case T_WATCH:
 #if defined(DDB)
 		kdb_trap(type, &tf->tf_registers);
 		return;	/* KERN */
@@ -527,33 +591,62 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		goto dopanic;
 #endif
 	case T_BREAK+T_USER: {
-		uint32_t instr;
-
 		/* compute address of break instruction */
 		vaddr_t va = pc + (cause & MIPS_CR_BR_DELAY ? sizeof(int) : 0);
 
 		/* read break instruction */
-		instr = ufetch_uint32((void *)va);
+		instr = mips_ufetch32((void *)va);
+		insn.word = instr;
 
 		if (l->l_md.md_ss_addr != va || instr != MIPS_BREAK_SSTEP) {
+			bool advance_pc = false;
+
 			ksi.ksi_trap = type & ~T_USER;
 			ksi.ksi_signo = SIGTRAP;
 			ksi.ksi_addr = (void *)va;
 			ksi.ksi_code = TRAP_TRACE;
+
+			if ((insn.JType.op == OP_SPECIAL) &&
+			    (insn.RType.func == OP_BREAK)) {
+				int code = (insn.RType.rs << 5) | insn.RType.rt;
+				switch (code) {
+				case 0:
+					/* we broke, skip it to avoid infinite loop */
+					advance_pc = true;
+					break;
+				case MIPS_BREAK_INTOVERFLOW:
+					ksi.ksi_signo = SIGFPE;
+					ksi.ksi_code = FPE_INTOVF;
+					advance_pc = true;
+					break;
+				case MIPS_BREAK_INTDIVZERO:
+					ksi.ksi_signo = SIGFPE;
+					ksi.ksi_code = FPE_INTDIV;
+					advance_pc = true;
+					break;
+				default:
+					/* do nothing */
+					break;
+				}
+			}
+
+			if (advance_pc)
+				tf->tf_regs[_R_PC] += 4;
 			break;
 		}
 		/*
 		 * Restore original instruction and clear BP
 		 */
-		rv = ustore_uint32_isync((void *)va, l->l_md.md_ss_instr);
-		if (rv < 0) {
+		rv = mips_ustore32_isync((void *)va, l->l_md.md_ss_instr);
+		if (rv != 0) {
 			vaddr_t sa, ea;
 			sa = trunc_page(va);
 			ea = round_page(va + sizeof(int) - 1);
 			rv = uvm_map_protect(&p->p_vmspace->vm_map,
 				sa, ea, VM_PROT_ALL, false);
 			if (rv == 0) {
-				rv = ustore_uint32_isync((void *)va, l->l_md.md_ss_instr);
+				rv = mips_ustore32_isync((void *)va,
+				    l->l_md.md_ss_instr);
 				(void)uvm_map_protect(&p->p_vmspace->vm_map,
 				sa, ea, VM_PROT_READ|VM_PROT_EXECUTE, false);
 			}
@@ -561,7 +654,7 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		mips_icache_sync_all();		/* XXXJRT -- necessary? */
 		mips_dcache_wbinv_all();	/* XXXJRT -- necessary? */
 
-		if (rv < 0)
+		if (rv != 0)
 			printf("Warning: can't restore instruction"
 			    " at %#"PRIxVADDR": 0x%x\n",
 			    l->l_md.md_ss_addr, l->l_md.md_ss_instr);
@@ -584,7 +677,7 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 	case T_RES_INST+T_USER:
 	case T_COP_UNUSABLE+T_USER:
 #if !defined(FPEMUL) && !defined(NOFPU)
-		if ((cause & MIPS_CR_COP_ERR) == 0x10000000) {
+		if (__SHIFTOUT(cause, MIPS_CR_COP_ERR) == MIPS_CR_COP_ERR_CU1) {
 			fpu_load();          	/* load FPA */
 		} else
 #endif
@@ -603,29 +696,44 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		userret(l);
 		return; /* GEN */
 	case T_OVFLOW+T_USER:
-	case T_TRAP+T_USER:
+	case T_TRAP+T_USER: {
+		/* compute address of trap/faulting instruction */
+		vaddr_t va = pc + (cause & MIPS_CR_BR_DELAY ? sizeof(int) : 0);
+		bool advance_pc = false;
+
+		/* read break instruction */
+		instr = mips_ufetch32((void *)va);
+		insn.word = instr;
+
 		ksi.ksi_trap = type & ~T_USER;
 		ksi.ksi_signo = SIGFPE;
 		ksi.ksi_addr = (void *)(intptr_t)pc /*utf->tf_regs[_R_PC]*/;
 		ksi.ksi_code = FPE_FLTOVF; /* XXX */
+
+		if ((insn.JType.op == OP_SPECIAL) &&
+		    (insn.RType.func == OP_TEQ)) {
+			int code = (insn.RType.rd << 5) | insn.RType.shamt;
+			switch (code) {
+			case MIPS_BREAK_INTOVERFLOW:
+				ksi.ksi_code = FPE_INTOVF;
+				advance_pc = true;
+				break;
+			case MIPS_BREAK_INTDIVZERO:
+				ksi.ksi_code = FPE_INTDIV;
+				advance_pc = true;
+				break;
+			}
+		}
+
+		/* XXX when else do we advance the PC? */
+		if (advance_pc)
+			tf->tf_regs[_R_PC] += 4;
 		break; /* SIGNAL */
+	 }
 	}
 	utf->tf_regs[_R_CAUSE] = cause;
 	utf->tf_regs[_R_BADVADDR] = vaddr;
-#if defined(DEBUG)
-	printf("trap: pid %d(%s): sig %d: cause=%#x epc=%#"PRIxREGISTER
-	    " va=%#"PRIxVADDR"\n",
-	    p->p_pid, p->p_comm, ksi.ksi_signo, cause,
-	    utf->tf_regs[_R_PC], vaddr);
-	printf("registers:\n");
-	for (size_t i = 0; i < 32; i += 4) {
-		printf(
-		    "[%2zu]=%08"PRIxREGISTER" [%2zu]=%08"PRIxREGISTER
-		    " [%2zu]=%08"PRIxREGISTER" [%2zu]=%08"PRIxREGISTER "\n",
-		    i+0, utf->tf_regs[i+0], i+1, utf->tf_regs[i+1],
-		    i+2, utf->tf_regs[i+2], i+3, utf->tf_regs[i+3]);
-	}
-#endif
+	SIGDEBUG(utf, &ksi, rv, pc);
 	(*p->p_emul->e_trapsignal)(l, &ksi);
 	if ((type & T_USER) == 0) {
 #ifdef DDB
@@ -679,7 +787,7 @@ ast(void)
 }
 
 
-/* XXX need to rewrite acient comment XXX
+/* XXX need to rewrite ancient comment XXX
  * This routine is called by procxmt() to single step one instruction.
  * We do this by storing a break instruction after the current instruction,
  * resuming execution, and then restoring the old instruction.
@@ -698,7 +806,7 @@ mips_singlestep(struct lwp *l)
 		return EFAULT;
 	}
 	pc = (vaddr_t)tf->tf_regs[_R_PC];
-	if (ufetch_uint32((void *)pc) != 0) { /* not a NOP instruction */
+	if (mips_ufetch32((void *)pc) != 0) { /* not a NOP instruction */
 		struct pcb * const pcb = lwp_getpcb(l);
 		va = mips_emul_branch(tf, pc, PCB_FSR(pcb), true);
 	} else {
@@ -715,16 +823,17 @@ mips_singlestep(struct lwp *l)
 	}
 
 	l->l_md.md_ss_addr = va;
-	l->l_md.md_ss_instr = ufetch_uint32((void *)va);
-	rv = ustore_uint32_isync((void *)va, MIPS_BREAK_SSTEP);
-	if (rv < 0) {
+	l->l_md.md_ss_instr = mips_ufetch32((void *)va);
+	rv = mips_ustore32_isync((void *)va, MIPS_BREAK_SSTEP);
+	if (rv != 0) {
 		vaddr_t sa, ea;
 		sa = trunc_page(va);
 		ea = round_page(va + sizeof(int) - 1);
 		rv = uvm_map_protect(&p->p_vmspace->vm_map,
 		    sa, ea, VM_PROT_ALL, false);
 		if (rv == 0) {
-			rv = ustore_uint32_isync((void *)va, MIPS_BREAK_SSTEP);
+			rv = mips_ustore32_isync((void *)va,
+			    MIPS_BREAK_SSTEP);
 			(void)uvm_map_protect(&p->p_vmspace->vm_map,
 			    sa, ea, VM_PROT_READ|VM_PROT_EXECUTE, false);
 		}
@@ -732,449 +841,68 @@ mips_singlestep(struct lwp *l)
 #if 0
 	printf("SS %s (%d): breakpoint set at %x: %x (pc %x) br %x\n",
 		p->p_comm, p->p_pid, p->p_md.md_ss_addr,
-		p->p_md.md_ss_instr, pc, ufetch_uint32((void *)va)); /* XXX */
+		p->p_md.md_ss_instr, pc, mips_ufetch32((void *)va)); /* XXX */
 #endif
 	return 0;
 }
 
-
-#ifndef DDB_TRACE
-
-#if defined(DEBUG) || defined(DDB) || defined(KGDB) || defined(geo)
-mips_reg_t kdbrpeek(vaddr_t, size_t);
-
-int
-kdbpeek(vaddr_t addr)
+#ifdef TRAP_SIGDEBUG
+static void
+frame_dump(const struct trapframe *tf, struct pcb *pcb)
 {
-	int rc;
 
-	if (addr & 3) {
-		printf("kdbpeek: unaligned address %#"PRIxVADDR"\n", addr);
-		/* We might have been called from DDB, so do not go there. */
-		stacktrace();
-		rc = -1 ;
-	} else if (addr == 0) {
-		printf("kdbpeek: NULL\n");
-		rc = 0xdeadfeed;
-	} else {
-		rc = *(int *)addr;
-	}
-	return rc;
-}
-
-mips_reg_t
-kdbrpeek(vaddr_t addr, size_t n)
-{
-	mips_reg_t rc;
-
-	if (addr & (n - 1)) {
-		printf("kdbrpeek: unaligned address %#"PRIxVADDR"\n", addr);
-		/* We might have been called from DDB, so do not go there. */
-		stacktrace();
-		rc = -1 ;
-	} else if (addr == 0) {
-		printf("kdbrpeek: NULL\n");
-		rc = 0xdeadfeed;
-	} else {
-		if (sizeof(mips_reg_t) == 8 && n == 8)
-			rc = *(int64_t *)addr;
-		else
-			rc = *(int32_t *)addr;
-	}
-	return rc;
-}
-
-extern char start[], edata[], verylocore[];
-#ifdef MIPS1
-extern char mips1_kern_gen_exception[];
-extern char mips1_user_gen_exception[];
-extern char mips1_kern_intr[];
-extern char mips1_user_intr[];
-extern char mips1_systemcall[];
-#endif
-#ifdef MIPS3
-extern char mips3_kern_gen_exception[];
-extern char mips3_user_gen_exception[];
-extern char mips3_kern_intr[];
-extern char mips3_user_intr[];
-extern char mips3_systemcall[];
-#endif
-#ifdef MIPS32
-extern char mips32_kern_gen_exception[];
-extern char mips32_user_gen_exception[];
-extern char mips32_kern_intr[];
-extern char mips32_user_intr[];
-extern char mips32_systemcall[];
-#endif
-#ifdef MIPS32R2
-extern char mips32r2_kern_gen_exception[];
-extern char mips32r2_user_gen_exception[];
-extern char mips32r2_kern_intr[];
-extern char mips32r2_user_intr[];
-extern char mips32r2_systemcall[];
-#endif
-#ifdef MIPS64
-extern char mips64_kern_gen_exception[];
-extern char mips64_user_gen_exception[];
-extern char mips64_kern_intr[];
-extern char mips64_user_intr[];
-extern char mips64_systemcall[];
-#endif
-#ifdef MIPS64R2
-extern char mips64r2_kern_gen_exception[];
-extern char mips64r2_user_gen_exception[];
-extern char mips64r2_kern_intr[];
-extern char mips64r2_user_intr[];
-extern char mips64r2_systemcall[];
-#endif
-
-int main(void *);	/* XXX */
-
-/*
- *  stack trace code, also useful to DDB one day
- */
-
-/* forward */
-const char *fn_name(vaddr_t addr);
-void stacktrace_subr(mips_reg_t, mips_reg_t, mips_reg_t, mips_reg_t,
-	vaddr_t, vaddr_t, vaddr_t, vaddr_t, void (*)(const char*, ...));
-
-#define	MIPS_JR_RA	0x03e00008	/* instruction code for jr ra */
-#define	MIPS_JR_K0	0x03400008	/* instruction code for jr k0 */
-#define	MIPS_ERET	0x42000018	/* instruction code for eret */
-
-/*
- * Do a stack backtrace.
- * (*printfn)()  prints the output to either the system log,
- * the console, or both.
- */
-void
-stacktrace_subr(mips_reg_t a0, mips_reg_t a1, mips_reg_t a2, mips_reg_t a3,
-    vaddr_t pc, vaddr_t sp, vaddr_t fp, vaddr_t ra,
-    void (*printfn)(const char*, ...))
-{
-	vaddr_t va, subr;
-	unsigned instr, mask;
-	InstFmt i;
-	int more, stksize;
-	unsigned int frames =  0;
-	int foundframesize = 0;
-	mips_reg_t regs[32] = {
-		[_R_ZERO] = 0,
-		[_R_A0] = a0, [_R_A1] = a1, [_R_A2] = a2, [_R_A3] = a3,
-		[_R_RA] = ra,
-	};
-#ifdef DDB
-	db_expr_t diff;
-	db_sym_t sym;
-#endif
-
-/* Jump here when done with a frame, to start a new one */
-loop:
-	stksize = 0;
-	subr = 0;
-	mask = 1;
-	if (frames++ > 100) {
-		(*printfn)("\nstackframe count exceeded\n");
-		/* return breaks stackframe-size heuristics with gcc -O2 */
-		goto finish;	/*XXX*/
-	}
-
-	/* check for bad SP: could foul up next frame */
-	if ((sp & (sizeof(sp)-1)) || (intptr_t)sp >= 0) {
-		(*printfn)("SP 0x%x: not in kernel\n", sp);
-		ra = 0;
-		subr = 0;
-		goto done;
-	}
-
-	/* Check for bad PC */
-	if (pc & 3 || (intptr_t)pc >= 0 || (intptr_t)pc >= (intptr_t)edata) {
-		(*printfn)("PC 0x%x: not in kernel space\n", pc);
-		ra = 0;
-		goto done;
-	}
-
-#ifdef DDB
-	/*
-	 * Check the kernel symbol table to see the beginning of
-	 * the current subroutine.
-	 */
-	diff = 0;
-	sym = db_search_symbol(pc, DB_STGY_ANY, &diff);
-	if (sym != DB_SYM_NULL && diff == 0) {
-		/* check func(foo) __attribute__((__noreturn__)) case */
-		instr = kdbpeek(pc - 2 * sizeof(int));
-		i.word = instr;
-		if (i.JType.op == OP_JAL) {
-			sym = db_search_symbol(pc - sizeof(int),
-			    DB_STGY_ANY, &diff);
-			if (sym != DB_SYM_NULL && diff != 0)
-				diff += sizeof(int);
-		}
-	}
-	if (sym == DB_SYM_NULL) {
-		ra = 0;
-		goto done;
-	}
-	va = pc - diff;
+	printf("trapframe %p\n", tf);
+	printf("ast %#018lx   v0 %#018lx   v1 %#018lx\n",
+	    tf->tf_regs[_R_AST], tf->tf_regs[_R_V0], tf->tf_regs[_R_V1]);
+	printf(" a0 %#018lx   a1 %#018lx   a2 %#018lx\n",
+	    tf->tf_regs[_R_A0], tf->tf_regs[_R_A1], tf->tf_regs[_R_A2]);
+#if defined(__mips_n32) || defined(__mips_n64)
+	printf(" a3 %#018lx   a4  %#018lx  a5  %#018lx\n",
+	    tf->tf_regs[_R_A3], tf->tf_regs[_R_A4], tf->tf_regs[_R_A5]);
+	printf(" a6 %#018lx   a7  %#018lx  t0  %#018lx\n",
+	    tf->tf_regs[_R_A6], tf->tf_regs[_R_A7], tf->tf_regs[_R_T0]);
+	printf(" t1 %#018lx   t2  %#018lx  t3  %#018lx\n",
+	    tf->tf_regs[_R_T1], tf->tf_regs[_R_T2], tf->tf_regs[_R_T3]);
 #else
-	/*
-	 * Find the beginning of the current subroutine by scanning backwards
-	 * from the current PC for the end of the previous subroutine.
-	 *
-	 * XXX This won't work well because nowadays gcc is so aggressive
-	 *     as to reorder instruction blocks for branch-predict.
-	 *     (i.e. 'jr ra' wouldn't indicate the end of subroutine)
-	 */
-	va = pc;
-	do {
-		va -= sizeof(int);
-		if (va <= (vaddr_t)verylocore)
-			goto finish;
-		instr = kdbpeek(va);
-		if (instr == MIPS_ERET)
-			goto mips3_eret;
-	} while (instr != MIPS_JR_RA && instr != MIPS_JR_K0);
-	/* skip back over branch & delay slot */
-	va += sizeof(int);
-mips3_eret:
-	va += sizeof(int);
-	/* skip over nulls which might separate .o files */
-	while ((instr = kdbpeek(va)) == 0)
-		va += sizeof(int);
+	printf(" a3 %#018lx   t0  %#018lx  t1  %#018lx\n",
+	    tf->tf_regs[_R_A3], tf->tf_regs[_R_T0], tf->tf_regs[_R_T1]);
+	printf(" t2 %#018lx   t3  %#018lx  t4  %#018lx\n",
+	    tf->tf_regs[_R_T2], tf->tf_regs[_R_T3], tf->tf_regs[_R_T4]);
+	printf(" t5 %#018lx   t6  %#018lx  t7  %#018lx\n",
+	    tf->tf_regs[_R_T5], tf->tf_regs[_R_T6], tf->tf_regs[_R_T7]);
 #endif
-	subr = va;
-
-	/* scan forwards to find stack size and any saved registers */
-	stksize = 0;
-	more = 3;
-	mask &= 0x40ff0001;	/* if s0-s8 are valid, leave then as valid */
-	foundframesize = 0;
-	for (va = subr; more; va += sizeof(int),
-			      more = (more == 3) ? 3 : more - 1) {
-		/* stop if hit our current position */
-		if (va >= pc)
-			break;
-		instr = kdbpeek(va);
-		i.word = instr;
-		switch (i.JType.op) {
-		case OP_SPECIAL:
-			switch (i.RType.func) {
-			case OP_JR:
-			case OP_JALR:
-				more = 2; /* stop after next instruction */
-				break;
-
-			case OP_ADD:
-			case OP_ADDU:
-			case OP_DADD:
-			case OP_DADDU:
-				if (!(mask & (1 << i.RType.rd))
-				    || !(mask & (1 << i.RType.rt)))
-					break;
-				if (i.RType.rd != _R_ZERO)
-					break;
-				mask |= (1 << i.RType.rs);
-				regs[i.RType.rs] = regs[i.RType.rt];
-				if (i.RType.func >= OP_DADD)
-					break;
-				regs[i.RType.rs] = (int32_t)regs[i.RType.rs];
-				break;
-
-			case OP_SYSCALL:
-			case OP_BREAK:
-				more = 1; /* stop now */
-				break;
-			}
-			break;
-
-		case OP_REGIMM:
-		case OP_J:
-		case OP_JAL:
-		case OP_BEQ:
-		case OP_BNE:
-		case OP_BLEZ:
-		case OP_BGTZ:
-			more = 2; /* stop after next instruction */
-			break;
-
-		case OP_COP0:
-		case OP_COP1:
-		case OP_COP2:
-		case OP_COP3:
-			switch (i.RType.rs) {
-			case OP_BCx:
-			case OP_BCy:
-				more = 2; /* stop after next instruction */
-			};
-			break;
-
-		case OP_SW:
-#if !defined(__mips_o32)
-		case OP_SD:
-#endif
-		{
-			size_t size = (i.JType.op == OP_SW) ? 4 : 8;
-
-			/* look for saved registers on the stack */
-			if (i.IType.rs != _R_SP)
-				break;
-			switch (i.IType.rt) {
-			case _R_A0: /* a0 */
-			case _R_A1: /* a1 */
-			case _R_A2: /* a2 */
-			case _R_A3: /* a3 */
-			case _R_S0: /* s0 */
-			case _R_S1: /* s1 */
-			case _R_S2: /* s2 */
-			case _R_S3: /* s3 */
-			case _R_S4: /* s4 */
-			case _R_S5: /* s5 */
-			case _R_S6: /* s6 */
-			case _R_S7: /* s7 */
-			case _R_S8: /* s8 */
-			case _R_RA: /* ra */
-				regs[i.IType.rt] =
-				    kdbrpeek(sp + (int16_t)i.IType.imm, size);
-				mask |= (1 << i.IType.rt);
-				break;
-			}
-			break;
-		}
-
-		case OP_ADDI:
-		case OP_ADDIU:
-#if !defined(__mips_o32)
-		case OP_DADDI:
-		case OP_DADDIU:
-#endif
-			/* look for stack pointer adjustment */
-			if (i.IType.rs != _R_SP || i.IType.rt != _R_SP)
-				break;
-			/* don't count pops for mcount */
-			if (!foundframesize) {
-				stksize = - ((short)i.IType.imm);
-				foundframesize = 1;
-			}
-			break;
-		}
-	}
-done:
-	if (mask & (1 << _R_RA))
-		ra = regs[_R_RA];
-	(*printfn)("%#"PRIxVADDR": %s+%"PRIxVADDR" (%"PRIxREGISTER",%"PRIxREGISTER",%"PRIxREGISTER",%"PRIxREGISTER") ra %"PRIxVADDR" sz %d\n",
-		sp, fn_name(subr), pc - subr,
-		regs[_R_A0], regs[_R_A1], regs[_R_A2], regs[_R_A3],
-		ra, stksize);
-
-	if (ra) {
-		if (pc == ra && stksize == 0)
-			(*printfn)("stacktrace: loop!\n");
-		else {
-			pc = ra;
-			sp += stksize;
-			ra = 0;
-			goto loop;
-		}
-	} else {
-finish:
-		(*printfn)("User-level: pid %d.%d\n",
-		    curlwp->l_proc->p_pid, curlwp->l_lid);
-	}
+	printf(" s0 %#018lx   s1  %#018lx  s2  %#018lx\n",
+	    tf->tf_regs[_R_S0], tf->tf_regs[_R_S1], tf->tf_regs[_R_S2]);
+	printf(" s3 %#018lx   s4  %#018lx  s5  %#018lx\n",
+	    tf->tf_regs[_R_S3], tf->tf_regs[_R_S4], tf->tf_regs[_R_S5]);
+	printf(" s6 %#018lx   s7  %#018lx  t8  %#018lx\n",
+	    tf->tf_regs[_R_S6], tf->tf_regs[_R_S7], tf->tf_regs[_R_T8]);
+	printf(" t9 %#018lx   k0  %#018lx  k1  %#018lx\n",
+	    tf->tf_regs[_R_T9], tf->tf_regs[_R_K0], tf->tf_regs[_R_K1]);
+	printf(" gp %#018lx   sp  %#018lx  s8  %#018lx\n",
+	    tf->tf_regs[_R_GP], tf->tf_regs[_R_SP], tf->tf_regs[_R_S8]);
+	printf(" ra %#018lx   sr  %#018lx  pc  %#018lx\n",
+	    tf->tf_regs[_R_RA], tf->tf_regs[_R_SR], tf->tf_regs[_R_PC]);
+	printf(" mullo     %#018lx mulhi %#018lx\n",
+	    tf->tf_regs[_R_MULLO], tf->tf_regs[_R_MULHI]);
+	printf(" badvaddr  %#018lx cause %#018lx\n",
+	    tf->tf_regs[_R_BADVADDR], tf->tf_regs[_R_CAUSE]);
+	printf("\n");
+	hexdump(printf, "Stack dump", tf, 256);
 }
 
-/*
- * Functions ``special'' enough to print by name
- */
-#define Name(_fn)  { (void*)_fn, # _fn }
-const static struct { void *addr; const char *name;} names[] = {
-	Name(stacktrace),
-	Name(stacktrace_subr),
-	Name(main),
-	Name(trap),
-
-#ifdef MIPS1	/*  r2000 family  (mips-I CPU) */
-	Name(mips1_kern_gen_exception),
-	Name(mips1_user_gen_exception),
-	Name(mips1_systemcall),
-	Name(mips1_kern_intr),
-	Name(mips1_user_intr),
-#endif	/* MIPS1 */
-
-#if defined(MIPS3)			/* r4000 family (mips-III CPU) */
-	Name(mips3_kern_gen_exception),
-	Name(mips3_user_gen_exception),
-	Name(mips3_systemcall),
-	Name(mips3_kern_intr),
-	Name(mips3_user_intr),
-#endif	/* MIPS3 */
-
-#if defined(MIPS32)			/* MIPS32 family (mips-III CPU) */
-	Name(mips32_kern_gen_exception),
-	Name(mips32_user_gen_exception),
-	Name(mips32_systemcall),
-	Name(mips32_kern_intr),
-	Name(mips32_user_intr),
-#endif	/* MIPS32 */
-
-#if defined(MIPS32R2)			/* MIPS32R2 family (mips-III CPU) */
-	Name(mips32r2_kern_gen_exception),
-	Name(mips32r2_user_gen_exception),
-	Name(mips32r2_systemcall),
-	Name(mips32r2_kern_intr),
-	Name(mips32r2_user_intr),
-#endif	/* MIPS32R2 */
-
-#if defined(MIPS64)			/* MIPS64 family (mips-III CPU) */
-	Name(mips64_kern_gen_exception),
-	Name(mips64_user_gen_exception),
-	Name(mips64_systemcall),
-	Name(mips64_kern_intr),
-	Name(mips64_user_intr),
-#endif	/* MIPS64 */
-
-#if defined(MIPS64R2)			/* MIPS64R2 family (mips-III CPU) */
-	Name(mips64r2_kern_gen_exception),
-	Name(mips64r2_user_gen_exception),
-	Name(mips64r2_systemcall),
-	Name(mips64r2_kern_intr),
-	Name(mips64r2_user_intr),
-#endif	/* MIPS64R2 */
-
-	Name(cpu_idle),
-	Name(cpu_switchto),
-	{0, 0}
-};
-
-/*
- * Map a function address to a string name, if known; or a hex string.
- */
-const char *
-fn_name(vaddr_t addr)
+static void
+sigdebug(const struct trapframe *tf, const ksiginfo_t *ksi, int e,
+    vaddr_t pc)
 {
-	static char buf[17];
-	int i = 0;
-#ifdef DDB
-	db_expr_t diff;
-	db_sym_t sym;
-	const char *symname;
-#endif
+	struct lwp *l = curlwp;
+	struct proc *p = l->l_proc;
 
-#ifdef DDB
-	diff = 0;
-	symname = NULL;
-	sym = db_search_symbol(addr, DB_STGY_ANY, &diff);
-	db_symbol_values(sym, &symname, 0);
-	if (symname && diff == 0)
-		return (symname);
-#endif
-	for (i = 0; names[i].name; i++)
-		if (names[i].addr == (void*)addr)
-			return (names[i].name);
-	snprintf(buf, sizeof(buf), "%#"PRIxVADDR, addr);
-	return (buf);
+	printf("pid %d.%d (%s): signal %d code=%d (trap %#lx) "
+	    "@pc %#lx addr %#lx error=%d\n",
+	    p->p_pid, l->l_lid, p->p_comm, ksi->ksi_signo, ksi->ksi_code,
+	    tf->tf_regs[_R_CAUSE], (unsigned long)pc, tf->tf_regs[_R_BADVADDR],
+	    e);
+	frame_dump(tf, lwp_getpcb(l));
 }
-
-#endif /* DEBUG */
-#endif /* DDB_TRACE */
+#endif /* TRAP_SIGDEBUG */

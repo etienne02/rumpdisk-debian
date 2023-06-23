@@ -1,4 +1,4 @@
-/*	$NetBSD: ext2fs_readwrite.c,v 1.74 2015/03/28 19:24:04 maxv Exp $	*/
+/*	$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp $	*/
 
 /*-
  * Copyright (c) 1993
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.74 2015/03/28 19:24:04 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -120,9 +120,9 @@ ext2fs_read(void *v)
 		return ext2fs_bufrd(vp, uio, ap->a_ioflag, ap->a_cred);
 
 	if ((uint64_t)uio->uio_offset > ump->um_maxfilesize)
-		return (EFBIG);
+		return EFBIG;
 	if (uio->uio_resid == 0)
-		return (0);
+		return 0;
 	if (uio->uio_offset >= ext2fs_size(ip))
 		goto out;
 
@@ -135,14 +135,14 @@ ext2fs_read(void *v)
 			break;
 
 		error = ubc_uiomove(&vp->v_uobj, uio, bytelen, advice,
-		    UBC_READ | UBC_PARTIALOK | UBC_UNMAP_FLAG(vp));
+		    UBC_READ | UBC_PARTIALOK | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 	}
 
 out:
 	error = ext2fs_post_read_update(vp, ap->a_ioflag, error);
-	return (error);
+	return error;
 }
 
 /*
@@ -228,7 +228,7 @@ ext2fs_bufrd(struct vnode *vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 
 out:
 	error = ext2fs_post_read_update(vp, ioflag, error);
-	return (error);
+	return error;
 }
 
 static int
@@ -289,14 +289,14 @@ ext2fs_write(void *v)
 		uio->uio_offset = ext2fs_size(ip);
 	if ((ip->i_e2fs_flags & EXT2_APPEND) &&
 	    uio->uio_offset != ext2fs_size(ip))
-		return (EPERM);
+		return EPERM;
 
 	fs = ip->i_e2fs;
 	if (uio->uio_offset < 0 ||
 	    (uint64_t)uio->uio_offset + uio->uio_resid > ump->um_maxfilesize)
-		return (EFBIG);
+		return EFBIG;
 	if (uio->uio_resid == 0)
-		return (0);
+		return 0;
 
 	async = vp->v_mount->mnt_flag & MNT_ASYNC;
 	resid = uio->uio_resid;
@@ -316,7 +316,7 @@ ext2fs_write(void *v)
 		if (error)
 			break;
 		error = ubc_uiomove(&vp->v_uobj, uio, bytelen, advice,
-		    UBC_WRITE | UBC_UNMAP_FLAG(vp));
+		    UBC_WRITE | UBC_VNODE_FLAGS(vp));
 		if (error)
 			break;
 
@@ -336,14 +336,14 @@ ext2fs_write(void *v)
 		 */
 
 		if (!async && oldoff >> 16 != uio->uio_offset >> 16) {
-			mutex_enter(vp->v_interlock);
+			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 			error = VOP_PUTPAGES(vp, (oldoff >> 16) << 16,
 			    (uio->uio_offset >> 16) << 16,
 			    PGO_CLEANIT | PGO_LAZY);
 		}
 	}
 	if (error == 0 && ioflag & IO_SYNC) {
-		mutex_enter(vp->v_interlock);
+		rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 		error = VOP_PUTPAGES(vp, trunc_page(oldoff),
 		    round_page(ext2_blkroundup(fs, uio->uio_offset)),
 		    PGO_CLEANIT | PGO_SYNCIO);
@@ -351,7 +351,7 @@ ext2fs_write(void *v)
 
 	error = ext2fs_post_write_update(vp, uio, ioflag, ap->a_cred, osize,
 	    resid, extended, error);
-	return (error);
+	return error;
 }
 
 /*
@@ -433,7 +433,7 @@ ext2fs_bufwr(struct vnode *vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 
 	error = ext2fs_post_write_update(vp, uio, ioflag, cred, osize, resid,
 	    extended, error);
-	return (error);
+	return error;
 }
 
 static int

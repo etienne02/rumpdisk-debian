@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.137 2016/07/25 16:03:38 maxv Exp $	*/
+/*	$NetBSD: locore.S,v 1.186 2021/08/13 20:26:07 andvar Exp $	*/
 
 /*
  * Copyright-o-rama!
@@ -128,15 +128,13 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.137 2016/07/25 16:03:38 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.186 2021/08/13 20:26:07 andvar Exp $");
 
-#include "opt_compat_oldboot.h"
 #include "opt_copy_symtab.h"
 #include "opt_ddb.h"
 #include "opt_modular.h"
 #include "opt_multiboot.h"
 #include "opt_realmem.h"
-#include "opt_vm86.h"
 #include "opt_xen.h"
 
 #include "assym.h"
@@ -155,22 +153,22 @@ __KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.137 2016/07/25 16:03:38 maxv Exp $");
 #include <machine/i82489reg.h>
 #include <machine/cputypes.h>
 
-#ifndef XEN
+#ifndef XENPV
 #include <machine/multiboot.h>
 #endif
 
 /* Get definitions for IOM_BEGIN, IOM_END, and IOM_SIZE */
 #include <dev/isa/isareg.h>
 
-#ifndef XEN
+#ifndef XENPV
 #define	_RELOC(x)	((x) - KERNBASE)
 #else
 #define	_RELOC(x)	((x))
-#endif /* XEN */
+#endif /* XENPV */
 #define	RELOC(x)	_RELOC(_C_LABEL(x))
 
-/* 32bit version of PG_NX */
-#define PG_NX32	0x80000000
+/* 32bit version of PTE_NX */
+#define PTE_NX32	0x80000000
 
 #ifndef PAE
 #define	PROC0_PDIR_OFF	0
@@ -245,51 +243,53 @@ __KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.137 2016/07/25 16:03:38 maxv Exp $");
 
 
 #ifdef XEN
+#define __ASSEMBLY__
+#include <xen/include/public/elfnote.h>
+#include <xen/include/public/xen.h>
+
+#define ELFNOTE(name, type, desctype, descdata...) \
+.pushsection .note.name			;	\
+  .align 4				;	\
+  .long 2f - 1f		/* namesz */	;	\
+  .long 4f - 3f		/* descsz */	;	\
+  .long type				;	\
+1:.asciz #name				;	\
+2:.align 4				;	\
+3:desctype descdata			;	\
+4:.align 4				;	\
+.popsection
+
 /*
  * Xen guest identifier and loader selection
  */
 .section __xen_guest
-	.ascii	"GUEST_OS=netbsd,GUEST_VER=3.0,XEN_VER=xen-3.0"
-	.ascii	",VIRT_BASE=0xc0000000" /* KERNBASE */
-	.ascii	",ELF_PADDR_OFFSET=0xc0000000" /* KERNBASE */
-	.ascii	",VIRT_ENTRY=0xc0100000" /* KERNTEXTOFF */
-	.ascii	",HYPERCALL_PAGE=0x00000101"
-		/* (???+HYPERCALL_PAGE_OFFSET)/PAGE_SIZE) */
-#ifdef PAE
-	.ascii	",PAE=yes[extended-cr3]"
+	ELFNOTE(Xen, XEN_ELFNOTE_GUEST_OS,       .asciz, "NetBSD")
+	ELFNOTE(Xen, XEN_ELFNOTE_GUEST_VERSION,  .asciz, "4.99")
+	ELFNOTE(Xen, XEN_ELFNOTE_XEN_VERSION,    .asciz, "xen-3.0")
+	ELFNOTE(Xen, XEN_ELFNOTE_VIRT_BASE,      .long,  KERNBASE)
+#ifdef XENPV
+	ELFNOTE(Xen, XEN_ELFNOTE_PADDR_OFFSET,   .long,  KERNBASE)
+	ELFNOTE(Xen, XEN_ELFNOTE_ENTRY,          .long,  start)
+#else
+	ELFNOTE(Xen, XEN_ELFNOTE_PADDR_OFFSET,   .long,  0)
+	ELFNOTE(Xen, XEN_ELFNOTE_PHYS32_ENTRY,   .long,  RELOC(start_xenpvh))
+#endif /* XENPV */
+	ELFNOTE(Xen, XEN_ELFNOTE_HYPERCALL_PAGE, .long,  hypercall_page)
+	ELFNOTE(Xen, XEN_ELFNOTE_HV_START_LOW,   .long,  HYPERVISOR_VIRT_START)
+	ELFNOTE(Xen, XEN_ELFNOTE_FEATURES,       .asciz, "writable_descriptor_tables|auto_translated_physmap|supervisor_mode_kernel|hvm_callback_vector")
+	ELFNOTE(Xen, XEN_ELFNOTE_PAE_MODE,       .asciz, "yes")
+	ELFNOTE(Xen, XEN_ELFNOTE_L1_MFN_VALID,   .quad,  PTE_P, PTE_P)\
+	ELFNOTE(Xen, XEN_ELFNOTE_LOADER,         .asciz, "generic")     
+	ELFNOTE(Xen, XEN_ELFNOTE_SUSPEND_CANCEL, .long,  0)
+#if NKSYMS > 0 || defined(DDB) || defined(MODULAR)
+	ELFNOTE(Xen, XEN_ELFNOTE_BSD_SYMTAB,     .asciz, "yes")
 #endif
-	.ascii	",LOADER=generic"
-#if (NKSYMS || defined(DDB) || defined(MODULAR)) && !defined(makeoptions_COPY_SYMTAB)
-	.ascii	",BSD_SYMTAB=yes"
-#endif
-	.byte	0
-#endif	/* XEN */
+#endif  /* XEN */
 
 /*
  * Initialization
  */
 	.data
-
-	.globl	_C_LABEL(lapic_tpr)
-
-#if NLAPIC > 0
-	.align	PAGE_SIZE
-	.globl	_C_LABEL(local_apic)
-
-	.type	_C_LABEL(local_apic), @object
-LABEL(local_apic)
-	.space	LAPIC_TPRI
-END(local_apic)
-	.type	_C_LABEL(lapic_tpr), @object
-LABEL(lapic_tpr)
-	.space	PAGE_SIZE-LAPIC_TPRI
-END(lapic_tpr)
-#else
-	.type	_C_LABEL(lapic_tpr), @object
-LABEL(lapic_tpr)
-	.long 0
-END(lapic_tpr)
-#endif
 
 	.globl	_C_LABEL(tablesize)
 	.globl	_C_LABEL(nox_flag)
@@ -329,19 +329,19 @@ END(PDPpaddr)
 	.size	tmpstk, tmpstk - .
 	.space	512
 tmpstk:
-#ifdef XEN
+#ifdef XENPV
 	.align 		PAGE_SIZE, 0x0	/* Align on page boundary */
 LABEL(tmpgdt)
 	.space 		PAGE_SIZE	/* Xen expects a page */
 END(tmpgdt)
-#endif /* XEN */
+#endif /* XENPV */
 
 	.text
 	.globl	_C_LABEL(kernel_text)
 	.set	_C_LABEL(kernel_text),KERNTEXTOFF
 
 ENTRY(start)
-#ifndef XEN
+#ifndef XENPV
 
 	/* Warm boot */
 	movw	$0x1234,0x472
@@ -357,23 +357,242 @@ _C_LABEL(Multiboot_Header):
 	.long	MULTIBOOT_HEADER_FLAGS
 	.long	-(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS)
 
+	.align	8
+	.globl	Multiboot2_Header
+_C_LABEL(Multiboot2_Header):
+	.long	MULTIBOOT2_HEADER_MAGIC
+	.long	MULTIBOOT2_ARCHITECTURE_I386
+	.long	Multiboot2_Header_end - Multiboot2_Header
+	.long	-(MULTIBOOT2_HEADER_MAGIC + MULTIBOOT2_ARCHITECTURE_I386 \
+		+ (Multiboot2_Header_end - Multiboot2_Header))
+
+	.long	1	/* MULTIBOOT_HEADER_TAG_INFORMATION_REQUEST */
+	.long	12	/* sizeof(multiboot_header_tag_information_request) */
+			/* + sizeof(uint32_t) * requests */
+	.long	4	/* MULTIBOOT_TAG_TYPE_BASIC_MEMINFO */
+	.long	0	/* pad for 8 bytes alignment */
+
+	.long	8	/* MULTIBOOT_HEADER_TAG_ENTRY_ADDRESS_EFI32 */
+	.long	12	/* sizeof(struct multiboot_tag_efi32) */
+	.long	efi_multiboot2_loader - KERNBASE
+	.long   0	/* pad for 8 bytes alignment */
+
+#if notyet 
+	/* 
+	 * Could be used to get an early console for debug,
+	 * but this is broken.
+	 */
+	.long	7	/* MULTIBOOT_HEADER_TAG_EFI_BS */
+	.long	8	/* sizeof(struct multiboot_tag) */
+#endif
+
+	.long	0	/* MULTIBOOT_HEADER_TAG_END */
+	.long	8	/* sizeof(struct multiboot_tag) */
+	.globl	Multiboot2_Header_end
+_C_LABEL(Multiboot2_Header_end):
+
 1:
 	/* Check if we are being executed by a Multiboot-compliant boot
 	 * loader. */
 	cmpl	$MULTIBOOT_INFO_MAGIC,%eax
-	jne	1f
+	je	multiboot1_loader
 
+	cmpl	$MULTIBOOT2_BOOTLOADER_MAGIC,%eax
+	je	multiboot2_loader
+
+	jmp	1f
+
+multiboot1_loader:
 	/*
-	 * Indeed, a multiboot-compliant boot loader executed us.  We copy
-	 * the received Multiboot information structure into kernel's data
-	 * space to process it later -- after we are relocated.  It will
-	 * be safer to run complex C code than doing it at this point.
+	 * Indeed, a multiboot-compliant boot loader executed us. We switch
+	 * to the temporary stack, and copy the received Multiboot information
+	 * structure into kernel's data space to process it later -- after we
+	 * are relocated. It will be safer to run complex C code than doing it
+	 * at this point.
 	 */
+	movl	$_RELOC(tmpstk),%esp
 	pushl	%ebx		/* Address of Multiboot information */
-	call	_C_LABEL(multiboot_pre_reloc)
+	call	_C_LABEL(multiboot1_pre_reloc)
 	addl	$4,%esp
 	jmp	2f
+
+efi_multiboot2_loader:
+	/*
+	 * EFI32 multiboot2 entry point. We are left here without
+	 * stack and with no idea of where we were loaded in memory.
+	 * The only inputs are 
+	 * %eax MULTIBOOT2_BOOTLOADER_MAGIC
+	 * %ebx pointer to multiboot_info
+	 *
+	 * Here we will copy the kernel to 0x100000 (KERNTEXTOFF - KERNBASE)
+	 * as almost all the code in locore.S assume it is there. Once done, 
+	 * we join the main start code .This is derived from
+	 * src/sys/arch/i386/stand/efiboot/bootia32/startprog32.S
+	 */
+
+	cli
+
+	/*
+	 * Discover our load address and store it in %edx
+	 */
+	movl	$_RELOC(tmpstk),%esp
+	call	next
+next:	popl	%edx
+	subl	$(next - efi_multiboot2_loader), %edx
+
+	/*
+	 * Save multiboot_info for later. We cannot use
+	 * temporary stack for that since we are going to
+	 * overwrite it.
+	 */
+	movl	%ebx, (multiboot2_info_ptr - efi_multiboot2_loader)(%edx)
+ 
+	/*
+	 * Get relocated multiboot2_loader entry point in %ebx
+	 */
+	movl	$(KERNTEXTOFF - KERNBASE), %ebx
+	addl	$(multiboot2_loader - start), %ebx
+
+        /* Copy kernel */
+        movl    $(KERNTEXTOFF - KERNBASE), %edi		/* dest */ 
+        movl    %edx, %esi
+	subl	$(efi_multiboot2_loader - start), %esi	/* src */
+	movl	$(__kernel_end - kernel_text), %ecx	/* size */
+#if defined(NO_OVERLAP)
+        movl    %ecx, %eax
+#else 
+        movl    %edi, %eax
+        subl    %esi, %eax
+        cmpl    %ecx, %eax      /* overlapping? */
+        movl    %ecx, %eax
+        jb      .Lbackwards
 #endif
+        /* nope, copy forwards. */
+        shrl    $2, %ecx        /* copy by words */
+        rep
+        movsl
+        and     $3, %eax        /* any bytes left? */
+        jnz     .Ltrailing
+        jmp     .Lcopy_done
+
+.Ltrailing:
+        cmp     $2, %eax
+        jb      11f
+        movw    (%esi), %ax
+        movw    %ax, (%edi)
+        je      .Lcopy_done
+        movb    2(%esi), %al
+        movb    %al, 2(%edi)
+        jmp     .Lcopy_done
+11:     movb    (%esi), %al
+        movb    %al, (%edi)
+        jmp     .Lcopy_done
+
+#if !defined(NO_OVERLAP)
+.Lbackwards:
+        addl    %ecx, %edi      /* copy backwards. */
+        addl    %ecx, %esi
+        and     $3, %eax        /* any fractional bytes? */
+        jnz     .Lback_align
+.Lback_aligned:
+        shrl    $2, %ecx
+        subl    $4, %esi
+        subl    $4, %edi
+        std
+        rep
+        movsl
+        cld
+        jmp     .Lcopy_done
+
+.Lback_align:
+        sub     %eax, %esi
+        sub     %eax, %edi
+        cmp     $2, %eax
+        jb      11f
+        je      12f
+        movb    2(%esi), %al
+        movb    %al, 2(%edi)
+12:     movw    (%esi), %ax
+        movw    %ax, (%edi)
+        jmp     .Lback_aligned
+11:     movb    (%esi), %al
+        movb    %al, (%edi)
+        jmp     .Lback_aligned
+#endif
+        /* End of copy kernel */
+.Lcopy_done:
+	cld			/* LynxOS depends on it */
+
+	/* Prepare jump address */
+	lea	(efi_multiboot2_loader32a - efi_multiboot2_loader)(%edx), %eax
+	movl	%eax, (efi_multiboot2_loader32r - efi_multiboot2_loader)(%edx)
+
+	/* Setup GDT */
+	lea	(gdt - efi_multiboot2_loader)(%edx), %eax
+	movl	%eax, (gdtrr - efi_multiboot2_loader)(%edx)
+	lgdt	(gdtr - efi_multiboot2_loader)(%edx)
+
+	/* Jump to set %cs */
+	ljmp	*(efi_multiboot2_loader32r - efi_multiboot2_loader)(%edx)
+
+	.align	4
+efi_multiboot2_loader32a:
+	movl	$0x10, %eax	/* #define DATA_SEGMENT	0x10 */
+	movw	%ax, %ds
+	movw	%ax, %es
+	movw	%ax, %fs
+	movw	%ax, %gs
+	movw	%ax, %ss
+
+	/* Already set new stack pointer */
+	movl	%esp, %ebp
+
+	/* Disable Paging in CR0 */
+	movl	%cr0, %eax
+	andl	$(~CR0_PG), %eax
+	movl	%eax, %cr0
+
+	/* Disable PAE in CR4 */
+	movl	%cr4, %eax
+	andl	$(~CR4_PAE), %eax
+	movl	%eax, %cr4
+
+	jmp	efi_multiboot2_loader32b
+
+	.align	4
+efi_multiboot2_loader32b:
+	xor	%eax, %eax
+	movl	%ebx, (efi_multiboot2_loader32r - efi_multiboot2_loader)(%edx)
+	/*
+	 * Reload multiboot info from target location
+	 */
+	movl	_RELOC(multiboot2_info_ptr), %ebx
+	ljmp	*(efi_multiboot2_loader32r - efi_multiboot2_loader)(%edx)
+
+	.align	16
+efi_multiboot2_loader32r:
+	.long	0
+	.long	0x08	/* #define	CODE_SEGMENT	0x08 */
+	.align	16
+gdt:
+	.long	0, 0
+	.byte	0xff, 0xff, 0x00, 0x00, 0x00, 0x9f, 0xcf, 0x00
+	.byte	0xff, 0xff, 0x00, 0x00, 0x00, 0x93, 0xcf, 0x00
+gdtr:
+	.word	gdtr - gdt
+gdtrr:
+	.quad  	0
+multiboot2_info_ptr:
+	.long	0
+
+	.align 16
+multiboot2_loader:
+	movl    $_RELOC(tmpstk),%esp
+	pushl	%ebx		/* Address of Multiboot information */
+	call	_C_LABEL(multiboot2_pre_reloc)
+	addl	$4,%esp
+	jmp	.Lstart_common
+#endif /* MULTIBOOT */
 
 1:
 	/*
@@ -389,7 +608,7 @@ _C_LABEL(Multiboot_Header):
 	call	_C_LABEL(native_loader)
 	addl	$24,%esp
 
-2:
+.Lstart_common:
 	/* First, reset the PSL. */
 	pushl	$PSL_MBO
 	popfl
@@ -560,13 +779,13 @@ try586:	/* Use the `cpuid' instruction. */
 	movl	%eax,RELOC(cpuid_level)
 
 	/*
-	 * Retrieve the NX/XD flag. We use the 32bit version of PG_NX.
+	 * Retrieve the NX/XD flag. We use the 32bit version of PTE_NX.
 	 */
 	movl	$0x80000001,%eax
 	cpuid
 	andl	$CPUID_NOX,%edx
 	jz	no_NOX
-	movl	$PG_NX32,RELOC(nox_flag)
+	movl	$PTE_NX32,RELOC(nox_flag)
 no_NOX:
 
 2:
@@ -622,7 +841,7 @@ no_NOX:
  */
 
 	/* Find end of kernel image; brings us on (1). */
-	movl	$RELOC(end),%edi
+	movl	$RELOC(__kernel_end),%edi
 
 #if (NKSYMS || defined(DDB) || defined(MODULAR)) && !defined(makeoptions_COPY_SYMTAB)
 	/* Save the symbols (if loaded); brinds us on (2). */
@@ -654,7 +873,7 @@ no_NOX:
 	incl	%eax		/* one more PTP for VAs stolen by bootstrap */
 1:	movl	%eax,RELOC(nkptp)+1*4
 
-	/* tablesize = (PDP_SIZE + UPAGES + nkptp) << PGSHIFT; */
+	/* tablesize = (PDP_SIZE + UPAGES + nkptp[1]) << PGSHIFT; */
 	addl	$(PDP_SIZE+UPAGES),%eax
 #ifdef PAE
 	incl	%eax 		/* one more page for L3 */
@@ -664,7 +883,8 @@ no_NOX:
 #endif
 	movl	%eax,RELOC(tablesize)
 
-	/* Ensure that nkptp covers BOOTSTRAP TABLES. */
+	/* Ensure that nkptp[1] covers BOOTSTRAP TABLES, ie:
+	 * (esi + tablesize) >> L2_SHIFT + 1 < nkptp[1] */
 	addl	%esi,%eax
 	addl	$~L2_FRAME,%eax
 	shrl	$L2_SHIFT,%eax
@@ -691,7 +911,7 @@ no_NOX:
 	 */
 	leal	(PROC0_PTP1_OFF)(%esi),%ebx
 
-	/* Skip the first MB. */
+	/* Skip the area below the kernel text. */
 	movl	$(KERNTEXTOFF - KERNBASE),%ecx
 	shrl	$PGSHIFT,%ecx
 	fillkpt_blank
@@ -701,7 +921,7 @@ no_NOX:
 	movl	$RELOC(__rodata_start),%ecx
 	subl	%eax,%ecx
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KR),%eax
+	orl	$(PTE_P),%eax
 	fillkpt
 
 	/* Map the kernel rodata R. */
@@ -709,7 +929,7 @@ no_NOX:
 	movl	$RELOC(__data_start),%ecx
 	subl	%eax,%ecx
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KR),%eax
+	orl	$(PTE_P),%eax
 	fillkpt_nox
 
 	/* Map the kernel data+bss RW. */
@@ -717,7 +937,7 @@ no_NOX:
 	movl	$RELOC(__kernel_end),%ecx
 	subl	%eax,%ecx
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	fillkpt_nox
 
 	/* Map [SYMS]+[PRELOADED MODULES] RW. */
@@ -725,21 +945,21 @@ no_NOX:
 	movl	%esi,%ecx		/* start of BOOTSTRAP TABLES */
 	subl	%eax,%ecx
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	fillkpt_nox
 
 	/* Map the BOOTSTRAP TABLES RW. */
 	movl	%esi,%eax		/* start of BOOTSTRAP TABLES */
 	movl	RELOC(tablesize),%ecx	/* length of BOOTSTRAP TABLES */
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	fillkpt_nox
 
 	/* We are on (4). Map ISA I/O MEM RW. */
 	movl	$IOM_BEGIN,%eax
 	movl	$IOM_SIZE,%ecx	/* size of ISA I/O MEM */
 	shrl	$PGSHIFT,%ecx
-	orl	$(PG_V|PG_KW/*|PG_N*/),%eax
+	orl	$(PTE_P|PTE_W/*|PTE_PCD*/),%eax
 	fillkpt_nox
 
 	/*
@@ -747,21 +967,21 @@ no_NOX:
 	 */
 	leal	(PROC0_PDIR_OFF)(%esi),%ebx
 	leal	(PROC0_PTP1_OFF)(%esi),%eax
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	movl	RELOC(nkptp)+1*4,%ecx
 	fillkpt
 
 	/* Set up L2 entries for actual kernel mapping */
 	leal	(PROC0_PDIR_OFF + L2_SLOT_KERNBASE * PDE_SIZE)(%esi),%ebx
 	leal	(PROC0_PTP1_OFF)(%esi),%eax
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	movl	RELOC(nkptp)+1*4,%ecx
 	fillkpt
 
 	/* Install recursive top level PDE */
 	leal	(PROC0_PDIR_OFF + PDIR_SLOT_PTE * PDE_SIZE)(%esi),%ebx
 	leal	(PROC0_PDIR_OFF)(%esi),%eax
-	orl	$(PG_V|PG_KW),%eax
+	orl	$(PTE_P|PTE_W),%eax
 	movl	$PDP_SIZE,%ecx
 	fillkpt_nox
 
@@ -771,7 +991,7 @@ no_NOX:
 	 */
 	leal	(PROC0_L3_OFF)(%esi),%ebx
 	leal	(PROC0_PDIR_OFF)(%esi),%eax
-	orl	$(PG_V),%eax
+	orl	$(PTE_P),%eax
 	movl	$PDP_SIZE,%ecx
 	fillkpt
 
@@ -842,8 +1062,12 @@ begin:
 	/* It is now safe to parse the Multiboot information structure
 	 * we saved before from C code.  Note that we cannot delay its
 	 * parsing any more because initgdt (called below) needs to make
-	 * use of this information. */
-	call	_C_LABEL(multiboot_post_reloc)
+	 * use of this information.
+	 * We call both multiboot 1 and 2 flavors, they now if they 
+	 * have something to do on their own.
+	 */
+	call	_C_LABEL(multiboot1_post_reloc)
+	call 	_C_LABEL(multiboot2_post_reloc)
 #endif
 
 	subl	$NGDT*8, %esp		/* space for temporary gdt */
@@ -858,104 +1082,168 @@ begin:
 	pushl	$0	/* init386() expects a 64 bits paddr_t with PAE */
 #endif
 	pushl	%eax
-	call	_C_LABEL(init386)	/* wire 386 chip for unix operation */
+#if defined(XEN) && !defined(XENPV)
+        call    _C_LABEL(init_xen_early)
+#endif
+	call	_C_LABEL(init_bootspace)
+	call	_C_LABEL(init386)
 	addl	$PDE_SIZE,%esp		/* pop paddr_t */
 	addl	$NGDT*8,%esp		/* pop temporary gdt */
 
-#ifdef SAFARI_FIFO_HACK
-	movb	$5,%al
-	movw	$0x37b,%dx
-	outb	%al,%dx
-	movw	$0x37f,%dx
-	inb	%dx,%al
-	movb	%al,%cl
-
-	orb	$1,%cl
-
-	movb	$5,%al
-	movw	$0x37b,%dx
-	outb	%al,%dx
-	movw	$0x37f,%dx
-	movb	%cl,%al
-	outb	%al,%dx
-#endif /* SAFARI_FIFO_HACK */
-
 	call 	_C_LABEL(main)
-#else /* XEN */
+#else /* XENPV */
 	/* First, reset the PSL. */
 	pushl	$PSL_MBO
 	popfl
 
 	cld
-	movl	%esp, %ebx		/* save start of available space */
-	movl	$_RELOC(tmpstk),%esp	/* bootstrap stack end location */
+
+	/*
+	 * Xen info:
+	 * - %esp -> stack, *theoretically* the last used page by Xen bootstrap
+	 */
+	movl	%esp,%ebx
+	movl	$_RELOC(tmpstk),%esp
 
 	/* Clear BSS. */
 	xorl	%eax,%eax
 	movl	$RELOC(__bss_start),%edi
 	movl	$RELOC(_end),%ecx
 	subl	%edi,%ecx
-	rep stosb
+	rep
+	stosb
 
 	/* Copy the necessary stuff from start_info structure. */
 	/* We need to copy shared_info early, so that sti/cli work */
 	movl	$RELOC(start_info_union),%edi
 	movl	$128,%ecx
-	rep movsl
+	rep
+	movsl
 
-	/* Clear segment registers; always null in proc0. */
+	/* Clear segment registers. */
 	xorl	%eax,%eax
 	movw	%ax,%fs
 	movw	%ax,%gs
-	decl	%eax
-	movl	%eax,RELOC(cpuid_level)
 
 	xorl	%eax,%eax
 	cpuid
 	movl	%eax,RELOC(cpuid_level)
 
+	movl    $VM_GUEST_XENPV, RELOC(vm_guest)
+
 	/*
-	 * Use a temp page. We'll re- add it to uvm(9) once we're
-	 * done using it.
+	 * Use a temporary GDT page. We'll re-add it to uvm(9) once we're done
+	 * using it.
 	 */
-	movl	$RELOC(tmpgdt), %eax
+	movl	$RELOC(tmpgdt),%eax
 	pushl	%eax		/* start of temporary gdt */
 	call	_C_LABEL(initgdt)
 	addl	$4,%esp
 
-	call	xen_pmap_bootstrap
+	call	xen_locore
 
 	/*
-	 * First avail returned by xen_pmap_bootstrap in %eax
+	 * The first VA available is returned by xen_locore in %eax. We
+	 * use it as the UAREA, and set up the stack here.
 	 */
-	movl	%eax, %esi;
-	movl	%esi, _C_LABEL(lwp0uarea)
-
-	/* Set up bootstrap stack. */
+	movl	%eax,%esi
+	movl	%esi,_C_LABEL(lwp0uarea)
 	leal	(USPACE-FRAMESIZE)(%eax),%esp
 	xorl	%ebp,%ebp		/* mark end of frames */
 
-	addl	$USPACE, %esi
-	subl	$KERNBASE, %esi		/* init386 wants a physical address */
+	/* Set first_avail after the DUMMY PAGE (see xen_locore). */
+	addl	$(USPACE+PAGE_SIZE),%esi
+	subl	$KERNBASE,%esi		/* init386 wants a physical address */
 
-#ifdef PAE
 	pushl	$0	/* init386() expects a 64 bits paddr_t with PAE */
-#endif
 	pushl	%esi
-	call	_C_LABEL(init386)	/* wire 386 chip for unix operation */
+	call	_C_LABEL(init_bootspace)
+	call	_C_LABEL(init386)
 	addl	$PDE_SIZE,%esp		/* pop paddr_t */
 	call 	_C_LABEL(main)
-#endif /* XEN */
+#endif /* XENPV */
 END(start)
 
 #if defined(XEN)
+#ifndef XENPV
+/* entry point for Xen PVH */
+ENTRY(start_xenpvh)
+	/* Xen doesn't start us with a valid gdt */
+	movl    $RELOC(gdtdesc_xenpvh), %eax
+	lgdt    (%eax)
+	jmp     $GSEL(GCODE_SEL, SEL_KPL), $RELOC(.Lreload_cs)
+
+.Lreload_cs:
+	movw    $GSEL(GDATA_SEL, SEL_KPL), %ax          
+	movw    %ax, %ds
+	movw    %ax, %es
+	movw    %ax, %ss   
+
+	/* we need a valid stack */
+	movl	$RELOC(tmpstk),%esp
+
+	/* clear BSS */
+        xorl    %eax,%eax
+	movl    $RELOC(__bss_start),%edi
+	movl    $RELOC(_end),%ecx
+	subl    %edi,%ecx
+	rep
+	stosb
+
+	/*
+	 * save addr of the hvm_start_info structure. This is also the end
+	 * of the symbol table
+	 */
+	movl	%ebx, RELOC(hvm_start_paddr)
+	movl	%ebx, %eax
+	addl	$KERNBASE,%eax
+	movl	$RELOC(esym),%ebp
+	movl	%eax,(%ebp)
+	/* get a page for HYPERVISOR_shared_info */
+	addl	$PAGE_SIZE, %ebx
+	addl	$PGOFSET,%ebx
+	andl	$~PGOFSET,%ebx
+	movl	$RELOC(HYPERVISOR_shared_info_pa),%ebp
+	movl	%ebx,(%ebp)
+	/* XXX assume hvm_start_info+dependant structure fits in a single page */
+	addl	$PAGE_SIZE, %ebx
+	addl	$PGOFSET,%ebx
+	andl	$~PGOFSET,%ebx
+	addl	$KERNBASE,%ebx
+	movl	$RELOC(eblob),%ebp
+	movl	%ebx,(%ebp)
+	/* annouce ourself */
+	movl	$VM_GUEST_XENPVH, RELOC(vm_guest)
+	jmp	.Lstart_common
+END(start_xenpvh)
+	.align 8
+gdtdesc_xenpvh:
+	.word	gdt_xenpvhend - gdt_xenpvh
+	.long	RELOC(gdt_xenpvh)
+	.word	0
+gdt_xenpvh:
+	.long   0			# null descriptor
+	.long   0
+	.long   0x0000ffff		# %cs
+	.long   0x00cf9a00
+	.long   0x0000ffff		# %ds, %es, %ss
+	.long   0x00cf9200
+gdt_xenpvhend:
+	.align 4
+#endif /* !XENPV */
+
+
 /* space for the hypercall call page */
 #define HYPERCALL_PAGE_OFFSET 0x1000
-.org HYPERCALL_PAGE_OFFSET
-ENTRY(hypercall_page)
-.skip 0x1000
+.align HYPERCALL_PAGE_OFFSET
+ENTRY(hypercall_page) /* Returns -1, on HYPERVISOR_xen_version() */
+.skip	(__HYPERVISOR_xen_version*32), 0x90
+	movl	$-1, %eax
+	retl
+.align HYPERCALL_PAGE_OFFSET, 0x90
 END(hypercall_page)
 
+#ifdef XENPV
 /*
  * void lgdt_finish(void);
  * Finish load a new GDT pointer (do any necessary cleanup).
@@ -965,7 +1253,7 @@ END(hypercall_page)
  * this only happens at run time when the GDT is resized.
  */
 /* LINTSTUB: Func: void lgdt_finish(void) */
-NENTRY(lgdt_finish)
+ENTRY(lgdt_finish)
 	movl	$GSEL(GDATA_SEL, SEL_KPL),%eax
 	movw	%ax,%ds
 	movw	%ax,%es
@@ -980,6 +1268,7 @@ NENTRY(lgdt_finish)
 	lret
 END(lgdt_finish)
 
+#endif /* XENPV */
 #endif /* XEN */
 
 /*
@@ -992,7 +1281,7 @@ END(lgdt_finish)
  * stub to call.
  * NOTE: This function does not have a normal calling sequence!
  */
-NENTRY(lwp_trampoline)
+ENTRY(lwp_trampoline)
 	movl	%ebp,%edi	/* for .Lsyscall_checkast */
 	xorl	%ebp,%ebp
 	pushl	%edi
@@ -1012,7 +1301,7 @@ END(lwp_trampoline)
  * Signal trampoline; copied to top of user stack.  Used only for
  * compatibility with old releases of NetBSD.
  */
-NENTRY(sigcode)
+ENTRY(sigcode)
 	/*
 	 * Handler has returned here as if we called it.  The sigcontext
 	 * is on the stack after the 3 args "we" pushed.
@@ -1084,8 +1373,8 @@ END(dumpsys)
  * struct lwp *cpu_switchto(struct lwp *oldlwp, struct lwp *newlwp,
  *     bool returning)
  *
- *	1. if (oldlwp != NULL), save its context.
- *	2. then, restore context of newlwp.
+ *	1. save context of oldlwp.
+ *	2. restore context of newlwp.
  *
  * Note that the stack frame layout is known to "struct switchframe" in
  * <machine/frame.h> and to the code in cpu_lwp_fork() which initializes
@@ -1096,29 +1385,14 @@ ENTRY(cpu_switchto)
 	pushl	%esi
 	pushl	%edi
 
-#if defined(DIAGNOSTIC) && !defined(XEN)
-	cmpl	$IPL_SCHED,CPUVAR(ILEVEL)
-	jbe	0f
-	pushl	CPUVAR(ILEVEL)
-	pushl	$.Lstr
-	call	_C_LABEL(panic)
-	addl	$8,%esp
-.Lstr:	.string	"cpu_switchto: switching above IPL_SCHED (%d)\0"
-0:
-#endif
-
 	movl	16(%esp),%esi		/* oldlwp */
 	movl	20(%esp),%edi		/* newlwp */
 	movl	24(%esp),%edx		/* returning */
-
-	testl	%esi,%esi		/* oldlwp = NULL ? */
-	jz	skip_save
 
 	/* Save old context. */
 	movl	L_PCB(%esi),%eax
 	movl	%esp,PCB_ESP(%eax)
 	movl	%ebp,PCB_EBP(%eax)
-skip_save:
 
 	/* Switch to newlwp's stack. */
 	movl	L_PCB(%edi),%ebx
@@ -1137,20 +1411,35 @@ skip_save:
 	jnz	switch_return
 
 	/* Switch ring0 stack */
-#ifdef XEN
+#ifdef XENPV
 	pushl	%edi
 	call	_C_LABEL(i386_switch_context)
 	addl	$4,%esp
 #else
 	movl	PCB_ESP0(%ebx),%eax
-	movl	%eax,CPUVAR(ESP0)
+	movl	CPUVAR(TSS),%ecx
+	movl	%eax,TSS_ESP0(%ecx)
 #endif
+
+	/* Switch the dbregs. */
+	pushl	%edi
+	pushl	%esi
+	call	_C_LABEL(x86_dbregs_switch)
+	addl	$8,%esp
+
+	/* Switch the FPU. */
+	pushl	%edx
+	pushl	%edi
+	pushl	%esi
+	call	_C_LABEL(fpu_switch)
+	addl	$8,%esp
+	popl	%edx
 
 	/* Don't bother with the rest if switching to a system process. */
 	testl	$LW_SYSTEM,L_FLAG(%edi)
 	jnz	switch_return
 
-#ifndef XEN
+#ifndef XENPV
 	/* Restore thread-private %fs/%gs descriptors. */
 	movl	CPUVAR(GDT),%ecx
 	movl	PCB_FSD(%ebx),%eax
@@ -1161,13 +1450,14 @@ skip_save:
 	movl	PCB_GSD+4(%ebx),%edx
 	movl	%eax,(GUGS_SEL*8)(%ecx)
 	movl	%edx,(GUGS_SEL*8+4)(%ecx)
-#endif /* !XEN */
+#endif /* !XENPV */
 
 	/* Switch I/O bitmap */
 	movl	PCB_IOMAP(%ebx),%eax
 	orl	%eax,%eax
 	jnz	.Lcopy_iobitmap
-	movl	$(IOMAP_INVALOFF << 16),CPUVAR(IOBASE)
+	movl	CPUVAR(TSS),%eax
+	movl	$(IOMAP_INVALOFF << 16),TSS_IOBASE(%eax)
 .Liobitmap_done:
 
 	/* Is this process using RAS (restartable atomic sequences)? */
@@ -1187,34 +1477,11 @@ skip_save:
 	movl	%eax,TF_EIP(%ecx)
 no_RAS:
 
-	/*
-	 * Restore cr0 (including FPU state).  Raise the IPL to IPL_HIGH.
-	 * FPU IPIs can alter the LWP's saved cr0.  Dropping the priority
-	 * is deferred until mi_switch(), when cpu_switchto() returns.
-	 */
-#ifdef XEN
+#ifdef XENPV
 	pushl	%edi
 	call	_C_LABEL(i386_tls_switch)
 	addl	$4,%esp
-#else /* !XEN */
-	movl	$IPL_HIGH,CPUVAR(ILEVEL)
-	movl	PCB_CR0(%ebx),%ecx		/* has CR0_TS clear */
-	movl	%cr0,%edx
-
-	/*
-	 * If our floating point registers are on a different CPU,
-	 * set CR0_TS so we'll trap rather than reuse bogus state.
-	 */
-	cmpl	CPUVAR(FPCURLWP),%edi
-	je	skip_TS
-	orl	$CR0_TS,%ecx
-skip_TS:
-
-	/* Reloading CR0 is very expensive - avoid if possible. */
-	cmpl	%edx,%ecx
-	je	switch_return
-	movl	%ecx,%cr0
-#endif /* !XEN */
+#endif
 
 switch_return:
 	/* Return to the new LWP, returning 'oldlwp' in %eax. */
@@ -1231,13 +1498,14 @@ switch_return:
 	pushl	%esi
 	pushl	%edi
 	movl	%eax,%esi		/* pcb_iomap */
-	movl	CPUVAR(SELF),%edi
-	leal	CPU_INFO_IOMAP(%edi),%edi
+	movl	CPUVAR(TSS),%edi
+	leal	TSS_IOMAP(%edi),%edi
 	rep
 	movsl
 	popl	%edi
 	popl	%esi
-	movl	$((CPU_INFO_IOMAP - CPU_INFO_TSS) << 16),CPUVAR(IOBASE)
+	movl	CPUVAR(TSS),%eax
+	movl	$(IOMAP_VALIDOFF << 16),TSS_IOBASE(%eax)
 	jmp	.Liobitmap_done
 END(cpu_switchto)
 
@@ -1254,33 +1522,16 @@ ENTRY(savectx)
 END(savectx)
 
 /*
- * osyscall()
- *
- * Old call gate entry for syscall
- */
-IDTVEC(osyscall)
-#ifndef XEN
-	/* XXX we are in trouble! interrupts be off here. */
-	cli			/* must be first instruction */
-#endif
-	pushfl			/* set eflags in trap frame */
-	popl	8(%esp)
-	orl	$PSL_I,8(%esp)	/* re-enable ints on return to user */
-	pushl	$7		/* size of instruction for restart */
-	jmp	syscall1
-IDTVEC_END(osyscall)
-
-/*
  * syscall()
  *
  * Trap gate entry for syscall
  */
 IDTVEC(syscall)
 	pushl	$2		/* size of instruction for restart */
-syscall1:
 	pushl	$T_ASTFLT	/* trap # for doing ASTs */
 	INTRENTRY
 	STI(%eax)
+
 #ifdef DIAGNOSTIC
 	movl	CPUVAR(ILEVEL),%ebx
 	testl	%ebx,%ebx
@@ -1293,6 +1544,7 @@ syscall1:
 #endif
 1:
 #endif /* DIAGNOSTIC */
+
 	addl	$1,CPUVAR(NSYSCALL)	/* count it atomically */
 	adcl	$0,CPUVAR(NSYSCALL)+4	/* count it atomically */
 	movl	CPUVAR(CURLWP),%edi
@@ -1307,7 +1559,10 @@ syscall1:
 	movl	L_MD_ASTPENDING(%edi), %eax
 	orl	CPUVAR(WANT_PMAPLOAD), %eax
 	jnz	9f
-#ifdef XEN
+
+	HANDLE_DEFERRED_FPU
+
+#ifdef XENPV
 	STIC(%eax)
 	jz	14f
 	call	_C_LABEL(stipending)
@@ -1329,13 +1584,16 @@ syscall1:
 17:	movl	%ebx, CPUVAR(ILEVEL)	/* restore cpl  */
 	jmp	.Lsyscall_checkast
 14:
-#endif /* XEN */
-#ifndef DIAGNOSTIC
-	INTRFASTEXIT
-#else /* DIAGNOSTIC */
+#endif /* XENPV */
+
+#ifdef DIAGNOSTIC
 	cmpl	$IPL_NONE,CPUVAR(ILEVEL)
 	jne	3f
+#endif
+
 	INTRFASTEXIT
+
+#ifdef DIAGNOSTIC
 3:	STI(%eax)
 	pushl	$4f
 	call	_C_LABEL(panic)
@@ -1346,7 +1604,8 @@ syscall1:
 	jmp	.Lsyscall_checkast
 4:	.asciz	"SPL NOT LOWERED ON SYSCALL EXIT\n"
 5:	.asciz	"SPL NOT ZERO ON SYSCALL ENTRY\n"
-#endif /* DIAGNOSTIC */
+#endif
+
 9:
 	cmpl	$0, CPUVAR(WANT_PMAPLOAD)
 	jz	10f
@@ -1364,45 +1623,12 @@ syscall1:
 	jmp	.Lsyscall_checkast	/* re-check ASTs */
 IDTVEC_END(syscall)
 
-IDTVEC(svr4_fasttrap)
-	pushl	$2		/* size of instruction for restart */
-	pushl	$T_ASTFLT	/* trap # for doing ASTs */
-	INTRENTRY
-	STI(%eax)
-	pushl	$RW_READER
-	pushl	$_C_LABEL(svr4_fasttrap_lock)
-	call	_C_LABEL(rw_enter)
-	addl	$8,%esp
-	call	*_C_LABEL(svr4_fasttrap_vec)
-	pushl	$_C_LABEL(svr4_fasttrap_lock)
-	call	_C_LABEL(rw_exit)
-	addl	$4,%esp
-2:	/* Check for ASTs on exit to user mode. */
-	cli
-	CHECK_ASTPENDING(%eax)
-	je	1f
-	/* Always returning to user mode here. */
-	CLEAR_ASTPENDING(%eax)
-	sti
-	/* Pushed T_ASTFLT into tf_trapno on entry. */
-	pushl	%esp
-	call	_C_LABEL(trap)
-	addl	$4,%esp
-	jmp	2b
-1:	CHECK_DEFERRED_SWITCH
-	jnz	9f
-	INTRFASTEXIT
-9:	sti
-	call	_C_LABEL(pmap_load)
-	cli
-	jmp	2b
-
 /*
  * int npx586bug1(int a, int b)
  * Used when checking for the FDIV bug on first generations pentiums.
  * Anything 120MHz or above is fine.
  */
-NENTRY(npx586bug1)
+ENTRY(npx586bug1)
 	fildl	4(%esp)		/* x */
 	fildl	8(%esp)		/* y */
 	fld	%st(1)
@@ -1415,39 +1641,40 @@ NENTRY(npx586bug1)
 	ret
 END(npx586bug1)
 
-/*
- * void sse2_idlezero_page(void *pg)
- *
- * Zero a page without polluting the cache.  Preemption must be
- * disabled by the caller. Abort if a preemption is pending.
- */
-ENTRY(sse2_idlezero_page)
-	pushl	%ebp
-	movl	%esp,%ebp
-	movl	8(%esp), %edx
-	movl	$(PAGE_SIZE/32), %ecx
-	xorl	%eax, %eax
-	.align	16
-1:
-	testl	$RESCHED_KPREEMPT, CPUVAR(RESCHED)
-	jnz	2f
-	movnti	%eax, 0(%edx)
-	movnti	%eax, 4(%edx)
-	movnti	%eax, 8(%edx)
-	movnti	%eax, 12(%edx)
-	movnti	%eax, 16(%edx)
-	movnti	%eax, 20(%edx)
-	movnti	%eax, 24(%edx)
-	movnti	%eax, 28(%edx)
-	addl	$32, %edx
-	decl	%ecx
-	jnz	1b
-	sfence
-	incl	%eax
-	pop	%ebp
-	ret
-2:
-	sfence
-	popl	%ebp
-	ret
-END(sse2_idlezero_page)
+ENTRY(intrfastexit)
+	movw	TF_GS(%esp),%gs
+	movw	TF_FS(%esp),%fs
+	movw	TF_ES(%esp),%es
+	movw	TF_DS(%esp),%ds
+	movl	TF_EDI(%esp),%edi
+	movl	TF_ESI(%esp),%esi
+	movl	TF_EBP(%esp),%ebp
+	movl	TF_EBX(%esp),%ebx
+	movl	TF_EDX(%esp),%edx
+	movl	TF_ECX(%esp),%ecx
+	movl	TF_EAX(%esp),%eax
+	addl	$(TF_PUSHSIZE+8),%esp
+	iret
+END(intrfastexit)
+
+	.section .rodata
+
+	/*
+	 * Hotpatch templates.
+	 */
+
+LABEL(hp_nolock)
+	nop
+LABEL(hp_nolock_end)
+
+LABEL(hp_retfence)
+	lfence
+LABEL(hp_retfence_end)
+
+LABEL(hp_clac)
+	clac
+LABEL(hp_clac_end)
+
+LABEL(hp_stac)
+	stac
+LABEL(hp_stac_end)

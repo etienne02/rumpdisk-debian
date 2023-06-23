@@ -1,4 +1,4 @@
-/*	$NetBSD: ip6.h,v 1.23 2007/12/25 18:33:46 perry Exp $	*/
+/*	$NetBSD: ip6.h,v 1.30 2021/03/07 15:01:00 christos Exp $	*/
 /*	$KAME: ip6.h,v 1.45 2003/06/05 04:46:38 keiichi Exp $	*/
 
 /*
@@ -64,6 +64,11 @@
 #ifndef _NETINET_IP6_H_
 #define _NETINET_IP6_H_
 
+#include <sys/types.h>
+#include <sys/endian.h>
+
+#include <netinet/in.h>
+
 /*
  * Definition for internet protocol version 6.
  * RFC 2460
@@ -81,7 +86,7 @@ struct ip6_hdr {
 	} ip6_ctlun;
 	struct in6_addr ip6_src;	/* source address */
 	struct in6_addr ip6_dst;	/* destination address */
-} __packed;
+};
 
 #define ip6_vfc		ip6_ctlun.ip6_un2_vfc
 #define ip6_flow	ip6_ctlun.ip6_un1.ip6_un1_flow
@@ -119,33 +124,33 @@ struct ip6_hdr_pseudo {
 	u_int32_t	ip6ph_len;
 	u_int8_t	ip6ph_zero[3];
 	u_int8_t	ip6ph_nxt;
-} __packed;
+};
+__CTASSERT(sizeof(struct ip6_hdr) == 40);
+__CTASSERT(sizeof(struct ip6_hdr_pseudo) == 40);
 #endif
 
 /*
  * Extension Headers
  */
 
-struct	ip6_ext {
+struct ip6_ext {
 	u_int8_t ip6e_nxt;
 	u_int8_t ip6e_len;
-} __packed;
+};
 
 /* Hop-by-Hop options header */
-/* XXX should we pad it to force alignment on an 8-byte boundary? */
 struct ip6_hbh {
 	u_int8_t ip6h_nxt;	/* next header */
 	u_int8_t ip6h_len;	/* length in units of 8 octets */
 	/* followed by options */
-} __packed;
+};
 
 /* Destination options header */
-/* XXX should we pad it to force alignment on an 8-byte boundary? */
 struct ip6_dest {
 	u_int8_t ip6d_nxt;	/* next header */
 	u_int8_t ip6d_len;	/* length in units of 8 octets */
 	/* followed by options */
-} __packed;
+};
 
 /* Option types and related macros */
 #define IP6OPT_PAD1		0x00	/* 00 0 00000 */
@@ -159,7 +164,7 @@ struct ip6_dest {
 #define IP6OPT_RTALERT_LEN	4
 #define IP6OPT_RTALERT_MLD	0	/* Datagram contains an MLD message */
 #define IP6OPT_RTALERT_RSVP	1	/* Datagram contains an RSVP message */
-#define IP6OPT_RTALERT_ACTNET	2 	/* contains an Active Networks msg */
+#define IP6OPT_RTALERT_ACTNET	2	/* contains an Active Networks msg */
 #define IP6OPT_MINLEN		2
 
 #define IP6OPT_TYPE(o)		((o) & 0xC0)
@@ -174,14 +179,14 @@ struct ip6_dest {
 struct ip6_opt {
 	u_int8_t ip6o_type;
 	u_int8_t ip6o_len;
-} __packed;
+};
 
 /* Jumbo Payload Option */
 struct ip6_opt_jumbo {
 	u_int8_t ip6oj_type;
 	u_int8_t ip6oj_len;
 	u_int8_t ip6oj_jumbo_len[4];
-} __packed;
+};
 #define IP6OPT_JUMBO_LEN 6
 
 /* NSAP Address Option */
@@ -192,21 +197,21 @@ struct ip6_opt_nsap {
 	u_int8_t ip6on_dst_nsap_len;
 	/* followed by source NSAP */
 	/* followed by destination NSAP */
-} __packed;
+};
 
 /* Tunnel Limit Option */
 struct ip6_opt_tunnel {
 	u_int8_t ip6ot_type;
 	u_int8_t ip6ot_len;
 	u_int8_t ip6ot_encap_limit;
-} __packed;
+};
 
 /* Router Alert Option */
 struct ip6_opt_router {
 	u_int8_t ip6or_type;
 	u_int8_t ip6or_len;
 	u_int8_t ip6or_value[2];
-} __packed;
+};
 /* Router alert values (in network byte order) */
 #if BYTE_ORDER == BIG_ENDIAN
 #define IP6_ALERT_MLD	0x0000
@@ -222,12 +227,12 @@ struct ip6_opt_router {
 
 /* Routing header */
 struct ip6_rthdr {
-	u_int8_t  ip6r_nxt;	/* next header */
-	u_int8_t  ip6r_len;	/* length in units of 8 octets */
-	u_int8_t  ip6r_type;	/* routing type */
-	u_int8_t  ip6r_segleft;	/* segments left */
+	u_int8_t ip6r_nxt;	/* next header */
+	u_int8_t ip6r_len;	/* length in units of 8 octets */
+	u_int8_t ip6r_type;	/* routing type */
+	u_int8_t ip6r_segleft;	/* segments left */
 	/* followed by routing type specific data */
-} __packed;
+};
 
 /* Type 0 Routing header */
 struct ip6_rthdr0 {
@@ -236,7 +241,7 @@ struct ip6_rthdr0 {
 	u_int8_t  ip6r0_type;		/* always zero */
 	u_int8_t  ip6r0_segleft;	/* segments left */
 	u_int32_t ip6r0_reserved;	/* reserved field */
-} __packed;
+};
 
 /* Fragment header */
 struct ip6_frag {
@@ -244,7 +249,7 @@ struct ip6_frag {
 	u_int8_t  ip6f_reserved;	/* reserved field */
 	u_int16_t ip6f_offlg;		/* offset, reserved, and flag */
 	u_int32_t ip6f_ident;		/* identification */
-} __packed;
+};
 
 #if BYTE_ORDER == BIG_ENDIAN
 #define IP6F_OFF_MASK		0xfff8	/* mask out offset from _offlg */
@@ -268,52 +273,8 @@ struct ip6_frag {
 #define IPV6_MAXPACKET	65535	/* ip6 max packet size without Jumbo payload*/
 
 #ifdef _KERNEL
-/*
- * IP6_EXTHDR_GET ensures that intermediate protocol header (from "off" to
- * "len") is located in single mbuf, on contiguous memory region.
- * The pointer to the region will be returned to pointer variable "val",
- * with type "typ".
- * IP6_EXTHDR_GET0 does the same, except that it aligns the structure at the
- * very top of mbuf.  GET0 is likely to make memory copy than GET.
- *
- * XXX we're now testing this, needs m_pulldown()
- */
 #define IP6_EXTHDR_GET(val, typ, m, off, len) \
-do {									\
-	struct mbuf *_t;						\
-	int _tmp;							\
-	if ((m)->m_len >= (off) + (len))				\
-		(val) = (typ)(mtod((m), char *) + (off));		\
-	else {								\
-		_t = m_pulldown((m), (off), (len), &_tmp);		\
-		if (_t) {						\
-			if (_t->m_len < _tmp + (len))			\
-				panic("m_pulldown malfunction");	\
-			(val) = (typ)(mtod(_t, char *) + _tmp);	\
-		} else {						\
-			(val) = (typ)NULL;				\
-			(m) = NULL;					\
-		}							\
-	}								\
-} while (/*CONSTCOND*/ 0)
-
-#define IP6_EXTHDR_GET0(val, typ, m, off, len) \
-do {									\
-	struct mbuf *_t;						\
-	if ((off) == 0 && (m)->m_len >= len)				\
-		(val) = (typ)mtod((m), void *);			\
-	else {								\
-		_t = m_pulldown((m), (off), (len), NULL);		\
-		if (_t) {						\
-			if (_t->m_len < (len))				\
-				panic("m_pulldown malfunction");	\
-			(val) = (typ)mtod(_t, void *);			\
-		} else {						\
-			(val) = (typ)NULL;				\
-			(m) = NULL;					\
-		}							\
-	}								\
-} while (/*CONSTCOND*/ 0)
+	M_REGION_GET(val, typ, m, off, len)
 #endif /*_KERNEL*/
 
 #endif /* !_NETINET_IP6_H_ */

@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.dep.mk,v 1.82 2014/12/01 01:34:30 erh Exp $
+#	$NetBSD: bsd.dep.mk,v 1.87 2020/07/01 07:38:29 lukem Exp $
 
 ##### Basic targets
 realdepend:	beforedepend .depend afterdepend
@@ -62,48 +62,48 @@ _MKDEP_FILEFLAGS=
 	${_MKTARGET_CREATE}
 	${MKDEP} -f ${.TARGET}.tmp ${_MKDEP_FILEFLAGS} -- ${MKDEPFLAGS} \
 	    ${CFLAGS:M-std=*} ${CFLAGS:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
-	    ${CPPFLAGS} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
+	    ${CPPFLAGS:N-Wp,-iremap,*} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
 	    ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} && \
-	    mv ${.TARGET}.tmp ${.TARGET}
+	    ${MV} ${.TARGET}.tmp ${.TARGET}
 
 .m.d:
 	${_MKTARGET_CREATE}
 	${MKDEP} -f ${.TARGET}.tmp ${_MKDEP_FILEFLAGS} -- ${MKDEPFLAGS} \
 	    ${OBJCFLAGS:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
-	    ${CPPFLAGS} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
+	    ${CPPFLAGS:N-Wp,-iremap,*} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
 	    ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} && \
-	    mv ${.TARGET}.tmp ${.TARGET}
+	    ${MV} ${.TARGET}.tmp ${.TARGET}
 
 .s.d .S.d:
 	${_MKTARGET_CREATE}
 	${MKDEP} -f ${.TARGET}.tmp ${_MKDEP_FILEFLAGS} -- ${MKDEPFLAGS} \
 	    ${AFLAGS:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
-	    ${CPPFLAGS} ${AFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} \
+	    ${CPPFLAGS:N-Wp,-iremap,*} ${AFLAGS.${.IMPSRC:T}} ${CPPFLAGS.${.IMPSRC:T}} \
 	    ${__acpp_flags} ${.IMPSRC} && \
-	    mv ${.TARGET}.tmp ${.TARGET}
+	    ${MV} ${.TARGET}.tmp ${.TARGET}
 
 .C.d .cc.d .cpp.d .cxx.d:
 	${_MKTARGET_CREATE}
 	${MKDEPCXX} -f ${.TARGET}.tmp ${_MKDEP_FILEFLAGS} -- ${MKDEPFLAGS} \
 	    ${CXXFLAGS:M-std=*} ${CXXFLAGS:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
-	    ${CPPFLAGS} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
+	    ${CPPFLAGS:N-Wp,-iremap,*} ${COPTS.${.IMPSRC:T}} ${CPUFLAGS.${.IMPSRC:T}} \
 	    ${CPPFLAGS.${.IMPSRC:T}} ${.IMPSRC} && \
-	    mv ${.TARGET}.tmp ${.TARGET}
+	    ${MV} ${.TARGET}.tmp ${.TARGET}
 
 .endif # defined(SRCS) && !empty(SRCS)					# }
 
 ##### Clean rules
 .if defined(SRCS) && !empty(SRCS)
-CLEANDIRFILES+= .depend ${__DPSRCS.d} ${__DPSRCS.d:.d=.d.tmp} ${.CURDIR}/tags ${CLEANDEPEND}
+CLEANDIRFILES+= .depend ${__DPSRCS.d} ${__DPSRCS.d:.d=.d.tmp} tags ${CLEANDEPEND}
 .endif
 
 ##### Custom rules
-.if !target(tags)
+.if !commands(tags)
 tags: ${SRCS}
 .if defined(SRCS) && !empty(SRCS)
 	${_MKTARGET_CREATE}
-	-cd "${.CURDIR}"; ctags -f /dev/stdout ${.ALLSRC:N*.h} | \
-	    ${TOOL_SED} "s;\${.CURDIR}/;;" > tags
+	-cd "${.CURDIR}"; ctags -f /dev/stdout ${.ALLSRC:M*.[cly]} | \
+	    ${TOOL_SED} "s;\${.CURDIR}/;;" > ${.OBJDIR}/tags
 .endif
 .endif
 

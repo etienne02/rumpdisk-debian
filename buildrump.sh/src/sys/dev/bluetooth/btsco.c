@@ -1,4 +1,4 @@
-/*	$NetBSD: btsco.c,v 1.34 2015/07/10 22:03:12 nat Exp $	*/
+/*	$NetBSD: btsco.c,v 1.42 2020/06/11 02:39:31 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btsco.c,v 1.34 2015/07/10 22:03:12 nat Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btsco.c,v 1.42 2020/06/11 02:39:31 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/audioio.h>
@@ -54,9 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: btsco.c,v 1.34 2015/07/10 22:03:12 nat Exp $");
 #include <netbt/rfcomm.h>
 #include <netbt/sco.h>
 
-#include <dev/audio_if.h>
-#include <dev/auconv.h>
-#include <dev/mulaw.h>
+#include <dev/audio/audio_if.h>
 
 #include <dev/bluetooth/btdev.h>
 #include <dev/bluetooth/btsco.h>
@@ -97,7 +95,7 @@ struct btsco_softc {
 	device_t		 sc_audio;	/* MI audio device */
 	void			*sc_intr;	/* interrupt cookie */
 	kcondvar_t		 sc_connect;	/* connect wait */
-	kmutex_t		 sc_intr_lock;	/* for audio */
+	kmutex_t		 sc_lock;	/* for audio */
 
 	/* Bluetooth */
 	bdaddr_t		 sc_laddr;	/* local address */
@@ -149,16 +147,16 @@ CFATTACH_DECL_NEW(btsco, sizeof(struct btsco_softc),
 /* audio(9) glue */
 static int btsco_open(void *, int);
 static void btsco_close(void *);
-static int btsco_query_encoding(void *, struct audio_encoding *);
-static int btsco_set_params(void *, int, int, audio_params_t *, audio_params_t *,
-				stream_filter_list_t *, stream_filter_list_t *);
+static int btsco_query_format(void *, audio_format_query_t *);
+static int btsco_set_format(void *, int,
+				const audio_params_t *, const audio_params_t *,
+				audio_filter_reg_t *, audio_filter_reg_t *);
 static int btsco_round_blocksize(void *, int, int, const audio_params_t *);
 static int btsco_start_output(void *, void *, int, void (*)(void *), void *);
 static int btsco_start_input(void *, void *, int, void (*)(void *), void *);
 static int btsco_halt_output(void *);
 static int btsco_halt_input(void *);
 static int btsco_getdev(void *, struct audio_device *);
-static int btsco_setfd(void *, int);
 static int btsco_set_port(void *, mixer_ctrl_t *);
 static int btsco_get_port(void *, mixer_ctrl_t *);
 static int btsco_query_devinfo(void *, mixer_devinfo_t *);
@@ -169,34 +167,24 @@ static int btsco_dev_ioctl(void *, u_long, void *, int, struct lwp *);
 static void btsco_get_locks(void *, kmutex_t **, kmutex_t **);
 
 static const struct audio_hw_if btsco_if = {
-	btsco_open,		/* open */
-	btsco_close,		/* close */
-	NULL,			/* drain */
-	btsco_query_encoding,	/* query_encoding */
-	btsco_set_params,	/* set_params */
-	btsco_round_blocksize,	/* round_blocksize */
-	NULL,			/* commit_settings */
-	NULL,			/* init_output */
-	NULL,			/* init_input */
-	btsco_start_output,	/* start_output */
-	btsco_start_input,	/* start_input */
-	btsco_halt_output,	/* halt_output */
-	btsco_halt_input,	/* halt_input */
-	NULL,			/* speaker_ctl */
-	btsco_getdev,		/* getdev */
-	btsco_setfd,		/* setfd */
-	btsco_set_port,		/* set_port */
-	btsco_get_port,		/* get_port */
-	btsco_query_devinfo,	/* query_devinfo */
-	btsco_allocm,		/* allocm */
-	btsco_freem,		/* freem */
-	NULL,			/* round_buffersize */
-	NULL,			/* mappage */
-	btsco_get_props,	/* get_props */
-	NULL,			/* trigger_output */
-	NULL,			/* trigger_input */
-	btsco_dev_ioctl,	/* dev_ioctl */
-	btsco_get_locks,	/* get_locks */
+	.open			= btsco_open,
+	.close			= btsco_close,
+	.query_format		= btsco_query_format,
+	.set_format		= btsco_set_format,
+	.round_blocksize	= btsco_round_blocksize,
+	.start_output		= btsco_start_output,
+	.start_input		= btsco_start_input,
+	.halt_output		= btsco_halt_output,
+	.halt_input		= btsco_halt_input,
+	.getdev			= btsco_getdev,
+	.set_port		= btsco_set_port,
+	.get_port		= btsco_get_port,
+	.query_devinfo		= btsco_query_devinfo,
+	.allocm			= btsco_allocm,
+	.freem			= btsco_freem,
+	.get_props		= btsco_get_props,
+	.dev_ioctl		= btsco_dev_ioctl,
+	.get_locks		= btsco_get_locks,
 };
 
 static const struct audio_device btsco_device = {
@@ -207,15 +195,14 @@ static const struct audio_device btsco_device = {
 
 /* Voice_Setting == 0x0060: 8000Hz, mono, 16-bit, slinear_le */
 static const struct audio_format btsco_format = {
-	NULL,				/* driver_data */
-	(AUMODE_PLAY | AUMODE_RECORD),	/* mode */
-	AUDIO_ENCODING_SLINEAR_LE,	/* encoding */
-	16,				/* validbits */
-	16,				/* precision */
-	1,				/* channels */
-	AUFMT_MONAURAL,			/* channel_mask */
-	1,				/* frequency_type */
-	{ 8000 }			/* frequency */
+	.mode		= AUMODE_PLAY | AUMODE_RECORD,
+	.encoding	= AUDIO_ENCODING_SLINEAR_LE,
+	.validbits	= 16,
+	.precision	= 16,
+	.channels	= 1,
+	.channel_mask	= AUFMT_MONAURAL,
+	.frequency_type	= 1,
+	.frequency	= { 8000 },
 };
 
 /* bluetooth(9) glue for SCO */
@@ -271,10 +258,10 @@ btsco_match(device_t self, cfdata_t cfdata, void *aux)
 	prop_object_t obj;
 
 	obj = prop_dictionary_get(dict, BTDEVservice);
-	if (prop_string_equals_cstring(obj, "HSET"))
+	if (prop_string_equals_string(obj, "HSET"))
 		return 1;
 
-	if (prop_string_equals_cstring(obj, "HF"))
+	if (prop_string_equals_string(obj, "HF"))
 		return 1;
 
 	return 0;
@@ -295,31 +282,31 @@ btsco_attach(device_t parent, device_t self, void *aux)
 	sc->sc_state = BTSCO_CLOSED;
 	sc->sc_name = device_xname(self);
 	cv_init(&sc->sc_connect, "connect");
-	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_NONE);
+	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 
 	/*
 	 * copy in our configuration info
 	 */
 	obj = prop_dictionary_get(dict, BTDEVladdr);
-	bdaddr_copy(&sc->sc_laddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_laddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(dict, BTDEVraddr);
-	bdaddr_copy(&sc->sc_raddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_raddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(dict, BTDEVservice);
-	if (prop_string_equals_cstring(obj, "HF")) {
+	if (prop_string_equals_string(obj, "HF")) {
 		sc->sc_flags |= BTSCO_LISTEN;
 		aprint_verbose(" listen mode");
 	}
 
 	obj = prop_dictionary_get(dict, BTSCOchannel);
 	if (prop_object_type(obj) != PROP_TYPE_NUMBER
-	    || prop_number_integer_value(obj) < RFCOMM_CHANNEL_MIN
-	    || prop_number_integer_value(obj) > RFCOMM_CHANNEL_MAX) {
+	    || prop_number_signed_value(obj) < RFCOMM_CHANNEL_MIN
+	    || prop_number_signed_value(obj) > RFCOMM_CHANNEL_MAX) {
 		aprint_error(" invalid %s", BTSCOchannel);
 		return;
 	}
-	sc->sc_channel = prop_number_integer_value(obj);
+	sc->sc_channel = prop_number_signed_value(obj);
 
 	aprint_verbose(" channel %d", sc->sc_channel);
 	aprint_normal("\n");
@@ -382,10 +369,12 @@ btsco_detach(device_t self, int flags)
 		sc->sc_intr = NULL;
 	}
 
+	mutex_enter(bt_lock);
 	if (sc->sc_rx_mbuf != NULL) {
 		m_freem(sc->sc_rx_mbuf);
 		sc->sc_rx_mbuf = NULL;
 	}
+	mutex_exit(bt_lock);
 
 	if (sc->sc_tx_refcnt > 0) {
 		aprint_error_dev(self, "tx_refcnt=%d!\n", sc->sc_tx_refcnt);
@@ -395,7 +384,7 @@ btsco_detach(device_t self, int flags)
 	}
 
 	cv_destroy(&sc->sc_connect);
-	mutex_destroy(&sc->sc_intr_lock);
+	mutex_destroy(&sc->sc_lock);
 
 	return 0;
 }
@@ -462,7 +451,7 @@ btsco_sco_disconnected(void *arg, int err)
 		 * has completed so that when it tries to send more, we
 		 * can indicate an error.
 		 */
-		mutex_enter(&sc->sc_intr_lock);
+		mutex_enter(bt_lock);
 		if (sc->sc_tx_pending > 0) {
 			sc->sc_tx_pending = 0;
 			(*sc->sc_tx_intr)(sc->sc_tx_intrarg);
@@ -471,7 +460,7 @@ btsco_sco_disconnected(void *arg, int err)
 			sc->sc_rx_want = 0;
 			(*sc->sc_rx_intr)(sc->sc_rx_intrarg);
 		}
-		mutex_exit(&sc->sc_intr_lock);
+		mutex_exit(bt_lock);
 		break;
 
 	default:
@@ -505,13 +494,11 @@ btsco_sco_complete(void *arg, int count)
 
 	DPRINTFN(10, "%s count %d\n", sc->sc_name, count);
 
-	mutex_enter(&sc->sc_intr_lock);
 	if (sc->sc_tx_pending > 0) {
 		sc->sc_tx_pending -= count;
 		if (sc->sc_tx_pending == 0)
 			(*sc->sc_tx_intr)(sc->sc_tx_intrarg);
 	}
-	mutex_exit(&sc->sc_intr_lock);
 }
 
 static void
@@ -530,7 +517,6 @@ btsco_sco_input(void *arg, struct mbuf *m)
 
 	DPRINTFN(10, "%s len=%d\n", sc->sc_name, m->m_pkthdr.len);
 
-	mutex_enter(&sc->sc_intr_lock);
 	if (sc->sc_rx_want == 0) {
 		m_freem(m);
 	} else {
@@ -556,7 +542,6 @@ btsco_sco_input(void *arg, struct mbuf *m)
 		if (sc->sc_rx_want == 0)
 			(*sc->sc_rx_intr)(sc->sc_rx_intrarg);
 	}
-	mutex_exit(&sc->sc_intr_lock);
 }
 
 
@@ -634,7 +619,7 @@ btsco_open(void *hdl, int flags)
 	case BTSCO_CLOSED:		/* disconnected */
 		err = sc->sc_err;
 
-		/* fall through to */
+		/* FALLTHROUGH */
 	case BTSCO_WAIT_CONNECT:	/* error */
 		if (sc->sc_sco != NULL)
 			sco_detach_pcb(&sc->sc_sco);
@@ -698,58 +683,19 @@ btsco_close(void *hdl)
 }
 
 static int
-btsco_query_encoding(void *hdl, struct audio_encoding *ae)
+btsco_query_format(void *hdl, audio_format_query_t *afp)
 {
-/*	struct btsco_softc *sc = hdl;	*/
-	int err = 0;
 
-	switch (ae->index) {
-	case 0:
-		strcpy(ae->name, AudioEslinear_le);
-		ae->encoding = AUDIO_ENCODING_SLINEAR_LE;
-		ae->precision = 16;
-		ae->flags = 0;
-		break;
-
-	default:
-		err = EINVAL;
-	}
-
-	return err;
+	return audio_query_format(&btsco_format, 1, afp);
 }
 
 static int
-btsco_set_params(void *hdl, int setmode, int usemode,
-		audio_params_t *play, audio_params_t *rec,
-		stream_filter_list_t *pfil, stream_filter_list_t *rfil)
+btsco_set_format(void *hdl, int setmode,
+		const audio_params_t *play, const audio_params_t *rec,
+		audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
 {
-/*	struct btsco_softc *sc = hdl;	*/
-	const struct audio_format *f;
-	int rv;
 
-	DPRINTF("setmode 0x%x usemode 0x%x\n", setmode, usemode);
-	DPRINTF("rate %d, precision %d, channels %d encoding %d\n",
-		play->sample_rate, play->precision, play->channels, play->encoding);
-
-	/*
-	 * If we had a list of formats, we could check the HCI_Voice_Setting
-	 * and select the appropriate one to use. Currently only one is
-	 * supported: 0x0060 == 8000Hz, mono, 16-bit, slinear_le
-	 */
-	f = &btsco_format;
-
-	if (setmode & AUMODE_PLAY) {
-		rv = auconv_set_converter(f, 1, AUMODE_PLAY, play, TRUE, pfil);
-		if (rv < 0)
-			return EINVAL;
-	}
-
-	if (setmode & AUMODE_RECORD) {
-		rv = auconv_set_converter(f, 1, AUMODE_RECORD, rec, TRUE, rfil);
-		if (rv < 0)
-			return EINVAL;
-	}
-
+	/* We have only one format so nothing to do here. */
 	return 0;
 }
 
@@ -777,7 +723,7 @@ btsco_round_blocksize(void *hdl, int bs, int mode,
 /*
  * Start Output
  *
- * We dont want to be calling the network stack with sc_intr_lock held
+ * We dont want to be calling the network stack with bt_lock held
  * so make a note of what is to be sent, and schedule an interrupt to
  * bundle it up and queue it.
  */
@@ -899,14 +845,6 @@ btsco_getdev(void *hdl, struct audio_device *ret)
 }
 
 static int
-btsco_setfd(void *hdl, int fd)
-{
-	DPRINTF("set %s duplex\n", fd ? "full" : "half");
-
-	return 0;
-}
-
-static int
 btsco_set_port(void *hdl, mixer_ctrl_t *mc)
 {
 	struct btsco_softc *sc = hdl;
@@ -1023,11 +961,11 @@ btsco_allocm(void *hdl, int direction, size_t size)
 	struct btsco_softc *sc = hdl;
 	void *addr;
 
-	DPRINTF("%s: size %d direction %d\n", sc->sc_name, size, direction);
+	DPRINTF("%s: size %zd direction %d\n", sc->sc_name, size, direction);
 
 	addr = kmem_alloc(size, KM_SLEEP);
 
-	if (addr != NULL && direction == AUMODE_PLAY) {
+	if (direction == AUMODE_PLAY) {
 		sc->sc_tx_buf = addr;
 		sc->sc_tx_refcnt = 0;
 	}
@@ -1071,7 +1009,8 @@ static int
 btsco_get_props(void *hdl)
 {
 
-	return AUDIO_PROP_FULLDUPLEX;
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE |
+	    AUDIO_PROP_FULLDUPLEX;
 }
 
 static void
@@ -1079,8 +1018,8 @@ btsco_get_locks(void *hdl, kmutex_t **intr, kmutex_t **thread)
 {
 	struct btsco_softc *sc = hdl;
 
-	*intr = &sc->sc_intr_lock;
-	*thread = bt_lock;
+	*thread = &sc->sc_lock;
+	*intr = bt_lock;
 }
 
 /*
@@ -1141,12 +1080,12 @@ btsco_intr(void *arg)
 	if (sc->sc_sco == NULL)
 		return;		/* connection is lost */
 
+	mutex_enter(bt_lock);
 	block = sc->sc_tx_block;
 	size = sc->sc_tx_size;
 	sc->sc_tx_block = NULL;
 	sc->sc_tx_size = 0;
 
-	mutex_enter(bt_lock);
 	while (size > 0) {
 		MGETHDR(m, M_DONTWAIT, MT_DATA);
 		if (m == NULL)

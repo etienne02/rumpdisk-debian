@@ -1,4 +1,4 @@
-/*	$NetBSD: uhcivar.h,v 1.53 2016/04/23 10:15:32 skrll Exp $	*/
+/*	$NetBSD: uhcivar.h,v 1.57 2020/03/15 07:56:19 skrll Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -61,7 +61,6 @@ typedef union {
 
 struct uhci_xfer {
 	struct usbd_xfer ux_xfer;
-	struct usb_task ux_aborttask;
 	enum {
 		UX_NONE, UX_CTRL, UX_BULK, UX_INTR, UX_ISOC
 	} ux_type;
@@ -113,7 +112,7 @@ struct uhci_soft_td {
  * aligned.
  * NOTE: Minimum size is 32 bytes.
  */
-#define UHCI_STD_SIZE ((sizeof(struct uhci_soft_td) + UHCI_TD_ALIGN - 1) / UHCI_TD_ALIGN * UHCI_TD_ALIGN)
+#define UHCI_STD_SIZE (roundup(sizeof(struct uhci_soft_td), UHCI_TD_ALIGN))
 #define UHCI_STD_CHUNK 128 /*(PAGE_SIZE / UHCI_TD_SIZE)*/
 
 /*
@@ -129,7 +128,7 @@ struct uhci_soft_qh {
 	int offs;			/* QH's offset in usb_dma_t */
 };
 /* See comment about UHCI_STD_SIZE. */
-#define UHCI_SQH_SIZE ((sizeof(struct uhci_soft_qh) + UHCI_QH_ALIGN - 1) / UHCI_QH_ALIGN * UHCI_QH_ALIGN)
+#define UHCI_SQH_SIZE (roundup(sizeof(struct uhci_soft_qh), UHCI_QH_ALIGN))
 #define UHCI_SQH_CHUNK 128 /*(PAGE_SIZE / UHCI_QH_SIZE)*/
 
 /*
@@ -152,7 +151,6 @@ typedef struct uhci_softc {
 
 	kmutex_t sc_lock;
 	kmutex_t sc_intr_lock;
-	kcondvar_t sc_softwake_cv;
 
 	uhci_physaddr_t *sc_pframes;
 	usb_dma_t sc_dma;
@@ -172,10 +170,8 @@ typedef struct uhci_softc {
 
 	pool_cache_t sc_xferpool;	/* free xfer pool */
 
-	uint8_t sc_saved_sof;
 	uint16_t sc_saved_frnum;
-
-	char sc_softwake;
+	uint8_t sc_saved_sof;
 
 	char sc_isreset;
 	char sc_suspend;
@@ -187,9 +183,6 @@ typedef struct uhci_softc {
 	int sc_ival;			/* time between root hub intrs */
 	struct usbd_xfer *sc_intr_xfer;	/* root hub interrupt transfer */
 	struct callout sc_poll_handle;
-
-	char sc_vendor[32];		/* vendor string for root hub */
-	int sc_id_vendor;		/* vendor ID for root hub */
 
 	device_t sc_child;		/* /dev/usb# device */
 } uhci_softc_t;

@@ -1,4 +1,4 @@
-/*	$NetBSD: radeon_pci.c,v 1.10 2015/05/29 05:48:46 mrg Exp $	*/
+/*	$NetBSD: radeon_pci.c,v 1.14 2020/01/24 11:44:27 jmcneill Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,10 +30,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radeon_pci.c,v 1.10 2015/05/29 05:48:46 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radeon_pci.c,v 1.14 2020/01/24 11:44:27 jmcneill Exp $");
 
 #ifdef _KERNEL_OPT
 #include "vga.h"
+#if defined(__arm__) || defined(__aarch64__)
+#include "opt_fdt.h"
+#endif
 #endif
 
 #include <sys/types.h>
@@ -58,6 +61,10 @@ __KERNEL_RCSID(0, "$NetBSD: radeon_pci.c,v 1.10 2015/05/29 05:48:46 mrg Exp $");
 #include <dev/ic/pcdisplayvar.h>
 #include <dev/ic/vgareg.h>
 #include <dev/ic/vgavar.h>
+#endif
+
+#ifdef FDT
+#include <dev/fdt/fdtvar.h>
 #endif
 
 #include <drm/drmP.h>
@@ -201,6 +208,15 @@ radeon_attach(device_t parent, device_t self, void *aux)
 				       "i386 radeondrmkms hack\n");
 #endif
 
+#ifdef FDT
+	/*
+	 * XXX Remove the simple framebuffer, assuming that this device
+	 * will take over.
+	 */
+	const char *fb_compatible[] = { "simple-framebuffer", NULL };
+	fdt_remove_bycompat(fb_compatible);
+#endif
+
 	config_mountroot(self, &radeon_attach_real);
 }
 
@@ -227,6 +243,9 @@ radeon_attach_real(device_t self)
 
 	sc->sc_task_state = RADEON_TASK_ATTACH;
 	SIMPLEQ_INIT(&sc->sc_task_u.attach);
+
+	/* Initialize the Linux PCI device descriptor.  */
+	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
 
 	/* XXX errno Linux->NetBSD */
 	error = -drm_pci_attach(self, pa, &sc->sc_pci_dev, radeon_drm_driver,
@@ -288,7 +307,8 @@ radeon_detach(device_t self, int flags)
 		return error;
 	sc->sc_drm_dev = NULL;
 
-out:	pmf_device_deregister(self);
+out:	linux_pci_dev_destroy(&sc->sc_pci_dev);
+	pmf_device_deregister(self);
 
 	return 0;
 }

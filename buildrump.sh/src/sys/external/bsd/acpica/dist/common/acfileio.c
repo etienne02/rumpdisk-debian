@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,10 +43,9 @@
 
 #include "acpi.h"
 #include "accommon.h"
-#include "acapps.h"
 #include "actables.h"
 #include "acutils.h"
-#include <errno.h>
+#include "acapps.h"
 
 #define _COMPONENT          ACPI_UTILITIES
         ACPI_MODULE_NAME    ("acfileio")
@@ -64,6 +63,36 @@ AcGetOneTableFromFile (
 static ACPI_STATUS
 AcCheckTextModeCorruption (
     ACPI_TABLE_HEADER       *Table);
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcDeleteTableList
+ *
+ * PARAMETERS:  ListHead            - List to delete
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Delete a list of tables. This is useful for removing memory
+ *              allocated by AcGetAllTablesFromFile
+ *
+ ******************************************************************************/
+
+void
+AcDeleteTableList (
+    ACPI_NEW_TABLE_DESC     *ListHead)
+{
+    ACPI_NEW_TABLE_DESC     *Current = ListHead;
+    ACPI_NEW_TABLE_DESC     *Previous = Current;
+
+
+    while (Current)
+    {
+        Current = Current->Next;
+        AcpiOsFree (Previous);
+        Previous = Current;
+    }
+}
 
 
 /*******************************************************************************
@@ -98,7 +127,7 @@ AcGetAllTablesFromFile (
     File = fopen (Filename, "rb");
     if (!File)
     {
-        perror ("Could not open input file");
+        fprintf (stderr, "Could not open input file: %s\n", Filename);
         if (errno == ENOENT)
         {
             return (AE_NOT_EXIST);
@@ -113,7 +142,7 @@ AcGetAllTablesFromFile (
     if (FileSize == ACPI_UINT32_MAX)
     {
         Status = AE_ERROR;
-        goto ErrorExit;
+        goto Exit;
     }
 
     fprintf (stderr,
@@ -125,7 +154,7 @@ AcGetAllTablesFromFile (
     if (FileSize < sizeof (ACPI_TABLE_HEADER))
     {
         Status = AE_BAD_HEADER;
-        goto ErrorExit;
+        goto Exit;
     }
 
     /* Check for an non-binary file */
@@ -135,7 +164,8 @@ AcGetAllTablesFromFile (
         fprintf (stderr,
             "    %s: File does not appear to contain a valid AML table\n",
             Filename);
-        return (AE_TYPE);
+        Status = AE_TYPE;
+        goto Exit;
     }
 
     /* Read all tables within the file */
@@ -154,23 +184,31 @@ AcGetAllTablesFromFile (
         }
         else if (Status == AE_TYPE)
         {
-            return (AE_OK);
+            Status = AE_OK;
+            goto Exit;
         }
         else if (ACPI_FAILURE (Status))
         {
-            goto ErrorExit;
+            goto Exit;
         }
 
         /* Print table header for iASL/disassembler only */
 
 #ifdef ACPI_ASL_COMPILER
 
-            AcpiTbPrintTableHeader (0, Table);
+        AcpiTbPrintTableHeader (0, Table);
 #endif
 
         /* Allocate and link a table descriptor */
 
         TableDesc = AcpiOsAllocate (sizeof (ACPI_NEW_TABLE_DESC));
+        if (!TableDesc)
+        {
+            AcpiOsFree (Table);
+            Status = AE_NO_MEMORY;
+            goto Exit;
+        }
+
         TableDesc->Table = Table;
         TableDesc->Next = NULL;
 
@@ -205,7 +243,7 @@ AcGetAllTablesFromFile (
         *ReturnListHead = ListHead;
     }
 
-ErrorExit:
+Exit:
     fclose(File);
     return (Status);
 }
@@ -255,20 +293,21 @@ AcGetOneTableFromFile (
         return (AE_CTRL_TERMINATE);
     }
 
-    /* Validate the table signature/header (limited ASCII chars) */
-
-    Status = AcValidateTableHeader (File, TableOffset);
-    if (ACPI_FAILURE (Status))
-    {
-        return (Status);
-    }
-
     if (GetOnlyAmlTables)
     {
-        /* Table must be an AML table (DSDT/SSDT) or FADT */
+        /* Validate the table signature/header (limited ASCII chars) */
 
-        if (!ACPI_COMPARE_NAME (TableHeader.Signature, ACPI_SIG_FADT) &&
-            !AcpiUtIsAmlTable (&TableHeader))
+        Status = AcValidateTableHeader (File, TableOffset);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        /*
+         * Table must be an AML table (DSDT/SSDT).
+         * Used for iASL -e option only.
+         */
+        if (!AcpiUtIsAmlTable (&TableHeader))
         {
             fprintf (stderr,
                 "    %s: Table [%4.4s] is not an AML table - ignoring\n",
@@ -280,7 +319,7 @@ AcGetOneTableFromFile (
 
     /* Allocate a buffer for the entire table */
 
-    Table = AcpiOsAllocate ((size_t) TableHeader.Length);
+    Table = AcpiOsAllocate ((ACPI_SIZE) TableHeader.Length);
     if (!Table)
     {
         return (AE_NO_MEMORY);
@@ -291,7 +330,12 @@ AcGetOneTableFromFile (
     fseek (File, TableOffset, SEEK_SET);
 
     Count = fread (Table, 1, TableHeader.Length, File);
-    if (Count != (INT32) TableHeader.Length)
+
+    /*
+     * Checks for data table headers happen later in the execution. Only verify
+     * for Aml tables at this point in the code.
+     */
+    if (GetOnlyAmlTables && Count != (INT32) TableHeader.Length)
     {
         Status = AE_ERROR;
         goto ErrorExit;
@@ -388,13 +432,13 @@ AcValidateTableHeader (
     long                    TableOffset)
 {
     ACPI_TABLE_HEADER       TableHeader;
-    size_t                  Actual;
+    ACPI_SIZE               Actual;
     long                    OriginalOffset;
     UINT32                  FileSize;
     UINT32                  i;
 
 
-    ACPI_FUNCTION_TRACE ("AcValidateTableHeader");
+    ACPI_FUNCTION_TRACE (AcValidateTableHeader);
 
 
     /* Read a potential table header */
@@ -407,6 +451,9 @@ AcValidateTableHeader (
 
     if (Actual < sizeof (ACPI_TABLE_HEADER))
     {
+        fprintf (stderr,
+            "Could not read entire table header: Actual %u, Requested %u\n",
+            (UINT32) Actual, (UINT32) sizeof (ACPI_TABLE_HEADER));
         return (AE_ERROR);
     }
 
@@ -414,8 +461,6 @@ AcValidateTableHeader (
 
     if (!AcpiUtValidNameseg (TableHeader.Signature))
     {
-        fprintf (stderr, "Invalid table signature: 0x%8.8X\n",
-            *ACPI_CAST_PTR (UINT32, TableHeader.Signature));
         return (AE_BAD_SIGNATURE);
     }
 
@@ -435,7 +480,7 @@ AcValidateTableHeader (
      * These fields must be ASCII: OemId, OemTableId, AslCompilerId.
      * We allow a NULL terminator in OemId and OemTableId.
      */
-    for (i = 0; i < ACPI_NAME_SIZE; i++)
+    for (i = 0; i < ACPI_NAMESEG_SIZE; i++)
     {
         if (!ACPI_IS_ASCII ((UINT8) TableHeader.AslCompilerId[i]))
         {

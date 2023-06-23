@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_raid1.c,v 1.35 2013/09/15 12:47:26 martin Exp $	*/
+/*	$NetBSD: rf_raid1.c,v 1.39 2021/07/23 22:34:12 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -33,7 +33,7 @@
  *****************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_raid1.c,v 1.35 2013/09/15 12:47:26 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_raid1.c,v 1.39 2021/07/23 22:34:12 oster Exp $");
 
 #include "rf_raid.h"
 #include "rf_raid1.h"
@@ -65,8 +65,13 @@ rf_ConfigureRAID1(RF_ShutdownList_t **listp, RF_Raid_t *raidPtr,
 	RF_Raid1ConfigInfo_t *info;
 	RF_RowCol_t i;
 
+	/* Sanity check the number of columns... */
+	if (raidPtr->numCol < 2 || raidPtr->numCol % 2 != 0) {
+		return (EINVAL);
+	}
+	
 	/* create a RAID level 1 configuration structure */
-	RF_MallocAndAdd(info, sizeof(RF_Raid1ConfigInfo_t), (RF_Raid1ConfigInfo_t *), raidPtr->cleanupList);
+	info = RF_MallocAndAdd(sizeof(*info), raidPtr->cleanupList);
 	if (info == NULL)
 		return (ENOMEM);
 	layoutPtr->layoutSpecificInfo = (void *) info;
@@ -286,13 +291,13 @@ rf_VerifyParityRAID1(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 	rf_MakeAllocList(allocList);
 	if (allocList == NULL)
 		return (RF_PARITY_COULD_NOT_VERIFY);
-	mcpair = rf_AllocMCPair();
+	mcpair = rf_AllocMCPair(raidPtr);
 	if (mcpair == NULL)
 		goto done;
 	RF_ASSERT(layoutPtr->numDataCol == layoutPtr->numParityCol);
 	stripeWidth = layoutPtr->numDataCol + layoutPtr->numParityCol;
 	bcount = nbytes * (layoutPtr->numDataCol + layoutPtr->numParityCol);
-	RF_MallocAndAdd(bf, bcount, (char *), allocList);
+	bf = RF_MallocAndAdd(bcount, allocList);
 	if (bf == NULL)
 		goto done;
 #if RF_DEBUG_VERIFYPARITY
@@ -368,7 +373,7 @@ rf_VerifyParityRAID1(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 	RF_ASSERT(pda == NULL);
 
 #if RF_ACC_TRACE > 0
-	memset((char *) &tracerec, 0, sizeof(tracerec));
+	memset(&tracerec, 0, sizeof(tracerec));
 	rd_dag_h->tracerec = &tracerec;
 #endif
 #if 0
@@ -409,7 +414,7 @@ rf_VerifyParityRAID1(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
          * and column 1 of the array are mirror copies, and are considered
          * "data column 0" for this purpose).
          */
-	RF_MallocAndAdd(bbufs, layoutPtr->numParityCol * sizeof(int), (int *),
+	bbufs = RF_MallocAndAdd(layoutPtr->numParityCol * sizeof(*bbufs),
 	    allocList);
 	nbad = 0;
 	/*
@@ -488,7 +493,7 @@ rf_VerifyParityRAID1(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 			wrBlock->succedents[i]->params[3].v = RF_CREATE_PARAM3(RF_IO_NORMAL_PRIORITY, which_ru);
 		}
 #if RF_ACC_TRACE > 0
-		memset((char *) &tracerec, 0, sizeof(tracerec));
+		memset(&tracerec, 0, sizeof(tracerec));
 		wr_dag_h->tracerec = &tracerec;
 #endif
 #if 0
@@ -522,13 +527,13 @@ done:
          * so cleanup what we have to and return our running status.
          */
 	if (asm_h)
-		rf_FreeAccessStripeMap(asm_h);
+		rf_FreeAccessStripeMap(raidPtr, asm_h);
 	if (rd_dag_h)
 		rf_FreeDAG(rd_dag_h);
 	if (wr_dag_h)
 		rf_FreeDAG(wr_dag_h);
 	if (mcpair)
-		rf_FreeMCPair(mcpair);
+		rf_FreeMCPair(raidPtr, mcpair);
 	rf_FreeAllocList(allocList);
 #if RF_DEBUG_VERIFYPARITY
 	if (rf_verifyParityDebug) {
@@ -551,7 +556,7 @@ rf_SubmitReconBufferRAID1(RF_ReconBuffer_t *rbuf, int keep_it,
 	RF_ReconParityStripeStatus_t *pssPtr;
 	RF_ReconCtrl_t *reconCtrlPtr;
 	int     retcode;
-	RF_CallbackDesc_t *cb, *p;
+	RF_CallbackValueDesc_t *cb, *p;
 	RF_ReconBuffer_t *t;
 	RF_Raid_t *raidPtr;
 	void *ta;
@@ -646,9 +651,9 @@ rf_SubmitReconBufferRAID1(RF_ReconBuffer_t *rbuf, int keep_it,
 			RF_PANIC();
 		}
 		pssPtr->flags |= RF_PSS_BUFFERWAIT;
-		cb = rf_AllocCallbackDesc();
+		cb = rf_AllocCallbackValueDesc(raidPtr);
 		cb->col = rbuf->col;
-		cb->callbackArg.v = rbuf->parityStripeID;
+		cb->v = rbuf->parityStripeID;
 		cb->next = NULL;
 		if (reconCtrlPtr->bufferWaitList == NULL) {
 			/* we are the wait list- lucky us */

@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.11 2016/01/23 21:22:46 christos Exp $
+#	$NetBSD: Makefile,v 1.15 2019/10/13 07:28:11 mrg Exp $
 #
 
 .PATH:	${.CURDIR}/../../sys/rump/librump/rumpkern
@@ -17,7 +17,7 @@ LIBDO.${lib}=	_external
 LIBDPLIBS+=	${lib} lib
 .endfor
 
-CPPFLAGS+=	-DRUMP_CLIENT -D_KERNTYPES
+CPPFLAGS+=	-DRUMP_CLIENT
 CPPFLAGS+=	-I${.OBJDIR} -I${.CURDIR}
 CPPFLAGS+=	-I${.CURDIR}/../librumpuser
 SRCS=		rumpclient.c
@@ -32,5 +32,7 @@ COPTS.rump_syscalls.c+= -fno-strict-aliasing
 	@rm -f srcsys
 	@ln -s ${NETBSDSRCDIR}/sys/sys srcsys
 .endif
+
+COPTS.rumpclient.c+=	${GCC_NO_CAST_FUNCTION_TYPE}
 
 .include <bsd.lib.mk>

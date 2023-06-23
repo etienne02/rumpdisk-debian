@@ -1,4 +1,4 @@
-/*	$NetBSD: lm87.c,v 1.7 2016/01/10 14:03:11 jdc Exp $	*/
+/*	$NetBSD: lm87.c,v 1.15 2021/06/13 09:46:04 mlelstv Exp $	*/
 /*	$OpenBSD: lm87.c,v 1.20 2008/11/10 05:19:48 cnst Exp $	*/
 
 /*
@@ -18,7 +18,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lm87.c,v 1.7 2016/01/10 14:03:11 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lm87.c,v 1.15 2021/06/13 09:46:04 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -135,13 +135,13 @@ void	lmenv_refresh(struct sysmon_envsys *, envsys_data_t *);
 CFATTACH_DECL_NEW(lmenv, sizeof(struct lmenv_softc),
 	lmenv_match, lmenv_attach, NULL, NULL);
 
-static const char * lmenv_compats[] = {
-	"lm87",
-	"lm87cimt",
-	"adm9240",
-	"lm81",
-	"ds1780",
-	NULL
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "lm87" },
+	{ .compat = "lm87cimt" },
+	{ .compat = "adm9240" },
+	{ .compat = "lm81" },
+	{ .compat = "ds1780" },
+	DEVICE_COMPAT_EOL
 };
 
 int
@@ -149,41 +149,31 @@ lmenv_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
 	u_int8_t cmd, val;
-	int error, i;
+	int error, i, match_result;
 
-	if (ia->ia_name == NULL) {
-		/*
-		 * Indirect config - not much we can do!
-		 * Check typical addresses and read the Company ID register
-		 */
-		if ((ia->ia_addr < 0x2c) || (ia->ia_addr > 0x2f))
-			return 0;
+	if (iic_use_direct_match(ia, match, compat_data, &match_result))
+		return match_result;
+	
+	/*
+	 * Indirect config - not much we can do!
+	 * Check typical addresses and read the Company ID register
+	 */
+	if ((ia->ia_addr < 0x2c) || (ia->ia_addr > 0x2f))
+		return 0;
 
-		cmd = LM87_COMPANY_ID;
-		iic_acquire_bus(ia->ia_tag, 0);
-		error = iic_exec(ia->ia_tag, I2C_OP_READ_WITH_STOP, ia->ia_addr,
-		    &cmd, 1, &val, 1, I2C_F_POLL);
-		iic_release_bus(ia->ia_tag, 0);
+	cmd = LM87_COMPANY_ID;
+	if (iic_acquire_bus(ia->ia_tag, 0))
+		return 0;
+	error = iic_exec(ia->ia_tag, I2C_OP_READ_WITH_STOP, ia->ia_addr,
+	    &cmd, 1, &val, 1, 0);
+	iic_release_bus(ia->ia_tag, 0);
 
-		if (error)
-			return 0;
+	if (error)
+		return 0;
 
-		for (i = 0; lmenv_ids[i].id != 0; i++)
-			if (lmenv_ids[i].id == val)
-				return 1;
-	} else {
-		/*
-		 * Direct config - match via the list of compatible
-		 * hardware or simply match the device name.
-		 */
-		if (ia->ia_ncompat > 0) {
-			if (iic_compat_match(ia, lmenv_compats))
-				return 1;
-		} else {
-			if (strcmp(ia->ia_name, "lmenv") == 0)
-				return 1;
-		}
-	}
+	for (i = 0; lmenv_ids[i].id != 0; i++)
+		if (lmenv_ids[i].id == val)
+			return I2C_MATCH_ADDRESS_AND_PROBE;
 
 	return 0;
 }

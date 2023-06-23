@@ -1,5 +1,3 @@
-/*	$NetBSD: if_npflog.c,v 1.3 2013/03/13 13:15:47 christos Exp $	*/
-
 /*-
  * Copyright (c) 2010-2012 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -33,8 +31,9 @@
  * NPF logging extension.
  */
 
+#ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_npflog.c,v 1.3 2013/03/13 13:15:47 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_npflog.c,v 1.6 2018/09/29 14:41:36 rmind Exp $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -49,6 +48,10 @@ __KERNEL_RCSID(0, "$NetBSD: if_npflog.c,v 1.3 2013/03/13 13:15:47 christos Exp $
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/bpf.h>
+#endif
+
+#include "npf_impl.h"
+#include "if_npflog.h"
 
 MODULE(MODULE_CLASS_DRIVER, if_npflog, NULL);
 
@@ -124,7 +127,7 @@ npflog_clone_create(struct if_clone *ifc, int unit)
 	KERNEL_LOCK(1, NULL);
 	if_attach(ifp);
 	if_alloc_sadl(ifp);
-	bpf_attach(ifp, DLT_NULL, 0);
+	bpf_attach(ifp, DLT_NPFLOG, NPFLOG_HDRLEN);
 	LIST_INSERT_HEAD(&npflog_if_list, sc, sc_entry);
 	KERNEL_UNLOCK_ONE(NULL);
 

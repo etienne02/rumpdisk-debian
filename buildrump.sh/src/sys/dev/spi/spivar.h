@@ -1,4 +1,4 @@
-/* $NetBSD: spivar.h,v 1.6 2014/07/13 17:12:23 dholland Exp $ */
+/* $NetBSD: spivar.h,v 1.10 2020/08/04 13:20:45 kardel Exp $ */
 
 /*-
  * Copyright (c) 2006 Urbana-Champaign Independent Media Center.
@@ -77,10 +77,18 @@ int spibus_print(void *, const char *);
 /* one per chip select */
 struct spibus_attach_args {
 	struct spi_controller	*sba_controller;
+	prop_array_t		sba_child_devices;
 };
 
 struct spi_attach_args {
 	struct spi_handle	*sa_handle;
+	/* only set if using direct config */
+	int		sa_ncompat;	/* number of pointers in the
+					   ia_compat array */
+	const char **	sa_compat;	/* chip names */
+	prop_dictionary_t sa_prop;	/* dictionary for this device */
+
+	uintptr_t	sa_cookie;	/* OF node in openfirmware machines */
 };
 
 /*
@@ -103,7 +111,7 @@ struct spi_chunk {
 struct spi_transfer {
 	struct spi_chunk *st_chunks;		/* chained bufs */
 	SIMPLEQ_ENTRY(spi_transfer) st_chain;	/* chain of submitted jobs */
-	int		st_flags;
+	volatile int	st_flags;
 	int		st_errno;
 	int		st_slave;
 	void		*st_private;
@@ -111,6 +119,7 @@ struct spi_transfer {
 	kmutex_t	st_lock;
 	kcondvar_t	st_cv;
 	void		*st_busprivate;
+	void		*st_spiprivate;
 };
 
 /* declare a list of transfers */
@@ -131,7 +140,9 @@ SIMPLEQ_HEAD(spi_transq, spi_transfer);
 #define	SPI_F_DONE		0x0001
 #define	SPI_F_ERROR		0x0002
 
-int spi_configure(struct spi_handle *, int mode, int speed);
+int spi_compatible_match(const struct spi_attach_args *, const cfdata_t,
+			  const struct device_compatible_entry *);
+int spi_configure(struct spi_handle *, int, int);
 int spi_transfer(struct spi_handle *, struct spi_transfer *);
 void spi_transfer_init(struct spi_transfer *);
 void spi_chunk_init(struct spi_chunk *, int, const uint8_t *, uint8_t *);

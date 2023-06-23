@@ -1,4 +1,4 @@
-/*	$NetBSD: if_stgereg.h,v 1.5 2008/04/28 20:23:55 martin Exp $	*/
+/*	$NetBSD: if_stgereg.h,v 1.9 2020/01/14 09:49:26 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -31,6 +31,10 @@
 
 #ifndef _DEV_PCI_IF_STGEREG_H_
 #define	_DEV_PCI_IF_STGEREG_H_
+
+
+#include <net/if_ether.h>
+#include <sys/bus.h>
 
 /*
  * Register description for the Sundance Tech. TC9021 10/100/1000
@@ -319,7 +323,7 @@ struct stge_rfd {
 
 #define	STGE_VLANId			0x80
 
-#define	STGE_MaxFrameSize		0x84
+#define	STGE_MaxFrameSize		0x86
 
 #define	STGE_ReceiveMode		0x88	/* 16-bit */
 #define	RM_ReceiveUnicast		(1U << 0)

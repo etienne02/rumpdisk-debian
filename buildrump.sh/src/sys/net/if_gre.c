@@ -1,4 +1,4 @@
-/*	$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $ */
+/*	$NetBSD: if_gre.c,v 1.180 2021/02/14 19:33:29 roy Exp $ */
 
 /*
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.180 2021/02/14 19:33:29 roy Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_atalk.h"
@@ -71,6 +71,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $")
 #include <sys/systm.h>
 #include <sys/sysctl.h>
 #include <sys/kauth.h>
+#include <sys/device.h>
+#include <sys/module.h>
 
 #include <sys/kernel.h>
 #include <sys/mutex.h>
@@ -84,6 +86,9 @@ __KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $")
 #include <net/if_types.h>
 #include <net/netisr.h>
 #include <net/route.h>
+#include <sys/device.h>
+#include <sys/module.h>
+#include <sys/atomic.h>
 
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
@@ -114,9 +119,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.169 2016/06/10 13:27:16 ozaki-r Exp $")
 
 #include <net/if_gre.h>
 
-#include <compat/sys/socket.h>
-#include <compat/sys/sockio.h>
-
 #include "ioconf.h"
 
 /*
@@ -140,7 +142,11 @@ int gre_debug = 0;
 #define	GRE_DPRINTF(__sc, __fmt, ...)	do { } while (/*CONSTCOND*/0)
 #endif /* GRE_DEBUG */
 
+CTASSERT(sizeof(struct gre_h) == 4);
+
 int ip_gre_ttl = GRE_TTL;
+
+static u_int gre_count;
 
 static int gre_clone_create(struct if_clone *, int);
 static int gre_clone_destroy(struct ifnet *);
@@ -148,8 +154,7 @@ static int gre_clone_destroy(struct ifnet *);
 static struct if_clone gre_cloner =
     IF_CLONE_INITIALIZER("gre", gre_clone_create, gre_clone_destroy);
 
-static int gre_input(struct gre_softc *, struct mbuf *, int,
-    const struct gre_h *);
+static int gre_input(struct gre_softc *, struct mbuf *, const struct gre_h *);
 static bool gre_is_nullconf(const struct gre_soparm *);
 static int gre_output(struct ifnet *, struct mbuf *,
 			   const struct sockaddr *, const struct rtentry *);
@@ -317,13 +322,17 @@ gre_clone_create(struct if_clone *ifc, int unit)
 	if_attach(&sc->sc_if);
 	if_alloc_sadl(&sc->sc_if);
 	bpf_attach(&sc->sc_if, DLT_NULL, sizeof(uint32_t));
+	atomic_inc_uint(&gre_count);
 	return 0;
 
-fail1:	cv_destroy(&sc->sc_fp_condvar);
+fail1:
+	cv_destroy(&sc->sc_fp_condvar);
 	cv_destroy(&sc->sc_condvar);
 	mutex_destroy(&sc->sc_mtx);
 	free(sc, M_DEVBUF);
-fail0:	return -1;
+
+fail0:
+	return -1;
 }
 
 static int
@@ -358,6 +367,7 @@ gre_clone_destroy(struct ifnet *ifp)
 	gre_evcnt_detach(sc);
 	free(sc, M_DEVBUF);
 
+	atomic_dec_uint(&gre_count);
 	return 0;
 }
 
@@ -366,7 +376,7 @@ gre_receive(struct socket *so, void *arg, int events, int waitflag)
 {
 	struct gre_softc *sc = (struct gre_softc *)arg;
 	int rc;
-	const struct gre_h *gh;
+	struct gre_h gh;
 	struct mbuf *m;
 
 	GRE_DPRINTF(sc, "enter\n");
@@ -387,14 +397,17 @@ gre_receive(struct socket *so, void *arg, int events, int waitflag)
 		sc->sc_error_ev.ev_count++;
 		return;
 	}
-	if (m->m_len < sizeof(*gh) && (m = m_pullup(m, sizeof(*gh))) == NULL) {
-		GRE_DPRINTF(sc, "m_pullup failed\n");
-		sc->sc_pullup_ev.ev_count++;
-		return;
-	}
-	gh = mtod(m, const struct gre_h *);
 
-	if (gre_input(sc, m, 0, gh) == 0) {
+	if (__predict_false(m->m_len < sizeof(gh))) {
+		if ((m = m_pullup(m, sizeof(gh))) == NULL) {
+			GRE_DPRINTF(sc, "m_pullup failed\n");
+			sc->sc_pullup_ev.ev_count++;
+			return;
+		}
+	}
+	memcpy(&gh, mtod(m, void *), sizeof(gh));
+
+	if (gre_input(sc, m, &gh) == 0) {
 		sc->sc_unsupp_ev.ev_count++;
 		GRE_DPRINTF(sc, "dropping unsupported\n");
 		m_freem(m);
@@ -600,8 +613,7 @@ gre_soreceive(struct socket *so, struct mbuf **mp0)
 			panic("receive 1a");
 #endif
 		sbfree(&so->so_rcv, m);
-		MFREE(m, so->so_rcv.sb_mb);
-		m = so->so_rcv.sb_mb;
+		m = so->so_rcv.sb_mb = m_free(m);
 	}
 	while (m != NULL && m->m_type == MT_CONTROL && error == 0) {
 		sbfree(&so->so_rcv, m);
@@ -612,8 +624,7 @@ gre_soreceive(struct socket *so, struct mbuf **mp0)
 		if (pr->pr_domain->dom_dispose &&
 		    mtod(m, struct cmsghdr *)->cmsg_type == SCM_RIGHTS)
 			(*pr->pr_domain->dom_dispose)(m);
-		MFREE(m, so->so_rcv.sb_mb);
-		m = so->so_rcv.sb_mb;
+		m = so->so_rcv.sb_mb = m_free(m);
 	}
 
 	/*
@@ -776,19 +787,18 @@ shutdown:
 }
 
 static int
-gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
-    const struct gre_h *gh)
+gre_input(struct gre_softc *sc, struct mbuf *m, const struct gre_h *gh)
 {
 	pktqueue_t *pktq = NULL;
 	struct ifqueue *ifq = NULL;
 	uint16_t flags;
 	uint32_t af;		/* af passed to BPF tap */
 	int isr = 0, s;
+	int hlen;
 
-	sc->sc_if.if_ipackets++;
-	sc->sc_if.if_ibytes += m->m_pkthdr.len;
+	if_statadd2(&sc->sc_if, if_ipackets, 1, if_ibytes, m->m_pkthdr.len);
 
-	hlen += sizeof(struct gre_h);
+	hlen = sizeof(struct gre_h);
 
 	/* process GRE flags as packet can be of variable len */
 	flags = ntohs(gh->flags);
@@ -798,7 +808,7 @@ gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
 		hlen += 4;
 	/* We don't support routing fields (variable length) */
 	if (flags & GRE_RP) {
-		sc->sc_if.if_ierrors++;
+		if_statinc(&sc->sc_if, if_ierrors);
 		return 0;
 	}
 	if (flags & GRE_KP)
@@ -836,18 +846,18 @@ gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
 	default:	   /* others not yet supported */
 		GRE_DPRINTF(sc, "unhandled ethertype 0x%04x\n",
 		    ntohs(gh->ptype));
-		sc->sc_if.if_noproto++;
+		if_statinc(&sc->sc_if, if_noproto);
 		return 0;
 	}
 
 	if (hlen > m->m_pkthdr.len) {
 		m_freem(m);
-		sc->sc_if.if_ierrors++;
-		return EINVAL;
+		if_statinc(&sc->sc_if, if_ierrors);
+		return 1;
 	}
 	m_adj(m, hlen);
 
-	bpf_mtap_af(&sc->sc_if, af, m);
+	bpf_mtap_af(&sc->sc_if, af, m, BPF_D_IN);
 
 	m_set_rcvif(m, &sc->sc_if);
 
@@ -878,12 +888,14 @@ gre_input(struct gre_softc *sc, struct mbuf *m, int hlen,
  */
 static int
 gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
-	   const struct rtentry *rt)
+    const struct rtentry *rt)
 {
 	int error = 0;
 	struct gre_softc *sc = ifp->if_softc;
-	struct gre_h *gh;
+	struct gre_h gh = { .flags = 0 };
 	uint16_t etype = 0;
+
+	KASSERT((m->m_flags & M_PKTHDR) != 0);
 
 	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) {
 		m_freem(m);
@@ -891,7 +903,7 @@ gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		goto end;
 	}
 
-	bpf_mtap_af(ifp, dst->sa_family, m);
+	bpf_mtap_af(ifp, dst->sa_family, m, BPF_D_OUT);
 
 	m->m_flags &= ~(M_BCAST|M_MCAST);
 
@@ -899,7 +911,8 @@ gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	switch (dst->sa_family) {
 #ifdef INET
 	case AF_INET:
-		/* TBD Extract the IP ToS field and set the
+		/*
+		 * TBD Extract the IP ToS field and set the
 		 * encapsulating protocol's ToS to suit.
 		 */
 		etype = htons(ETHERTYPE_IP);
@@ -923,29 +936,26 @@ gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	}
 
 #ifdef MPLS
-		if (rt != NULL && rt_gettag(rt) != NULL) {
-			union mpls_shim msh;
-			msh.s_addr = MPLS_GETSADDR(rt);
-			if (msh.shim.label != MPLS_LABEL_IMPLNULL)
-				etype = htons(ETHERTYPE_MPLS);
-		}
+	if (rt != NULL && rt_gettag(rt) != NULL) {
+		union mpls_shim msh;
+		msh.s_addr = MPLS_GETSADDR(rt);
+		if (msh.shim.label != MPLS_LABEL_IMPLNULL)
+			etype = htons(ETHERTYPE_MPLS);
+	}
 #endif
 
-	M_PREPEND(m, sizeof(*gh), M_DONTWAIT);
-
+	M_PREPEND(m, sizeof(gh), M_DONTWAIT);
 	if (m == NULL) {
 		IF_DROP(&ifp->if_snd);
 		error = ENOBUFS;
 		goto end;
 	}
 
-	gh = mtod(m, struct gre_h *);
-	gh->flags = 0;
-	gh->ptype = etype;
+	gh.ptype = etype;
+	memcpy(mtod(m, void *), &gh, sizeof(gh));
 	/* XXX Need to handle IP ToS.  Look at how I handle IP TTL. */
 
-	ifp->if_opackets++;
-	ifp->if_obytes += m->m_pkthdr.len;
+	if_statadd2(ifp, if_opackets, 1, if_obytes, m->m_pkthdr.len);
 
 	/* Clear checksum-offload flags. */
 	m->m_pkthdr.csum_flags = 0;
@@ -955,11 +965,15 @@ gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	if ((error = gre_bufq_enqueue(&sc->sc_snd, m)) != 0) {
 		sc->sc_oflow_ev.ev_count++;
 		m_freem(m);
-	} else
+	} else {
+		kpreempt_disable();
 		softint_schedule(sc->sc_si);
-  end:
+		kpreempt_enable();
+	}
+
+end:
 	if (error)
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 	return error;
 }
 
@@ -1434,5 +1448,36 @@ out:
 void
 greattach(int count)
 {
+
+	/*
+	 * Nothing to do here, initialization is handled by the
+	 * module initialization code in greinit() below.
+	 */
+}
+
+static void
+greinit(void)
+{
 	if_clone_attach(&gre_cloner);
 }
+
+static int
+gredetach(void)
+{
+	int error = 0;
+
+	if (gre_count != 0)
+		error = EBUSY;
+
+	if (error == 0)
+		if_clone_detach(&gre_cloner);
+
+	return error;
+}
+
+/*
+ * Module infrastructure
+ */
+#include "if_module.h"
+
+IF_MODULE(MODULE_CLASS_DRIVER, gre, NULL)

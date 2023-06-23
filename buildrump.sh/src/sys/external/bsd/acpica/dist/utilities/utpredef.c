@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -129,7 +129,7 @@ AcpiUtMatchPredefinedMethod (
     ThisName = AcpiGbl_PredefinedMethods;
     while (ThisName->Info.Name[0])
     {
-        if (ACPI_COMPARE_NAME (Name, ThisName->Info.Name))
+        if (ACPI_COMPARE_NAMESEG (Name, ThisName->Info.Name))
         {
             return (ThisName);
         }
@@ -196,8 +196,6 @@ AcpiUtGetExpectedReturnTypes (
  ******************************************************************************/
 
 #if (defined ACPI_ASL_COMPILER || defined ACPI_HELP_APP)
-#include <stdio.h>
-#include <string.h>
 
 /* Local prototypes */
 
@@ -211,7 +209,7 @@ AcpiUtGetArgumentTypes (
 
 static const char   *UtExternalTypeNames[] = /* Indexed by ACPI_TYPE_* */
 {
-    ", UNSUPPORTED-TYPE",
+    ", Type_ANY",
     ", Integer",
     ", String",
     ", Buffer",
@@ -268,7 +266,7 @@ AcpiUtMatchResourceName (
     ThisName = AcpiGbl_ResourceNames;
     while (ThisName->Info.Name[0])
     {
-        if (ACPI_COMPARE_NAME (Name, ThisName->Info.Name))
+        if (ACPI_COMPARE_NAMESEG (Name, ThisName->Info.Name))
         {
             return (ThisName);
         }
@@ -393,7 +391,7 @@ AcpiUtGetArgumentTypes (
     {
         ThisArgumentType = METHOD_GET_NEXT_TYPE (ArgumentTypes);
 
-        if (!ThisArgumentType || (ThisArgumentType > METHOD_MAX_ARG_TYPE))
+        if (ThisArgumentType > METHOD_MAX_ARG_TYPE)
         {
             printf ("**** Invalid argument type (%u) "
                 "in predefined info structure\n", ThisArgumentType);

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_qt.c,v 1.19 2016/02/09 08:32:11 ozaki-r Exp $	*/
+/*	$NetBSD: if_qt.c,v 1.25 2020/01/29 05:57:21 thorpej Exp $	*/
 /*
  * Copyright (c) 1992 Steven M. Schultz
  * All rights reserved.
@@ -80,7 +80,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_qt.c,v 1.19 2016/02/09 08:32:11 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_qt.c,v 1.25 2020/01/29 05:57:21 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -100,6 +100,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_qt.c,v 1.19 2016/02/09 08:32:11 ozaki-r Exp $");
 #include <net/if_ether.h>
 #include <net/netisr.h>
 #include <net/route.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <sys/domain.h>
@@ -108,10 +109,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_qt.c,v 1.19 2016/02/09 08:32:11 ozaki-r Exp $");
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
 #endif
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
-
 
 #include <sys/bus.h>
 
@@ -369,7 +366,7 @@ qtinit(struct ifnet *ifp)
 /*
  * Fill in most of the INIT block: vector, options (interrupt enable), ring
  * locations.  The physical address is copied from the ROMs as part of the
- * -YM testing proceedure.  The CSR is saved here rather than in qtinit()
+ * -YM testing procedure.  The CSR is saved here rather than in qtinit()
  * because the qtturbo() routine needs it.
  *
  * The INIT block must be quadword aligned.  Using malloc() guarantees click
@@ -458,7 +455,7 @@ qtstart(struct ifnet *ifp)
 		if ((rp->tmd3 & TMD3_OWN) == 0)
 			panic("qtstart");
 
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		len = if_ubaput(&sc->sc_ifuba, &sc->sc_ifw[sc->xnext], m);
 		if (len < MINPACKETSIZE)
@@ -510,37 +507,35 @@ qtintr(void *arg)
 
 void
 qttint(struct qt_softc *sc)
-	{
+{
 	struct qt_tring *rp;
 
-	while (sc->nxmit > 0)
-		{
+	while (sc->nxmit > 0) {
 		rp = &sc->sc_ib->qc_t[sc->xlast];
 		if ((rp->tmd3 & TMD3_OWN) == 0)
 			break;
-		sc->is_if.if_opackets++;
+		if_statinc(&sc->is_if, if_opackets);
 /*
  * Collisions don't count as output errors, but babbling and missing packets
  * do count as output errors.
 */
-		if	(rp->tmd2 & TMD2_CER)
-			sc->is_if.if_collisions++;
-		if	((rp->tmd0 & TMD0_ERR1) ||
-			 ((rp->tmd2 & TMD2_ERR2) && (rp->tmd2 & BBLMIS)))
-			{
+		if (rp->tmd2 & TMD2_CER)
+			if_statinc(&sc->is_if, if_collisions);
+		if ((rp->tmd0 & TMD0_ERR1) ||
+		    ((rp->tmd2 & TMD2_ERR2) && (rp->tmd2 & BBLMIS))) {
 #ifdef QTDEBUG
 			char buf[100];
 			snprintb(buf, sizeof(buf), TMD2_BITS, rp->tmd2);
 			printf("%s: tmd2 %s\n", device_xname(sc->sc_dev), buf);
 #endif
-			sc->is_if.if_oerrors++;
-			}
+			if_statinc(&sc->is_if, if_oerrors);
+		}
 		if_ubaend(&sc->sc_ifuba, &sc->sc_ifw[sc->xlast]);
-		if	(++sc->xlast >= NXMT)
+		if (++sc->xlast >= NXMT)
 			sc->xlast = 0;
 		sc->nxmit--;
-		}
 	}
+}
 
 /*
  * Receive interrupt service.  Pull packet off the interface and put into
@@ -558,17 +553,14 @@ qtrint(struct qt_softc *sc)
 	while	(sc->sc_ib->qc_r[(int)sc->rindex].rmd3 & RMD3_OWN)
 		{
 		rp = &sc->sc_ib->qc_r[(int)sc->rindex];
-		if     ((rp->rmd0 & (RMD0_STP|RMD0_ENP)) != (RMD0_STP|RMD0_ENP))
-			{
+		if ((rp->rmd0 & (RMD0_STP|RMD0_ENP)) != (RMD0_STP|RMD0_ENP)) {
 			printf("%s: chained packet\n", device_xname(sc->sc_dev));
-			sc->is_if.if_ierrors++;
+			if_statinc(&sc->is_if, if_ierrors);
 			goto rnext;
-			}
+		}
 		len = (rp->rmd1 & RMD1_MCNT) - 4;	/* -4 for CRC */
-		sc->is_if.if_ipackets++;
 
-		if	((rp->rmd0 & RMD0_ERR3) || (rp->rmd2 & RMD2_ERR4))
-			{
+		if ((rp->rmd0 & RMD0_ERR3) || (rp->rmd2 & RMD2_ERR4)) {
 #ifdef QTDEBUG
 			char buf[100];
 			snprintb(buf, sizeof(buf), RMD0_BITS, rp->rmd0);
@@ -576,16 +568,15 @@ qtrint(struct qt_softc *sc)
 			snprintb(buf, sizeof(buf), RMD2_BITS, rp->rmd2);
 			printf("%s: rmd2 %s\n", device_xname(sc->sc_dev), buf);
 #endif
-			sc->is_if.if_ierrors++;
+			if_statinc(&sc->is_if, if_ierrors);
 			goto rnext;
-			}
+		}
 		m = if_ubaget(&sc->sc_ifuba, &sc->sc_ifr[(int)sc->rindex],
 		    ifp, len);
 		if (m == 0) {
-			sc->is_if.if_ierrors++;
+			if_statinc(&sc->is_if, if_ierrors);
 			goto rnext;
 		}
-		bpf_mtap(ifp, m);
 		if_percpuq_enqueue(ifp->if_percpuq, m);
 rnext:
 		--sc->nrcv;

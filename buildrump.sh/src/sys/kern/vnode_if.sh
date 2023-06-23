@@ -29,7 +29,7 @@ copyright="\
  * SUCH DAMAGE.
  */
 "
-SCRIPT_ID='$NetBSD: vnode_if.sh,v 1.61 2016/01/26 23:28:06 pooka Exp $'
+SCRIPT_ID='$NetBSD: vnode_if.sh,v 1.71 2021/08/12 19:15:15 andvar Exp $'
 
 # Script to produce VFS front-end sugar.
 #
@@ -86,7 +86,7 @@ fi
 # Input to this parser is pre-processed slightly by sed
 # so this awk parser doesn't have to work so hard.  The
 # changes done by the sed pre-processing step are:
-#	insert a space beween * and pointer name
+#	insert a space between * and pointer name
 #	replace semicolons with spaces
 #
 sed_prep='s:\*\([^\*/]\):\* \1:g
@@ -100,6 +100,7 @@ awk_parser='
 	args_name=$1;
 	argc=0;
 	willmake=-1;
+	fstrans="";
 	next;
 }
 # Last line of description
@@ -111,6 +112,10 @@ awk_parser='
 {
 	if ($1 == "VERSION") {
 		args_name=args_name "_v" $2;
+		next;
+	} else if ($1 ~ "^FSTRANS=") {
+		fstrans = $1;
+		sub("FSTRANS=", "", fstrans);
 		next;
 	}
 
@@ -129,10 +134,6 @@ awk_parser='
 	    $3 == "WILLRELE") {
 		willrele[argc] = 1;
 		i++;
-	} else if ($2 == "WILLUNLOCK" ||
-		   $3 == "WILLUNLOCK") {
-		willrele[argc] = 2;
-		i++;
 	} else if ($2 == "WILLPUT" ||
 		   $3 == "WILLPUT") {
 		willrele[argc] = 3;
@@ -143,6 +144,12 @@ awk_parser='
 	if ($2 == "WILLMAKE") {
 		willmake=argc;
 		i++;
+	}
+	if (argc == 0 && fstrans == "") {
+		if (lockstate[0] == 1)
+			fstrans = "NO";
+		else
+			fstrans = "YES";
 	}
 
 	# XXX: replace non-portable types for rump.  We should really
@@ -262,6 +269,8 @@ BEGIN	{
 		printf("struct flock;\n");
 		printf("struct knote;\n");
 		printf("struct vm_page;\n");
+		printf("struct acl;\n");
+		printf("\n#include <sys/acl.h>\n");
 	}
 	printf("\n#ifndef _KERNEL\n#include <stdbool.h>\n#endif\n");
 	if (rump)
@@ -305,11 +314,65 @@ echo '
 #include <sys/buf.h>
 #include <sys/vnode.h>
 #include <sys/lock.h>'
+[ -z "${rump}" ] && echo '#include <sys/fstrans.h>'
 [ ! -z "${rump}" ] && echo '#include <rump/rumpvnode_if.h>'		\
 	&& echo '#include <rump-sys/kern.h>'
 
 if [ -z "${rump}" ] ; then
 	echo "
+enum fst_op { FST_NO, FST_YES, FST_LAZY, FST_TRY };
+
+static inline int
+vop_pre(vnode_t *vp, struct mount **mp, bool *mpsafe, enum fst_op op)
+{
+	int error;
+
+	*mpsafe = (vp->v_vflag & VV_MPSAFE);
+
+	if (!*mpsafe) {
+		KERNEL_LOCK(1, curlwp);
+	}
+
+	if (op == FST_YES || op == FST_LAZY || op == FST_TRY) {
+		for (;;) {
+			*mp = vp->v_mount;
+			if (op == FST_TRY) {
+				error = fstrans_start_nowait(*mp);
+				if (error) {
+					if (!*mpsafe) {
+						KERNEL_UNLOCK_ONE(curlwp);
+					}
+					return error;
+				}
+			} else if (op == FST_LAZY) {
+				fstrans_start_lazy(*mp);
+			} else {
+				fstrans_start(*mp);
+			}
+			if (__predict_true(*mp == vp->v_mount))
+				break;
+			fstrans_done(*mp);
+		}
+	} else {
+		*mp = vp->v_mount;
+	}
+
+	return 0;
+}
+
+static inline void
+vop_post(vnode_t *vp, struct mount *mp, bool mpsafe, enum fst_op op)
+{
+
+	if (op == FST_YES || op == FST_LAZY) {
+		fstrans_done(mp);
+	}
+
+	if (!mpsafe) {
+		KERNEL_UNLOCK_ONE(curlwp);
+	}
+}
+
 const struct vnodeop_desc vop_default_desc = {"
 echo '	0,
 	"default",
@@ -358,16 +421,15 @@ function offsets() {
 	vpnum = 0;
 	for (i=0; i<argc; i++) {
 		if (willrele[i]) {
-			if (willrele[i] == 2) {
-				word = "UNLOCK";
-			} else if (willrele[i] == 3) {
+			if (willrele[i] == 3) {
 				word = "PUT";
 			} else {
 				word = "RELE";
 			}
 			printf(" | VDESC_VP%s_WILL%s", vpnum, word);
-			vpnum++;
 		}
+		if (argtype[i] == "struct vnode *")
+			vpnum++;
 	}
 	print ",";
 	# vp offsets
@@ -397,6 +459,7 @@ function bodyrump() {
 function bodynorm() {
 	printf("{\n\tint error;\n\tbool mpsafe;\n\tstruct %s_args a;\n",
 		args_name);
+	printf("\tstruct mount *mp;\n");
 	if (lockdebug) {
 		printf("#ifdef VNODE_LOCKDEBUG\n");
 		for (i=0; i<argc; i++) {
@@ -418,11 +481,27 @@ function bodynorm() {
 			printf("#endif\n");
 		}
 	}
-	printf("\tmpsafe = (%s->v_vflag & VV_MPSAFE);\n", argname[0]);
-	printf("\tif (!mpsafe) { KERNEL_LOCK(1, curlwp); }\n");
+	if (fstrans == "LOCK")
+		printf("\terror = vop_pre(%s, &mp, &mpsafe, %s);\n",
+			argname[0], "(!(flags & (LK_SHARED|LK_EXCLUSIVE)) ? FST_NO : (flags & LK_NOWAIT ? FST_TRY : FST_YES))");
+	else if (fstrans == "UNLOCK")
+		printf("\terror = vop_pre(%s, &mp, &mpsafe, FST_%s);\n",
+			argname[0], "NO");
+	else
+		printf("\terror = vop_pre(%s, &mp, &mpsafe, FST_%s);\n",
+			argname[0], fstrans);
+	printf("\tif (error)\n\t\treturn error;\n");
 	printf("\terror = (VCALL(%s, VOFFSET(%s), &a));\n",
 		argname[0], name);
-	printf("\tif (!mpsafe) { KERNEL_UNLOCK_ONE(curlwp); }\n");
+	if (fstrans == "LOCK")
+		printf("\tvop_post(%s, mp, mpsafe, %s);\n",
+			argname[0], "(flags & (LK_UPGRADE|LK_DOWNGRADE) ? FST_NO : (error ? FST_YES : FST_NO))");
+	else if (fstrans == "UNLOCK")
+		printf("\tvop_post(%s, mp, mpsafe, FST_%s);\n",
+			argname[0], "YES");
+	else
+		printf("\tvop_post(%s, mp, mpsafe, FST_%s);\n",
+			argname[0], fstrans);
 	if (willmake != -1) {
 		printf("#ifdef DIAGNOSTIC\n");
 		printf("\tif (error == 0)\n"				\

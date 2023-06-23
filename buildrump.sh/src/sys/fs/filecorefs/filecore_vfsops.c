@@ -1,4 +1,4 @@
-/*	$NetBSD: filecore_vfsops.c,v 1.78 2015/03/28 19:24:05 maxv Exp $	*/
+/*	$NetBSD: filecore_vfsops.c,v 1.83 2020/03/16 21:20:10 pgoyette Exp $	*/
 
 /*-
  * Copyright (c) 1994 The Regents of the University of California.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: filecore_vfsops.c,v 1.78 2015/03/28 19:24:05 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: filecore_vfsops.c,v 1.83 2020/03/16 21:20:10 pgoyette Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -97,8 +97,6 @@ __KERNEL_RCSID(0, "$NetBSD: filecore_vfsops.c,v 1.78 2015/03/28 19:24:05 maxv Ex
 
 MODULE(MODULE_CLASS_VFS, filecore, NULL);
 
-static struct sysctllog *filecore_sysctl_log;
-
 extern const struct vnodeopv_desc filecore_vnodeop_opv_desc;
 
 const struct vnodeopv_desc * const filecore_vnodeopv_descs[] = {
@@ -125,12 +123,28 @@ struct vfsops filecore_vfsops = {
 	.vfs_done = filecore_done,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
 	.vfs_opv_descs = filecore_vnodeopv_descs
 };
+
+SYSCTL_SETUP(filecore_sysctl_setup, "filecore fs sysctl")
+{
+
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_NODE, "filecore",
+		       SYSCTL_DESCR("Acorn FILECORE file system"),
+		       NULL, 0, NULL, 0,
+		       CTL_VFS, 19, CTL_EOL);
+	/*
+	 * XXX the "19" above could be dynamic, thereby eliminating
+	 * one more instance of the "number to vfs" mapping problem,
+	 * but "19" is the order as taken from sys/mount.h
+	 */
+}
 
 static int
 filecore_modcmd(modcmd_t cmd, void *arg)
@@ -142,23 +156,11 @@ filecore_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_attach(&filecore_vfsops);
 		if (error != 0)
 			break;
-		sysctl_createv(&filecore_sysctl_log, 0, NULL, NULL,
-			       CTLFLAG_PERMANENT,
-			       CTLTYPE_NODE, "filecore",
-			       SYSCTL_DESCR("Acorn FILECORE file system"),
-			       NULL, 0, NULL, 0,
-			       CTL_VFS, 19, CTL_EOL);
-		/*
-		 * XXX the "19" above could be dynamic, thereby eliminating
-		 * one more instance of the "number to vfs" mapping problem,
-		 * but "19" is the order as taken from sys/mount.h
-		 */
 		break;
 	case MODULE_CMD_FINI:
 		error = vfs_detach(&filecore_vfsops);
 		if (error != 0)
 			break;
-		sysctl_teardown(&filecore_sysctl_log);	
 		break;
 	default:
 		error = ENOTTY;
@@ -201,13 +203,13 @@ filecore_mountroot(void)
 
 	args.flags = FILECOREMNT_ROOT;
 	if ((error = filecore_mountfs(rootvp, mp, p, &args)) != 0) {
-		vfs_unbusy(mp, false, NULL);
-		vfs_destroy(mp);
+		vfs_unbusy(mp);
+		vfs_rele(mp);
 		return (error);
 	}
 	mountlist_append(mp);
 	(void)filecore_statvfs(mp, &mp->mnt_stat, p);
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 	return (0);
 }
 #endif
@@ -460,12 +462,12 @@ filecore_unmount(struct mount *mp, int mntflags)
  * Return root of a filesystem
  */
 int
-filecore_root(struct mount *mp, struct vnode **vpp)
+filecore_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *nvp;
         int error;
 
-        if ((error = VFS_VGET(mp, FILECORE_ROOTINO, &nvp)) != 0)
+        if ((error = VFS_VGET(mp, FILECORE_ROOTINO, lktype, &nvp)) != 0)
                 return (error);
         *vpp = nvp;
         return (0);
@@ -519,7 +521,8 @@ struct ifid {
 
 /* ARGSUSED */
 int
-filecore_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
+filecore_fhtovp(struct mount *mp, struct fid *fhp, int lktype,
+    struct vnode **vpp)
 {
 	struct ifid ifh;
 	struct vnode *nvp;
@@ -530,7 +533,7 @@ filecore_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
 		return EINVAL;
 
 	memcpy(&ifh, fhp, sizeof(ifh));
-	if ((error = VFS_VGET(mp, ifh.ifid_ino, &nvp)) != 0) {
+	if ((error = VFS_VGET(mp, ifh.ifid_ino, lktype, &nvp)) != 0) {
 		*vpp = NULLVP;
 		return (error);
 	}
@@ -553,14 +556,14 @@ filecore_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
  */
 
 int
-filecore_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+filecore_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 	int error;
 
 	error = vcache_get(mp, &ino, sizeof(ino), vpp);
 	if (error)
 		return error;
-	error = vn_lock(*vpp, LK_EXCLUSIVE);
+	error = vn_lock(*vpp, lktype);
 	if (error) {
 		vrele(*vpp);
 		*vpp = NULL;

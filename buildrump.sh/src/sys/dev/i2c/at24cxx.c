@@ -1,4 +1,4 @@
-/*	$NetBSD: at24cxx.c,v 1.22 2016/07/23 18:02:10 jakllsch Exp $	*/
+/*	$NetBSD: at24cxx.c,v 1.41 2021/01/28 14:57:43 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: at24cxx.c,v 1.22 2016/07/23 18:02:10 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: at24cxx.c,v 1.41 2021/01/28 14:57:43 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,6 +53,8 @@ __KERNEL_RCSID(0, "$NetBSD: at24cxx.c,v 1.22 2016/07/23 18:02:10 jakllsch Exp $"
 #include <dev/i2c/i2cvar.h>
 #include <dev/i2c/at24cxxvar.h>
 
+#include "ioconf.h"
+
 /*
  * AT24Cxx EEPROM I2C address:
  *	101 0xxx
@@ -65,7 +67,7 @@ __KERNEL_RCSID(0, "$NetBSD: at24cxx.c,v 1.22 2016/07/23 18:02:10 jakllsch Exp $"
 #define	AT24CXX_ADDR		0x50
 
 #define	AT24CXX_WRITE_CYCLE_MS	10
-#define	AT24CXX_ADDR_HI(a)	(((a) >> 8) & 0x1f)
+#define	AT24CXX_ADDR_HI(a)	(((a) >> 8) & 0xff)
 #define	AT24CXX_ADDR_LO(a)	((a) & 0xff)
 
 #include "seeprom.h"
@@ -86,7 +88,6 @@ static void seeprom_attach(device_t, device_t, void *);
 
 CFATTACH_DECL_NEW(seeprom, sizeof(struct seeprom_softc),
 	seeprom_match, seeprom_attach, NULL, NULL);
-extern struct cfdriver seeprom_cd;
 
 dev_type_open(seeprom_open);
 dev_type_close(seeprom_close);
@@ -110,39 +111,37 @@ const struct cdevsw seeprom_cdevsw = {
 
 static int seeprom_wait_idle(struct seeprom_softc *);
 
-static const char * seeprom_compats[] = {
-	"i2c-at24c64",
-	"i2c-at34c02",
-	"atmel,24c02",
-	NULL
-};
-
-static const struct seeprom_size {
-	const char *name;
-	int size;
-} seeprom_sizes[] = {
-	{ "atmel,24c02", 256 },
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "i2c-at24c01",		.value = 128 },
+	{ .compat = "i2c-at24c02",		.value = 256 },
+	{ .compat = "i2c-at24c04",		.value = 512 },
+	{ .compat = "i2c-at24c08",		.value = 1024 },
+	{ .compat = "i2c-at24c16",		.value = 2048 },
+	{ .compat = "i2c-at24c32",		.value = 4096 },
+	{ .compat = "i2c-at24c64",		.value = 8192 },
+	{ .compat = "i2c-at24c128",		.value = 16384 },
+	{ .compat = "i2c-at24c256",		.value = 32768 },
+	{ .compat = "i2c-at24c512",		.value = 65536 },
+	{ .compat = "i2c-at34c02",		.value = 256 },
+	{ .compat = "atmel,24c02",		.value = 256 },
+	{ .compat = "atmel,24c16",		.value = 2048 },
+	{ .compat = "atmel,24c256",		.value = 32768 },
+	DEVICE_COMPAT_EOL
 };
 
 static int
 seeprom_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
+	int match_result;
 
-	if (ia->ia_name) {
-		if (ia->ia_ncompat > 0) {
-			if (iic_compat_match(ia, seeprom_compats))
-				return (1);
-		} else {
-			if (strcmp(ia->ia_name, "seeprom") == 0)
-				return (1);
-		}
-	} else {
-		if ((ia->ia_addr & AT24CXX_ADDRMASK) == AT24CXX_ADDR)
-			return (1);
-	}
+	if (iic_use_direct_match(ia, cf, compat_data, &match_result))
+		return match_result;
 
-	return (0);
+	if ((ia->ia_addr & AT24CXX_ADDRMASK) == AT24CXX_ADDR)
+		return I2C_MATCH_ADDRESS_ONLY;
+
+	return 0;
 }
 
 static void
@@ -150,7 +149,7 @@ seeprom_attach(device_t parent, device_t self, void *aux)
 {
 	struct seeprom_softc *sc = device_private(self);
 	struct i2c_attach_args *ia = aux;
-	u_int n;
+	const struct device_compatible_entry *dce;
 
 	sc->sc_tag = ia->ia_tag;
 	sc->sc_address = ia->ia_addr;
@@ -180,16 +179,10 @@ seeprom_attach(device_t parent, device_t self, void *aux)
 	 */
 	if (device_cfdata(self)->cf_flags)
 		sc->sc_size = (device_cfdata(self)->cf_flags << 7);
-	else
-		sc->sc_size = ia->ia_size;
 
-	if (sc->sc_size <= 0 && ia->ia_ncompat > 0) {
-		for (n = 0; n < __arraycount(seeprom_sizes); n++) {
-			if (!strcmp(seeprom_sizes[n].name, ia->ia_compat[n])) {
-				sc->sc_size = seeprom_sizes[n].size;
-				break;
-			}
-		}
+	if (sc->sc_size <= 0) {
+		if ((dce = iic_compatible_lookup(ia, compat_data)) != NULL)
+			sc->sc_size = dce->value;
 	}
 
 	switch (sc->sc_size) {
@@ -399,8 +392,8 @@ seeprom_wait_idle(struct seeprom_softc *sc)
 		if (error == 0)
 			break;
 
-		rv = tsleep(sc, PRIBIO | PCATCH, "seepromwr", timeout);
-		if (rv != EWOULDBLOCK)
+		rv = kpause("seepromwr", true, timeout, NULL);
+		if (rv != EWOULDBLOCK && rv != 0)
 			return (rv);
 	}
 
@@ -423,7 +416,7 @@ seeprom_bootstrap_read(i2c_tag_t tag, int i2caddr, int offset, int devsize,
 	/* We are very forgiving about devsize during bootstrap. */
 	cmdlen = (devsize >= 4096) ? 2 : 1;
 
-	if (iic_acquire_bus(tag, I2C_F_POLL) != 0)
+	if (iic_acquire_bus(tag, 0) != 0)
 		return (-1);
 
 	while (len) {
@@ -438,8 +431,8 @@ seeprom_bootstrap_read(i2c_tag_t tag, int i2caddr, int offset, int devsize,
 
 		/* Read a single byte. */
 		if (iic_exec(tag, I2C_OP_READ_WITH_STOP, addr,
-			     cmdbuf, cmdlen, rvp, 1, I2C_F_POLL)) {
-			iic_release_bus(tag, I2C_F_POLL);
+			     cmdbuf, cmdlen, rvp, 1, 0)) {
+			iic_release_bus(tag, 0);
 			return (-1);
 		}
 
@@ -448,6 +441,6 @@ seeprom_bootstrap_read(i2c_tag_t tag, int i2caddr, int offset, int devsize,
 		offset++;
 	}
 
-	iic_release_bus(tag, I2C_F_POLL);
+	iic_release_bus(tag, 0);
 	return (0);
 }

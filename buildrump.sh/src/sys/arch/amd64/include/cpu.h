@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.60 2012/01/21 16:48:56 chs Exp $	*/
+/*	$NetBSD: cpu.h,v 1.69 2021/04/17 20:12:55 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -44,10 +44,11 @@
 #ifdef _KERNEL
 
 #if defined(__GNUC__) && !defined(_MODULE)
+
 static struct cpu_info *x86_curcpu(void);
 static lwp_t *x86_curlwp(void);
 
-__inline static struct cpu_info * __unused
+__inline static struct cpu_info * __unused __nomsan
 x86_curcpu(void)
 {
 	struct cpu_info *ci;
@@ -59,7 +60,7 @@ x86_curcpu(void)
 	return ci;
 }
 
-__inline static lwp_t * __unused __attribute__ ((const))
+__inline static lwp_t * __unused __nomsan __attribute__ ((const))
 x86_curlwp(void)
 {
 	lwp_t *l;
@@ -71,26 +72,20 @@ x86_curlwp(void)
 	return l;
 }
 
-__inline static void __unused
-cpu_set_curpri(int pri)
-{
-
-	__asm volatile(
-	    "movl %1, %%gs:%0" :
-	    "=m" (*(struct cpu_info *)offsetof(struct cpu_info, ci_schedstate.spc_curpriority)) :
-	    "r" (pri)
-	);
-}
 #endif	/* __GNUC__ && !_MODULE */
 
-#define	CLKF_USERMODE(frame)	USERMODE((frame)->cf_if.if_tf.tf_cs, \
-				    (frame)->cf_if.if_tf.tf_rflags)
+#ifdef XENPV
+#define	CLKF_USERMODE(frame)	(curcpu()->ci_xen_clockf_usermode)
+#define CLKF_PC(frame)		(curcpu()->ci_xen_clockf_pc)
+#else /* XENPV */
+#define	CLKF_USERMODE(frame)	USERMODE((frame)->cf_if.if_tf.tf_cs)
 #define CLKF_PC(frame)		((frame)->cf_if.if_tf.tf_rip)
+#endif /* XENPV */
 #define CLKF_INTR(frame)	(curcpu()->ci_idepth > 0)
 #define LWP_PC(l)		((l)->l_md.md_regs->tf_rip)
 
-void	*cpu_uarea_alloc(bool);
-bool	cpu_uarea_free(void *);
+void *cpu_uarea_alloc(bool);
+bool cpu_uarea_free(void *);
 
 #endif	/* _KERNEL */
 

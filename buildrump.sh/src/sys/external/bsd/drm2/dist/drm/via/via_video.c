@@ -1,3 +1,5 @@
+/*	$NetBSD: via_video.c,v 1.7 2020/02/14 04:37:43 riastradh Exp $	*/
+
 /*
  * Copyright 2005 Thomas Hellstrom. All Rights Reserved.
  *
@@ -24,6 +26,9 @@
  *
  * Video and XvMC related functions.
  */
+
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: via_video.c,v 1.7 2020/02/14 04:37:43 riastradh Exp $");
 
 #include <drm/drmP.h>
 #include <drm/via_drm.h>
@@ -106,7 +111,7 @@ int via_decoder_futex(struct drm_device *dev, void *data, struct drm_file *file_
 		spin_lock(&dev_priv->decoder_lock[fx->lock]);
 		DRM_SPIN_WAIT_ON(ret, &dev_priv->decoder_queue[fx->lock],
 		    &dev_priv->decoder_lock[fx->lock],
-		    (fx->ms / 10) * (DRM_HZ / 100),
+		    (fx->ms / 10) * (HZ / 100),
 		    *lock != fx->val);
 		spin_unlock(&dev_priv->decoder_lock[fx->lock]);
 #else

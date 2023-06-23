@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -78,6 +78,10 @@ AcpiDbExecutionWalk (
     UINT32                  NestingLevel,
     void                    *Context,
     void                    **ReturnValue);
+
+static void ACPI_SYSTEM_XFACE
+AcpiDbSingleExecutionThread (
+    void                    *Context);
 
 
 /*******************************************************************************
@@ -140,7 +144,8 @@ AcpiDbDeleteObjects (
  *
  * RETURN:      Status
  *
- * DESCRIPTION: Execute a control method.
+ * DESCRIPTION: Execute a control method. Used to evaluate objects via the
+ *              "EXECUTE" or "EVALUATE" commands.
  *
  ******************************************************************************/
 
@@ -206,13 +211,25 @@ AcpiDbExecuteMethod (
 
     if (ACPI_FAILURE (Status))
     {
+        if ((Status == AE_ABORT_METHOD) || AcpiGbl_AbortMethod)
+        {
+            /* Clear the abort and fall back to the debugger prompt */
+
+            ACPI_EXCEPTION ((AE_INFO, Status,
+                "Aborting top-level method"));
+
+            AcpiGbl_AbortMethod = FALSE;
+            Status = AE_OK;
+            goto Cleanup;
+        }
+
         ACPI_EXCEPTION ((AE_INFO, Status,
-            "while executing %s from debugger", Info->Pathname));
+            "while executing %s from AML Debugger", Info->Pathname));
 
         if (Status == AE_BUFFER_OVERFLOW)
         {
             ACPI_ERROR ((AE_INFO,
-                "Possible overflow of internal debugger "
+                "Possible buffer overflow within AML Debugger "
                 "buffer (size 0x%X needed 0x%X)",
                 ACPI_DEBUG_BUFFER_SIZE, (UINT32) ReturnObj->Length));
         }
@@ -246,7 +263,7 @@ AcpiDbExecuteSetup (
     ACPI_FUNCTION_NAME (DbExecuteSetup);
 
 
-    /* Catenate the current scope to the supplied name */
+    /* Concatenate the current scope to the supplied name */
 
     Info->Pathname[0] = 0;
     if ((Info->Name[0] != '\\') &&
@@ -382,11 +399,12 @@ AcpiDbExecutionWalk (
 
     Status = AcpiEvaluateObject (Node, NULL, NULL, &ReturnObj);
 
+    AcpiGbl_MethodExecuting = FALSE;
+
     AcpiOsPrintf ("Evaluation of [%4.4s] returned %s\n",
         AcpiUtGetNodeName (Node),
         AcpiFormatException (Status));
 
-    AcpiGbl_MethodExecuting = FALSE;
     return (AE_OK);
 }
 
@@ -403,7 +421,8 @@ AcpiDbExecutionWalk (
  * RETURN:      None
  *
  * DESCRIPTION: Execute a control method. Name is relative to the current
- *              scope.
+ *              scope. Function used for the "EXECUTE", "EVALUATE", and
+ *              "ALL" commands
  *
  ******************************************************************************/
 
@@ -446,18 +465,45 @@ AcpiDbExecute (
             ACPI_UINT32_MAX, AcpiDbExecutionWalk, NULL, NULL, NULL);
         return;
     }
+
+    if ((Flags & EX_ALL) && (strlen (Name) > 4))
+    {
+        AcpiOsPrintf ("Input name (%s) must be a 4-char NameSeg\n", Name);
+        return;
+    }
+
+    NameString = ACPI_ALLOCATE (strlen (Name) + 1);
+    if (!NameString)
+    {
+        return;
+    }
+
+    memset (&AcpiGbl_DbMethodInfo, 0, sizeof (ACPI_DB_METHOD_INFO));
+    strcpy (NameString, Name);
+    AcpiUtStrupr (NameString);
+
+    /* Subcommand to Execute all predefined names in the namespace */
+
+    if (!strncmp (NameString, "PREDEF", 6))
+    {
+        AcpiDbEvaluatePredefinedNames ();
+        ACPI_FREE (NameString);
+        return;
+    }
+
+    /* Command (ALL <nameseg>) to execute all methods of a particular name */
+
+    else if (Flags & EX_ALL)
+    {
+        AcpiGbl_DbMethodInfo.Name = NameString;
+        ReturnObj.Pointer = NULL;
+        ReturnObj.Length = ACPI_ALLOCATE_BUFFER;
+        AcpiDbEvaluateAll (NameString);
+        ACPI_FREE (NameString);
+        return;
+    }
     else
     {
-        NameString = ACPI_ALLOCATE (strlen (Name) + 1);
-        if (!NameString)
-        {
-            return;
-        }
-
-        memset (&AcpiGbl_DbMethodInfo, 0, sizeof (ACPI_DB_METHOD_INFO));
-
-        strcpy (NameString, Name);
-        AcpiUtStrupr (NameString);
         AcpiGbl_DbMethodInfo.Name = NameString;
         AcpiGbl_DbMethodInfo.Args = Args;
         AcpiGbl_DbMethodInfo.Types = Types;
@@ -465,25 +511,25 @@ AcpiDbExecute (
 
         ReturnObj.Pointer = NULL;
         ReturnObj.Length = ACPI_ALLOCATE_BUFFER;
-
-        Status = AcpiDbExecuteSetup (&AcpiGbl_DbMethodInfo);
-        if (ACPI_FAILURE (Status))
-        {
-            ACPI_FREE (NameString);
-            return;
-        }
-
-        /* Get the NS node, determines existence also */
-
-        Status = AcpiGetHandle (NULL, AcpiGbl_DbMethodInfo.Pathname,
-            &AcpiGbl_DbMethodInfo.Method);
-        if (ACPI_SUCCESS (Status))
-        {
-            Status = AcpiDbExecuteMethod (&AcpiGbl_DbMethodInfo,
-                &ReturnObj);
-        }
-        ACPI_FREE (NameString);
     }
+
+    Status = AcpiDbExecuteSetup (&AcpiGbl_DbMethodInfo);
+    if (ACPI_FAILURE (Status))
+    {
+        ACPI_FREE (NameString);
+        return;
+    }
+
+    /* Get the NS node, determines existence also */
+
+    Status = AcpiGetHandle (NULL, AcpiGbl_DbMethodInfo.Pathname,
+        &AcpiGbl_DbMethodInfo.Method);
+    if (ACPI_SUCCESS (Status))
+    {
+        Status = AcpiDbExecuteMethod (&AcpiGbl_DbMethodInfo,
+            &ReturnObj);
+    }
+    ACPI_FREE (NameString);
 
     /*
      * Allow any handlers in separate threads to complete.
@@ -526,10 +572,11 @@ AcpiDbExecute (
                 (UINT32) ReturnObj.Length);
 
             AcpiDbDumpExternalObject (ReturnObj.Pointer, 1);
+            AcpiOsPrintf ("\n");
 
             /* Dump a _PLD buffer if present */
 
-            if (ACPI_COMPARE_NAME ((ACPI_CAST_PTR (ACPI_NAMESPACE_NODE,
+            if (ACPI_COMPARE_NAMESEG ((ACPI_CAST_PTR (ACPI_NAMESPACE_NODE,
                 AcpiGbl_DbMethodInfo.Method)->Name.Ascii),
                 METHOD_NAME__PLD))
             {
@@ -661,6 +708,124 @@ AcpiDbMethodThread (
                 AcpiFormatException (Status));
         }
     }
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbSingleExecutionThread
+ *
+ * PARAMETERS:  Context                 - Method info struct
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Create one thread and execute a method
+ *
+ ******************************************************************************/
+
+static void ACPI_SYSTEM_XFACE
+AcpiDbSingleExecutionThread (
+    void                    *Context)
+{
+    ACPI_DB_METHOD_INFO     *Info = Context;
+    ACPI_STATUS             Status;
+    ACPI_BUFFER             ReturnObj;
+
+
+    AcpiOsPrintf ("\n");
+
+    Status = AcpiDbExecuteMethod (Info, &ReturnObj);
+    if (ACPI_FAILURE (Status))
+    {
+        AcpiOsPrintf ("%s During evaluation of %s\n",
+            AcpiFormatException (Status), Info->Pathname);
+        return;
+    }
+
+    /* Display a return object, if any */
+
+    if (ReturnObj.Length)
+    {
+        AcpiOsPrintf ("Evaluation of %s returned object %p, "
+            "external buffer length %X\n",
+            AcpiGbl_DbMethodInfo.Pathname, ReturnObj.Pointer,
+            (UINT32) ReturnObj.Length);
+
+        AcpiDbDumpExternalObject (ReturnObj.Pointer, 1);
+    }
+
+    AcpiOsPrintf ("\nBackground thread completed\n%c ",
+        ACPI_DEBUGGER_COMMAND_PROMPT);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiDbCreateExecutionThread
+ *
+ * PARAMETERS:  MethodNameArg           - Control method to execute
+ *              Arguments               - Array of arguments to the method
+ *              Types                   - Corresponding array of object types
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Create a single thread to evaluate a namespace object. Handles
+ *              arguments passed on command line for control methods.
+ *
+ ******************************************************************************/
+
+void
+AcpiDbCreateExecutionThread (
+    char                    *MethodNameArg,
+    char                    **Arguments,
+    ACPI_OBJECT_TYPE        *Types)
+{
+    ACPI_STATUS             Status;
+    UINT32                  i;
+
+
+    memset (&AcpiGbl_DbMethodInfo, 0, sizeof (ACPI_DB_METHOD_INFO));
+    AcpiGbl_DbMethodInfo.Name = MethodNameArg;
+    AcpiGbl_DbMethodInfo.InitArgs = 1;
+    AcpiGbl_DbMethodInfo.Args = AcpiGbl_DbMethodInfo.Arguments;
+    AcpiGbl_DbMethodInfo.Types = AcpiGbl_DbMethodInfo.ArgTypes;
+
+    /* Setup method arguments, up to 7 (0-6) */
+
+    for (i = 0; (i < ACPI_METHOD_NUM_ARGS) && *Arguments; i++)
+    {
+        AcpiGbl_DbMethodInfo.Arguments[i] = *Arguments;
+        Arguments++;
+
+        AcpiGbl_DbMethodInfo.ArgTypes[i] = *Types;
+        Types++;
+    }
+
+    Status = AcpiDbExecuteSetup (&AcpiGbl_DbMethodInfo);
+    if (ACPI_FAILURE (Status))
+    {
+        return;
+    }
+
+    /* Get the NS node, determines existence also */
+
+    Status = AcpiGetHandle (NULL, AcpiGbl_DbMethodInfo.Pathname,
+        &AcpiGbl_DbMethodInfo.Method);
+    if (ACPI_FAILURE (Status))
+    {
+        AcpiOsPrintf ("%s Could not get handle for %s\n",
+            AcpiFormatException (Status), AcpiGbl_DbMethodInfo.Pathname);
+        return;
+    }
+
+    Status = AcpiOsExecute (OSL_DEBUGGER_EXEC_THREAD,
+        AcpiDbSingleExecutionThread, &AcpiGbl_DbMethodInfo);
+    if (ACPI_FAILURE (Status))
+    {
+        return;
+    }
+
+    AcpiOsPrintf ("\nBackground thread started\n");
 }
 
 

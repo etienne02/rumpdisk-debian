@@ -1,5 +1,5 @@
-/*	$NetBSD: keysock.c,v 1.50 2016/06/10 13:27:16 ozaki-r Exp $	*/
-/*	$FreeBSD: src/sys/netipsec/keysock.c,v 1.3.2.1 2003/01/24 05:11:36 sam Exp $	*/
+/*	$NetBSD: keysock.c,v 1.70 2019/06/12 22:23:50 christos Exp $	*/
+/*	$FreeBSD: keysock.c,v 1.3.2.1 2003/01/24 05:11:36 sam Exp $	*/
 /*	$KAME: keysock.c,v 1.25 2001/08/13 20:07:41 itojun Exp $	*/
 
 /*
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: keysock.c,v 1.50 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: keysock.c,v 1.70 2019/06/12 22:23:50 christos Exp $");
 
 /* This code has derived from sys/net/rtsock.c on FreeBSD2.2.5 */
 
@@ -49,6 +49,8 @@ __KERNEL_RCSID(0, "$NetBSD: keysock.c,v 1.50 2016/06/10 13:27:16 ozaki-r Exp $")
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/cpu.h>
+#include <sys/syslog.h>
 
 #include <net/raw_cb.h>
 #include <net/route.h>
@@ -58,7 +60,6 @@ __KERNEL_RCSID(0, "$NetBSD: keysock.c,v 1.50 2016/06/10 13:27:16 ozaki-r Exp $")
 #include <netipsec/keysock.h>
 #include <netipsec/key_debug.h>
 
-#include <netipsec/ipsec_osdep.h>
 #include <netipsec/ipsec_private.h>
 
 struct key_cb {
@@ -82,6 +83,23 @@ static int key_sendup0(struct rawcb *, struct mbuf *, int, int);
 
 int key_registered_sb_max = (2048 * MHLEN); /* XXX arbitrary */
 
+static kmutex_t *key_so_mtx;
+static struct rawcbhead key_rawcb;
+
+void
+key_init_so(void)
+{
+
+	key_so_mtx = mutex_obj_alloc(MUTEX_DEFAULT, IPL_NONE);
+}
+
+static void
+key_pr_init(void)
+{
+
+	LIST_INIT(&key_rawcb);
+}
+
 /*
  * key_output()
  */
@@ -92,8 +110,7 @@ key_output(struct mbuf *m, struct socket *so)
 	int len, error = 0;
 	int s;
 
-	if (m == 0)
-		panic("key_output: NULL pointer was passed");
+	KASSERT(m != NULL);
 
 	{
 		uint64_t *ps = PFKEY_STAT_GETREF();
@@ -117,10 +134,10 @@ key_output(struct mbuf *m, struct socket *so)
 		}
 	}
 
-	if ((m->m_flags & M_PKTHDR) == 0)
-		panic("key_output: not M_PKTHDR ??");
+	KASSERT((m->m_flags & M_PKTHDR) != 0);
 
-	KEYDEBUG(KEYDEBUG_KEY_DUMP, kdebug_mbuf(m));
+	if (KEYDEBUG_ON(KEYDEBUG_KEY_DUMP))
+		kdebug_mbuf(__func__, m);
 
 	msg = mtod(m, struct sadb_msg *);
 	PFKEY_STATINC(PFKEY_STAT_OUT_MSGTYPE + msg->sadb_msg_type);
@@ -184,111 +201,26 @@ key_sendup0(
 		ok = sbappendaddrchain(&rp->rcb_socket->so_rcv,
 			       (struct sockaddr *)&key_src, m, sbprio);
 
-	  if (!ok) {
+	if (!ok) {
+		log(LOG_WARNING,
+		    "%s: couldn't send PF_KEY message to the socket\n",
+		    __func__);
 		PFKEY_STATINC(PFKEY_STAT_IN_NOMEM);
 		m_freem(m);
+		/* Don't call soroverflow because we're returning this
+		 * error directly to the sender. */
+		rp->rcb_socket->so_rcv.sb_overflowed++;
 		error = ENOBUFS;
-	} else
+	} else {
+		sorwakeup(rp->rcb_socket);
 		error = 0;
-	sorwakeup(rp->rcb_socket);
+	}
 	return error;
 }
 
-/* XXX this interface should be obsoleted. */
-int
-key_sendup(struct socket *so, struct sadb_msg *msg, u_int len,
-	   int target)	/*target of the resulting message*/
-{
-	struct mbuf *m, *n, *mprev;
-	int tlen;
-
-	/* sanity check */
-	if (so == 0 || msg == 0)
-		panic("key_sendup: NULL pointer was passed");
-
-	KEYDEBUG(KEYDEBUG_KEY_DUMP,
-		printf("key_sendup: \n");
-		kdebug_sadb(msg));
-
-	/*
-	 * we increment statistics here, just in case we have ENOBUFS
-	 * in this function.
-	 */
-	{
-		uint64_t *ps = PFKEY_STAT_GETREF();
-		ps[PFKEY_STAT_IN_TOTAL]++;
-		ps[PFKEY_STAT_IN_BYTES] += len;
-		ps[PFKEY_STAT_IN_MSGTYPE + msg->sadb_msg_type]++;
-		PFKEY_STAT_PUTREF();
-	}
-
-	/*
-	 * Get mbuf chain whenever possible (not clusters),
-	 * to save socket buffer.  We'll be generating many SADB_ACQUIRE
-	 * messages to listening key sockets.  If we simply allocate clusters,
-	 * sbappendaddr() will raise ENOBUFS due to too little sbspace().
-	 * sbspace() computes # of actual data bytes AND mbuf region.
-	 *
-	 * TODO: SADB_ACQUIRE filters should be implemented.
-	 */
-	tlen = len;
-	m = mprev = NULL;
-	while (tlen > 0) {
-		int mlen;	
-		if (tlen == len) {
-			MGETHDR(n, M_DONTWAIT, MT_DATA);
-			mlen = MHLEN;
-		} else {
-			MGET(n, M_DONTWAIT, MT_DATA);
-			mlen = MLEN;
-		}
-		if (!n) {
-			PFKEY_STATINC(PFKEY_STAT_IN_NOMEM);
-			return ENOBUFS;
-		}
-		n->m_len = mlen;
-		if (tlen >= MCLBYTES) {	/*XXX better threshold? */
-			MCLGET(n, M_DONTWAIT);
-			if ((n->m_flags & M_EXT) == 0) {
-				m_free(n);
-				m_freem(m);
-				PFKEY_STATINC(PFKEY_STAT_IN_NOMEM);
-				return ENOBUFS;
-			}
-			n->m_len = MCLBYTES;
-		}
-
-		if (tlen < n->m_len)
-			n->m_len = tlen;
-		n->m_next = NULL;
-		if (m == NULL)
-			m = mprev = n;
-		else {
-			mprev->m_next = n;
-			mprev = n;
-		}
-		tlen -= n->m_len;
-		n = NULL;
-	}
-	m->m_pkthdr.len = len;
-	m_reset_rcvif(m);
-	m_copyback(m, 0, len, msg);
-
-	/* avoid duplicated statistics */
-	{
-		uint64_t *ps = PFKEY_STAT_GETREF();
-		ps[PFKEY_STAT_IN_TOTAL]--;
-		ps[PFKEY_STAT_IN_BYTES] -= len;
-		ps[PFKEY_STAT_IN_MSGTYPE + msg->sadb_msg_type]--;
-		PFKEY_STAT_PUTREF();
-	}
-
-	return key_sendup_mbuf(so, m, target);
-}
-
 /* so can be NULL if target != KEY_SENDUP_ONE */
-int
-key_sendup_mbuf(struct socket *so, struct mbuf *m,
+static int
+_key_sendup_mbuf(struct socket *so, struct mbuf *m,
 		int target/*, sbprio */)
 {
 	struct mbuf *n;
@@ -298,10 +230,8 @@ key_sendup_mbuf(struct socket *so, struct mbuf *m,
 	int error = 0;
 	int sbprio = 0; /* XXX should be a parameter */
 
-	if (m == NULL)
-		panic("key_sendup_mbuf: NULL pointer was passed");
-	if (so == NULL && target == KEY_SENDUP_ONE)
-		panic("key_sendup_mbuf: NULL pointer was passed");
+	KASSERT(m != NULL);
+	KASSERT(so != NULL || target != KEY_SENDUP_ONE);
 
 	/*
 	 * RFC 2367 says ACQUIRE and other kernel-generated messages
@@ -341,7 +271,7 @@ key_sendup_mbuf(struct socket *so, struct mbuf *m,
 		PFKEY_STATINC(PFKEY_STAT_IN_MSGTYPE + msg->sadb_msg_type);
 	}
 
-	LIST_FOREACH(rp, &rawcb_list, rcb_list)
+	LIST_FOREACH(rp, &key_rawcb, rcb_list)
 	{
 		struct socket * kso = rp->rcb_socket;
 		if (rp->rcb_proto.sp_family != PF_KEY)
@@ -359,7 +289,7 @@ key_sendup_mbuf(struct socket *so, struct mbuf *m,
 		 * (based on pf_key@inner.net message on 14 Oct 1998)
 		 */
 		if (((struct keycb *)rp)->kp_promisc) {
-			if ((n = m_copy(m, 0, (int)M_COPYALL)) != NULL) {
+			if ((n = m_copym(m, 0, (int)M_COPYALL, M_DONTWAIT)) != NULL) {
 				(void)key_sendup0(rp, n, 1, 0);
 				n = NULL;
 			}
@@ -397,7 +327,7 @@ key_sendup_mbuf(struct socket *so, struct mbuf *m,
 		if (!sendup)
 			continue;
 
-		if ((n = m_copy(m, 0, (int)M_COPYALL)) == NULL) {
+		if ((n = m_copym(m, 0, (int)M_COPYALL, M_DONTWAIT)) == NULL) {
 			m_freem(m);
 			PFKEY_STATINC(PFKEY_STAT_IN_NOMEM);
 			return ENOBUFS;
@@ -422,6 +352,24 @@ key_sendup_mbuf(struct socket *so, struct mbuf *m,
 	return error;
 }
 
+int
+key_sendup_mbuf(struct socket *so, struct mbuf *m,
+		int target/*, sbprio */)
+{
+	int error;
+
+	if (so == NULL)
+		mutex_enter(key_so_mtx);
+	else
+		KASSERT(solocked(so));
+
+	error = _key_sendup_mbuf(so, m, target);
+
+	if (so == NULL)
+		mutex_exit(key_so_mtx);
+	return error;
+}
+
 static int
 key_attach(struct socket *so, int proto)
 {
@@ -434,7 +382,15 @@ key_attach(struct socket *so, int proto)
 	so->so_pcb = kp;
 
 	s = splsoftnet();
-	error = raw_attach(so, proto);
+
+	if (so->so_lock != key_so_mtx) {
+		KASSERT(so->so_lock == NULL);
+		mutex_obj_hold(key_so_mtx);
+		so->so_lock = key_so_mtx;
+		solock(so);
+	}
+
+	error = raw_attach(so, proto, &key_rawcb);
 	if (error) {
 		PFKEY_STATINC(PFKEY_STAT_SOCKERR);
 		kmem_free(kp, sizeof(*kp));
@@ -463,6 +419,7 @@ key_detach(struct socket *so)
 	struct keycb *kp = (struct keycb *)sotorawcb(so);
 	int s;
 
+	KASSERT(!cpu_softintr_p());
 	KASSERT(solocked(so));
 	KASSERT(kp != NULL);
 
@@ -480,7 +437,7 @@ key_accept(struct socket *so, struct sockaddr *nam)
 {
 	KASSERT(solocked(so));
 
-	panic("key_accept");
+	panic("%s: unsupported", __func__);
 
 	return EOPNOTSUPP;
 }
@@ -556,7 +513,7 @@ key_abort(struct socket *so)
 {
 	KASSERT(solocked(so));
 
-	panic("key_abort");
+	panic("%s: unsupported", __func__);
 
 	return EOPNOTSUPP;
 }
@@ -655,7 +612,7 @@ static int
 key_purgeif(struct socket *so, struct ifnet *ifa)
 {
 
-	panic("key_purgeif");
+	panic("%s: unsupported", __func__);
 
 	return EOPNOTSUPP;
 }
@@ -717,7 +674,7 @@ static const struct protosw keysw[] = {
 	.pr_flags = PR_ATOMIC|PR_ADDR,
 	.pr_ctlinput = raw_ctlinput,
 	.pr_usrreqs = &key_usrreqs,
-	.pr_init = raw_init,
+	.pr_init = key_pr_init,
     }
 };
 

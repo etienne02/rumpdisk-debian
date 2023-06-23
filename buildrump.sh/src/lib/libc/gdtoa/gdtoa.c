@@ -1,4 +1,4 @@
-/* $NetBSD: gdtoa.c,v 1.6 2012/03/13 21:13:33 christos Exp $ */
+/* $NetBSD: gdtoa.c,v 1.8 2021/05/06 16:15:33 christos Exp $ */
 
 /****************************************************************
 
@@ -118,10 +118,10 @@ bitstob(ULong *bits, int nbits, int *bbits)
 gdtoa
 #ifdef KR_headers
 	(fpi, be, bits, kindp, mode, ndigits, decpt, rve)
-	FPI *fpi; int be; ULong *bits;
+	CONST FPI *fpi; int be; ULong *bits;
 	int *kindp, mode, ndigits, *decpt; char **rve;
 #else
-	(FPI *fpi, int be, ULong *bits, int *kindp, int mode, int ndigits, int *decpt, char **rve)
+	(CONST FPI *fpi, int be, ULong *bits, int *kindp, int mode, int ndigits, int *decpt, char **rve)
 #endif
 {
  /*	Arguments ndigits and decpt are similar to the second and third
@@ -601,10 +601,16 @@ gdtoa
 	 */
 	i = ((s5 ? hi0bits(S->x[S->wds-1]) : ULbits - 1) - s2 - 4) & kmask;
 	m2 += i;
-	if ((b2 += i) > 0)
+	if ((b2 += i) > 0) {
 		b = lshift(b, b2);
-	if ((s2 += i) > 0)
+		if (b == NULL)
+			return NULL;
+		}
+	if ((s2 += i) > 0) {
 		S = lshift(S, s2);
+		if (S == NULL)
+			return NULL;
+		}
 	if (k_check) {
 		if (cmp(b,S) < 0) {
 			k--;

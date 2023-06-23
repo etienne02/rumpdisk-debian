@@ -1,4 +1,4 @@
-/*	$NetBSD: siside.c,v 1.36 2014/05/31 16:25:29 christos Exp $	*/
+/*	$NetBSD: siside.c,v 1.38 2019/02/05 11:30:07 mrg Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2001 Manuel Bouyer.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: siside.c,v 1.36 2014/05/31 16:25:29 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siside.c,v 1.38 2019/02/05 11:30:07 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -112,7 +112,7 @@ siside_attach(device_t parent, device_t self, void *aux)
 	}
 }
 
-static struct sis_hostbr_type {
+static const struct sis_hostbr_type {
 	u_int16_t id;
 	u_int8_t rev;
 	u_int8_t udma_mode;
@@ -175,7 +175,7 @@ static struct sis_hostbr_type {
 	{PCI_PRODUCT_SIS_965,   0x00, 6, "965", SIS_TYPE_133NEW},
 };
 
-static struct sis_hostbr_type *sis_hostbr_type_match;
+static const struct sis_hostbr_type *sis_hostbr_type_match;
 
 static int
 sis_hostbr_match(const struct pci_attach_args *pa)
@@ -451,6 +451,7 @@ sis_setup_channel(struct ata_channel *chp)
 				sis_tim |=
 				    sis_udma100new_tim[drvp->UDMA_mode] <<
 				    SIS_TIM100_UDMA_TIME_OFF(drive);
+				break;
 			case SIS_TYPE_133OLD:
 				sis_tim |=
 				    sis_udma133old_tim[drvp->UDMA_mode] <<

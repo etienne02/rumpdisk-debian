@@ -1,4 +1,4 @@
-/*	$NetBSD: xd.c,v 1.95 2015/04/26 15:15:20 mlelstv Exp $	*/
+/*	$NetBSD: xd.c,v 1.98 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1995 Charles D. Cranor
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xd.c,v 1.95 2015/04/26 15:15:20 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xd.c,v 1.98 2021/08/07 16:19:17 thorpej Exp $");
 
 #undef XDC_DEBUG		/* full debug */
 #define XDC_DIAG		/* extra sanity checks */
@@ -584,11 +584,8 @@ xdcattach(device_t parent, device_t self, void *aux)
 
 	memset(xdc->iopbase, 0, XDC_MAXIOPB * sizeof(struct xd_iopb));
 
-	xdc->reqs = (struct xd_iorq *)
-	    malloc(XDC_MAXIOPB * sizeof(struct xd_iorq),
-	    M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (xdc->reqs == NULL)
-		panic("xdc malloc");
+	xdc->reqs = malloc(XDC_MAXIOPB * sizeof(struct xd_iorq),
+	    M_DEVBUF, M_WAITOK|M_ZERO);
 
 	/* init free list, iorq to iopb pointers, and non-zero fields in the
 	 * iopb which never change. */
@@ -675,7 +672,7 @@ xdcattach(device_t parent, device_t self, void *aux)
 	xa.booting = 1;
 
 	for (xa.driveno = 0; xa.driveno < XDC_MAXDEV; xa.driveno++)
-		(void) config_found(self, (void *) &xa, NULL);
+		(void) config_found(self, (void *) &xa, NULL, CFARGS_NONE);
 
 	/* start the watchdog clock */
 	callout_reset(&xdc->sc_tick_ch, XDC_TICKCNT, xdc_tick, xdc);

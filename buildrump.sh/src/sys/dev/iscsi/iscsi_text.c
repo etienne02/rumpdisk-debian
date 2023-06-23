@@ -1,4 +1,4 @@
-/*	$NetBSD: iscsi_text.c,v 1.10 2016/05/29 13:51:16 mlelstv Exp $	*/
+/*	$NetBSD: iscsi_text.c,v 1.13 2019/04/21 11:45:08 maya Exp $	*/
 
 /*-
  * Copyright (c) 2005,2006,2011 The NetBSD Foundation, Inc.
@@ -33,9 +33,6 @@
 #include "base64.h"
 #include <sys/md5.h>
 #include <sys/cprng.h>
-
-/* define to send T_BIGNUM in hex format instead of base64 */
-/* #define ISCSI_HEXBIGNUMS */
 
 #define isdigit(x) ((x) >= '0' && (x) <= '9')
 #define toupper(x) ((x) & ~0x20)
@@ -175,6 +172,7 @@ typedef struct
 {
 	text_key_t key;				/* the key */
 	int list_num;				/* number of elements in list, doubles as */
+	bool hex_bignums;			/* whether to encode in hex or base64 */
 	/* data size for large numeric values */
 	union
 	{
@@ -633,22 +631,21 @@ my_strcpy(uint8_t *dest, const uint8_t *src)
 STATIC unsigned
 put_bignumval(negotiation_parameter_t *par, uint8_t *buf)
 {
-#ifdef ISCSI_HEXBIGNUMS
 	int k, c;
 
-	my_strcpy(buf, "0x");
-	for (k=0; k<par->list_num; ++k) {
-		c = par->val.sval[k] >> 4;
-		buf[2+2*k] = c < 10 ? '0' + c : 'a' + (c-10);
-		c = par->val.sval[k] & 0xf;
-		buf[2+2*k+1] = c < 10 ? '0' + c : 'a' + (c-10);
-	}
-	buf[2+2*k] = '\0';
+	if (par->hex_bignums) {
+		my_strcpy(buf, "0x");
+		for (k=0; k<par->list_num; ++k) {
+			c = par->val.sval[k] >> 4;
+			buf[2+2*k] = c < 10 ? '0' + c : 'a' + (c-10);
+			c = par->val.sval[k] & 0xf;
+			buf[2+2*k+1] = c < 10 ? '0' + c : 'a' + (c-10);
+		}
+		buf[2+2*k] = '\0';
 
-	return 2+2*par->list_num;
-#else
+		return 2+2*par->list_num;
+	}
 	return base64_encode(par->val.sval, par->list_num, buf);
-#endif
 }
 
 /*
@@ -829,11 +826,10 @@ parameter_size(negotiation_parameter_t *par)
 
 		case T_BIGNUM:
 			/* list_num holds value size */
-#ifdef ISCSI_HEXBIGNUMS
-			size += 2 + 2*par->list_num;
-#else
-			size += base64_enclen(par->list_num);
-#endif
+			if (par->hex_bignums)
+				size += 2 + 2*par->list_num;
+			else
+				size += base64_enclen(par->list_num);
 			i = par->list_num;
 			break;
 
@@ -935,15 +931,15 @@ complete_pars(negotiation_state_t *state, pdu_t *pdu)
 		DEBOUT(("*** Out of memory in complete_pars\n"));
 		return ISCSI_STATUS_NO_RESOURCES;
 	}
-	pdu->temp_data = bp;
+	pdu->pdu_temp_data = bp;
 
-	if (put_par_block(pdu->temp_data, len, state->pars,
+	if (put_par_block(pdu->pdu_temp_data, len, state->pars,
 			state->num_pars) == 0) {
 		DEBOUT(("Bad parameter in complete_pars\n"));
 		return ISCSI_STATUS_PARAMETER_INVALID;
 	}
 
-	pdu->temp_data_len = len;
+	pdu->pdu_temp_data_len = len;
 	return 0;
 }
 
@@ -1002,6 +998,7 @@ set_key_s(negotiation_state_t *state, text_key_t key, uint8_t *val)
 	par->key = key;
 	par->list_num = 1;
 	par->val.sval = val;
+	par->hex_bignums = iscsi_hex_bignums;
 	state->num_pars++;
 	state->kflags[key] |= NS_SENT;
 
@@ -1169,8 +1166,8 @@ eval_parameter(connection_t *conn, negotiation_state_t *state,
 		break;
 
 	case K_TargetAlias:
-		if (conn->login_par->is_present.TargetAlias) {
-			copyoutstr(par->val.sval, conn->login_par->TargetAlias,
+		if (conn->c_login_par->is_present.TargetAlias) {
+			copyoutstr(par->val.sval, conn->c_login_par->TargetAlias,
 				ISCSI_STRING_LENGTH - 1, &sz);
 			/* do anything with return code?? */
 		}
@@ -1203,15 +1200,15 @@ STATIC void
 init_session_parameters(session_t *sess, negotiation_state_t *state)
 {
 
-	state->ErrorRecoveryLevel = sess->ErrorRecoveryLevel;
-	state->InitialR2T = sess->InitialR2T;
-	state->ImmediateData = sess->ImmediateData;
-	state->MaxConnections = sess->MaxConnections;
-	state->DefaultTime2Wait = sess->DefaultTime2Wait;
-	state->DefaultTime2Retain = sess->DefaultTime2Retain;
-	state->MaxBurstLength = sess->MaxBurstLength;
-	state->FirstBurstLength = sess->FirstBurstLength;
-	state->MaxOutstandingR2T = sess->MaxOutstandingR2T;
+	state->ErrorRecoveryLevel = sess->s_ErrorRecoveryLevel;
+	state->InitialR2T = sess->s_InitialR2T;
+	state->ImmediateData = sess->s_ImmediateData;
+	state->MaxConnections = sess->s_MaxConnections;
+	state->DefaultTime2Wait = sess->s_DefaultTime2Wait;
+	state->DefaultTime2Retain = sess->s_DefaultTime2Retain;
+	state->MaxBurstLength = sess->s_MaxBurstLength;
+	state->FirstBurstLength = sess->s_FirstBurstLength;
+	state->MaxOutstandingR2T = sess->s_MaxOutstandingR2T;
 }
 
 
@@ -1233,7 +1230,7 @@ init_session_parameters(session_t *sess, negotiation_state_t *state)
 int
 assemble_login_parameters(connection_t *conn, ccb_t *ccb, pdu_t *pdu)
 {
-	iscsi_login_parameters_t *par = conn->login_par;
+	iscsi_login_parameters_t *par = conn->c_login_par;
 	size_t sz;
 	int rc, i, next;
 	negotiation_state_t *state;
@@ -1244,7 +1241,7 @@ assemble_login_parameters(connection_t *conn, ccb_t *ccb, pdu_t *pdu)
 		DEBOUT(("*** Out of memory in assemble_login_params\n"));
 		return ISCSI_STATUS_NO_RESOURCES;
 	}
-	ccb->temp_data = state;
+	ccb->ccb_temp_data = state;
 
 	if (!iscsi_InitiatorName[0]) {
 		DEBOUT(("No InitiatorName\n"));
@@ -1255,7 +1252,7 @@ assemble_login_parameters(connection_t *conn, ccb_t *ccb, pdu_t *pdu)
 	if (iscsi_InitiatorAlias[0])
 		set_key_s(state, K_InitiatorAlias, iscsi_InitiatorAlias);
 
-	conn->Our_MaxRecvDataSegmentLength =
+	conn->c_Our_MaxRecvDataSegmentLength =
 		(par->is_present.MaxRecvDataSegmentLength)
 		? par->MaxRecvDataSegmentLength : DEFAULT_MaxRecvDataSegmentLength;
 
@@ -1335,8 +1332,8 @@ int
 assemble_security_parameters(connection_t *conn, ccb_t *ccb, pdu_t *rx_pdu,
 							 pdu_t *tx_pdu)
 {
-	negotiation_state_t *state = (negotiation_state_t *) ccb->temp_data;
-	iscsi_login_parameters_t *par = conn->login_par;
+	negotiation_state_t *state = (negotiation_state_t *) ccb->ccb_temp_data;
+	iscsi_login_parameters_t *par = conn->c_login_par;
 	negotiation_parameter_t rxp, *cpar;
 	uint8_t *rxpars;
 	int rc, next;
@@ -1349,14 +1346,14 @@ assemble_security_parameters(connection_t *conn, ccb_t *ccb, pdu_t *rx_pdu,
 	state->num_pars = 0;
 	next = 0;
 
-	rxpars = (uint8_t *) rx_pdu->temp_data;
+	rxpars = (uint8_t *) rx_pdu->pdu_temp_data;
 	if (rxpars == NULL) {
 		DEBOUT(("No received parameters!\n"));
 		return ISCSI_STATUS_NEGOTIATION_ERROR;
 	}
 	/* Note: There are always at least 2 extra bytes past temp_data_len */
-	rxpars[rx_pdu->temp_data_len] = '\0';
-	rxpars[rx_pdu->temp_data_len + 1] = '\0';
+	rxpars[rx_pdu->pdu_temp_data_len] = '\0';
+	rxpars[rx_pdu->pdu_temp_data_len + 1] = '\0';
 
 	while (*rxpars) {
 		if ((rxpars = get_parameter(rxpars, &rxp)) == NULL) {
@@ -1533,7 +1530,7 @@ assemble_security_parameters(connection_t *conn, ccb_t *ccb, pdu_t *rx_pdu,
 STATIC void
 set_first_opnegs(connection_t *conn, negotiation_state_t *state)
 {
-	iscsi_login_parameters_t *lpar = conn->login_par;
+	iscsi_login_parameters_t *lpar = conn->c_login_par;
 	negotiation_parameter_t *cpar;
 
     /* Digests - suggest None,CRC32C unless the user forces a value */
@@ -1552,13 +1549,13 @@ set_first_opnegs(connection_t *conn, negotiation_state_t *state)
 	}
 
 	set_key_n(state, K_MaxRecvDataSegmentLength,
-		conn->Our_MaxRecvDataSegmentLength);
+		conn->c_Our_MaxRecvDataSegmentLength);
 	/* This is direction-specific, we may have a different default */
 	state->MaxRecvDataSegmentLength =
 		entries[K_MaxRecvDataSegmentLength].defval;
 
 	/* First connection only */
-	if (!conn->session->TSIH) {
+	if (!conn->c_session->s_TSIH) {
 		state->ErrorRecoveryLevel =
 			(lpar->is_present.ErrorRecoveryLevel) ? lpar->ErrorRecoveryLevel
 												  : 2;
@@ -1593,10 +1590,10 @@ set_first_opnegs(connection_t *conn, negotiation_state_t *state)
 		else
 			state->DefaultTime2Retain = entries[K_DefaultTime2Retain].defval;
 	} else
-		init_session_parameters(conn->session, state);
+		init_session_parameters(conn->c_session, state);
 
 	DEBC(conn, 10, ("SetFirstOpnegs: recover=%d, MRDSL=%d\n",
-		conn->recover, state->MaxRecvDataSegmentLength));
+		conn->c_recover, state->MaxRecvDataSegmentLength));
 }
 
 
@@ -1618,7 +1615,7 @@ int
 assemble_negotiation_parameters(connection_t *conn, ccb_t *ccb, pdu_t *rx_pdu,
 							    pdu_t *tx_pdu)
 {
-	negotiation_state_t *state = (negotiation_state_t *) ccb->temp_data;
+	negotiation_state_t *state = (negotiation_state_t *) ccb->ccb_temp_data;
 	negotiation_parameter_t rxp;
 	uint8_t *rxpars;
 	int rc;
@@ -1626,18 +1623,18 @@ assemble_negotiation_parameters(connection_t *conn, ccb_t *ccb, pdu_t *rx_pdu,
 	state->num_pars = 0;
 
 	DEBC(conn, 10, ("AsmNegParams: connState=%d, MRDSL=%d\n",
-		conn->state, state->MaxRecvDataSegmentLength));
+		conn->c_state, state->MaxRecvDataSegmentLength));
 
-	if (conn->state == ST_SEC_NEG) {
-		conn->state = ST_OP_NEG;
+	if (conn->c_state == ST_SEC_NEG) {
+		conn->c_state = ST_OP_NEG;
 		set_first_opnegs(conn, state);
 	}
 
-	rxpars = (uint8_t *) rx_pdu->temp_data;
+	rxpars = (uint8_t *) rx_pdu->pdu_temp_data;
 	if (rxpars != NULL) {
 		/* Note: There are always at least 2 extra bytes past temp_data_len */
-		rxpars[rx_pdu->temp_data_len] = '\0';
-		rxpars[rx_pdu->temp_data_len + 1] = '\0';
+		rxpars[rx_pdu->pdu_temp_data_len] = '\0';
+		rxpars[rx_pdu->pdu_temp_data_len + 1] = '\0';
 
 		while (*rxpars) {
 			if ((rxpars = get_parameter(rxpars, &rxp)) == NULL)
@@ -1679,12 +1676,12 @@ init_text_parameters(connection_t *conn, ccb_t *ccb)
 		DEBOUT(("*** Out of memory in init_text_params\n"));
 		return ISCSI_STATUS_NO_RESOURCES;
 	}
-	ccb->temp_data = state;
+	ccb->ccb_temp_data = state;
 
-	state->HeaderDigest = conn->HeaderDigest;
-	state->DataDigest = conn->DataDigest;
-	state->MaxRecvDataSegmentLength = conn->MaxRecvDataSegmentLength;
-	init_session_parameters(conn->session, state);
+	state->HeaderDigest = conn->c_HeaderDigest;
+	state->DataDigest = conn->c_DataDigest;
+	state->MaxRecvDataSegmentLength = conn->c_MaxRecvDataSegmentLength;
+	init_session_parameters(conn->c_session, state);
 
 	return 0;
 }
@@ -1719,8 +1716,8 @@ assemble_send_targets(pdu_t *pdu, uint8_t *val)
 		DEBOUT(("*** Out of memory in assemble_send_targets\n"));
 		return ISCSI_STATUS_NO_RESOURCES;
 	}
-	pdu->temp_data = buf;
-	pdu->temp_data_len = len;
+	pdu->pdu_temp_data = buf;
+	pdu->pdu_temp_data_len = len;
 
 	if (put_parameter(buf, len, &par) == 0)
 		return ISCSI_STATUS_PARAMETER_INVALID;
@@ -1740,41 +1737,41 @@ assemble_send_targets(pdu_t *pdu, uint8_t *val)
 void
 set_negotiated_parameters(ccb_t *ccb)
 {
-	negotiation_state_t *state = (negotiation_state_t *) ccb->temp_data;
-	connection_t *conn = ccb->connection;
-	session_t *sess = ccb->session;
+	negotiation_state_t *state = (negotiation_state_t *) ccb->ccb_temp_data;
+	connection_t *conn = ccb->ccb_connection;
+	session_t *sess = ccb->ccb_session;
 
-	conn->HeaderDigest = state->HeaderDigest;
-	conn->DataDigest = state->DataDigest;
-	sess->ErrorRecoveryLevel = state->ErrorRecoveryLevel;
-	sess->InitialR2T = state->InitialR2T;
-	sess->ImmediateData = state->ImmediateData;
-	conn->MaxRecvDataSegmentLength = state->MaxRecvDataSegmentLength;
-	sess->MaxConnections = state->MaxConnections;
-	sess->DefaultTime2Wait = conn->Time2Wait = state->DefaultTime2Wait;
-	sess->DefaultTime2Retain = conn->Time2Retain =
+	conn->c_HeaderDigest = state->HeaderDigest;
+	conn->c_DataDigest = state->DataDigest;
+	sess->s_ErrorRecoveryLevel = state->ErrorRecoveryLevel;
+	sess->s_InitialR2T = state->InitialR2T;
+	sess->s_ImmediateData = state->ImmediateData;
+	conn->c_MaxRecvDataSegmentLength = state->MaxRecvDataSegmentLength;
+	sess->s_MaxConnections = state->MaxConnections;
+	sess->s_DefaultTime2Wait = conn->c_Time2Wait = state->DefaultTime2Wait;
+	sess->s_DefaultTime2Retain = conn->c_Time2Retain =
 		state->DefaultTime2Retain;
 
 	/* set idle connection timeout to half the Time2Retain window so we */
 	/* don't miss it, unless Time2Retain is ridiculously small. */
-	conn->idle_timeout_val = (conn->Time2Retain >= 10) ?
-		(conn->Time2Retain / 2) * hz : CONNECTION_IDLE_TIMEOUT;
+	conn->c_idle_timeout_val = (conn->c_Time2Retain >= 10) ?
+		(conn->c_Time2Retain / 2) * hz : CONNECTION_IDLE_TIMEOUT;
 
-	sess->MaxBurstLength = state->MaxBurstLength;
-	sess->FirstBurstLength = state->FirstBurstLength;
-	sess->MaxOutstandingR2T = state->MaxOutstandingR2T;
+	sess->s_MaxBurstLength = state->MaxBurstLength;
+	sess->s_FirstBurstLength = state->FirstBurstLength;
+	sess->s_MaxOutstandingR2T = state->MaxOutstandingR2T;
 
 	DEBC(conn, 10,("SetNegPar: MRDSL=%d, MBL=%d, FBL=%d, IR2T=%d, ImD=%d\n",
 		state->MaxRecvDataSegmentLength, state->MaxBurstLength,
 		state->FirstBurstLength, state->InitialR2T,
 		state->ImmediateData));
 
-	conn->max_transfer = min(sess->MaxBurstLength, conn->MaxRecvDataSegmentLength);
+	conn->c_max_transfer = min(sess->s_MaxBurstLength, conn->c_MaxRecvDataSegmentLength);
 
-	conn->max_firstimmed = (!sess->ImmediateData) ? 0 :
-				min(sess->FirstBurstLength, conn->max_transfer);
+	conn->c_max_firstimmed = (!sess->s_ImmediateData) ? 0 :
+				min(sess->s_FirstBurstLength, conn->c_max_transfer);
 
-	conn->max_firstdata = (sess->InitialR2T || sess->FirstBurstLength < conn->max_firstimmed) ? 0 :
-				min(sess->FirstBurstLength - conn->max_firstimmed, conn->max_transfer);
+	conn->c_max_firstdata = (sess->s_InitialR2T || sess->s_FirstBurstLength < conn->c_max_firstimmed) ? 0 :
+				min(sess->s_FirstBurstLength - conn->c_max_firstimmed, conn->c_max_transfer);
 
 }

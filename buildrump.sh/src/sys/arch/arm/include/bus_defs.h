@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_defs.h,v 1.10 2014/01/29 00:42:15 matt Exp $	*/
+/*	$NetBSD: bus_defs.h,v 1.17 2021/08/30 22:56:26 jmcneill Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2001 The NetBSD Foundation, Inc.
@@ -66,6 +66,7 @@
 
 #if defined(_KERNEL_OPT)
 #include "opt_arm_bus_space.h"
+#include "opt_kasan.h"
 #endif
 
 /*
@@ -97,9 +98,20 @@ typedef u_long bus_space_handle_t;
 #define	BUS_SPACE_MAP_LINEAR		0x02
 #define	BUS_SPACE_MAP_PREFETCHABLE     	0x04
 
+#define	BUS_SPACE_MAP_BUS1		0x0100
+#define	BUS_SPACE_MAP_BUS2		0x0200
+#define	BUS_SPACE_MAP_BUS3		0x0400
+#define	BUS_SPACE_MAP_BUS4		0x0800
+
+#define	_ARM_BUS_SPACE_MAP_STRONGLY_ORDERED	BUS_SPACE_MAP_BUS1
+
 struct bus_space {
 	/* cookie */
 	void		*bs_cookie;
+
+	/* used for aarch64. require ".bs_cookie = bus_space" */
+	int		bs_stride;	/* offset <<= bs_stride (if needed) */
+	int		bs_flags;
 
 	/* mapping/unmapping */
 	int		(*bs_map)(void *, bus_addr_t, bus_size_t,
@@ -145,7 +157,7 @@ struct bus_space {
 			    bus_size_t, uint32_t *, bus_size_t);
 	void		(*bs_rm_8)(void *, bus_space_handle_t,
 			    bus_size_t, uint64_t *, bus_size_t);
-					
+
 	/* read region */
 	void		(*bs_rr_1)(void *, bus_space_handle_t,
 			    bus_size_t, uint8_t *, bus_size_t);
@@ -155,7 +167,7 @@ struct bus_space {
 			    bus_size_t, uint32_t *, bus_size_t);
 	void		(*bs_rr_8)(void *, bus_space_handle_t,
 			    bus_size_t, uint64_t *, bus_size_t);
-					
+
 	/* write (single) */
 	void		(*bs_w_1)(void *, bus_space_handle_t,
 			    bus_size_t, uint8_t);
@@ -175,7 +187,7 @@ struct bus_space {
 			    bus_size_t, const uint32_t *, bus_size_t);
 	void		(*bs_wm_8)(void *, bus_space_handle_t,
 			    bus_size_t, const uint64_t *, bus_size_t);
-					
+
 	/* write region */
 	void		(*bs_wr_1)(void *, bus_space_handle_t,
 			    bus_size_t, const uint8_t *, bus_size_t);
@@ -236,7 +248,7 @@ struct bus_space {
 			    bus_size_t, uint32_t *, bus_size_t);
 	void		(*bs_rm_8_s)(void *, bus_space_handle_t,
 			    bus_size_t, uint64_t *, bus_size_t);
-					
+
 	/* read region stream */
 	void		(*bs_rr_1_s)(void *, bus_space_handle_t,
 			    bus_size_t, uint8_t *, bus_size_t);
@@ -246,7 +258,7 @@ struct bus_space {
 			    bus_size_t, uint32_t *, bus_size_t);
 	void		(*bs_rr_8_s)(void *, bus_space_handle_t,
 			    bus_size_t, uint64_t *, bus_size_t);
-					
+
 	/* write stream (single) */
 	void		(*bs_w_1_s)(void *, bus_space_handle_t,
 			    bus_size_t, uint8_t);
@@ -266,7 +278,7 @@ struct bus_space {
 			    bus_size_t, const uint32_t *, bus_size_t);
 	void		(*bs_wm_8_s)(void *, bus_space_handle_t,
 			    bus_size_t, const uint64_t *, bus_size_t);
-					
+
 	/* write region stream */
 	void		(*bs_wr_1_s)(void *, bus_space_handle_t,
 			    bus_size_t, const uint8_t *, bus_size_t);
@@ -277,6 +289,28 @@ struct bus_space {
 	void		(*bs_wr_8_s)(void *, bus_space_handle_t,
 			    bus_size_t, const uint64_t *, bus_size_t);
 #endif	/* __BUS_SPACE_HAS_STREAM_METHODS */
+
+#ifdef __BUS_SPACE_HAS_PROBING_METHODS
+	/* peek */
+	int		(*bs_pe_1)(void *, bus_space_handle_t,
+			    bus_size_t, uint8_t *);
+	int		(*bs_pe_2)(void *, bus_space_handle_t,
+			    bus_size_t, uint16_t *);
+	int		(*bs_pe_4)(void *, bus_space_handle_t,
+			    bus_size_t, uint32_t *);
+	int		(*bs_pe_8)(void *, bus_space_handle_t,
+			    bus_size_t, uint64_t *);
+
+	/* poke */
+	int		(*bs_po_1)(void *, bus_space_handle_t,
+			    bus_size_t, uint8_t);
+	int		(*bs_po_2)(void *, bus_space_handle_t,
+			    bus_size_t, uint16_t);
+	int		(*bs_po_4)(void *, bus_space_handle_t,
+			    bus_size_t, uint32_t);
+	int		(*bs_po_8)(void *, bus_space_handle_t,
+			    bus_size_t, uint64_t);
+#endif /* __BUS_SPACE_HAS_PROBING_METHODS */
 };
 
 #define	BUS_SPACE_BARRIER_READ	0x01
@@ -338,7 +372,12 @@ struct arm32_bus_dma_segment {
 	 */
 	bus_addr_t	ds_addr;	/* DMA address */
 	bus_size_t	ds_len;		/* length of transfer */
+
+	/*
+	 * PRIVATE MEMBERS:
+	 */
 	uint32_t	_ds_flags;	/* _BUS_DMAMAP_COHERENT */
+	paddr_t		_ds_paddr;	/* CPU address */
 };
 typedef struct arm32_bus_dma_segment	bus_dma_segment_t;
 
@@ -443,10 +482,16 @@ struct arm32_bus_dmamap {
 	struct vmspace	*_dm_vmspace;	/* vmspace that owns the mapping */
 
 	void		*_dm_cookie;	/* cookie for bus-specific functions */
+	void		*_dm_iommu;	/* cookie for iommu functions */
 
 	/*
 	 * PUBLIC MEMBERS: these are used by machine-independent code.
 	 */
+#if defined(KASAN)
+	void		*dm_buf;
+	bus_size_t	dm_buflen;
+	int		dm_buftype;
+#endif
 	bus_size_t	dm_maxsegsz;	/* largest possible segment */
 	bus_size_t	dm_mapsize;	/* size of the mapping */
 	int		dm_nsegs;	/* # valid segments in mapping */

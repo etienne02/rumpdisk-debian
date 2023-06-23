@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_dag.h,v 1.19 2005/12/11 12:23:37 christos Exp $	*/
+/*	$NetBSD: rf_dag.h,v 1.21 2020/06/19 19:29:39 jdolecek Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -89,11 +89,11 @@ typedef RF_uint8 RF_DagNodeFlags_t;
 
 struct RF_DagNode_s {
 	RF_NodeStatus_t status;	/* current status of this node */
-	int     (*doFunc) (RF_DagNode_t *);	/* normal function */
-	int     (*undoFunc) (RF_DagNode_t *);	/* func to remove effect of
+	void    (*doFunc) (RF_DagNode_t *);	/* normal function */
+	void    (*undoFunc) (RF_DagNode_t *);	/* func to remove effect of
 						 * doFunc */
-	int     (*wakeFunc) (RF_DagNode_t *, int status);	/* func called when the
-								 * node completes an I/O */
+	void    (*wakeFunc) (void *, int);	/* func called when the
+						 * node completes an I/O */
 	int     numParams;	/* number of parameters required by *funcPtr */
 	int     numResults;	/* number of results produced by *funcPtr */
 	int     numAntecedents;	/* number of antecedents */
@@ -178,7 +178,7 @@ struct RF_DagHeader_s {
 	RF_Raid_t *raidPtr;	/* the descriptor for the RAID device this DAG
 				 * is for */
 	RF_RaidAccessDesc_t *desc;	/* ptr to descriptor for this access */
-	void   *bp;		/* the bp for this I/O passed down from the
+	const struct buf *bp;	/* the bp for this I/O passed down from the
 				 * file system. ignored outside kernel */
 };
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: hme.c,v 1.108 2020/03/12 03:01:46 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.108 2020/03/12 03:01:46 thorpej Exp $");
 
 /* #define HMEDEBUG */
 
@@ -56,6 +56,7 @@ __KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $");
 #include <net/if_dl.h>
 #include <net/if_ether.h>
 #include <net/if_media.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <net/if_vlanvar.h>
@@ -67,10 +68,6 @@ __KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.93 2016/06/10 13:27:13 ozaki-r Exp $");
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
@@ -89,13 +86,13 @@ static bool	hme_shutdown(device_t, int);
 static int	hme_init(struct ifnet *);
 static void	hme_meminit(struct hme_softc *);
 static void	hme_mifinit(struct hme_softc *);
-static void	hme_reset(struct hme_softc *);  
+static void	hme_reset(struct hme_softc *);
 static void	hme_chipreset(struct hme_softc *);
 static void	hme_setladrf(struct hme_softc *);
 
 /* MII methods & callbacks */
-static int	hme_mii_readreg(device_t, int, int);
-static void	hme_mii_writereg(device_t, int, int, int);
+static int	hme_mii_readreg(device_t, int, int, uint16_t *);
+static int	hme_mii_writereg(device_t, int, int, uint16_t);
 static void	hme_mii_statchg(struct ifnet *);
 
 static int	hme_mediachange(struct ifnet *);
@@ -198,7 +195,7 @@ hme_config(struct hme_softc *sc)
 	/* Map DMA memory in CPU addressable space */
 	if ((error = bus_dmamem_map(dmatag, &seg, rseg, size,
 				    &sc->sc_rb.rb_membase,
-				    BUS_DMA_NOWAIT|BUS_DMA_COHERENT)) != 0) {
+				    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(sc->sc_dev, "DMA buffer map error %d\n",
 			error);
 		bus_dmamap_unload(dmatag, sc->sc_dmamap);
@@ -216,7 +213,7 @@ hme_config(struct hme_softc *sc)
 	/* Load the buffer */
 	if ((error = bus_dmamap_load(dmatag, sc->sc_dmamap,
 	    sc->sc_rb.rb_membase, size, NULL,
-	    BUS_DMA_NOWAIT|BUS_DMA_COHERENT)) != 0) {
+	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(sc->sc_dev, "DMA buffer map load error %d\n",
 			error);
 		bus_dmamem_free(dmatag, &seg, rseg);
@@ -235,8 +232,7 @@ hme_config(struct hme_softc *sc)
 	ifp->if_ioctl = hme_ioctl;
 	ifp->if_init = hme_init;
 	ifp->if_watchdog = hme_watchdog;
-	ifp->if_flags =
-	    IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS | IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	sc->sc_if_flags = ifp->if_flags;
 	ifp->if_capabilities |=
 	    IFCAP_CSUM_TCPv4_Tx | IFCAP_CSUM_TCPv4_Rx |
@@ -260,8 +256,8 @@ hme_config(struct hme_softc *sc)
 	child = LIST_FIRST(&mii->mii_phys);
 	if (child == NULL) {
 		/* No PHY attached */
-		ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|IFM_MANUAL, 0, NULL);
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_MANUAL);
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_MANUAL, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_MANUAL);
 	} else {
 		/*
 		 * Walk along the list of attached MII devices and
@@ -293,8 +289,8 @@ hme_config(struct hme_softc *sc)
 		 * the auto negotiation capability.
 		 * XXX; What to do otherwise?
 		 */
-		if (ifmedia_match(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO, 0))
-			ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		if (ifmedia_match(&mii->mii_media, IFM_ETHER | IFM_AUTO, 0))
+			ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 /*
 		else
 			ifmedia_set(&sc->sc_mii.mii_media, sc->sc_defaultmedia);
@@ -306,6 +302,7 @@ hme_config(struct hme_softc *sc)
 
 	/* Attach the interface. */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, sc->sc_enaddr);
 
 	if (pmf_device_register1(sc->sc_dev, NULL, NULL, hme_shutdown))
@@ -318,6 +315,7 @@ hme_config(struct hme_softc *sc)
 			  RND_TYPE_NET, RND_FLAG_DEFAULT);
 
 	callout_init(&sc->sc_tick_ch, 0);
+	callout_setfunc(&sc->sc_tick_ch, hme_tick, sc);
 }
 
 void
@@ -330,7 +328,7 @@ hme_tick(void *arg)
 	mii_tick(&sc->sc_mii);
 	splx(s);
 
-	callout_reset(&sc->sc_tick_ch, hz, hme_tick, sc);
+	callout_schedule(&sc->sc_tick_ch, hz);
 }
 
 void
@@ -638,7 +636,7 @@ hme_init(struct ifnet *ifp)
 		return rc;
 
 	/* Start the one second timer. */
-	callout_reset(&sc->sc_tick_ch, hz, hme_tick, sc);
+	callout_schedule(&sc->sc_tick_ch, hz);
 
 	ifp->if_flags |= IFF_RUNNING;
 	ifp->if_flags &= ~IFF_OACTIVE;
@@ -665,13 +663,13 @@ hme_put(struct hme_softc *sc, int ri, struct mbuf *m)
 	for (; m; m = n) {
 		len = m->m_len;
 		if (len == 0) {
-			MFREE(m, n);
+			n = m_free(m);
 			continue;
 		}
 		memcpy(bp, mtod(m, void *), len);
 		bp += len;
 		tlen += len;
-		MFREE(m, n);
+		n = m_free(m);
 	}
 	return (tlen);
 }
@@ -697,6 +695,7 @@ hme_get(struct hme_softc *sc, int ri, uint32_t flags)
 	MGETHDR(m0, M_DONTWAIT, MT_DATA);
 	if (m0 == 0)
 		return (0);
+	MCLAIM(m0, &sc->sc_ethercom.ec_rx_mowner);
 	m_set_rcvif(m0, ifp);
 	m0->m_pkthdr.len = totlen;
 	len = MHLEN;
@@ -720,7 +719,7 @@ hme_get(struct hme_softc *sc, int ri, uint32_t flags)
 			m->m_data = newdata;
 		}
 
-		m->m_len = len = min(totlen, len);
+		m->m_len = len = uimin(totlen, len);
 		memcpy(mtod(m, void *), bp, len);
 		bp += len;
 
@@ -752,7 +751,7 @@ hme_get(struct hme_softc *sc, int ri, uint32_t flags)
 			pktlen = m0->m_pkthdr.len - ETHER_HDR_LEN;
 		} else if (ntohs(eh->ether_type) == ETHERTYPE_VLAN) {
 			evh = (struct ether_vlan_header *)eh;
-			if (ntohs(evh->evl_proto != ETHERTYPE_IP))
+			if (ntohs(evh->evl_proto) != ETHERTYPE_IP)
 				goto swcsum;
 			ip = (struct ip *)((char *)eh + ETHER_HDR_LEN +
 			    ETHER_VLAN_ENCAP_LEN);
@@ -865,24 +864,16 @@ hme_read(struct hme_softc *sc, int ix, uint32_t flags)
 		printf("%s: invalid packet size %d; dropping\n",
 		    device_xname(sc->sc_dev), len);
 #endif
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
 
 	/* Pull packet off interface. */
 	m = hme_get(sc, ix, flags);
 	if (m == 0) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		return;
 	}
-
-	ifp->if_ipackets++;
-
-	/*
-	 * Check if there's a BPF listener on this interface.
-	 * If so, hand off the raw packet to BPF.
-	 */
-	bpf_mtap(ifp, m);
 
 	/* Pass the packet up. */
 	if_percpuq_enqueue(ifp->if_percpuq, m);
@@ -913,7 +904,7 @@ hme_start(struct ifnet *ifp)
 		 * If BPF is listening on this interface, let it see the
 		 * packet before we commit it to the wire.
 		 */
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 #ifdef INET
 		/* collect bits for h/w csum, before hme_put frees the mbuf */
@@ -940,7 +931,7 @@ hme_start(struct ifnet *ifp)
 			    + start;
 			txflags = HME_XD_TXCKSUM |
 				  (offset << HME_XD_TXCSSTUFFSHIFT) |
-		  		  (start << HME_XD_TXCSSTARTSHIFT);
+				  (start << HME_XD_TXCSSTARTSHIFT);
 		} else
 #endif
 			txflags = 0;
@@ -987,15 +978,17 @@ hme_tint(struct hme_softc *sc)
 	bus_space_handle_t mac = sc->sc_mac;
 	unsigned int ri, txflags;
 
+	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
+
 	/*
 	 * Unload collision counters
 	 */
-	ifp->if_collisions +=
+	if_statadd_ref(nsr, if_collisions,
 		bus_space_read_4(t, mac, HME_MACI_NCCNT) +
-		bus_space_read_4(t, mac, HME_MACI_FCCNT);
-	ifp->if_oerrors +=
+		bus_space_read_4(t, mac, HME_MACI_FCCNT));
+	if_statadd_ref(nsr, if_oerrors,
 		bus_space_read_4(t, mac, HME_MACI_EXCNT) +
-		bus_space_read_4(t, mac, HME_MACI_LTCNT);
+		bus_space_read_4(t, mac, HME_MACI_LTCNT));
 
 	/*
 	 * then clear the hardware counters.
@@ -1018,7 +1011,7 @@ hme_tint(struct hme_softc *sc)
 			break;
 
 		ifp->if_flags &= ~IFF_OACTIVE;
-		ifp->if_opackets++;
+		if_statinc_ref(nsr, if_opackets);
 
 		if (++ri == sc->sc_rb.rb_ntbuf)
 			ri = 0;
@@ -1026,10 +1019,12 @@ hme_tint(struct hme_softc *sc)
 		--sc->sc_rb.rb_td_nbusy;
 	}
 
+	IF_STAT_PUTREF(ifp);
+
 	/* Update ring */
 	sc->sc_rb.rb_tdtail = ri;
 
-	hme_start(ifp);
+	if_schedule_deferred_start(ifp);
 
 	if (sc->sc_rb.rb_td_nbusy == 0)
 		ifp->if_timer = 0;
@@ -1078,11 +1073,11 @@ hme_rint(struct hme_softc *sc)
 	sc->sc_rb.rb_rdtail = ri;
 
 	/* Read error counters ... */
-	ifp->if_ierrors +=
+	if_statadd(ifp, if_ierrors,
 	    bus_space_read_4(t, mac, HME_MACI_STAT_LCNT) +
 	    bus_space_read_4(t, mac, HME_MACI_STAT_ACNT) +
 	    bus_space_read_4(t, mac, HME_MACI_STAT_CCNT) +
-	    bus_space_read_4(t, mac, HME_MACI_STAT_CVCNT);
+	    bus_space_read_4(t, mac, HME_MACI_STAT_CVCNT));
 
 	/* ... then clear the hardware counters. */
 	bus_space_write_4(t, mac, HME_MACI_STAT_LCNT, 0);
@@ -1111,14 +1106,16 @@ hme_eint(struct hme_softc *sc, u_int status)
 	}
 
 	/* Receive error counters rolled over */
+	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 	if (status & HME_SEB_STAT_ACNTEXP)
-		ifp->if_ierrors += 0xff;
+		if_statadd_ref(nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_CCNTEXP)
-		ifp->if_ierrors += 0xff;
+		if_statadd_ref(nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_LCNTEXP)
-		ifp->if_ierrors += 0xff;
+		if_statadd_ref(nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_CVCNTEXP)
-		ifp->if_ierrors += 0xff;
+		if_statadd_ref(nsr, if_ierrors, 0xff);
+	IF_STAT_PUTREF(ifp);
 
 	/* RXTERR locks up the interface, so do a reset */
 	if (status & HME_SEB_STAT_RXTERR)
@@ -1126,7 +1123,7 @@ hme_eint(struct hme_softc *sc, u_int status)
 
 	snprintb(bits, sizeof(bits), HME_SEB_STAT_BITS, status);
 	printf("%s: status=%s\n", device_xname(sc->sc_dev), bits);
-		
+
 	return (1);
 }
 
@@ -1162,7 +1159,7 @@ hme_watchdog(struct ifnet *ifp)
 	struct hme_softc *sc = ifp->if_softc;
 
 	log(LOG_ERR, "%s: device timeout\n", device_xname(sc->sc_dev));
-	++ifp->if_oerrors;
+	if_statinc(ifp, if_oerrors);
 
 	hme_reset(sc);
 }
@@ -1204,18 +1201,18 @@ hme_mifinit(struct hme_softc *sc)
  * MII interface
  */
 static int
-hme_mii_readreg(device_t self, int phy, int reg)
+hme_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 {
 	struct hme_softc *sc = device_private(self);
 	bus_space_tag_t t = sc->sc_bustag;
 	bus_space_handle_t mif = sc->sc_mif;
 	bus_space_handle_t mac = sc->sc_mac;
 	uint32_t v, xif_cfg, mifi_cfg;
-	int n;
+	int n, rv;
 
 	/* We can at most have two PHYs */
 	if (phy != HME_PHYAD_EXTERNAL && phy != HME_PHYAD_INTERNAL)
-		return (0);
+		return -1;
 
 	/* Select the desired PHY in the MIF configuration register */
 	v = mifi_cfg = bus_space_read_4(t, mif, HME_MIFI_CFG);
@@ -1242,8 +1239,10 @@ hme_mii_readreg(device_t self, int phy, int reg)
 	mif_mdi_bit = 1 << (8 + (1 - phy));
 	delay(100);
 	v = bus_space_read_4(t, mif, HME_MIFI_CFG);
-	if ((v & mif_mdi_bit) == 0)
-		return (0);
+	if ((v & mif_mdi_bit) == 0) {
+		rv = -1;
+		goto out;
+	}
 #endif
 
 	/* Construct the frame command */
@@ -1258,12 +1257,13 @@ hme_mii_readreg(device_t self, int phy, int reg)
 		DELAY(1);
 		v = bus_space_read_4(t, mif, HME_MIFI_FO);
 		if (v & HME_MIF_FO_TALSB) {
-			v &= HME_MIF_FO_DATA;
+			*val = v & HME_MIF_FO_DATA;
+			rv = 0;
 			goto out;
 		}
 	}
 
-	v = 0;
+	rv = ETIMEDOUT;
 	printf("%s: mii_read timeout\n", device_xname(sc->sc_dev));
 
 out:
@@ -1271,22 +1271,22 @@ out:
 	bus_space_write_4(t, mif, HME_MIFI_CFG, mifi_cfg);
 	/* Restore XIF register */
 	bus_space_write_4(t, mac, HME_MACI_XIF, xif_cfg);
-	return (v);
+	return rv;
 }
 
-static void
-hme_mii_writereg(device_t self, int phy, int reg, int val)
+static int
+hme_mii_writereg(device_t self, int phy, int reg, uint16_t val)
 {
 	struct hme_softc *sc = device_private(self);
 	bus_space_tag_t t = sc->sc_bustag;
 	bus_space_handle_t mif = sc->sc_mif;
 	bus_space_handle_t mac = sc->sc_mac;
 	uint32_t v, xif_cfg, mifi_cfg;
-	int n;
+	int n, rv;
 
 	/* We can at most have two PHYs */
 	if (phy != HME_PHYAD_EXTERNAL && phy != HME_PHYAD_INTERNAL)
-		return;
+		return -1;
 
 	/* Select the desired PHY in the MIF configuration register */
 	v = mifi_cfg = bus_space_read_4(t, mif, HME_MIFI_CFG);
@@ -1313,8 +1313,10 @@ hme_mii_writereg(device_t self, int phy, int reg, int val)
 	mif_mdi_bit = 1 << (8 + (1 - phy));
 	delay(100);
 	v = bus_space_read_4(t, mif, HME_MIFI_CFG);
-	if ((v & mif_mdi_bit) == 0)
-		return;
+	if ((v & mif_mdi_bit) == 0) {
+		rv = -1;
+		goto out;
+	}
 #endif
 
 	/* Construct the frame command */
@@ -1329,16 +1331,21 @@ hme_mii_writereg(device_t self, int phy, int reg, int val)
 	for (n = 0; n < 100; n++) {
 		DELAY(1);
 		v = bus_space_read_4(t, mif, HME_MIFI_FO);
-		if (v & HME_MIF_FO_TALSB)
+		if (v & HME_MIF_FO_TALSB) {
+			rv = 0;
 			goto out;
+		}
 	}
 
+	rv = ETIMEDOUT;
 	printf("%s: mii_write timeout\n", device_xname(sc->sc_dev));
 out:
 	/* Restore MIFI_CFG register */
 	bus_space_write_4(t, mif, HME_MIFI_CFG, mifi_cfg);
 	/* Restore XIF register */
 	bus_space_write_4(t, mac, HME_MACI_XIF, xif_cfg);
+
+	return rv;
 }
 
 static void
@@ -1450,7 +1457,7 @@ hme_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 		if ((error = ifioctl_common(ifp, cmd, data)) != 0)
 			break;
 
-		switch (ifp->if_flags & (IFF_UP|IFF_RUNNING)) {
+		switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 		case IFF_RUNNING:
 			/*
 			 * If interface is marked down and it is running, then
@@ -1466,7 +1473,7 @@ hme_ioctl(struct ifnet *ifp, unsigned long cmd, void *data)
 			 */
 			error = hme_init(ifp);
 			break;
-		case IFF_UP|IFF_RUNNING:
+		case IFF_UP | IFF_RUNNING:
 			/*
 			 * If setting debug or promiscuous mode, do not reset
 			 * the chip; for everything else, call hme_init()
@@ -1569,6 +1576,7 @@ hme_setladrf(struct hme_softc *sc)
 	 * the word.
 	 */
 
+	ETHER_LOCK(ec);
 	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi, ETHER_ADDR_LEN)) {
@@ -1582,6 +1590,7 @@ hme_setladrf(struct hme_softc *sc)
 			 */
 			hash[3] = hash[2] = hash[1] = hash[0] = 0xffff;
 			ifp->if_flags |= IFF_ALLMULTI;
+			ETHER_UNLOCK(ec);
 			goto chipit;
 		}
 
@@ -1595,6 +1604,7 @@ hme_setladrf(struct hme_softc *sc)
 
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 
 	ifp->if_flags &= ~IFF_ALLMULTI;
 

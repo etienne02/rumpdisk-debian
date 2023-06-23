@@ -1,4 +1,4 @@
-/*	$NetBSD: mb89352.c,v 1.54 2013/11/04 16:54:56 christos Exp $	*/
+/*	$NetBSD: mb89352.c,v 1.60 2021/08/07 16:19:12 thorpej Exp $	*/
 /*	NecBSD: mb89352.c,v 1.4 1998/03/14 07:31:20 kmatsuda Exp	*/
 
 /*-
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb89352.c,v 1.54 2013/11/04 16:54:56 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb89352.c,v 1.60 2021/08/07 16:19:12 thorpej Exp $");
 
 #ifdef DDB
 #define	integrate
@@ -164,6 +164,8 @@ __KERNEL_RCSID(0, "$NetBSD: mb89352.c,v 1.54 2013/11/04 16:54:56 christos Exp $"
 #include <dev/ic/mb89352reg.h>
 #include <dev/ic/mb89352var.h>
 
+#include "ioconf.h"
+
 #ifndef DDB
 #define	Debugger() panic("should call debugger here (mb89352.c)")
 #endif /* ! DDB */
@@ -198,8 +200,6 @@ void	spc_dump89352(struct spc_softc *);
 void	spc_show_scsi_cmd(struct spc_acb *);
 void	spc_print_active_acb(void);
 #endif
-
-extern struct cfdriver spc_cd;
 
 /*
  * INITIALIZATION ROUTINES (probe, attach ++)
@@ -293,7 +293,7 @@ spc_attach(struct spc_softc *sc)
 
 	/*
 	 * Add reference to adapter so that we drop the reference after
-	 * config_found() to make sure the adatper is disabled.
+	 * config_found() to make sure the adapter is disabled.
 	 */
 	if (scsipi_adapter_addref(adapt) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to enable controller\n");
@@ -305,7 +305,7 @@ spc_attach(struct spc_softc *sc)
 	/*
 	 * ask the adapter what subunits are present
 	 */
-	sc->sc_child = config_found(sc->sc_dev, chan, scsiprint);
+	sc->sc_child = config_found(sc->sc_dev, chan, scsiprint, CFARGS_NONE);
 	scsipi_adapter_delref(adapt);
 }
 
@@ -932,6 +932,7 @@ nextbyte:
 	 */
 	for (;;) {
 #ifdef NO_MANUAL_XFER /* XXX */
+		uint8_t intstat;
 		if (bus_space_read_1(iot, ioh, INTS) != 0) {
 			/*
 			 * Target left MESSAGE IN, probably because it
@@ -960,12 +961,18 @@ nextbyte:
 #else
 		bus_space_write_1(iot, ioh, SCMD, SCMD_XFR | SCMD_PROG_XFR);
 #endif
+		intstat = 0;
 		for (;;) {
 			if ((bus_space_read_1(iot, ioh, SSTS) &
 			    SSTS_DREG_EMPTY) == 0)
 				break;
-			if (bus_space_read_1(iot, ioh, INTS) != 0)
+			/*
+			 * We have to read INTS before checking SSTS to avoid
+			 * race between SSTS_DREG_EMPTY and INTS_CMD_DONE.
+			 */
+			if (intstat != 0)
 				goto out;
+			intstat = bus_space_read_1(iot, ioh, INTS);
 		}
 		msg = bus_space_read_1(iot, ioh, DREG);
 #else
@@ -1484,7 +1491,7 @@ spc_dataout_pio(struct spc_softc *sc, uint8_t *p, int n)
 			DELAY(1);
 		}
 
-		xfer = min(DOUTAMOUNT, n);
+		xfer = uimin(DOUTAMOUNT, n);
 
 		SPC_MISC(("%d> ", xfer));
 

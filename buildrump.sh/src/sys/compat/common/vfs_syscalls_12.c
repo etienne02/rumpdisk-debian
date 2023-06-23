@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_syscalls_12.c,v 1.31 2014/09/05 09:21:54 matt Exp $	*/
+/*	$NetBSD: vfs_syscalls_12.c,v 1.37 2019/01/27 02:08:39 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -37,7 +37,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_12.c,v 1.31 2014/09/05 09:21:54 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_12.c,v 1.37 2019/01/27 02:08:39 pgoyette Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,10 +57,23 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_12.c,v 1.31 2014/09/05 09:21:54 matt Ex
 #include <sys/dirent.h>
 #include <sys/vfs_syscalls.h>
 
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 
 #include <compat/sys/stat.h>
 #include <compat/sys/dirent.h>
+
+#include <compat/common/compat_mod.h>
+
+static const struct syscall_package vfs_syscalls_12_syscalls[] = {
+	{ SYS_compat_12_fstat12, 0, (sy_call_t *)compat_12_sys_fstat },
+	{ SYS_compat_12_getdirentries, 0,
+	    (sy_call_t *)compat_12_sys_getdirentries },
+	{ SYS_compat_12_lstat12, 0, (sy_call_t *)compat_12_sys_lstat },
+	{ SYS_compat_12_stat12, 0, (sy_call_t *)compat_12_sys_stat },
+	{ 0, 0, NULL } 
+};
 
 /*
  * Convert from a new to an old stat structure.
@@ -89,7 +106,8 @@ compat_12_stat_conv(const struct stat *st, struct stat12 *ost)
  * Read a block of directory entries in a file system independent format.
  */
 int
-compat_12_sys_getdirentries(struct lwp *l, const struct compat_12_sys_getdirentries_args *uap, register_t *retval)
+compat_12_sys_getdirentries(struct lwp *l,
+    const struct compat_12_sys_getdirentries_args *uap, register_t *retval)
 {
 	/* {
 		syscallarg(int) fd;
@@ -137,7 +155,7 @@ compat_12_sys_getdirentries(struct lwp *l, const struct compat_12_sys_getdirentr
 
 	loff = fp->f_offset;
 	nbytes = SCARG(uap, count);
-	buflen = min(MAXBSIZE, nbytes);
+	buflen = uimin(MAXBSIZE, nbytes);
 	if (buflen < va.va_blocksize)
 		buflen = va.va_blocksize;
 	tbuf = malloc(buflen, M_TEMP, M_WAITOK);
@@ -171,8 +189,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic(__func__);
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if (bdp->d_fileno == 0) {
 			inp += reclen;	/* it is a hole; squish it out */
 			if (cookie)
@@ -181,6 +201,10 @@ again:
 				off += reclen;
 			continue;
 		}
+		if (bdp->d_namlen >= sizeof(idb.d_name))
+			idb.d_namlen = sizeof(idb.d_name) - 1;
+		else
+			idb.d_namlen = bdp->d_namlen;
 		old_reclen = _DIRENT_RECLEN(&idb, bdp->d_namlen);
 		if (reclen > len || resid < old_reclen) {
 			/* entry too big for buffer, so just stop */
@@ -195,8 +219,9 @@ again:
 		idb.d_fileno = (uint32_t)bdp->d_fileno;
 		idb.d_reclen = (uint16_t)old_reclen;
 		idb.d_type = (uint8_t)bdp->d_type;
-		idb.d_namlen = (uint8_t)bdp->d_namlen;
-		strcpy(idb.d_name, bdp->d_name);
+		(void)memcpy(idb.d_name, bdp->d_name, idb.d_namlen);
+		memset(idb.d_name + idb.d_namlen, 0,
+		    idb.d_reclen - _DIRENT_NAMEOFF(&idb) - idb.d_namlen);
 		if ((error = copyout(&idb, outp, old_reclen)))
 			goto out;
 		/* advance past this real entry */
@@ -238,7 +263,8 @@ out1:
  */
 /* ARGSUSED */
 int
-compat_12_sys_stat(struct lwp *l, const struct compat_12_sys_stat_args *uap, register_t *retval)
+compat_12_sys_stat(struct lwp *l, const struct compat_12_sys_stat_args *uap,
+    register_t *retval)
 {
 	/* {
 		syscallarg(const char *) path;
@@ -262,7 +288,8 @@ compat_12_sys_stat(struct lwp *l, const struct compat_12_sys_stat_args *uap, reg
  */
 /* ARGSUSED */
 int
-compat_12_sys_lstat(struct lwp *l, const struct compat_12_sys_lstat_args *uap, register_t *retval)
+compat_12_sys_lstat(struct lwp *l, const struct compat_12_sys_lstat_args *uap,
+    register_t *retval)
 {
 	/* {
 		syscallarg(const char *) path;
@@ -285,7 +312,8 @@ compat_12_sys_lstat(struct lwp *l, const struct compat_12_sys_lstat_args *uap, r
  */
 /* ARGSUSED */
 int
-compat_12_sys_fstat(struct lwp *l, const struct compat_12_sys_fstat_args *uap, register_t *retval)
+compat_12_sys_fstat(struct lwp *l, const struct compat_12_sys_fstat_args *uap,
+    register_t *retval)
 {
 	/* {
 		syscallarg(int) fd;
@@ -301,4 +329,18 @@ compat_12_sys_fstat(struct lwp *l, const struct compat_12_sys_fstat_args *uap, r
 		error = copyout(&oub, SCARG(uap, sb), sizeof (oub));
 	}
 	return (error);
+}
+
+int
+vfs_syscalls_12_init(void)
+{
+
+	return syscall_establish(NULL, vfs_syscalls_12_syscalls);
+}
+
+int
+vfs_syscalls_12_fini(void)
+{
+
+	return syscall_disestablish(NULL, vfs_syscalls_12_syscalls);
 }

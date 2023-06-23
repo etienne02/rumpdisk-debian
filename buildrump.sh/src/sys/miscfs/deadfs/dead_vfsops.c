@@ -1,4 +1,4 @@
-/*	$NetBSD: dead_vfsops.c,v 1.7 2015/07/01 08:13:53 hannken Exp $	*/
+/*	$NetBSD: dead_vfsops.c,v 1.9 2019/01/01 10:06:54 hannken Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dead_vfsops.c,v 1.7 2015/07/01 08:13:53 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dead_vfsops.c,v 1.9 2019/01/01 10:06:54 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -92,7 +92,7 @@ dead_panic(void)
  */
 int
 dead_newvnode(struct mount *mp, struct vnode *dvp, struct vnode *vp,
-    struct vattr *vap, kauth_cred_t cred,
+    struct vattr *vap, kauth_cred_t cred, void *extra,
     size_t *key_len, const void **new_key)
 {
 
@@ -108,8 +108,8 @@ dead_newvnode(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	uvm_vnp_setsize(vp, 0);
 	spec_node_init(vp, vap->va_rdev);
 
-	*key_len = sizeof(vp->v_interlock);
-	*new_key = &vp->v_interlock;
+	*key_len = 0;
+	*new_key = NULL;
 
 	return 0;
 }

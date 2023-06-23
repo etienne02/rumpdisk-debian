@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -250,7 +250,7 @@ AcpiExResolveOperands (
 
                     TargetOp = AML_DEBUG_OP;
 
-                    /*lint -fallthrough */
+                    ACPI_FALLTHROUGH;
 
                 case ACPI_REFCLASS_ARG:
                 case ACPI_REFCLASS_LOCAL:
@@ -314,7 +314,7 @@ AcpiExResolveOperands (
              * Else not a string - fall through to the normal Reference
              * case below
              */
-            /*lint -fallthrough */
+            ACPI_FALLTHROUGH;
 
         case ARGI_REFERENCE:            /* References: */
         case ARGI_INTEGER_REF:
@@ -428,11 +428,13 @@ AcpiExResolveOperands (
         case ARGI_INTEGER:
 
             /*
-             * Need an operand of type ACPI_TYPE_INTEGER,
-             * But we can implicitly convert from a STRING or BUFFER
-             * Aka - "Implicit Source Operand Conversion"
+             * Need an operand of type ACPI_TYPE_INTEGER, but we can
+             * implicitly convert from a STRING or BUFFER.
+             *
+             * Known as "Implicit Source Operand Conversion"
              */
-            Status = AcpiExConvertToInteger (ObjDesc, StackPtr, 16);
+            Status = AcpiExConvertToInteger (ObjDesc, StackPtr,
+                ACPI_IMPLICIT_CONVERSION);
             if (ACPI_FAILURE (Status))
             {
                 if (Status == AE_TYPE)

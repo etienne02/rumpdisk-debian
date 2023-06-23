@@ -1,4 +1,4 @@
-/*      $NetBSD: sp_common.c,v 1.38 2014/01/08 01:45:29 pooka Exp $	*/
+/*      $NetBSD: sp_common.c,v 1.42 2020/06/13 16:51:59 kamil Exp $	*/
 
 /*
  * Copyright (c) 2010, 2011 Antti Kantee.  All Rights Reserved.
@@ -60,14 +60,17 @@
  * XXX: NetBSD's __unused collides with Linux headers, so we cannot
  * define it before we've included everything.
  */
-#if !defined(__unused) && defined(__GNUC__)
+#if !defined(__unused) && (defined(__clang__) || defined(__GNUC__))
 #define __unused __attribute__((__unused__))
+#endif
+#if !defined(__printflike) && (defined(__clang__) || defined(__GNUC__))
+#define __printflike(a,b) __attribute__((__format__(__printf__, a, b))))
 #endif
 
 //#define DEBUG
 #ifdef DEBUG
 #define DPRINTF(x) mydprintf x
-static void
+static __printflike(1, 2) void
 mydprintf(const char *fmt, ...)
 {
 	va_list ap;
@@ -339,7 +342,7 @@ dosend(struct spclient *spc, struct iovec *iov, size_t iovlen)
 		}
 
 		/* ok, need to adjust iovec for potential next round */
-		while (n >= (ssize_t)iov[0].iov_len && iovlen) {
+		while (iovlen && n >= (ssize_t)iov[0].iov_len) {
 			n -= iov[0].iov_len;
 			iov++;
 			iovlen--;
@@ -499,11 +502,12 @@ readframe(struct spclient *spc)
 			return 1;
 		}
 
-		spc->spc_buf = malloc(framelen - HDRSZ);
+		/* Add an extra byte so that we are always NUL-terminated */
+		spc->spc_buf = malloc(framelen - HDRSZ + 1);
 		if (spc->spc_buf == NULL) {
 			return -1;
 		}
-		memset(spc->spc_buf, 0, framelen - HDRSZ);
+		memset(spc->spc_buf, 0, framelen - HDRSZ + 1);
 
 		/* "fallthrough" */
 	} else {
@@ -701,15 +705,21 @@ unix_cleanup(struct sockaddr *sa)
 
 /*ARGSUSED*/
 static int
-notsupp(void)
+addrparse_notsupp(const char *addr __unused, struct sockaddr **sa __unused,
+		  int allow_wildcard __unused)
 {
 
 	fprintf(stderr, "rump_sp: support not yet implemented\n");
 	return EOPNOTSUPP;
 }
 
+static void
+cleanup_success(struct sockaddr *sa __unused)
+{
+}
+
 static int
-success(void)
+connecthook_success(int s __unused)
 {
 
 	return 0;
@@ -724,12 +734,12 @@ static struct {
 	cleanup_fn cleanup;
 } parsetab[] = {
 	{ "tcp", PF_INET, sizeof(struct sockaddr_in),
-	    tcp_parse, tcp_connecthook, (cleanup_fn)success },
+	    tcp_parse, tcp_connecthook, cleanup_success },
 	{ "unix", PF_LOCAL, sizeof(struct sockaddr_un),
-	    unix_parse, (connecthook_fn)success, unix_cleanup },
+	    unix_parse, connecthook_success, unix_cleanup },
 	{ "tcp6", PF_INET6, sizeof(struct sockaddr_in6),
-	    (addrparse_fn)notsupp, (connecthook_fn)success,
-	    (cleanup_fn)success },
+	    addrparse_notsupp, connecthook_success,
+	    cleanup_success },
 };
 #define NPARSE (sizeof(parsetab)/sizeof(parsetab[0]))
 

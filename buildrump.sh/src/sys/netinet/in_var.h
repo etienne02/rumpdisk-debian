@@ -1,4 +1,4 @@
-/*	$NetBSD: in_var.h,v 1.78 2016/07/08 04:33:30 ozaki-r Exp $	*/
+/*	$NetBSD: in_var.h,v 1.102 2021/03/08 22:01:18 christos Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -71,6 +71,9 @@
 #define IN_IFF_DETACHED		0x04	/* may be detached from the link */
 #define IN_IFF_TRYTENTATIVE	0x08	/* intent to try DAD */
 
+#define IN_IFFBITS \
+    "\020\1TENTATIVE\2DUPLICATED\3DETACHED\4TRYTENTATIVE"
+
 /* do not input/output */
 #define IN_IFF_NOTREADY \
     (IN_IFF_TRYTENTATIVE | IN_IFF_TENTATIVE | IN_IFF_DUPLICATED)
@@ -104,12 +107,40 @@ struct in_ifaddr {
 	int	ia4_flags;		/* address flags */
 	void	(*ia_dad_start) (struct ifaddr *);	/* DAD start function */
 	void	(*ia_dad_stop) (struct ifaddr *);	/* DAD stop function */
+	time_t	ia_dad_defended;	/* last time of DAD defence */
 
 #ifdef _KERNEL
 	struct pslist_entry	ia_hash_pslist_entry;
 	struct pslist_entry	ia_pslist_entry;
 #endif
 };
+
+struct in_nbrinfo {
+	char ifname[IFNAMSIZ];	/* if name, e.g. "en0" */
+	struct in_addr addr;	/* IPv4 address of the neighbor */
+	long	asked;		/* number of queries already sent for this addr */
+	int	state;		/* reachability state */
+	int	expire;		/* lifetime for NDP state transition */
+};
+
+#ifdef _KERNEL
+static __inline void
+ia4_acquire(struct in_ifaddr *ia, struct psref *psref)
+{
+
+	KASSERT(ia != NULL);
+	ifa_acquire(&ia->ia_ifa, psref);
+}
+
+static __inline void
+ia4_release(struct in_ifaddr *ia, struct psref *psref)
+{
+
+	if (ia == NULL)
+		return;
+	ifa_release(&ia->ia_ifa, psref);
+}
+#endif
 
 struct	in_aliasreq {
 	char	ifra_name[IFNAMSIZ];		/* if name, e.g. "en0" */
@@ -147,6 +178,7 @@ extern	u_long in_ifaddrhash;			/* size of hash table - 1 */
 extern  struct in_ifaddrhashhead *in_ifaddrhashtbl;	/* Hash table head */
 extern  struct in_ifaddrhead in_ifaddrhead;		/* List head (in ip_input) */
 
+extern pserialize_t in_ifaddrhash_psz;
 extern struct pslist_head *in_ifaddrhashtbl_pslist;
 extern u_long in_ifaddrhash_pslist;
 extern struct pslist_head in_ifaddrhead_pslist;
@@ -225,7 +257,7 @@ extern	const	int	inetctlerrmap[];
  * Find whether an internet address (in_addr) belongs to one
  * of our interfaces (in_ifaddr).  NULL if the address isn't ours.
  */
-static inline struct in_ifaddr *
+static __inline struct in_ifaddr *
 in_get_ia(struct in_addr addr)
 {
 	struct in_ifaddr *ia;
@@ -238,11 +270,26 @@ in_get_ia(struct in_addr addr)
 	return ia;
 }
 
+static __inline struct in_ifaddr *
+in_get_ia_psref(struct in_addr addr, struct psref *psref)
+{
+	struct in_ifaddr *ia;
+	int s;
+
+	s = pserialize_read_enter();
+	ia = in_get_ia(addr);
+	if (ia != NULL)
+		ia4_acquire(ia, psref);
+	pserialize_read_exit(s);
+
+	return ia;
+}
+
 /*
  * Find whether an internet address (in_addr) belongs to a specified
  * interface.  NULL if the address isn't ours.
  */
-static inline struct in_ifaddr *
+static __inline struct in_ifaddr *
 in_get_ia_on_iface(struct in_addr addr, struct ifnet *ifp)
 {
 	struct in_ifaddr *ia;
@@ -256,11 +303,26 @@ in_get_ia_on_iface(struct in_addr addr, struct ifnet *ifp)
 	return ia;
 }
 
+static __inline struct in_ifaddr *
+in_get_ia_on_iface_psref(struct in_addr addr, struct ifnet *ifp, struct psref *psref)
+{
+	struct in_ifaddr *ia;
+	int s;
+
+	s = pserialize_read_enter();
+	ia = in_get_ia_on_iface(addr, ifp);
+	if (ia != NULL)
+		ia4_acquire(ia, psref);
+	pserialize_read_exit(s);
+
+	return ia;
+}
+
 /*
  * Find an internet address structure (in_ifaddr) corresponding
  * to a given interface (ifnet structure).
  */
-static inline struct in_ifaddr *
+static __inline struct in_ifaddr *
 in_get_ia_from_ifp(struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
@@ -271,6 +333,21 @@ in_get_ia_from_ifp(struct ifnet *ifp)
 	}
 
 	return ifatoia(ifa);
+}
+
+static __inline struct in_ifaddr *
+in_get_ia_from_ifp_psref(struct ifnet *ifp, struct psref *psref)
+{
+	struct in_ifaddr *ia;
+	int s;
+
+	s = pserialize_read_enter();
+	ia = in_get_ia_from_ifp(ifp);
+	if (ia != NULL)
+		ia4_acquire(ia, psref);
+	pserialize_read_exit(s);
+
+	return ia;
 }
 
 #include <netinet/in_selsrc.h>
@@ -305,10 +382,35 @@ struct in_multi {
 #ifdef _KERNEL
 
 #include <net/pktqueue.h>
+#include <sys/cprng.h>
 
 extern pktqueue_t *ip_pktq;
 
 extern int ip_dad_count;		/* Duplicate Address Detection probes */
+
+static inline bool
+ip_dad_enabled(void)
+{
+#if NARP > 0
+	return ip_dad_count > 0;
+#else
+	return false;
+#endif
+}
+
+#if defined(INET) && NARP > 0
+extern int arp_debug;
+#define ARPLOGADDR(a) IN_PRINT(_ipbuf, a)
+#define ARPLOG(level, fmt, args...) 					\
+	do {								\
+		char _ipbuf[INET_ADDRSTRLEN];	 			\
+		(void)_ipbuf;						\
+		if (arp_debug) 						\
+			log(level, "%s: " fmt, __func__, ##args);	\
+	} while (/*CONSTCOND*/0)
+#else
+#define ARPLOG(level, fmt, args...)
+#endif
 
 /*
  * Structure used by functions below to remember position when stepping
@@ -332,29 +434,29 @@ int in_multi_lock_held(void);
 
 struct ifaddr;
 
-int	in_ifinit(struct ifnet *,
-	    struct in_ifaddr *, const struct sockaddr_in *, int, int);
+int	in_ifinit(struct ifnet *, struct in_ifaddr *,
+    const struct sockaddr_in *, const struct sockaddr_in *, int);
 void	in_savemkludge(struct in_ifaddr *);
 void	in_restoremkludge(struct in_ifaddr *, struct ifnet *);
 void	in_purgemkludge(struct ifnet *);
-void	in_ifscrub(struct ifnet *, struct in_ifaddr *);
 void	in_setmaxmtu(void);
-const char *in_fmtaddr(struct in_addr);
 int	in_control(struct socket *, u_long, void *, struct ifnet *);
 void	in_purgeaddr(struct ifaddr *);
 void	in_purgeif(struct ifnet *);
+void	in_addrhash_insert(struct in_ifaddr *);
+void	in_addrhash_remove(struct in_ifaddr *);
 int	ipflow_fastforward(struct mbuf *);
 
-struct ipid_state;
-typedef struct ipid_state ipid_state_t;
-
-ipid_state_t *	ip_id_init(void);
-void		ip_id_fini(ipid_state_t *);
-uint16_t	ip_randomid(ipid_state_t *, uint16_t);
-
-extern ipid_state_t *	ip_ids;
 extern uint16_t		ip_id;
 extern int		ip_do_randomid;
+
+static __inline uint16_t
+ip_randomid(void)
+{
+
+	uint16_t id = (uint16_t)cprng_fast32();
+	return id ? id : 1;
+}
 
 /*
  * ip_newid_range: "allocate" num contiguous IP IDs.
@@ -368,7 +470,7 @@ ip_newid_range(const struct in_ifaddr *ia, u_int num)
 
 	if (ip_do_randomid) {
 		/* XXX ignore num */
-		return ip_randomid(ip_ids, ia ? ia->ia_idsalt : 0);
+		return ip_randomid();
 	}
 
 	/* Never allow an IP ID of 0 (detect wrap). */

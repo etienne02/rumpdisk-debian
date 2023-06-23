@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -41,6 +41,7 @@
  * POSSIBILITY OF SUCH DAMAGES.
  */
 
+#define DEFINE_AHELP_GLOBALS
 #include "acpihelp.h"
 
 
@@ -51,7 +52,15 @@ AhDisplayUsage (
     void);
 
 #define AH_UTILITY_NAME             "ACPI Help Utility"
-#define AH_SUPPORTED_OPTIONS        "adehikmopstuv"
+#define AH_SUPPORTED_OPTIONS        "adeghikmopstuvx^"
+
+
+#if defined ACPI_OPTION
+#undef ACPI_OPTION
+#endif
+
+#define ACPI_OPTION(Name, Description) \
+    AcpiOsPrintf ("  %-24s%s\n", Name, Description);
 
 
 /******************************************************************************
@@ -70,22 +79,25 @@ AhDisplayUsage (
     ACPI_USAGE_HEADER ("acpihelp <options> [Name/Prefix | HexValue]");
     ACPI_OPTION ("-h",                      "Display help");
     ACPI_OPTION ("-v",                      "Display version information");
+    ACPI_OPTION ("-vd",                     "Display build date and time");
 
-    ACPI_USAGE_TEXT ("\nAML (ACPI Machine Language) Names and Encodings:\n");
-    ACPI_OPTION ("-a [Name/Prefix]",        "Find/Display both ASL operator and AML opcode name(s)");
-    ACPI_OPTION ("-m [Name/Prefix]",        "Find/Display AML opcode name(s)");
+    ACPI_USAGE_TEXT ("\nAML Names and Encodings (ACPI Machine Language):\n");
+    ACPI_OPTION ("-a [Name/Prefix | *]",    "Display both ASL operator and AML opcode name(s)");
+    ACPI_OPTION ("-g [Name/Prefix | *]",    "Display AML grammar elements(s)");
+    ACPI_OPTION ("-m [Name/Prefix | *]",    "Display AML opcode name(s)");
 
     ACPI_USAGE_TEXT ("\nACPI Values:\n");
     ACPI_OPTION ("-e [HexValue]",           "Decode ACPICA exception code");
     ACPI_OPTION ("-o [HexValue]",           "Decode hex AML opcode");
+    ACPI_OPTION ("-x [HexValue]",           "Decode iASL exception code");
 
-    ACPI_USAGE_TEXT ("\nASL (ACPI Source Language) Names and Symbols:\n");
-    ACPI_OPTION ("-k [Name/Prefix]",        "Find/Display ASL non-operator keyword(s)");
-    ACPI_OPTION ("-p [Name/Prefix]",        "Find/Display ASL predefined method name(s)");
-    ACPI_OPTION ("-s [Name/Prefix]",        "Find/Display ASL operator name(s)");
+    ACPI_USAGE_TEXT ("\nASL Names and Symbols (ACPI Source Language):\n");
+    ACPI_OPTION ("-k [Name/Prefix | *]",    "Display ASL non-operator keyword(s)");
+    ACPI_OPTION ("-p [Name/Prefix | *]",    "Display ASL predefined method name(s)");
+    ACPI_OPTION ("-s [Name/Prefix | *]",    "Display ASL operator name(s)");
 
-    ACPI_USAGE_TEXT ("\nOther ACPI Names:\n");
-    ACPI_OPTION ("-i [Name/Prefix]",        "Find/Display ACPI/PNP Hardware ID(s)");
+    ACPI_USAGE_TEXT ("\nOther miscellaneous ACPI Names:\n");
+    ACPI_OPTION ("-i [Name/Prefix | *]",    "Display ACPI/PNP Hardware ID(s)");
     ACPI_OPTION ("-d",                      "Display iASL Preprocessor directives");
     ACPI_OPTION ("-t",                      "Display supported ACPI tables");
     ACPI_OPTION ("-u",                      "Display ACPI-related UUIDs");
@@ -145,6 +157,11 @@ main (
         DecodeType = AH_DECODE_EXCEPTION;
         break;
 
+    case 'g':
+
+        DecodeType = AH_DECODE_AML_TYPE;
+        break;
+
     case 'i':
 
         DecodeType = AH_DISPLAY_DEVICE_IDS;
@@ -185,9 +202,30 @@ main (
         DecodeType = AH_DISPLAY_UUIDS;
         break;
 
+    case 'x':
+
+        DecodeType = AH_DECODE_ASL_EXCEPTION;
+        break;
+
     case 'v': /* -v: (Version): signon already emitted, just exit */
 
-        return (0);
+        switch (AcpiGbl_Optarg[0])
+        {
+        case '^':  /* -v: (Version) */
+
+            return (1);
+
+        case 'd':
+
+            printf (ACPI_COMMON_BUILD_TIME);
+            return (1);
+
+        default:
+
+            printf ("Unknown option: -v%s\n", AcpiGbl_Optarg);
+            return (-1);
+        }
+        break;
 
     case 'h':
     default:
@@ -215,6 +253,11 @@ main (
     case AH_DECODE_AML_OPCODE:
 
         AhDecodeAmlOpcode (Name);
+        break;
+
+    case AH_DECODE_AML_TYPE:
+
+        AhFindAmlTypes (Name);
         break;
 
     case AH_DECODE_PREDEFINED_NAME:
@@ -255,6 +298,11 @@ main (
     case AH_DISPLAY_DIRECTIVES:
 
         AhDisplayDirectives ();
+        break;
+
+    case AH_DECODE_ASL_EXCEPTION:
+
+        AhDecodeAslException (Name);
         break;
 
    default:

@@ -1,5 +1,5 @@
 /*	$OpenBSD: main.c,v 1.77 2009/10/14 17:19:47 sthen Exp $	*/
-/*	$NetBSD: main.c,v 1.46 2016/01/23 14:24:43 christos Exp $	*/
+/*	$NetBSD: main.c,v 1.50 2020/06/25 02:25:53 uwe Exp $	*/
 
 /*-
  * Copyright (c) 1989, 1993
@@ -42,7 +42,7 @@
 #include "nbtool_config.h"
 #endif
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: main.c,v 1.46 2016/01/23 14:24:43 christos Exp $");
+__RCSID("$NetBSD: main.c,v 1.50 2020/06/25 02:25:53 uwe Exp $");
 #include <assert.h>
 #include <signal.h>
 #include <getopt.h>
@@ -196,7 +196,7 @@ onintr(int signo)
 struct option longopts[] = {
 	{ "debug",		optional_argument,	0, 'd' },
 	{ "define",		required_argument,	0, 'D' },
-	{ "error-output",	required_argument,	0, 'e' },
+	{ "error-output",	required_argument,	0, 'o' }, /* sic */
 	{ "fatal-warnings",	no_argument,		0, 'E' },
 	{ "freeze-state",	required_argument,	0, 'F' },
 	{ "gnu",		no_argument,		0, 'g' },
@@ -227,6 +227,7 @@ main(int argc, char *argv[])
 {
 	int c;
 	int n;
+	int error;
 	char *p;
 
 	setprogname(argv[0]);
@@ -245,7 +246,7 @@ main(int argc, char *argv[])
 	outfile = NULL;
 	resizedivs(MAXOUT);
 
-	while ((c = getopt_long(argc, argv, "D:d:e:EF:GgI:iL:o:PR:Qst:U:v",
+	while ((c = getopt_long(argc, argv, "D:d:EF:GgI:iL:o:PR:Qst:U:v",
 	    longopts, NULL)) != -1)
 		switch(c) {
 		case 'D':               /* define something..*/
@@ -261,11 +262,6 @@ main(int argc, char *argv[])
 			break;
 		case 'E':
 			fatal_warnings++;
-			break;
-		case 'e':
-			if (freopen(optarg, "w+", stderr) == NULL)
-				err(EXIT_FAILURE, "Can't redirect errors to `%s'",
-				    optarg);
 			break;
 		case 'F':
 			freeze = optarg;
@@ -291,7 +287,9 @@ main(int argc, char *argv[])
 			nesting_limit = atoi(optarg);
 			break;
 		case 'o':
-			trace_file(optarg);
+			error = trace_file(optarg);
+			if (error)
+				warn("%s", optarg);
                         break;
 		case 'P':
 			prefix_builtins = 1;
@@ -532,8 +530,14 @@ macro(void)
 				fp = sp;	/* new frame pointer */
 		/*
 		 * now push the string arguments:
+		 * XXX: Copy the macro definition. This leaks, but too
+		 * lazy to fix properly.
+		 * The problem is that if we evaluate a pushdef'ed
+		 * macro and then popdef it while it the definition 
+		 * is still on the stack we are going to reference
+		 * free memory.
 		 */
-				pushs1(macro_getdef(p)->defn);	/* defn string */
+				pushs1(xstrdup(macro_getdef(p)->defn));	/* defn string */
 				pushs1((char *)macro_name(p));	/* macro name  */
 				pushs(ep);	      	/* start next..*/
 

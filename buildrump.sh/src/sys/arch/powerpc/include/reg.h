@@ -1,4 +1,4 @@
-/*	$NetBSD: reg.h,v 1.12 2016/01/24 20:02:38 christos Exp $	*/
+/*	$NetBSD: reg.h,v 1.14 2021/08/13 20:47:55 andvar Exp $	*/
 
 #ifndef _POWERPC_REG_H_
 #define _POWERPC_REG_H_
@@ -8,7 +8,7 @@
  *
  *  Register	Usage
  *  r0		Volatile register which may be modified during function linkage
- *  r1		Stack fram pointer, always valid
+ *  r1		Stack frame pointer, always valid
  *  r2		System-reserved register
  *  r3-r4	Volatile registers used for parameter passing and return values
  *  r5-r10	Volatile registers used for parameter passing
@@ -21,7 +21,7 @@
  *
  *  [Start of callee-saved registers]
  *  r14-r30	Registers used for local variables
- *  r31		Used for local variable or "environent pointers"
+ *  r31		Used for local variable or "environment pointers"
  *  f14-f31	Registers used for local variables
  *
  *
@@ -29,12 +29,12 @@
  *
  *  Register	Usage
  *  r0		Volatile register which may be modified during function linkage
- *  r1		Stack fram pointer, always valid
+ *  r1		Stack frame pointer, always valid
  *  r2		TOC pointer
  *  r3		Volatile register used for parameter passing and return value
  *  r4-r10	Volatile registers used for parameter passing
  *  r11		Volatile register used in calls by pointer and as an
- *		environment pointr for languages which require one
+ *		environment pointer for languages which require one
  *  r12		Volatile register used for exception handling and glink code
  *  r13		Reserved for use as system thread ID
  *

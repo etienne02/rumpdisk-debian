@@ -1,6 +1,8 @@
-/*	$NetBSD: virtio.c,v 1.16 2016/07/11 06:14:51 knakahara Exp $	*/
+/*	$NetBSD: virtio.c,v 1.49 2021/02/07 09:29:53 skrll Exp $	*/
 
 /*
+ * Copyright (c) 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 2012 Stefan Fritsch, Alexander Fiveg.
  * Copyright (c) 2010 Minoura Makoto.
  * All rights reserved.
  *
@@ -26,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: virtio.c,v 1.16 2016/07/11 06:14:51 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: virtio.c,v 1.49 2021/02/07 09:29:53 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -35,396 +37,37 @@ __KERNEL_RCSID(0, "$NetBSD: virtio.c,v 1.16 2016/07/11 06:14:51 knakahara Exp $"
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/kmem.h>
+#include <sys/module.h>
 
-#include <dev/pci/pcidevs.h>
-#include <dev/pci/pcireg.h>
-#include <dev/pci/pcivar.h>
+#define VIRTIO_PRIVATE
 
-#include <dev/pci/virtioreg.h>
-#include <dev/pci/virtiovar.h>
+#include <dev/pci/virtioreg.h> /* XXX: move to non-pci */
+#include <dev/pci/virtiovar.h> /* XXX: move to non-pci */
 
 #define MINSEG_INDIRECT		2 /* use indirect if nsegs >= this value */
 
-static int	virtio_match(device_t, cfdata_t, void *);
-static void	virtio_attach(device_t, device_t, void *);
-static int	virtio_detach(device_t, int);
-static int	virtio_intr(void *arg);
-static int	virtio_msix_queue_intr(void *);
-static int	virtio_msix_config_intr(void *);
-static int	virtio_setup_msix_vectors(struct virtio_softc *);
-static int	virtio_setup_msix_interrupts(struct virtio_softc *,
-		    struct pci_attach_args *);
-static int	virtio_setup_intx_interrupt(struct virtio_softc *,
-		    struct pci_attach_args *);
-static int	virtio_setup_interrupts(struct virtio_softc *,
-		    struct pci_attach_args *);
-static void	virtio_soft_intr(void *arg);
-static void	virtio_init_vq(struct virtio_softc *,
-		    struct virtqueue *, const bool);
-
-CFATTACH_DECL3_NEW(virtio, sizeof(struct virtio_softc),
-    virtio_match, virtio_attach, virtio_detach, NULL, NULL, NULL,
-    DVF_DETACH_SHUTDOWN);
-
-static void
-virtio_set_status(struct virtio_softc *sc, int status)
-{
-	int old = 0;
-
-	if (status != 0)
-		old = bus_space_read_1(sc->sc_iot, sc->sc_ioh,
-				       VIRTIO_CONFIG_DEVICE_STATUS);
-	bus_space_write_1(sc->sc_iot, sc->sc_ioh, VIRTIO_CONFIG_DEVICE_STATUS,
-			  status|old);
-}
-
-#define virtio_device_reset(sc)	virtio_set_status((sc), 0)
-
-static int
-virtio_match(device_t parent, cfdata_t match, void *aux)
-{
-	struct pci_attach_args *pa;
-
-	pa = (struct pci_attach_args *)aux;
-	switch (PCI_VENDOR(pa->pa_id)) {
-	case PCI_VENDOR_QUMRANET:
-		if ((PCI_PRODUCT_QUMRANET_VIRTIO_1000 <=
-		     PCI_PRODUCT(pa->pa_id)) &&
-		    (PCI_PRODUCT(pa->pa_id) <=
-		     PCI_PRODUCT_QUMRANET_VIRTIO_103F))
-			return 1;
-		break;
-	}
-
-	return 0;
-}
-
+/* incomplete list */
 static const char *virtio_device_name[] = {
-	"Unknown (0)",			/* 0 */
-	"Network",			/* 1 */
-	"Block",			/* 2 */
-	"Console",			/* 3 */
-	"Entropy",			/* 4 */
-	"Memory Balloon",		/* 5 */
-	"I/O Memory",			/* 6 */
-	"Remote Processor Messaging",	/* 7 */
-	"SCSI",				/* 8 */
-	"9P Transport",			/* 9 */
-	"mac80211 wlan",		/* 10 */
+	"unknown (0)",			/*  0 */
+	"network",			/*  1 */
+	"block",			/*  2 */
+	"console",			/*  3 */
+	"entropy",			/*  4 */
+	"memory balloon",		/*  5 */
+	"I/O memory",			/*  6 */
+	"remote processor messaging",	/*  7 */
+	"SCSI",				/*  8 */
+	"9P transport",			/*  9 */
 };
 #define NDEVNAMES	__arraycount(virtio_device_name)
 
-#define VIRTIO_MSIX_CONFIG_VECTOR_INDEX	0
-#define VIRTIO_MSIX_QUEUE_VECTOR_INDEX	1
+static void	virtio_init_vq(struct virtio_softc *,
+		    struct virtqueue *, const bool);
 
-static int
-virtio_setup_msix_vectors(struct virtio_softc *sc)
+void
+virtio_set_status(struct virtio_softc *sc, int status)
 {
-	int offset, vector, ret, qid;
-
-	offset = VIRTIO_CONFIG_MSI_CONFIG_VECTOR;
-	vector = VIRTIO_MSIX_CONFIG_VECTOR_INDEX;
-
-	bus_space_write_2(sc->sc_iot, sc->sc_ioh, offset, vector);
-	ret = bus_space_read_2(sc->sc_iot, sc->sc_ioh, offset);
-	aprint_debug_dev(sc->sc_dev, "expected=%d, actual=%d\n",
-	    vector, ret);
-	if (ret != vector)
-		return -1;
-
-	for (qid = 0; qid < sc->sc_nvqs; qid++) {
-		offset = VIRTIO_CONFIG_QUEUE_SELECT;
-		bus_space_write_2(sc->sc_iot, sc->sc_ioh, offset, qid);
-
-		offset = VIRTIO_CONFIG_MSI_QUEUE_VECTOR;
-		vector = VIRTIO_MSIX_QUEUE_VECTOR_INDEX;
-
-		bus_space_write_2(sc->sc_iot, sc->sc_ioh, offset, vector);
-		ret = bus_space_read_2(sc->sc_iot, sc->sc_ioh, offset);
-		aprint_debug_dev(sc->sc_dev, "expected=%d, actual=%d\n",
-		    vector, ret);
-		if (ret != vector)
-			return -1;
-	}
-
-	return 0;
-}
-
-static int
-virtio_setup_msix_interrupts(struct virtio_softc *sc,
-    struct pci_attach_args *pa)
-{
-	device_t self = sc->sc_dev;
-	pci_chipset_tag_t pc = pa->pa_pc;
-	char intrbuf[PCI_INTRSTR_LEN];
-	char const *intrstr;
-	int idx;
-
-	idx = VIRTIO_MSIX_CONFIG_VECTOR_INDEX;
-	if (sc->sc_flags & VIRTIO_F_PCI_INTR_MPSAFE)
-		pci_intr_setattr(pc, &sc->sc_ihp[idx], PCI_INTR_MPSAFE, true);
-
-	sc->sc_ihs[idx] = pci_intr_establish_xname(pc, sc->sc_ihp[idx], IPL_NET,
-	    virtio_msix_config_intr, sc, device_xname(sc->sc_dev));
-	if (sc->sc_ihs[idx] == NULL) {
-		aprint_error_dev(self, "couldn't establish MSI-X for config\n");
-		goto error;
-	}
-
-	idx = VIRTIO_MSIX_QUEUE_VECTOR_INDEX;
-	if (sc->sc_flags & VIRTIO_F_PCI_INTR_MPSAFE)
-		pci_intr_setattr(pc, &sc->sc_ihp[idx], PCI_INTR_MPSAFE, true);
-
-	sc->sc_ihs[idx] = pci_intr_establish_xname(pc, sc->sc_ihp[idx], IPL_NET,
-	    virtio_msix_queue_intr, sc, device_xname(sc->sc_dev));
-	if (sc->sc_ihs[idx] == NULL) {
-		aprint_error_dev(self, "couldn't establish MSI-X for queues\n");
-		goto error;
-	}
-
-	if (virtio_setup_msix_vectors(sc) != 0) {
-		aprint_error_dev(self, "couldn't setup MSI-X vectors\n");
-		goto error;
-	}
-
-	idx = VIRTIO_MSIX_CONFIG_VECTOR_INDEX;
-	intrstr = pci_intr_string(pc, sc->sc_ihp[idx], intrbuf, sizeof(intrbuf));
-	aprint_normal_dev(self, "config interrupting at %s\n", intrstr);
-	idx = VIRTIO_MSIX_QUEUE_VECTOR_INDEX;
-	intrstr = pci_intr_string(pc, sc->sc_ihp[idx], intrbuf, sizeof(intrbuf));
-	aprint_normal_dev(self, "queues interrupting at %s\n", intrstr);
-
-	return 0;
-
-error:
-	idx = VIRTIO_MSIX_CONFIG_VECTOR_INDEX;
-	if (sc->sc_ihs[idx] != NULL)
-		pci_intr_disestablish(sc->sc_pc, sc->sc_ihs[idx]);
-	idx = VIRTIO_MSIX_QUEUE_VECTOR_INDEX;
-	if (sc->sc_ihs[idx] != NULL)
-		pci_intr_disestablish(sc->sc_pc, sc->sc_ihs[idx]);
-
-	return -1;
-}
-
-static int
-virtio_setup_intx_interrupt(struct virtio_softc *sc,
-    struct pci_attach_args *pa)
-{
-	device_t self = sc->sc_dev;
-	pci_chipset_tag_t pc = pa->pa_pc;
-	char intrbuf[PCI_INTRSTR_LEN];
-	char const *intrstr;
-
-	if (sc->sc_flags & VIRTIO_F_PCI_INTR_MPSAFE)
-		pci_intr_setattr(pc, &sc->sc_ihp[0], PCI_INTR_MPSAFE, true);
-
-	sc->sc_ihs[0] = pci_intr_establish_xname(pc, sc->sc_ihp[0],
-	    IPL_NET, virtio_intr, sc, device_xname(sc->sc_dev));
-	if (sc->sc_ihs[0] == NULL) {
-		aprint_error_dev(self, "couldn't establish INTx\n");
-		return -1;
-	}
-
-	intrstr = pci_intr_string(pc, sc->sc_ihp[0], intrbuf, sizeof(intrbuf));
-	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
-
-	return 0;
-}
-
-static int
-virtio_setup_interrupts(struct virtio_softc *sc, struct pci_attach_args *pa)
-{
-	device_t self = sc->sc_dev;
-	pci_chipset_tag_t pc = pa->pa_pc;
-	int error;
-	int nmsix;
-	int counts[PCI_INTR_TYPE_SIZE];
-	pci_intr_type_t max_type;
-
-	nmsix = pci_msix_count(pa->pa_pc, pa->pa_tag);
-	aprint_debug_dev(self, "pci_msix_count=%d\n", nmsix);
-
-	/* We need at least two: one for config and the other for queues */
-	if ((sc->sc_flags & VIRTIO_F_PCI_INTR_MSIX) == 0 || nmsix < 2) {
-		/* Try INTx only */
-		max_type = PCI_INTR_TYPE_INTX;
-		counts[PCI_INTR_TYPE_INTX] = 1;
-	} else {
-		/* Try MSI-X first and INTx second */
-		max_type = PCI_INTR_TYPE_MSIX;
-		counts[PCI_INTR_TYPE_MSIX] = 2;
-		counts[PCI_INTR_TYPE_MSI] = 0;
-		counts[PCI_INTR_TYPE_INTX] = 1;
-	}
-
- retry:
-	error = pci_intr_alloc(pa, &sc->sc_ihp, counts, max_type);
-	if (error != 0) {
-		aprint_error_dev(self, "couldn't map interrupt\n");
-		return -1;
-	}
-
-	if (pci_intr_type(pc, sc->sc_ihp[0]) == PCI_INTR_TYPE_MSIX) {
-		sc->sc_ihs = kmem_alloc(sizeof(*sc->sc_ihs) * 2,
-		    KM_SLEEP);
-		if (sc->sc_ihs == NULL) {
-			pci_intr_release(pc, sc->sc_ihp, 2);
-
-			/* Retry INTx */
-			max_type = PCI_INTR_TYPE_INTX;
-			counts[PCI_INTR_TYPE_INTX] = 1;
-			goto retry;
-		}
-
-		error = virtio_setup_msix_interrupts(sc, pa);
-		if (error != 0) {
-			kmem_free(sc->sc_ihs, sizeof(*sc->sc_ihs) * 2);
-			pci_intr_release(pc, sc->sc_ihp, 2);
-
-			/* Retry INTx */
-			max_type = PCI_INTR_TYPE_INTX;
-			counts[PCI_INTR_TYPE_INTX] = 1;
-			goto retry;
-		}
-
-		sc->sc_ihs_num = 2;
-		sc->sc_config_offset = VIRTIO_CONFIG_DEVICE_CONFIG_MSI;
-	} else if (pci_intr_type(pc, sc->sc_ihp[0]) == PCI_INTR_TYPE_INTX) {
-		sc->sc_ihs = kmem_alloc(sizeof(*sc->sc_ihs) * 1,
-		    KM_SLEEP);
-		if (sc->sc_ihs == NULL) {
-			pci_intr_release(pc, sc->sc_ihp, 1);
-			return -1;
-		}
-
-		error = virtio_setup_intx_interrupt(sc, pa);
-		if (error != 0) {
-			kmem_free(sc->sc_ihs, sizeof(*sc->sc_ihs) * 1);
-			pci_intr_release(pc, sc->sc_ihp, 1);
-			return -1;
-		}
-
-		sc->sc_ihs_num = 1;
-		sc->sc_config_offset = VIRTIO_CONFIG_DEVICE_CONFIG_NOMSI;
-	}
-
-	return 0;
-}
-
-static void
-virtio_attach(device_t parent, device_t self, void *aux)
-{
-	struct virtio_softc *sc = device_private(self);
-	struct pci_attach_args *pa = (struct pci_attach_args *)aux;
-	pci_chipset_tag_t pc = pa->pa_pc;
-	pcitag_t tag = pa->pa_tag;
-	int revision;
-	pcireg_t id;
-	int r;
-
-	revision = PCI_REVISION(pa->pa_class);
-	if (revision != 0) {
-		aprint_normal(": unknown revision 0x%02x; giving up\n",
-			      revision);
-		return;
-	}
-	aprint_normal("\n");
-	aprint_naive("\n");
-
-	/* subsystem ID shows what I am */
-	id = pci_conf_read(pc, tag, PCI_SUBSYS_ID_REG);
-	aprint_normal_dev(self, "Virtio %s Device (rev. 0x%02x)\n",
-			  (PCI_SUBSYS_ID(id) < NDEVNAMES?
-			   virtio_device_name[PCI_SUBSYS_ID(id)] : "Unknown"),
-			  revision);
-
-	sc->sc_dev = self;
-	sc->sc_pc = pc;
-	sc->sc_tag = tag;
-	sc->sc_iot = pa->pa_iot;
-	if (pci_dma64_available(pa))
-		sc->sc_dmat = pa->pa_dmat64;
-	else
-		sc->sc_dmat = pa->pa_dmat;
-	sc->sc_config_offset = VIRTIO_CONFIG_DEVICE_CONFIG_NOMSI;
-
-	if (pci_mapreg_map(pa, PCI_MAPREG_START, PCI_MAPREG_TYPE_IO, 0,
-			   &sc->sc_iot, &sc->sc_ioh, NULL, &sc->sc_iosize)) {
-		aprint_error_dev(self, "can't map i/o space\n");
-		return;
-	}
-
-	virtio_device_reset(sc);
-	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_ACK);
-	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER);
-
-	/* XXX: use softc as aux... */
-	sc->sc_childdevid = PCI_SUBSYS_ID(id);
-	sc->sc_child = NULL;
-	config_found(self, sc, NULL);
-	if (sc->sc_child == NULL) {
-		aprint_error_dev(self,
-				 "no matching child driver; not configured\n");
-		return;
-	}
-	if (sc->sc_child == (void*)1) { /* this shows error */
-		aprint_error_dev(self,
-				 "virtio configuration failed\n");
-		virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
-		return;
-	}
-
-	r = virtio_setup_interrupts(sc, pa);
-	if (r != 0) {
-		aprint_error_dev(self, "failed to setup interrupts\n");
-		virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
-		return;
-	}
-
-	sc->sc_soft_ih = NULL;
-	if (sc->sc_flags & VIRTIO_F_PCI_INTR_SOFTINT) {
-		u_int flags = SOFTINT_NET;
-		if (sc->sc_flags & VIRTIO_F_PCI_INTR_MPSAFE)
-			flags |= SOFTINT_MPSAFE;
-
-		sc->sc_soft_ih = softint_establish(flags, virtio_soft_intr, sc);
-		if (sc->sc_soft_ih == NULL)
-			aprint_error(": failed to establish soft interrupt\n");
-	}
-
-	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
-
-	return;
-}
-
-static int
-virtio_detach(device_t self, int flags)
-{
-	struct virtio_softc *sc = device_private(self);
-	int r;
-	int i;
-
-	if (sc->sc_child != 0 && sc->sc_child != (void*)1) {
-		r = config_detach(sc->sc_child, flags);
-		if (r)
-			return r;
-	}
-	KASSERT(sc->sc_child == 0 || sc->sc_child == (void*)1);
-	KASSERT(sc->sc_vqs == 0);
-	for (i = 0; i < sc->sc_ihs_num; i++) {
-		if (sc->sc_ihs[i] == NULL)
-			continue;
-		pci_intr_disestablish(sc->sc_pc, sc->sc_ihs[i]);
-	}
-	pci_intr_release(sc->sc_pc, sc->sc_ihp, sc->sc_ihs_num);
-	kmem_free(sc->sc_ihs, sizeof(*sc->sc_ihs) * sc->sc_ihs_num);
-	sc->sc_ihs_num = 0;
-	if (sc->sc_iosize)
-		bus_space_unmap(sc->sc_iot, sc->sc_ioh, sc->sc_iosize);
-	sc->sc_iosize = 0;
-
-	return 0;
+	sc->sc_ops->set_status(sc, status);
 }
 
 /*
@@ -435,7 +78,7 @@ virtio_detach(device_t self, int flags)
  *	virtio_reset(sc);	     // this will stop the device activity
  *	<dequeue finished requests>; // virtio_dequeue() still can be called
  *	<revoke pending requests in the vqs if any>;
- *	virtio_reinit_begin(sc);     // dequeue prohibitted
+ *	virtio_reinit_start(sc);     // dequeue prohibitted
  *	newfeatures = virtio_negotiate_features(sc, requestedfeatures);
  *	<some other initialization>;
  *	virtio_reinit_end(sc);	     // device activated; enqueue allowed
@@ -457,11 +100,7 @@ virtio_reinit_start(struct virtio_softc *sc)
 	for (i = 0; i < sc->sc_nvqs; i++) {
 		int n;
 		struct virtqueue *vq = &sc->sc_vqs[i];
-		bus_space_write_2(sc->sc_iot, sc->sc_ioh,
-				  VIRTIO_CONFIG_QUEUE_SELECT,
-				  vq->vq_index);
-		n = bus_space_read_2(sc->sc_iot, sc->sc_ioh,
-				     VIRTIO_CONFIG_QUEUE_SIZE);
+		n = sc->sc_ops->read_queue_size(sc, vq->vq_index);
 		if (n == 0)	/* vq disappeared */
 			continue;
 		if (n != vq->vq_num) {
@@ -470,19 +109,8 @@ virtio_reinit_start(struct virtio_softc *sc)
 			      vq->vq_index);
 		}
 		virtio_init_vq(sc, vq, true);
-		bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-				  VIRTIO_CONFIG_QUEUE_ADDRESS,
-				  (vq->vq_dmamap->dm_segs[0].ds_addr
-				   / VIRTIO_PAGE_SIZE));
-	}
-
-	/* MSI-X should have more than one handles where INTx has just one */
-	if (sc->sc_ihs_num > 1) {
-		if (virtio_setup_msix_vectors(sc) != 0) {
-			aprint_error_dev(sc->sc_dev,
-			    "couldn't setup MSI-X vectors\n");
-			return;
-		}
+		sc->sc_ops->setup_queue(sc, vq->vq_index,
+		    vq->vq_dmamap->dm_segs[0].ds_addr);
 	}
 }
 
@@ -495,154 +123,278 @@ virtio_reinit_end(struct virtio_softc *sc)
 /*
  * Feature negotiation.
  */
-uint32_t
-virtio_negotiate_features(struct virtio_softc *sc, uint32_t guest_features)
+void
+virtio_negotiate_features(struct virtio_softc *sc, uint64_t guest_features)
 {
-	uint32_t r;
-
 	if (!(device_cfdata(sc->sc_dev)->cf_flags & 1) &&
 	    !(device_cfdata(sc->sc_child)->cf_flags & 1)) /* XXX */
 		guest_features |= VIRTIO_F_RING_INDIRECT_DESC;
-	r = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-			     VIRTIO_CONFIG_DEVICE_FEATURES);
-	r &= guest_features;
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_GUEST_FEATURES, r);
-	sc->sc_features = r;
-	if (r & VIRTIO_F_RING_INDIRECT_DESC)
+	sc->sc_ops->neg_features(sc, guest_features);
+	if (sc->sc_active_features & VIRTIO_F_RING_INDIRECT_DESC)
 		sc->sc_indirect = true;
 	else
 		sc->sc_indirect = false;
-
-	return r;
 }
 
+
 /*
- * Device configuration registers.
+ * Device configuration registers readers/writers
  */
+#if 0
+#define DPRINTFR(n, fmt, val, index, num) \
+	printf("\n%s (", n); \
+	for (int i = 0; i < num; i++) \
+		printf("%02x ", bus_space_read_1(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index+i)); \
+	printf(") -> "); printf(fmt, val); printf("\n");
+#define DPRINTFR2(n, fmt, val_s, val_n) \
+	printf("%s ", n); \
+	printf("\n        stream "); printf(fmt, val_s); printf(" norm "); printf(fmt, val_n); printf("\n");
+#else
+#define DPRINTFR(n, fmt, val, index, num)
+#define DPRINTFR2(n, fmt, val_s, val_n)
+#endif
+
+
 uint8_t
-virtio_read_device_config_1(struct virtio_softc *sc, int index)
-{
-	return bus_space_read_1(sc->sc_iot, sc->sc_ioh,
-				sc->sc_config_offset + index);
+virtio_read_device_config_1(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	uint8_t val;
+
+	val = bus_space_read_1(iot, ioh, index);
+
+	DPRINTFR("read_1", "%02x", val, index, 1);
+	return val;
 }
 
 uint16_t
-virtio_read_device_config_2(struct virtio_softc *sc, int index)
-{
-	return bus_space_read_2(sc->sc_iot, sc->sc_ioh,
-				sc->sc_config_offset + index);
+virtio_read_device_config_2(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	uint16_t val;
+
+	val = bus_space_read_2(iot, ioh, index);
+	if (BYTE_ORDER != sc->sc_bus_endian)
+		val = bswap16(val);
+
+	DPRINTFR("read_2", "%04x", val, index, 2);
+	DPRINTFR2("read_2", "%04x",
+		bus_space_read_stream_2(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index),
+		bus_space_read_2(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index));
+	return val;
 }
 
 uint32_t
-virtio_read_device_config_4(struct virtio_softc *sc, int index)
-{
-	return bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-				sc->sc_config_offset + index);
+virtio_read_device_config_4(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	uint32_t val;
+
+	val = bus_space_read_4(iot, ioh, index);
+	if (BYTE_ORDER != sc->sc_bus_endian)
+		val = bswap32(val);
+
+	DPRINTFR("read_4", "%08x", val, index, 4);
+	DPRINTFR2("read_4", "%08x",
+		bus_space_read_stream_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index),
+		bus_space_read_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index));
+	return val;
 }
 
+/*
+ * The Virtio spec explicitly tells that reading and writing 8 bytes are not
+ * considered atomic and no triggers may be connected to reading or writing
+ * it. We access it using two 32 reads. See virtio spec 4.1.3.1.
+ */
 uint64_t
-virtio_read_device_config_8(struct virtio_softc *sc, int index)
-{
-	uint64_t r;
+virtio_read_device_config_8(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	union {
+		uint64_t u64;
+		uint32_t l[2];
+	} v;
+	uint64_t val;
 
-	r = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-			     sc->sc_config_offset + index + sizeof(uint32_t));
-	r <<= 32;
-	r += bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-			      sc->sc_config_offset + index);
-	return r;
+	v.l[0] = bus_space_read_4(iot, ioh, index);
+	v.l[1] = bus_space_read_4(iot, ioh, index + 4);
+	if (sc->sc_bus_endian != sc->sc_struct_endian) {
+		v.l[0] = bswap32(v.l[0]);
+		v.l[1] = bswap32(v.l[1]);
+	}
+	val = v.u64;
+
+	if (BYTE_ORDER != sc->sc_struct_endian)
+		val = bswap64(val);
+
+	DPRINTFR("read_8", "%08lx", val, index, 8);
+	DPRINTFR2("read_8 low ", "%08x",
+		bus_space_read_stream_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index),
+		bus_space_read_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index));
+	DPRINTFR2("read_8 high ", "%08x",
+		bus_space_read_stream_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index + 4),
+		bus_space_read_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, index + 4));
+	return val;
+}
+
+/*
+ * In the older virtio spec, device config registers are host endian. On newer
+ * they are little endian. Some newer devices however explicitly specify their
+ * register to always be little endian. These fuctions cater for these.
+ */
+uint16_t
+virtio_read_device_config_le_2(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	uint16_t val;
+
+	val = bus_space_read_2(iot, ioh, index);
+	if (sc->sc_bus_endian != LITTLE_ENDIAN)
+		val = bswap16(val);
+
+	DPRINTFR("read_le_2", "%04x", val, index, 2);
+	DPRINTFR2("read_le_2", "%04x",
+		bus_space_read_stream_2(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, 0),
+		bus_space_read_2(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, 0));
+	return val;
+}
+
+uint32_t
+virtio_read_device_config_le_4(struct virtio_softc *sc, int index) {
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	uint32_t val;
+
+	val = bus_space_read_4(iot, ioh, index);
+	if (sc->sc_bus_endian != LITTLE_ENDIAN)
+		val = bswap32(val);
+
+	DPRINTFR("read_le_4", "%08x", val, index, 4);
+	DPRINTFR2("read_le_4", "%08x",
+		bus_space_read_stream_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, 0),
+		bus_space_read_4(sc->sc_devcfg_iot, sc->sc_devcfg_ioh, 0));
+	return val;
 }
 
 void
-virtio_write_device_config_1(struct virtio_softc *sc,
-			     int index, uint8_t value)
+virtio_write_device_config_1(struct virtio_softc *sc, int index, uint8_t value)
 {
-	bus_space_write_1(sc->sc_iot, sc->sc_ioh,
-			  sc->sc_config_offset + index, value);
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+
+	bus_space_write_1(iot, ioh, index, value);
 }
 
 void
-virtio_write_device_config_2(struct virtio_softc *sc,
-			     int index, uint16_t value)
+virtio_write_device_config_2(struct virtio_softc *sc, int index, uint16_t value)
 {
-	bus_space_write_2(sc->sc_iot, sc->sc_ioh,
-			  sc->sc_config_offset + index, value);
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+
+	if (BYTE_ORDER != sc->sc_bus_endian)
+		value = bswap16(value);
+	bus_space_write_2(iot, ioh, index, value);
 }
 
 void
-virtio_write_device_config_4(struct virtio_softc *sc,
-			     int index, uint32_t value)
+virtio_write_device_config_4(struct virtio_softc *sc, int index, uint32_t value)
 {
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  sc->sc_config_offset + index, value);
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+
+	if (BYTE_ORDER != sc->sc_bus_endian)
+		value = bswap32(value);
+	bus_space_write_4(iot, ioh, index, value);
+}
+
+/*
+ * The Virtio spec explicitly tells that reading and writing 8 bytes are not
+ * considered atomic and no triggers may be connected to reading or writing
+ * it. We access it using two 32 bit writes. For good measure it is stated to
+ * always write lsb first just in case of a hypervisor bug. See See virtio
+ * spec 4.1.3.1.
+ */
+void
+virtio_write_device_config_8(struct virtio_softc *sc, int index, uint64_t value)
+{
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+	union {
+		uint64_t u64;
+		uint32_t l[2];
+	} v;
+
+	if (BYTE_ORDER != sc->sc_struct_endian)
+		value = bswap64(value);
+
+	v.u64 = value;
+	if (sc->sc_bus_endian != sc->sc_struct_endian) {
+		v.l[0] = bswap32(v.l[0]);
+		v.l[1] = bswap32(v.l[1]);
+	}
+
+	if (sc->sc_struct_endian == LITTLE_ENDIAN) {
+		bus_space_write_4(iot, ioh, index,     v.l[0]);
+		bus_space_write_4(iot, ioh, index + 4, v.l[1]);
+	} else {
+		bus_space_write_4(iot, ioh, index + 4, v.l[1]);
+		bus_space_write_4(iot, ioh, index,     v.l[0]);
+	}
+}
+
+/*
+ * In the older virtio spec, device config registers are host endian. On newer
+ * they are little endian. Some newer devices however explicitly specify their
+ * register to always be little endian. These fuctions cater for these.
+ */
+void
+virtio_write_device_config_le_2(struct virtio_softc *sc, int index, uint16_t value)
+{
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+
+	if (sc->sc_bus_endian != LITTLE_ENDIAN)
+		value = bswap16(value);
+	bus_space_write_2(iot, ioh, index, value);
 }
 
 void
-virtio_write_device_config_8(struct virtio_softc *sc,
-			     int index, uint64_t value)
+virtio_write_device_config_le_4(struct virtio_softc *sc, int index, uint32_t value)
 {
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  sc->sc_config_offset + index,
-			  value & 0xffffffff);
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  sc->sc_config_offset + index + sizeof(uint32_t),
-			  value >> 32);
+	bus_space_tag_t	   iot = sc->sc_devcfg_iot;
+	bus_space_handle_t ioh = sc->sc_devcfg_ioh;
+
+	if (sc->sc_bus_endian != LITTLE_ENDIAN)
+		value = bswap32(value);
+	bus_space_write_4(iot, ioh, index, value);
 }
+
+
+/*
+ * data structures endian helpers
+ */
+uint16_t virtio_rw16(struct virtio_softc *sc, uint16_t val)
+{
+	KASSERT(sc);
+	return BYTE_ORDER != sc->sc_struct_endian ? bswap16(val) : val;
+}
+
+uint32_t virtio_rw32(struct virtio_softc *sc, uint32_t val)
+{
+	KASSERT(sc);
+	return BYTE_ORDER != sc->sc_struct_endian ? bswap32(val) : val;
+}
+
+uint64_t virtio_rw64(struct virtio_softc *sc, uint64_t val)
+{
+	KASSERT(sc);
+	return BYTE_ORDER != sc->sc_struct_endian ? bswap64(val) : val;
+}
+
 
 /*
  * Interrupt handler.
  */
-static int
-virtio_intr(void *arg)
-{
-	struct virtio_softc *sc = arg;
-	int isr, r = 0;
-
-	/* check and ack the interrupt */
-	isr = bus_space_read_1(sc->sc_iot, sc->sc_ioh,
-			       VIRTIO_CONFIG_ISR_STATUS);
-	if (isr == 0)
-		return 0;
-	if ((isr & VIRTIO_CONFIG_ISR_CONFIG_CHANGE) &&
-	    (sc->sc_config_change != NULL))
-		r = (sc->sc_config_change)(sc);
-	if (sc->sc_intrhand != NULL) {
-		if (sc->sc_soft_ih != NULL)
-			softint_schedule(sc->sc_soft_ih);
-		else
-			r |= (sc->sc_intrhand)(sc);
-	}
-
-	return r;
-}
-
-static int
-virtio_msix_queue_intr(void *arg)
-{
-	struct virtio_softc *sc = arg;
-	int r = 0;
-
-	if (sc->sc_intrhand != NULL) {
-		if (sc->sc_soft_ih != NULL)
-			softint_schedule(sc->sc_soft_ih);
-		else
-			r |= (sc->sc_intrhand)(sc);
-	}
-
-	return r;
-}
-
-static int
-virtio_msix_config_intr(void *arg)
-{
-	struct virtio_softc *sc = arg;
-
-	/* TODO: handle events */
-	aprint_debug_dev(sc->sc_dev, "%s\n", __func__);
-	return 1;
-}
-
 static void
 virtio_soft_intr(void *arg)
 {
@@ -667,20 +419,26 @@ vq_sync_descs(struct virtio_softc *sc, struct virtqueue *vq, int ops)
 static inline void
 vq_sync_aring(struct virtio_softc *sc, struct virtqueue *vq, int ops)
 {
+	uint16_t hdrlen = offsetof(struct vring_avail, ring);
+	if (sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX)
+		hdrlen += sizeof(uint16_t);
+
 	bus_dmamap_sync(sc->sc_dmat, vq->vq_dmamap,
 			vq->vq_availoffset,
-			offsetof(struct vring_avail, ring)
-			 + vq->vq_num * sizeof(uint16_t),
+			hdrlen + sc->sc_nvqs * sizeof(uint16_t),
 			ops);
 }
 
 static inline void
 vq_sync_uring(struct virtio_softc *sc, struct virtqueue *vq, int ops)
 {
+	uint16_t hdrlen = offsetof(struct vring_used, ring);
+	if (sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX)
+		hdrlen += sizeof(uint16_t);
+
 	bus_dmamap_sync(sc->sc_dmat, vq->vq_dmamap,
 			vq->vq_usedoffset,
-			offsetof(struct vring_used, ring)
-			 + vq->vq_num * sizeof(struct vring_used_elem),
+			hdrlen + sc->sc_nvqs * sizeof(struct vring_used_elem),
 			ops);
 }
 
@@ -703,6 +461,20 @@ vq_sync_indirect(struct virtio_softc *sc, struct virtqueue *vq, int slot,
  * Scan vq, bus_dmamap_sync for the vqs (not for the payload),
  * and calls (*vq_done)() if some entries are consumed.
  */
+bool
+virtio_vq_is_enqueued(struct virtio_softc *sc, struct virtqueue *vq)
+{
+
+	if (vq->vq_queued) {
+		vq->vq_queued = 0;
+		vq_sync_aring(sc, vq, BUS_DMASYNC_POSTWRITE);
+	}
+	vq_sync_uring(sc, vq, BUS_DMASYNC_POSTREAD);
+	membar_consumer();
+
+	return (vq->vq_used_idx != virtio_rw16(sc, vq->vq_used->idx)) ? 1 : 0;
+}
+
 int
 virtio_vq_intr(struct virtio_softc *sc)
 {
@@ -711,13 +483,7 @@ virtio_vq_intr(struct virtio_softc *sc)
 
 	for (i = 0; i < sc->sc_nvqs; i++) {
 		vq = &sc->sc_vqs[i];
-		if (vq->vq_queued) {
-			vq->vq_queued = 0;
-			vq_sync_aring(sc, vq, BUS_DMASYNC_POSTWRITE);
-		}
-		vq_sync_uring(sc, vq, BUS_DMASYNC_POSTREAD);
-		membar_consumer();
-		if (vq->vq_used_idx != vq->vq_used->idx) {
+		if (virtio_vq_is_enqueued(sc, vq) == 1) {
 			if (vq->vq_done)
 				r |= (vq->vq_done)(vq);
 		}
@@ -726,23 +492,114 @@ virtio_vq_intr(struct virtio_softc *sc)
 	return r;
 }
 
+int
+virtio_vq_intrhand(struct virtio_softc *sc)
+{
+	struct virtqueue *vq;
+	int i, r = 0;
+
+	for (i = 0; i < sc->sc_nvqs; i++) {
+		vq = &sc->sc_vqs[i];
+		r |= (vq->vq_intrhand)(vq->vq_intrhand_arg);
+	}
+
+	return r;
+}
+
+
+/*
+ * Increase the event index in order to delay interrupts.
+ */
+int
+virtio_postpone_intr(struct virtio_softc *sc, struct virtqueue *vq,
+		uint16_t nslots)
+{
+	uint16_t	idx, nused;
+
+	idx = vq->vq_used_idx + nslots;
+
+	/* set the new event index: avail_ring->used_event = idx */
+	*vq->vq_used_event = virtio_rw16(sc, idx);
+	membar_producer();
+
+	vq_sync_aring(vq->vq_owner, vq, BUS_DMASYNC_PREWRITE);
+	vq->vq_queued++;
+
+	nused = (uint16_t)
+		(virtio_rw16(sc, vq->vq_used->idx) - vq->vq_used_idx);
+	KASSERT(nused <= vq->vq_num);
+
+	return nslots < nused;
+}
+
+/*
+ * Postpone interrupt until 3/4 of the available descriptors have been
+ * consumed.
+ */
+int
+virtio_postpone_intr_smart(struct virtio_softc *sc, struct virtqueue *vq)
+{
+	uint16_t	nslots;
+
+	nslots = (uint16_t)
+		(virtio_rw16(sc, vq->vq_avail->idx) - vq->vq_used_idx) * 3 / 4;
+
+	return virtio_postpone_intr(sc, vq, nslots);
+}
+
+/*
+ * Postpone interrupt until all of the available descriptors have been
+ * consumed.
+ */
+int
+virtio_postpone_intr_far(struct virtio_softc *sc, struct virtqueue *vq)
+{
+	uint16_t	nslots;
+
+	nslots = (uint16_t)
+		(virtio_rw16(sc, vq->vq_avail->idx) - vq->vq_used_idx);
+
+	return virtio_postpone_intr(sc, vq, nslots);
+}
+
 /*
  * Start/stop vq interrupt.  No guarantee.
  */
 void
 virtio_stop_vq_intr(struct virtio_softc *sc, struct virtqueue *vq)
 {
-	vq->vq_avail->flags |= VRING_AVAIL_F_NO_INTERRUPT;
+	if (sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX) {
+		/*
+		 * No way to disable the interrupt completely with
+		 * RingEventIdx. Instead advance used_event by half the
+		 * possible value. This won't happen soon and is far enough in
+		 * the past to not trigger a spurios interrupt.
+		 */
+		*vq->vq_used_event = virtio_rw16(sc, vq->vq_used_idx + 0x8000);
+	} else {
+		vq->vq_avail->flags |= virtio_rw16(sc, VRING_AVAIL_F_NO_INTERRUPT);
+	}
 	vq_sync_aring(sc, vq, BUS_DMASYNC_PREWRITE);
 	vq->vq_queued++;
 }
 
-void
+int
 virtio_start_vq_intr(struct virtio_softc *sc, struct virtqueue *vq)
 {
-	vq->vq_avail->flags &= ~VRING_AVAIL_F_NO_INTERRUPT;
+	if (sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX) {
+		/*
+		 * If event index feature is negotiated, enabling interrupts
+		 * is done through setting the latest consumed index in the
+		 * used_event field
+		 */
+		*vq->vq_used_event = virtio_rw16(sc, vq->vq_used_idx);
+	} else {
+		vq->vq_avail->flags &= ~virtio_rw16(sc, VRING_AVAIL_F_NO_INTERRUPT);
+	}
 	vq_sync_aring(sc, vq, BUS_DMASYNC_PREWRITE);
 	vq->vq_queued++;
+
+	return vq->vq_used_idx != virtio_rw16(sc, vq->vq_used->idx);
 }
 
 /*
@@ -764,8 +621,9 @@ virtio_init_vq(struct virtio_softc *sc, struct virtqueue *vq,
 		for (i = 0; i < vq_size; i++) {
 			vd = vq->vq_indirect;
 			vd += vq->vq_maxnsegs * i;
-			for (j = 0; j < vq->vq_maxnsegs-1; j++)
-				vd[j].next = j + 1;
+			for (j = 0; j < vq->vq_maxnsegs-1; j++) {
+				vd[j].next = virtio_rw16(sc, j + 1);
+			}
 		}
 	}
 
@@ -791,7 +649,7 @@ virtio_init_vq(struct virtio_softc *sc, struct virtqueue *vq,
 	vq_sync_uring(sc, vq, BUS_DMASYNC_PREREAD);
 	vq->vq_queued++;
 }
-	       
+
 /*
  * Allocate/free a vq.
  */
@@ -800,28 +658,31 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
     int maxsegsize, int maxnsegs, const char *name)
 {
 	int vq_size, allocsize1, allocsize2, allocsize3, allocsize = 0;
-	int rsegs, r;
+	int rsegs, r, hdrlen;
 #define VIRTQUEUE_ALIGN(n)	(((n)+(VIRTIO_PAGE_SIZE-1))&	\
 				 ~(VIRTIO_PAGE_SIZE-1))
 
+	/* Make sure callers allocate vqs in order */
+	KASSERT(sc->sc_nvqs == index);
+
 	memset(vq, 0, sizeof(*vq));
 
-	bus_space_write_2(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_QUEUE_SELECT, index);
-	vq_size = bus_space_read_2(sc->sc_iot, sc->sc_ioh,
-				   VIRTIO_CONFIG_QUEUE_SIZE);
+	vq_size = sc->sc_ops->read_queue_size(sc, index);
 	if (vq_size == 0) {
 		aprint_error_dev(sc->sc_dev,
 				 "virtqueue not exist, index %d for %s\n",
 				 index, name);
 		goto err;
 	}
+
+	hdrlen = sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX ? 3 : 2;
+
 	/* allocsize1: descriptor table + avail ring + pad */
 	allocsize1 = VIRTQUEUE_ALIGN(sizeof(struct vring_desc)*vq_size
-				     + sizeof(uint16_t)*(2+vq_size));
+			     + sizeof(uint16_t)*(hdrlen + vq_size));
 	/* allocsize2: used ring + pad */
-	allocsize2 = VIRTQUEUE_ALIGN(sizeof(uint16_t)*2
-				     + sizeof(struct vring_used_elem)*vq_size);
+	allocsize2 = VIRTQUEUE_ALIGN(sizeof(uint16_t) * hdrlen
+			     + sizeof(struct vring_used_elem)*vq_size);
 	/* allocsize3: indirect table */
 	if (sc->sc_indirect && maxnsegs >= MINSEG_INDIRECT)
 		allocsize3 = sizeof(struct vring_desc) * maxnsegs * vq_size;
@@ -831,15 +692,15 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 
 	/* alloc and map the memory */
 	r = bus_dmamem_alloc(sc->sc_dmat, allocsize, VIRTIO_PAGE_SIZE, 0,
-			     &vq->vq_segs[0], 1, &rsegs, BUS_DMA_NOWAIT);
+			     &vq->vq_segs[0], 1, &rsegs, BUS_DMA_WAITOK);
 	if (r != 0) {
 		aprint_error_dev(sc->sc_dev,
 				 "virtqueue %d for %s allocation failed, "
 				 "error code %d\n", index, name, r);
 		goto err;
 	}
-	r = bus_dmamem_map(sc->sc_dmat, &vq->vq_segs[0], 1, allocsize,
-			   &vq->vq_vaddr, BUS_DMA_NOWAIT);
+	r = bus_dmamem_map(sc->sc_dmat, &vq->vq_segs[0], rsegs, allocsize,
+			   &vq->vq_vaddr, BUS_DMA_WAITOK);
 	if (r != 0) {
 		aprint_error_dev(sc->sc_dev,
 				 "virtqueue %d for %s map failed, "
@@ -847,7 +708,7 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 		goto err;
 	}
 	r = bus_dmamap_create(sc->sc_dmat, allocsize, 1, allocsize, 0,
-			      BUS_DMA_NOWAIT, &vq->vq_dmamap);
+			      BUS_DMA_WAITOK, &vq->vq_dmamap);
 	if (r != 0) {
 		aprint_error_dev(sc->sc_dev,
 				 "virtqueue %d for %s dmamap creation failed, "
@@ -855,19 +716,13 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 		goto err;
 	}
 	r = bus_dmamap_load(sc->sc_dmat, vq->vq_dmamap,
-			    vq->vq_vaddr, allocsize, NULL, BUS_DMA_NOWAIT);
+			    vq->vq_vaddr, allocsize, NULL, BUS_DMA_WAITOK);
 	if (r != 0) {
 		aprint_error_dev(sc->sc_dev,
 				 "virtqueue %d for %s dmamap load failed, "
 				 "error code %d\n", index, name, r);
 		goto err;
 	}
-
-	/* set the vq address */
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_QUEUE_ADDRESS,
-			  (vq->vq_dmamap->dm_segs[0].ds_addr
-			   / VIRTIO_PAGE_SIZE));
 
 	/* remember addresses and offsets for later use */
 	vq->vq_owner = sc;
@@ -876,8 +731,13 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 	vq->vq_desc = vq->vq_vaddr;
 	vq->vq_availoffset = sizeof(struct vring_desc)*vq_size;
 	vq->vq_avail = (void*)(((char*)vq->vq_desc) + vq->vq_availoffset);
+	vq->vq_used_event = (uint16_t *) ((char *)vq->vq_avail +
+		 offsetof(struct vring_avail, ring[vq->vq_num]));
 	vq->vq_usedoffset = allocsize1;
 	vq->vq_used = (void*)(((char*)vq->vq_desc) + vq->vq_usedoffset);
+	vq->vq_avail_event = (uint16_t *)((char *)vq->vq_used +
+		 offsetof(struct vring_used, ring[vq->vq_num]));
+
 	if (allocsize3 > 0) {
 		vq->vq_indirectoffset = allocsize1 + allocsize2;
 		vq->vq_indirect = (void*)(((char*)vq->vq_desc)
@@ -889,13 +749,12 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 
 	/* free slot management */
 	vq->vq_entries = kmem_zalloc(sizeof(struct vq_entry)*vq_size,
-				     KM_NOSLEEP);
-	if (vq->vq_entries == NULL) {
-		r = ENOMEM;
-		goto err;
-	}
-
+				     KM_SLEEP);
 	virtio_init_vq(sc, vq, false);
+
+	/* set the vq address */
+	sc->sc_ops->setup_queue(sc, index,
+	    vq->vq_dmamap->dm_segs[0].ds_addr);
 
 	aprint_verbose_dev(sc->sc_dev,
 			   "allocated %u byte for virtqueue %d for %s, "
@@ -905,11 +764,13 @@ virtio_alloc_vq(struct virtio_softc *sc, struct virtqueue *vq, int index,
 				   "using %d byte (%d entries) "
 				   "indirect descriptors\n",
 				   allocsize3, maxnsegs * vq_size);
+
+	sc->sc_nvqs++;
+
 	return 0;
 
 err:
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_QUEUE_ADDRESS, 0);
+	sc->sc_ops->setup_queue(sc, index, 0);
 	if (vq->vq_dmamap)
 		bus_dmamap_destroy(sc->sc_dmat, vq->vq_dmamap);
 	if (vq->vq_vaddr)
@@ -939,10 +800,7 @@ virtio_free_vq(struct virtio_softc *sc, struct virtqueue *vq)
 	}
 
 	/* tell device that there's no virtqueue any longer */
-	bus_space_write_2(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_QUEUE_SELECT, vq->vq_index);
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh,
-			  VIRTIO_CONFIG_QUEUE_ADDRESS, 0);
+	sc->sc_ops->setup_queue(sc, vq->vq_index, 0);
 
 	kmem_free(vq->vq_entries, sizeof(*vq->vq_entries) * vq->vq_num);
 	bus_dmamap_unload(sc->sc_dmat, vq->vq_dmamap);
@@ -953,6 +811,8 @@ virtio_free_vq(struct virtio_softc *sc, struct virtqueue *vq)
 	mutex_destroy(&vq->vq_uring_lock);
 	mutex_destroy(&vq->vq_aring_lock);
 	memset(vq, 0, sizeof(*vq));
+
+	sc->sc_nvqs--;
 
 	return 0;
 }
@@ -1002,10 +862,9 @@ vq_free_entry(struct virtqueue *vq, struct vq_entry *qe)
  *	r = bus_dmamap_load(dmat, dmamap_payload[slot], data, count, ..);
  *	if (r) {
  *	  virtio_enqueue_abort(sc, vq, slot);
- *	  bus_dmamap_unload(dmat, dmamap_payload[slot]);
  *	  return r;
  *	}
- *	r = virtio_enqueue_reserve(sc, vq, slot, 
+ *	r = virtio_enqueue_reserve(sc, vq, slot,
  *				   dmamap_payload[slot]->dm_nsegs+1);
  *							// ^ +1 for command
  *	if (r) {	// currently 0 or EAGAIN
@@ -1063,24 +922,26 @@ virtio_enqueue_reserve(struct virtio_softc *sc, struct virtqueue *vq,
 
 	if (indirect) {
 		struct vring_desc *vd;
+		uint64_t addr;
 		int i;
 
 		vd = &vq->vq_desc[qe1->qe_index];
-		vd->addr = vq->vq_dmamap->dm_segs[0].ds_addr
+		addr = vq->vq_dmamap->dm_segs[0].ds_addr
 			+ vq->vq_indirectoffset;
-		vd->addr += sizeof(struct vring_desc)
+		addr += sizeof(struct vring_desc)
 			* vq->vq_maxnsegs * qe1->qe_index;
-		vd->len = sizeof(struct vring_desc) * nsegs;
-		vd->flags = VRING_DESC_F_INDIRECT;
+		vd->addr  = virtio_rw64(sc, addr);
+		vd->len   = virtio_rw32(sc, sizeof(struct vring_desc) * nsegs);
+		vd->flags = virtio_rw16(sc, VRING_DESC_F_INDIRECT);
 
 		vd = vq->vq_indirect;
 		vd += vq->vq_maxnsegs * qe1->qe_index;
 		qe1->qe_desc_base = vd;
 
 		for (i = 0; i < nsegs-1; i++) {
-			vd[i].flags = VRING_DESC_F_NEXT;
+			vd[i].flags = virtio_rw16(sc, VRING_DESC_F_NEXT);
 		}
-		vd[i].flags = 0;
+		vd[i].flags  = virtio_rw16(sc, 0);
 		qe1->qe_next = 0;
 
 		return 0;
@@ -1096,15 +957,15 @@ virtio_enqueue_reserve(struct virtio_softc *sc, struct virtqueue *vq,
 		for (i = 0; i < nsegs - 1; i++) {
 			qe = vq_alloc_entry(vq);
 			if (qe == NULL) {
-				vd[s].flags = 0;
+				vd[s].flags = virtio_rw16(sc, 0);
 				virtio_enqueue_abort(sc, vq, slot);
 				return EAGAIN;
 			}
-			vd[s].flags = VRING_DESC_F_NEXT;
-			vd[s].next = qe->qe_index;
+			vd[s].flags = virtio_rw16(sc, VRING_DESC_F_NEXT);
+			vd[s].next  = virtio_rw16(sc, qe->qe_index);
 			s = qe->qe_index;
 		}
-		vd[s].flags = 0;
+		vd[s].flags = virtio_rw16(sc, 0);
 
 		return 0;
 	}
@@ -1126,11 +987,11 @@ virtio_enqueue(struct virtio_softc *sc, struct virtqueue *vq, int slot,
 	KASSERT(dmamap->dm_nsegs > 0);
 
 	for (i = 0; i < dmamap->dm_nsegs; i++) {
-		vd[s].addr = dmamap->dm_segs[i].ds_addr;
-		vd[s].len = dmamap->dm_segs[i].ds_len;
+		vd[s].addr = virtio_rw64(sc, dmamap->dm_segs[i].ds_addr);
+		vd[s].len  = virtio_rw32(sc, dmamap->dm_segs[i].ds_len);
 		if (!write)
-			vd[s].flags |= VRING_DESC_F_WRITE;
-		s = vd[s].next;
+			vd[s].flags |= virtio_rw16(sc, VRING_DESC_F_WRITE);
+		s = virtio_rw16(sc, vd[s].next);
 	}
 	qe1->qe_next = s;
 
@@ -1151,11 +1012,11 @@ virtio_enqueue_p(struct virtio_softc *sc, struct virtqueue *vq, int slot,
 	KASSERT((dmamap->dm_segs[0].ds_len > start) &&
 		(dmamap->dm_segs[0].ds_len >= start + len));
 
-	vd[s].addr = dmamap->dm_segs[0].ds_addr + start;
-	vd[s].len = len;
+	vd[s].addr = virtio_rw64(sc, dmamap->dm_segs[0].ds_addr + start);
+	vd[s].len  = virtio_rw32(sc, len);
 	if (!write)
-		vd[s].flags |= VRING_DESC_F_WRITE;
-	qe1->qe_next = vd[s].next;
+		vd[s].flags |= virtio_rw16(sc, VRING_DESC_F_WRITE);
+	qe1->qe_next = virtio_rw16(sc, vd[s].next);
 
 	return 0;
 }
@@ -1178,23 +1039,35 @@ virtio_enqueue_commit(struct virtio_softc *sc, struct virtqueue *vq, int slot,
 	if (qe1->qe_indirect)
 		vq_sync_indirect(sc, vq, slot, BUS_DMASYNC_PREWRITE);
 	mutex_enter(&vq->vq_aring_lock);
-	vq->vq_avail->ring[(vq->vq_avail_idx++) % vq->vq_num] = slot;
+	vq->vq_avail->ring[(vq->vq_avail_idx++) % vq->vq_num] =
+		virtio_rw16(sc, slot);
 
 notify:
 	if (notifynow) {
-		vq_sync_aring(sc, vq, BUS_DMASYNC_PREWRITE);
-		vq_sync_uring(sc, vq, BUS_DMASYNC_PREREAD);
+		uint16_t o, n, t;
+		uint16_t flags;
+		o = virtio_rw16(sc, vq->vq_avail->idx);
+		n = vq->vq_avail_idx;
+
+		/* publish avail idx */
 		membar_producer();
-		vq->vq_avail->idx = vq->vq_avail_idx;
+		vq->vq_avail->idx = virtio_rw16(sc, vq->vq_avail_idx);
 		vq_sync_aring(sc, vq, BUS_DMASYNC_PREWRITE);
-		membar_producer();
 		vq->vq_queued++;
-		vq_sync_uring(sc, vq, BUS_DMASYNC_POSTREAD);
+
 		membar_consumer();
-		if (!(vq->vq_used->flags & VRING_USED_F_NO_NOTIFY))
-			bus_space_write_2(sc->sc_iot, sc->sc_ioh,
-					  VIRTIO_CONFIG_QUEUE_NOTIFY,
-					  vq->vq_index);
+		vq_sync_uring(sc, vq, BUS_DMASYNC_PREREAD);
+		if (sc->sc_active_features & VIRTIO_F_RING_EVENT_IDX) {
+			t = virtio_rw16(sc, *vq->vq_avail_event) + 1;
+			if ((uint16_t) (n - t) < (uint16_t) (n - o))
+				sc->sc_ops->kick(sc, vq->vq_index);
+		} else {
+			flags = virtio_rw16(sc, vq->vq_used->flags);
+			if (!(flags & VRING_USED_F_NO_NOTIFY))
+				sc->sc_ops->kick(sc, vq->vq_index);
+		}
+		vq_sync_uring(sc, vq, BUS_DMASYNC_POSTREAD);
+		vq_sync_aring(sc, vq, BUS_DMASYNC_POSTWRITE);
 	}
 	mutex_exit(&vq->vq_aring_lock);
 
@@ -1218,8 +1091,8 @@ virtio_enqueue_abort(struct virtio_softc *sc, struct virtqueue *vq, int slot)
 
 	s = slot;
 	vd = &vq->vq_desc[0];
-	while (vd[s].flags & VRING_DESC_F_NEXT) {
-		s = vd[s].next;
+	while (virtio_rw16(sc, vd[s].flags) & VRING_DESC_F_NEXT) {
+		s = virtio_rw16(sc, vd[s].next);
 		vq_free_entry(vq, qe);
 		qe = &vq->vq_entries[s];
 	}
@@ -1241,13 +1114,13 @@ virtio_dequeue(struct virtio_softc *sc, struct virtqueue *vq,
 	uint16_t slot, usedidx;
 	struct vq_entry *qe;
 
-	if (vq->vq_used_idx == vq->vq_used->idx)
+	if (vq->vq_used_idx == virtio_rw16(sc, vq->vq_used->idx))
 		return ENOENT;
 	mutex_enter(&vq->vq_uring_lock);
 	usedidx = vq->vq_used_idx++;
 	mutex_exit(&vq->vq_uring_lock);
 	usedidx %= vq->vq_num;
-	slot = vq->vq_used->ring[usedidx].id;
+	slot = virtio_rw32(sc, vq->vq_used->ring[usedidx].id);
 	qe = &vq->vq_entries[slot];
 
 	if (qe->qe_indirect)
@@ -1256,7 +1129,7 @@ virtio_dequeue(struct virtio_softc *sc, struct virtqueue *vq,
 	if (slotp)
 		*slotp = slot;
 	if (lenp)
-		*lenp = vq->vq_used->ring[usedidx].len;
+		*lenp = virtio_rw32(sc, vq->vq_used->ring[usedidx].len);
 
 	return 0;
 }
@@ -1272,12 +1145,209 @@ virtio_dequeue_commit(struct virtio_softc *sc, struct virtqueue *vq, int slot)
 	struct vring_desc *vd = &vq->vq_desc[0];
 	int s = slot;
 
-	while (vd[s].flags & VRING_DESC_F_NEXT) {
-		s = vd[s].next;
+	while (virtio_rw16(sc, vd[s].flags) & VRING_DESC_F_NEXT) {
+		s = virtio_rw16(sc, vd[s].next);
 		vq_free_entry(vq, qe);
 		qe = &vq->vq_entries[s];
 	}
 	vq_free_entry(vq, qe);
 
 	return 0;
+}
+
+/*
+ * Attach a child, fill all the members.
+ */
+void
+virtio_child_attach_start(struct virtio_softc *sc, device_t child, int ipl,
+		    struct virtqueue *vqs,
+		    virtio_callback config_change,
+		    virtio_callback intr_hand,
+		    int req_flags, int req_features, const char *feat_bits)
+{
+	char buf[1024];
+
+	sc->sc_child = child;
+	sc->sc_ipl = ipl;
+	sc->sc_vqs = vqs;
+	sc->sc_config_change = config_change;
+	sc->sc_intrhand = intr_hand;
+	sc->sc_flags = req_flags;
+
+	virtio_negotiate_features(sc, req_features);
+	snprintb(buf, sizeof(buf), feat_bits, sc->sc_active_features);
+	aprint_normal(": features: %s\n", buf);
+	aprint_naive("\n");
+}
+
+void
+virtio_child_attach_set_vqs(struct virtio_softc *sc,
+    struct virtqueue *vqs, int nvq_pairs)
+{
+
+	KASSERT(nvq_pairs == 1 ||
+	    (sc->sc_flags & VIRTIO_F_INTR_SOFTINT) == 0);
+	if (nvq_pairs > 1)
+		sc->sc_child_mq = true;
+
+	sc->sc_vqs = vqs;
+}
+
+int
+virtio_child_attach_finish(struct virtio_softc *sc)
+{
+	int r;
+
+	sc->sc_finished_called = true;
+	r = sc->sc_ops->setup_interrupts(sc);
+	if (r != 0) {
+		aprint_error_dev(sc->sc_dev, "failed to setup interrupts\n");
+		goto fail;
+	}
+
+	KASSERT(sc->sc_soft_ih == NULL);
+	if (sc->sc_flags & VIRTIO_F_INTR_SOFTINT) {
+		u_int flags = SOFTINT_NET;
+		if (sc->sc_flags & VIRTIO_F_INTR_MPSAFE)
+			flags |= SOFTINT_MPSAFE;
+
+		sc->sc_soft_ih = softint_establish(flags, virtio_soft_intr, sc);
+		if (sc->sc_soft_ih == NULL) {
+			sc->sc_ops->free_interrupts(sc);
+			aprint_error_dev(sc->sc_dev,
+			    "failed to establish soft interrupt\n");
+			goto fail;
+		}
+	}
+
+	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
+	return 0;
+
+fail:
+	if (sc->sc_soft_ih) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
+	}
+
+	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
+	return 1;
+}
+
+void
+virtio_child_detach(struct virtio_softc *sc)
+{
+	sc->sc_child = NULL;
+	sc->sc_vqs = NULL;
+
+	virtio_device_reset(sc);
+
+	sc->sc_ops->free_interrupts(sc);
+
+	if (sc->sc_soft_ih) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
+	}
+}
+
+void
+virtio_child_attach_failed(struct virtio_softc *sc)
+{
+	virtio_child_detach(sc);
+
+	virtio_set_status(sc, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
+
+	sc->sc_child = VIRTIO_CHILD_FAILED;
+}
+
+bus_dma_tag_t
+virtio_dmat(struct virtio_softc *sc)
+{
+	return sc->sc_dmat;
+}
+
+device_t
+virtio_child(struct virtio_softc *sc)
+{
+	return sc->sc_child;
+}
+
+int
+virtio_intrhand(struct virtio_softc *sc)
+{
+	return (sc->sc_intrhand)(sc);
+}
+
+uint64_t
+virtio_features(struct virtio_softc *sc)
+{
+	return sc->sc_active_features;
+}
+
+int
+virtio_attach_failed(struct virtio_softc *sc)
+{
+	device_t self = sc->sc_dev;
+
+	/* no error if its not connected, but its failed */
+	if (sc->sc_childdevid == 0)
+		return 1;
+
+	if (sc->sc_child == NULL) {
+		aprint_error_dev(self,
+			"no matching child driver; not configured\n");
+		return 1;
+	}
+
+	if (sc->sc_child == VIRTIO_CHILD_FAILED) {
+		aprint_error_dev(self, "virtio configuration failed\n");
+		return 1;
+	}
+
+	/* sanity check */
+	if (!sc->sc_finished_called) {
+		aprint_error_dev(self, "virtio internal error, child driver "
+			"signaled OK but didn't initialize interrupts\n");
+		return 1;
+	}
+
+	return 0;
+}
+
+void
+virtio_print_device_type(device_t self, int id, int revision)
+{
+	aprint_normal_dev(self, "%s device (rev. 0x%02x)\n",
+		  (id < NDEVNAMES ? virtio_device_name[id] : "Unknown"),
+		  revision);
+}
+
+
+MODULE(MODULE_CLASS_DRIVER, virtio, NULL);
+
+#ifdef _MODULE
+#include "ioconf.c"
+#endif
+
+static int
+virtio_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_init_component(cfdriver_ioconf_virtio,
+		    cfattach_ioconf_virtio, cfdata_ioconf_virtio);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_fini_component(cfdriver_ioconf_virtio,
+		    cfattach_ioconf_virtio, cfdata_ioconf_virtio);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+
+	return error;
 }

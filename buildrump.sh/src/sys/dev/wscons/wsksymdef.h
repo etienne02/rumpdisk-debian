@@ -1,4 +1,4 @@
-/*	$NetBSD: wsksymdef.h,v 1.66 2012/04/22 14:32:08 khorben Exp $ */
+/*	$NetBSD: wsksymdef.h,v 1.76 2021/05/11 10:16:48 nia Exp $ */
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -590,6 +590,18 @@
 
 #define KS_voidSymbol		0xf500
 
+
+/*
+ * Group Latin-5 (iso8859-9)
+ */
+
+#define KS_L5_Gbreve		0xd0
+#define KS_L5_Idotabove		0xdd
+#define KS_L5_Scedilla		0xde
+#define KS_L5_gbreve		0xf0
+#define KS_L5_idotless		0xfd
+#define KS_L5_scedilla		0xfe
+
 /*ENDKEYSYMDECL*/
 
 /*
@@ -632,6 +644,7 @@
 #define KB_IOPENER		0x0040	/* f1-f12 -> ESC,f1-f11 */
 #define KB_MACHDEP		0x0080	/* machine dependent */
 #define KB_COLEMAK	    0x00010000	/* Colemak layout */
+#define KB_APPLE	    0x00020000	/* Apple USB layout */
 
 /*
  * Define keyboard type and texts all in one table.
@@ -639,34 +652,41 @@
  * Sort (loosely) by country name.
  */
 #define KB_ENC_FUN(action) \
-action(KB_USER,	0,	0x0100,	"user",	,	"User-defined")	\
-action(KB_US,	0,	0x0200,	"us",	,	"US-English")	\
-action(KB_UK,	0,	0x0700,	"uk",	,	"UK-English")	\
-action(KB_BE,	0,	0x1300,	"be",	,	"Belgian")	\
-action(KB_CZ,	0,	0x1500, "cz",	,	"Czech")	\
-action(KB_DK,	0,	0x0400,	"dk",	,	"Danish")	\
-action(KB_NL,	0,	0x1600,	"nl",	,	"Dutch") 	\
-action(KB_FI,	0,	0x0900,	"fi",	,	"Finnish")	\
-action(KB_FR,	0,	0x0600,	"fr",	,	"French")	\
-action(KB_DE, KB_NODEAD,0x0300,	"de",".nodead",	"German")	\
-action(KB_GR,	0,	0x1400,	"gr",	,	"Greek")	\
-action(KB_HU,	0,	0x0c00,	"hu",	,	"Hungarian")	\
-action(KB_IT,	0,	0x0500,	"it",	,	"Italian")	\
-action(KB_JP,	0,	0x0800,	"jp",	,	"Japanese")	\
-action(KB_NO,	0,	0x0a00,	"no",	,	"Norwegian")	\
-action(KB_PL,	0,	0x0d00,	"pl",	,	"Polish")	\
-action(KB_PT,	0,	0x1100,	"pt",	,	"Portuguese")	\
-action(KB_RU,	0,	0x0e00,	"ru",	,	"Russian")	\
-action(KB_ES,	0,	0x0b00,	"es",	,	"Spanish")	\
-action(KB_SV,	0,	0x0900,	"sv",	,	"Swedish")	\
-action(KB_SF,	0,	0x1000,	"sf",	,	"Swiss French")	\
-action(KB_SG,	0,	0x0f00,	"sg",	,	"Swiss German")	\
+action(KB_USER,	0,	0x0100,	"user",	,	"User-defined")		\
+action(KB_US,	0,	0x0200,	"us",	,	"US-English")		\
+action(KB_UK,	0,	0x0700,	"uk",	,	"UK-English")		\
+action(KB_BE,	0,	0x1300,	"be",	,	"Belgian")		\
+action(KB_BR,	0,	0x1800,	"br",	,	"Brazilian")		\
+action(KB_CF,	0,	0x1c00,	"cf",	,	"Canadian French")	\
+action(KB_CZ,	0,	0x1500, "cz",	,	"Czech")		\
+action(KB_DK,	0,	0x0400,	"dk",	,	"Danish")		\
+action(KB_NL,	0,	0x1600,	"nl",	,	"Dutch") 		\
+action(KB_EE,	0,	0x1900,	"ee",	,	"Estonian") 		\
+action(KB_FI,	0,	0x0900,	"fi",	,	"Finnish")		\
+action(KB_FR,	0,	0x0600,	"fr",	,	"French")		\
+action(KB_DE, KB_NODEAD,0x0300,	"de",".nodead",	"German (QWERTZ)")	\
+action(KB_NEO,  0,	0x2000,	"neo",	,	"German (Neo 2)")	\
+action(KB_GR,	0,	0x1400,	"gr",	,	"Greek")		\
+action(KB_HU,	0,	0x0c00,	"hu",	,	"Hungarian")		\
+action(KB_IS,	0,	0x1a00,	"is",	,	"Icelandic")		\
+action(KB_IT,	0,	0x0500,	"it",	,	"Italian")		\
+action(KB_JP,	0,	0x0800,	"jp",	,	"Japanese")		\
+action(KB_LA,	0,	0x1b00,	"la",	,	"Latin American")	\
+action(KB_NO,	0,	0x0a00,	"no",	,	"Norwegian")		\
+action(KB_PL,	0,	0x0d00,	"pl",	,	"Polish")		\
+action(KB_PT,	0,	0x1100,	"pt",	,	"Portuguese")		\
+action(KB_RU,	0,	0x0e00,	"ru",	,	"Russian")		\
+action(KB_ES,	0,	0x0b00,	"es",	,	"Spanish")		\
+action(KB_SV,	0,	0x0900,	"sv",	,	"Swedish")		\
+action(KB_SF,	0,	0x1000,	"sf",	,	"Swiss French")		\
+action(KB_SG,	0,	0x0f00,	"sg",	,	"Swiss German")		\
+action(KB_TR,	0,	0x1700,	"tr",	,	"Turkish (Q-Layout)")	\
 action(KB_UA,	0,	0x1200,	"ua",	,	"Ukrainian")	
 #define KB_NONE 0x0000
 
 /* Define all the KB_xx numeric values using above table */
 #define KBF_ENUM(tag, tagf, value, cc, ccf, country) tag=value,
-enum { KB_ENC_FUN(KBF_ENUM) KB_NEXT=0x1700 };
+enum { KB_ENC_FUN(KBF_ENUM) KB_NEXT=0x1d00 };
 
 /* Define list of KB_xxx and country codes for array initialisation */
 #define KBF_ENCTAB(tag, tagf, value, cc, ccf, country) { tag, cc },
@@ -681,6 +701,7 @@ enum { KB_ENC_FUN(KBF_ENUM) KB_NEXT=0x1700 };
 	{ KB_METAESC,	"metaesc" }, \
 	{ KB_IOPENER,	"iopener" }, \
 	{ KB_MACHDEP,	"machdep" }, \
-	{ KB_COLEMAK,	"colemak" }
+	{ KB_COLEMAK,	"colemak" }, \
+	{ KB_APPLE,	"apple" }
 
 #endif /* !_DEV_WSCONS_WSKSYMDEF_H_ */

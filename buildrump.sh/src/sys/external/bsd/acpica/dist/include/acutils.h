@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -63,6 +63,7 @@ extern const char                       *AcpiGbl_MaxDecode[];
 extern const char                       *AcpiGbl_MemDecode[];
 extern const char                       *AcpiGbl_MinDecode[];
 extern const char                       *AcpiGbl_MtpDecode[];
+extern const char                       *AcpiGbl_PhyDecode[];
 extern const char                       *AcpiGbl_RngDecode[];
 extern const char                       *AcpiGbl_RwDecode[];
 extern const char                       *AcpiGbl_ShrDecode[];
@@ -86,6 +87,7 @@ extern const char                       *AcpiGbl_BpbDecode[];
 extern const char                       *AcpiGbl_SbDecode[];
 extern const char                       *AcpiGbl_FcDecode[];
 extern const char                       *AcpiGbl_PtDecode[];
+extern const char                       *AcpiGbl_PtypDecode[];
 #endif
 
 /*
@@ -118,9 +120,6 @@ extern const char                       *AcpiGbl_PtDecode[];
 #ifndef ACPI_MSG_ERROR
 #define ACPI_MSG_ERROR          "ACPI Error: "
 #endif
-#ifndef ACPI_MSG_EXCEPTION
-#define ACPI_MSG_EXCEPTION      "ACPI Exception: "
-#endif
 #ifndef ACPI_MSG_WARNING
 #define ACPI_MSG_WARNING        "ACPI Warning: "
 #endif
@@ -129,10 +128,10 @@ extern const char                       *AcpiGbl_PtDecode[];
 #endif
 
 #ifndef ACPI_MSG_BIOS_ERROR
-#define ACPI_MSG_BIOS_ERROR     "ACPI BIOS Error (bug): "
+#define ACPI_MSG_BIOS_ERROR     "Firmware Error (ACPI): "
 #endif
 #ifndef ACPI_MSG_BIOS_WARNING
-#define ACPI_MSG_BIOS_WARNING   "ACPI BIOS Warning (bug): "
+#define ACPI_MSG_BIOS_WARNING   "Firmware Warning (ACPI): "
 #endif
 
 /*
@@ -141,6 +140,10 @@ extern const char                       *AcpiGbl_PtDecode[];
 #define ACPI_MSG_SUFFIX \
     AcpiOsPrintf (" (%8.8X/%s-%u)\n", ACPI_CA_VERSION, ModuleName, LineNumber)
 
+/* Flags to indicate implicit or explicit string-to-integer conversion */
+
+#define ACPI_IMPLICIT_CONVERSION        TRUE
+#define ACPI_NO_IMPLICIT_CONVERSION     FALSE
 
 /* Types for Resource descriptor entries */
 
@@ -180,10 +183,11 @@ typedef struct acpi_pkg_info
 
 /* AcpiUtDumpBuffer */
 
-#define DB_BYTE_DISPLAY     1
-#define DB_WORD_DISPLAY     2
-#define DB_DWORD_DISPLAY    4
-#define DB_QWORD_DISPLAY    8
+#define DB_BYTE_DISPLAY      0x01
+#define DB_WORD_DISPLAY      0x02
+#define DB_DWORD_DISPLAY     0x04
+#define DB_QWORD_DISPLAY     0x08
+#define DB_DISPLAY_DATA_ONLY 0x10
 
 
 /*
@@ -221,17 +225,61 @@ AcpiUtStricmp (
     char                    *String1,
     char                    *String2);
 
+
+/*
+ * utstrsuppt - string-to-integer conversion support functions
+ */
+ACPI_STATUS
+AcpiUtConvertOctalString (
+    char                    *String,
+    UINT64                  *ReturnValue);
+
+ACPI_STATUS
+AcpiUtConvertDecimalString (
+    char                    *String,
+    UINT64                  *ReturnValuePtr);
+
+ACPI_STATUS
+AcpiUtConvertHexString (
+    char                    *String,
+    UINT64                  *ReturnValuePtr);
+
+char
+AcpiUtRemoveWhitespace (
+    char                    **String);
+
+char
+AcpiUtRemoveLeadingZeros (
+    char                    **String);
+
+BOOLEAN
+AcpiUtDetectHexPrefix (
+    char                    **String);
+
+void
+AcpiUtRemoveHexPrefix (
+    char                    **String);
+
+BOOLEAN
+AcpiUtDetectOctalPrefix (
+    char                    **String);
+
+
+/*
+ * utstrtoul64 - string-to-integer conversion functions
+ */
 ACPI_STATUS
 AcpiUtStrtoul64 (
     char                    *String,
-    UINT32                  Base,
-    UINT32                  MaxIntegerByteWidth,
     UINT64                  *RetInteger);
 
-/* Values for MaxIntegerByteWidth above */
+UINT64
+AcpiUtExplicitStrtoul64 (
+    char                    *String);
 
-#define ACPI_MAX32_BYTE_WIDTH       4
-#define ACPI_MAX64_BYTE_WIDTH       8
+UINT64
+AcpiUtImplicitStrtoul64 (
+    char                    *String);
 
 
 /*
@@ -241,11 +289,11 @@ ACPI_STATUS
 AcpiUtInitGlobals (
     void);
 
-#if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DEBUGGER)
-
 const char *
 AcpiUtGetMutexName (
     UINT32                  MutexId);
+
+#if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DEBUGGER)
 
 const char *
 AcpiUtGetNotifyName (
@@ -281,10 +329,19 @@ const char *
 AcpiUtGetEventName (
     UINT32                  EventId);
 
+const char *
+AcpiUtGetArgumentTypeName (
+    UINT32                  ArgType);
+
 char
 AcpiUtHexToAsciiChar (
     UINT64                  Integer,
     UINT32                  Position);
+
+ACPI_STATUS
+AcpiUtAsciiToHexByte (
+    char                    *TwoAsciiChars,
+    UINT8                   *ReturnByte);
 
 UINT8
 AcpiUtAsciiCharToHex (
@@ -725,7 +782,7 @@ ACPI_GENERIC_STATE *
 AcpiUtCreatePkgState (
     void                    *InternalObject,
     void                    *ExternalObject,
-    UINT16                  Index);
+    UINT32                  Index);
 
 ACPI_STATUS
 AcpiUtCreateUpdateStateAndPush (
@@ -758,6 +815,24 @@ AcpiUtShortDivide (
     UINT32                  Divisor,
     UINT64                  *OutQuotient,
     UINT32                  *OutRemainder);
+
+ACPI_STATUS
+AcpiUtShortMultiply (
+    UINT64                  InMultiplicand,
+    UINT32                  Multiplier,
+    UINT64                  *Outproduct);
+
+ACPI_STATUS
+AcpiUtShortShiftLeft (
+    UINT64                  Operand,
+    UINT32                  Count,
+    UINT64                  *OutResult);
+
+ACPI_STATUS
+AcpiUtShortShiftRight (
+    UINT64                  Operand,
+    UINT32                  Count,
+    UINT64                  *OutResult);
 
 
 /*
@@ -875,12 +950,18 @@ void
 AcpiUtRepairName (
     char                    *Name);
 
-#if defined (ACPI_DEBUGGER) || defined (ACPI_APPLICATION)
+#if defined (ACPI_DEBUGGER) || defined (ACPI_APPLICATION) || defined (ACPI_DEBUG_OUTPUT)
 BOOLEAN
 AcpiUtSafeStrcpy (
     char                    *Dest,
     ACPI_SIZE               DestSize,
     char                    *Source);
+
+void
+AcpiUtSafeStrncpy (
+    char                    *Dest,
+    const char              *Source,
+    ACPI_SIZE               DestSize);
 
 BOOLEAN
 AcpiUtSafeStrcat (
@@ -1007,37 +1088,41 @@ AcpiUtDeleteAddressLists (
 /*
  * utxferror - various error/warning output functions
  */
+ACPI_PRINTF_LIKE(5)
 void ACPI_INTERNAL_VAR_XFACE
 AcpiUtPredefinedWarning (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...);
 
+ACPI_PRINTF_LIKE(5)
 void ACPI_INTERNAL_VAR_XFACE
 AcpiUtPredefinedInfo (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...);
 
+ACPI_PRINTF_LIKE(5)
 void ACPI_INTERNAL_VAR_XFACE
 AcpiUtPredefinedBiosError (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...);
 
 void
-AcpiUtNamespaceError (
+AcpiUtPrefixedNamespaceError (
     const char              *ModuleName,
     UINT32                  LineNumber,
+    ACPI_GENERIC_STATE      *PrefixScope,
     const char              *InternalName,
     ACPI_STATUS             LookupStatus);
 
@@ -1068,48 +1153,6 @@ AcpiAhMatchUuid (
 
 
 /*
- * utprint - printf/vprintf output functions
- */
-const char *
-AcpiUtScanNumber (
-    const char              *String,
-    UINT64                  *NumberPtr);
-
-const char *
-AcpiUtPrintNumber (
-    char                    *String,
-    UINT64                  Number);
-
-int
-AcpiUtVsnprintf (
-    char                    *String,
-    ACPI_SIZE               Size,
-    const char              *Format,
-    va_list                 Args);
-
-int
-AcpiUtSnprintf (
-    char                    *String,
-    ACPI_SIZE               Size,
-    const char              *Format,
-    ...);
-
-#ifdef ACPI_APPLICATION
-int
-AcpiUtFileVprintf (
-    ACPI_FILE               File,
-    const char              *Format,
-    va_list                 Args);
-
-int
-AcpiUtFilePrintf (
-    ACPI_FILE               File,
-    const char              *Format,
-    ...);
-#endif
-
-
-/*
  * utuuid -- UUID support functions
  */
 #if (defined ACPI_ASL_COMPILER || defined ACPI_EXEC_APP || defined ACPI_HELP_APP|| defined ACPI_DISASSEMBLER)
@@ -1117,6 +1160,11 @@ void
 AcpiUtConvertStringToUuid (
     const char              *InString,
     UINT8                   *UuidBuffer);
+
+ACPI_STATUS
+AcpiUtConvertUuidToString (
+    char                    *UuidBuffer,
+    char                    *OutString);
 #endif
 
 #endif /* _ACUTILS_H */

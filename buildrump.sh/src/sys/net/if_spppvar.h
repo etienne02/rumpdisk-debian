@@ -1,4 +1,4 @@
-/*	$NetBSD: if_spppvar.h,v 1.16 2009/10/05 21:27:36 dyoung Exp $	*/
+/*	$NetBSD: if_spppvar.h,v 1.42 2021/06/01 04:59:50 yamaguchi Exp $	*/
 
 #ifndef _NET_IF_SPPPVAR_H_
 #define _NET_IF_SPPPVAR_H_
@@ -26,6 +26,20 @@
  * From: Id: if_sppp.h,v 1.7 1998/12/01 20:20:19 hm Exp
  */
 
+#include <sys/workqueue.h>
+#include <sys/pcq.h>
+struct sppp;
+
+struct sppp_work {
+	struct work	 work;
+	void		*arg;
+	void		(*func)(struct sppp *, void *);
+	unsigned int	 state;
+#define SPPP_WK_FREE	0
+#define SPPP_WK_BUSY	1
+#define SPPP_WK_UNAVAIL	2
+};
+
 #define IDX_LCP 0		/* idx into state table */
 
 struct slcp {
@@ -40,6 +54,11 @@ struct slcp {
 	int	max_terminate;
 	int	max_configure;
 	int	max_failure;
+	/* multilink variables */
+	u_long	mrru;		/* our   max received reconstructed unit */
+	u_long	their_mrru;	/* their max receive dreconstructed unit */
+	bool	reestablish;	/* reestablish after the next down event */
+	bool	tlf_sent;	/* call lower layer's tlf before a down event */
 };
 
 #define IDX_IPCP 1		/* idx into state table */
@@ -59,6 +78,9 @@ struct sipcp {
 	uint32_t saved_hisaddr;/* if hisaddr (IPv4) is dynamic, save original one here, in network byte order */
 	uint32_t req_hisaddr;	/* remote address requested */
 	uint32_t req_myaddr;	/* local address requested */
+
+	uint8_t my_ifid[8];	/* IPv6CP my ifid*/
+	uint8_t his_ifid[8];	/* IPv6CP his ifid*/
 };
 
 struct sauth {
@@ -68,13 +90,49 @@ struct sauth {
 	char	*secret;		/* secret password */
 	u_char	name_len;		/* no need to have a bigger size */
 	u_char	secret_len;		/* because proto gives size in a byte */
-	char	challenge[16];		/* random challenge [don't change size! it's really hardcoded!] */
+};
+
+struct schap {
+	char	 challenge[16];		/* random challenge
+					   [don't change size! it's really hardcoded!] */
+	char	 digest[16];
+	u_char	 digest_len;
+	bool	 rechallenging;		/* sent challenge after open */
+	bool	 response_rcvd;		/* receive response, stop sending challenge */
+
+	struct sppp_work	 work_challenge_rcvd;
 };
 
 #define IDX_PAP		3
 #define IDX_CHAP	4
 
 #define IDX_COUNT (IDX_CHAP + 1) /* bump this when adding cp's! */
+
+struct sppp_cp {
+	u_long		 seq;		/* local sequence number */
+	u_long		 rseq;		/* remote sequence number */
+	int		 state;		/* state machine */
+	u_char		 confid;	/* local id of last configuration request */
+	u_char		 rconfid;	/* remote id of last configuration request */
+	int		 rst_counter;	/* restart counter */
+	int		 fail_counter;	/* negotiation failure counter */
+	struct callout	 ch;		/* per-proto and if callouts */
+	u_char		 rcr_type;	/* parsing result of conf-req */
+	struct mbuf	*mbuf_confreq;	/* received conf-req */
+	struct mbuf	*mbuf_confnak;	/* received conf-nak or conf-rej */
+
+	struct sppp_work	 work_up;
+	struct sppp_work	 work_down;
+	struct sppp_work	 work_open;
+	struct sppp_work	 work_close;
+	struct sppp_work	 work_to;
+	struct sppp_work	 work_rcr;
+	struct sppp_work	 work_rca;
+	struct sppp_work	 work_rcn;
+	struct sppp_work	 work_rtr;
+	struct sppp_work	 work_rta;
+	struct sppp_work	 work_rxj;
+};
 
 struct sppp {
 	/* NB: pp_if _must_ be first */
@@ -83,12 +141,12 @@ struct sppp {
 	struct	ifqueue pp_cpq;	/* PPP control protocol queue */
 	struct  sppp *pp_next;  /* next interface in keepalive list */
 	u_int   pp_flags;       /* use Cisco protocol instead of PPP */
+	u_int	pp_ncpflags;	/* enable or disable each NCP */
 	u_int	pp_framebytes;	/* number of bytes added by (hardware) framing */
 	u_int   pp_alivecnt;    /* keepalive packets counter */
+	u_int	pp_alive_interval;	/* keepalive interval */
 	u_int   pp_loopcnt;     /* loopback detection counter */
 	u_int	pp_maxalive;	/* number or echo req. w/o reply */
-	u_long  pp_seq[IDX_COUNT];	/* local sequence number */
-	u_long  pp_rseq[IDX_COUNT];	/* remote sequence number */
 	uint64_t	pp_saved_mtu;	/* saved MTU value */
 	time_t	pp_last_receive;	/* peer's last "sign of life" */
 	time_t	pp_max_noreceive;	/* seconds since last receive before
@@ -100,25 +158,22 @@ struct sppp {
 	int	pp_auth_failures;	/* authorization failures */
 	int	pp_max_auth_fail;	/* max. allowed authorization failures */
 	int	pp_phase;	/* phase we're currently in */
+	krwlock_t	pp_lock;	/* lock for sppp structure */
 	int	query_dns;	/* 1 if we want to know the dns addresses */
 	uint32_t	dns_addrs[2];
-	int	state[IDX_COUNT];	/* state machine */
-	u_char  confid[IDX_COUNT];	/* id of last configuration request */
-	int	rst_counter[IDX_COUNT];	/* restart counter */
-	int	fail_counter[IDX_COUNT]; /* negotiation failure counter */
-#if defined(__NetBSD__)
-	struct	callout ch[IDX_COUNT];	/* per-proto and if callouts */
-	struct	callout pap_my_to_ch;	/* PAP needs one more... */
-#endif
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 	struct callout_handle ch[IDX_COUNT]; /* per-proto and if callouts */
 	struct callout_handle pap_my_to_ch; /* PAP needs one more... */
 #endif
+	struct workqueue *wq_cp;
+	struct sppp_work work_ifdown;
+	struct sppp_cp scp[IDX_COUNT];
 	struct slcp lcp;		/* LCP params */
 	struct sipcp ipcp;		/* IPCP params */
 	struct sipcp ipv6cp;		/* IPv6CP params */
 	struct sauth myauth;		/* auth params, i'm peer */
 	struct sauth hisauth;		/* auth params, i'm authenticator */
+	struct schap chap;		/* CHAP params */
 	/*
 	 * These functions are filled in by sppp_attach(), and are
 	 * expected to be used by the lower layer (hardware) drivers
@@ -148,14 +203,18 @@ struct sppp {
 	void	(*pp_chg)(struct sppp *, int);
 };
 
-#define PP_KEEPALIVE    0x01    /* use keepalive protocol */
-#define PP_CISCO        0x02    /* use Cisco protocol instead of PPP */
-				/* 0x04 was PP_TIMO */
-#define PP_CALLIN	0x08	/* we are being called */
-#define PP_NEEDAUTH	0x10	/* remote requested authentication */
-#define	PP_NOFRAMING	0x20	/* do not add/expect encapsulation
-				   around PPP frames (i.e. the serial
-				   HDLC like encapsulation, RFC1662) */
+#define PP_KEEPALIVE		0x01	/* use keepalive protocol */
+					/* 0x02 was PP_CISCO */
+					/* 0x04 was PP_TIMO */
+#define PP_CALLIN		0x08	/* we are being called */
+#define PP_NEEDAUTH		0x10	/* remote requested authentication */
+#define PP_NOFRAMING		0x20	/* do not add/expect encapsulation
+					   around PPP frames (i.e. the serial
+					   HDLC like encapsulation, RFC1662) */
+#define PP_LOOPBACK		0x40	/* in line loopback mode */
+#define PP_LOOPBACK_IFDOWN	0x80	/* if_down() when loopback detected */
+#define PP_KEEPALIVE_IFDOWN	0x100	/* if_down() when no ECHO_REPLY received */
+#define PP_ADMIN_UP		0x200	/* the interface is up */
 
 
 #define PP_MTU          1500    /* default/minimal MRU */
@@ -170,4 +229,25 @@ struct mbuf *sppp_dequeue (struct ifnet *);
 int sppp_isempty (struct ifnet *);
 void sppp_flush (struct ifnet *);
 #endif
+
+/*
+ * Locking notes:
+ * + spppq is protected by spppq_lock (an adaptive mutex)
+ *     spppq is a list of all struct sppps, and it is used for
+ *     sending keepalive packets.
+ * + struct sppp is protected by sppp->pp_lock (an rwlock)
+ *     sppp holds configuration parameters for line,
+ *     authentication and addresses. It also has pointers
+ *     of functions to notify events to lower layer.
+ *     When notify events, sppp->pp_lock must be released.
+ *     Because the event handler implemented in a lower
+ *     layer often call functions implemented in
+ *     if_spppsubr.c.
+ *
+ * Locking order:
+ *    - IFNET_LOCK => spppq_lock => struct sppp->pp_lock
+ *
+ * NOTICE
+ * - Lower layers must not acquire sppp->pp_lock
+ */
 #endif /* !_NET_IF_SPPPVAR_H_ */

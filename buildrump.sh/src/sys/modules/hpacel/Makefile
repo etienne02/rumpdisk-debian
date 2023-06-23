@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.1 2011/07/13 07:52:49 jruoho Exp $
+# $NetBSD: Makefile,v 1.3 2021/04/13 06:25:49 mrg Exp $
 
 .include "../Makefile.inc"
 
@@ -8,6 +8,6 @@ KMOD=	hpacel
 IOCONF=	hpacel.ioconf
 SRCS=	hpacel_acpi.c
 
-WARNS=	4
+COPTS.hpacel_acpi.c+=       ${GCC_NO_MAYBE_UNINITIALIZED}
 
 .include <bsd.kmodule.mk>

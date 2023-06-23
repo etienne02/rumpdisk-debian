@@ -1,4 +1,4 @@
-/*	$NetBSD: mtrr_k6.c,v 1.13 2008/04/04 22:07:22 cegger Exp $	*/
+/*	$NetBSD: mtrr_k6.c,v 1.15 2020/01/31 08:21:11 maxv Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mtrr_k6.c,v 1.13 2008/04/04 22:07:22 cegger Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mtrr_k6.c,v 1.15 2020/01/31 08:21:11 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -71,7 +71,7 @@ mtrr_var_raw[] = {
 
 static struct mtrr *mtrr_var;
 
-struct mtrr_funcs k6_mtrr_funcs = {
+const struct mtrr_funcs k6_mtrr_funcs = {
 	k6_mtrr_init_cpu,
 	k6_mtrr_reload_cpu,
 	k6_mtrr_clean,
@@ -149,9 +149,7 @@ k6_mtrr_init_first(void)
 #endif
 
 	mtrr_var = (struct mtrr *)
-	    malloc(MTRR_K6_NVAR * sizeof(struct mtrr), M_TEMP, M_NOWAIT);
-	if (mtrr_var == NULL)
-		panic("can't allocate variable MTRR array");
+	    malloc(MTRR_K6_NVAR * sizeof(struct mtrr), M_TEMP, M_WAITOK);
 	mtrr_funcs = &k6_mtrr_funcs;
 
 	k6_raw2soft();

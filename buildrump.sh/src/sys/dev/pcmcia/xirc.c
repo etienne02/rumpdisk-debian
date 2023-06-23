@@ -1,4 +1,4 @@
-/*	$NetBSD: xirc.c,v 1.33 2012/02/14 13:51:19 drochner Exp $	*/
+/*	$NetBSD: xirc.c,v 1.38 2021/08/07 16:19:15 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2004 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xirc.c,v 1.33 2012/02/14 13:51:19 drochner Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xirc.c,v 1.38 2021/08/07 16:19:15 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -50,6 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD: xirc.c,v 1.33 2012/02/14 13:51:19 drochner Exp $");
 #include <net/if_dl.h>
 #include <net/if_ether.h>
 #include <net/if_media.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -58,10 +59,6 @@ __KERNEL_RCSID(0, "$NetBSD: xirc.c,v 1.33 2012/02/14 13:51:19 drochner Exp $");
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/intr.h>
 #include <sys/bus.h>
@@ -263,11 +260,12 @@ xirc_attach(device_t parent, device_t self, void *aux)
 
 	if (sc->sc_id & (XIMEDIA_MODEM << 8))
 		/*XXXUNCONST*/
-		sc->sc_modem = config_found(self, __UNCONST("com"), xirc_print);
+		sc->sc_modem = config_found(self, __UNCONST("com"), xirc_print,
+		    CFARGS_NONE);
 	if (sc->sc_id & (XIMEDIA_ETHER << 8))
 		/*XXXUNCONST*/
 		sc->sc_ethernet = config_found(self, __UNCONST("xi"),
-		    xirc_print);
+		    xirc_print, CFARGS_NONE);
 
 	xirc_disable(sc, XIRC_MODEM_ENABLED|XIRC_ETHERNET_ENABLED,
 	    sc->sc_id & (XIMEDIA_MODEM|XIMEDIA_ETHER));
@@ -556,7 +554,7 @@ com_xirc_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
-	COM_INIT_REGS(sc->sc_regs, 
+	com_init_regs(&sc->sc_regs, 
 	    msc->sc_modem_pcioh.iot,
 	    msc->sc_modem_pcioh.ioh,
 	    -1);
@@ -697,6 +695,7 @@ xi_xirc_lan_nid_ciscallback(struct pcmcia_tuple *tuple, void *arg)
 				myla[i] = pcmcia_tuple_read_1(tuple, i + 3);
 			return (1);
 		}
+		break;
 
 	case 0x89:
 		if (pcmcia_tuple_read_1(tuple, 0) != 0x04 ||

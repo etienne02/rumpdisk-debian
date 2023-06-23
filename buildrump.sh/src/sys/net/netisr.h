@@ -1,4 +1,4 @@
-/* $NetBSD: netisr.h,v 1.44 2015/05/25 08:29:01 ozaki-r Exp $ */
+/* $NetBSD: netisr.h,v 1.46 2018/09/06 06:42:00 maxv Exp $ */
 
 /*
  * Copyright (c) 1980, 1986, 1989, 1993
@@ -52,7 +52,7 @@
 #include "opt_inet.h"
 #include "opt_atalk.h"
 #include "opt_mpls.h"
-#include "opt_natm.h"
+#include "opt_can.h"
 #include "arp.h"
 #endif /* defined(_KERNEL_OPT) */
 
@@ -62,7 +62,7 @@
 #include <sys/socket.h>
 
 /*
- * XXX IFNAMSIZE for if_ppp.h, natm.h; struct ifnet decl for in6.h, in.h;
+ * XXX IFNAMSIZE for if_ppp.h; struct ifnet decl for in6.h, in.h;
  * XXX struct mbuf decl for in6.h, in.h, route.h (via in_var.h).
  */
 #include <net/if.h>
@@ -84,11 +84,12 @@
 #ifdef MPLS
 #include <netmpls/mpls_var.h>
 #endif
-#ifdef NATM
-#include <netnatm/natm.h>
-#endif
 #ifdef NETATALK
 #include <netatalk/at_extern.h>
+#endif
+#ifdef CAN
+#include <netcan/can.h>
+#include <netcan/can_var.h>
 #endif
 
 #endif /* !defined(_LOCORE) */
@@ -109,6 +110,7 @@
 #define	NETISR_NATM	27		/* same as AF_NATM */
 #define	NETISR_ARP	28		/* same as AF_ARP */
 #define	NETISR_MPLS	33		/* same as AF_MPLS */
+#define	NETISR_CAN	35		/* same as AF_CAN */
 #define	NETISR_MAX	AF_MAX
 
 #if !defined(_LOCORE) && defined(_KERNEL)

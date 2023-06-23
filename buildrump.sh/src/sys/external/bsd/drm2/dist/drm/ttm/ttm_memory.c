@@ -1,3 +1,5 @@
+/*	$NetBSD: ttm_memory.c,v 1.6 2020/02/14 14:34:59 maya Exp $	*/
+
 /**************************************************************************
  *
  * Copyright (c) 2006-2009 VMware, Inc., Palo Alto, CA., USA
@@ -25,6 +27,9 @@
  *
  **************************************************************************/
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: ttm_memory.c,v 1.6 2020/02/14 14:34:59 maya Exp $");
+
 #define pr_fmt(fmt) "[TTM] " fmt
 
 #include <drm/drmP.h>
@@ -37,8 +42,6 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/printk.h>
-#include <linux/export.h>
 
 #define TTM_MEMORY_ALLOC_RETRIES 4
 
@@ -197,11 +200,7 @@ static bool ttm_zones_above_swap_target(struct ttm_mem_global *glob,
 
 		if (from_wq)
 			target = zone->swap_limit;
-#ifdef __NetBSD__
-		else if (DRM_SUSER())
-#else
 		else if (capable(CAP_SYS_ADMIN))
-#endif
 			target = zone->emer_mem;
 		else
 			target = zone->max_mem;
@@ -318,7 +317,8 @@ static int ttm_mem_init_highmem_zone(struct ttm_mem_global *glob,
 	glob->zone_highmem = zone;
 #ifndef __NetBSD__
 	ret = kobject_init_and_add(
-		&zone->kobj, &ttm_mem_zone_kobj_type, &glob->kobj, zone->name);
+		&zone->kobj, &ttm_mem_zone_kobj_type, &glob->kobj, "%s",
+		zone->name);
 	if (unlikely(ret != 0)) {
 		kobject_put(&zone->kobj);
 		return ret;
@@ -448,6 +448,7 @@ void ttm_mem_global_release(struct ttm_mem_global *glob)
 		kobject_put(&zone->kobj);
 #endif
 			}
+	spin_lock_destroy(&glob->lock);
 #ifdef __NetBSD__
 	kfree(glob);
 #else
@@ -518,13 +519,8 @@ static int ttm_mem_global_reserve(struct ttm_mem_global *glob,
 		if (single_zone && zone != single_zone)
 			continue;
 
-#ifdef __NetBSD__
-		limit = DRM_SUSER() ?
-			zone->emer_mem : zone->max_mem;
-#else
 		limit = (capable(CAP_SYS_ADMIN)) ?
 			zone->emer_mem : zone->max_mem;
-#endif
 
 		if (zone->used_mem > limit)
 			goto out_unlock;

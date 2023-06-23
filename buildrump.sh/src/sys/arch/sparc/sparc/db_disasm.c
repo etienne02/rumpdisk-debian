@@ -1,4 +1,4 @@
-/*	$NetBSD: db_disasm.c,v 1.21 2015/10/04 08:16:13 joerg Exp $ */
+/*	$NetBSD: db_disasm.c,v 1.23 2021/04/06 16:10:08 simonb Exp $ */
 
 /*
  * Copyright (c) 1994 David S. Miller, davem@nadzieja.rutgers.edu
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.21 2015/10/04 08:16:13 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.23 2021/04/06 16:10:08 simonb Exp $");
 
 #include <sys/param.h>
 #include <machine/db_machdep.h>
@@ -876,7 +876,7 @@ struct sparc_insn sparc_i[] = {
 };
 
 db_addr_t
-db_disasm(vaddr_t loc, bool altfmt)
+db_disasm(db_addr_t loc, bool altfmt)
 {
 	struct sparc_insn*	i_ptr = (struct sparc_insn *)&sparc_i;
 
@@ -995,12 +995,12 @@ db_disasm(vaddr_t loc, bool altfmt)
 		case 'i':
 			/* simm13 -- signed */
 			val = SIGNEX(insn, 13);
-			db_printf("%s0x%x", SIGN(val), (int)abs(val));
+			db_printf("%s0x%x", SIGN(val), abs((int)val));
 			break;
 		case 'j':
 			/* simm11 -- signed */
 			val = SIGNEX(insn, 11);
-			db_printf("%s0x%x", SIGN(val), (int)abs(val));
+			db_printf("%s0x%x", SIGN(val), abs((int)val));
 			break;
 		case 'l':
 			val = (((insn>>20)&0x3)<<13)|(insn & 0x1fff);
@@ -1043,7 +1043,7 @@ db_disasm(vaddr_t loc, bool altfmt)
 			db_printf("[%%%s %c 0x%x]",
 				regs[((insn >> 14) & 0x1f)],
 				(int)((val<0)?'-':'+'),
-				(int)abs(val));
+				abs((int)val));
 			if (*f_ptr == '8')
 				db_printf(" %%asi");
 			break;

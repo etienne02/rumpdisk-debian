@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp $	*/
+/*	$NetBSD: tcp_timer.c,v 1.96 2021/03/08 17:54:43 christos Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -93,11 +93,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.96 2021/03/08 17:54:43 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_tcp_debug.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include <sys/param.h>
@@ -108,6 +109,9 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp
 #include <sys/protosw.h>
 #include <sys/errno.h>
 #include <sys/kernel.h>
+#include <sys/callout.h>
+#include <sys/workqueue.h>
+#include <sys/cprng.h>
 
 #include <net/if.h>
 
@@ -119,9 +123,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp
 #include <netinet/ip_icmp.h>
 
 #ifdef INET6
-#ifndef INET
-#include <netinet/in.h>
-#endif
 #include <netinet/ip6.h>
 #include <netinet6/in6_pcb.h>
 #endif
@@ -133,7 +134,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_timer.c,v 1.91 2016/07/25 00:10:38 knakahara Exp
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_private.h>
 #include <netinet/tcp_congctl.h>
-#include <netinet/tcpip.h>
 #ifdef TCP_DEBUG
 #include <netinet/tcp_debug.h>
 #endif
@@ -148,6 +148,15 @@ u_int	tcp_keepintvl = 0;
 u_int	tcp_keepcnt = 0;		/* max idle probes */
 
 int	tcp_maxpersistidle = 0;		/* max idle time in persist */
+
+static callout_t	tcp_slowtimo_ch;
+#ifdef NET_MPSAFE
+static struct workqueue	*tcp_slowtimo_wq;
+static struct work	tcp_slowtimo_wk;
+#endif
+
+static void tcp_slowtimo_work(struct work *, void *);
+static void tcp_slowtimo(void *);
 
 /*
  * Time to delay the ACK.  This is initialized in tcp_init(), unless
@@ -193,6 +202,21 @@ tcp_timer_init(void)
 		tcp_delack_ticks = TCP_DELACK_TICKS;
 }
 
+void
+tcp_slowtimo_init(void)
+{
+#ifdef NET_MPSAFE
+	int error;
+
+	error = workqueue_create(&tcp_slowtimo_wq, "tcp_slowtimo",
+	    tcp_slowtimo_work, NULL, PRI_SOFTNET, IPL_SOFTNET, WQ_MPSAFE);
+	if (error != 0)
+		panic("%s: workqueue_create failed (%d)\n", __func__, error);
+#endif
+	callout_init(&tcp_slowtimo_ch, CALLOUT_MPSAFE);
+	callout_reset(&tcp_slowtimo_ch, 1, tcp_slowtimo, NULL);
+}
+
 /*
  * Callout to process delayed ACKs for a TCPCB.
  */
@@ -229,16 +253,27 @@ tcp_delack(void *arg)
  * Updates the timers in all active tcb's and
  * causes finite state machine actions if timers expire.
  */
-void
-tcp_slowtimo(void *arg)
+static void
+tcp_slowtimo_work(struct work *wk, void *arg)
 {
 
 	mutex_enter(softnet_lock);
-	tcp_iss_seq += TCP_ISSINCR;			/* increment iss */
+	tcp_iss_seq += TCP_ISSINCR + (TCP_ISS_RANDOM_MASK & cprng_fast32());
 	tcp_now++;					/* for timestamps */
 	mutex_exit(softnet_lock);
 
 	callout_schedule(&tcp_slowtimo_ch, hz / PR_SLOWHZ);
+}
+
+static void
+tcp_slowtimo(void *arg)
+{
+
+#ifdef NET_MPSAFE
+	workqueue_enqueue(tcp_slowtimo_wq, &tcp_slowtimo_wk, NULL);
+#else
+	tcp_slowtimo_work(NULL, NULL);
+#endif
 }
 
 /*
@@ -309,10 +344,8 @@ tcp_timer_rexmt(void *arg)
  		return;
  	}
 #ifdef TCP_DEBUG
-#ifdef INET
 	if (tp->t_inpcb)
 		so = tp->t_inpcb->inp_socket;
-#endif
 #ifdef INET6
 	if (tp->t_in6pcb)
 		so = tp->t_in6pcb->in6p_socket;
@@ -358,11 +391,9 @@ tcp_timer_rexmt(void *arg)
 	if (tp->t_mtudisc && tp->t_rxtshift > TCP_MAXRXTSHIFT / 6) {
 		TCP_STATINC(TCP_STAT_PMTUBLACKHOLE);
 
-#ifdef INET
 		/* try turning PMTUD off */
 		if (tp->t_inpcb)
 			tp->t_mtudisc = 0;
-#endif
 #ifdef INET6
 		/* try using IPv6 minimum MTU */
 		if (tp->t_in6pcb)
@@ -381,10 +412,8 @@ tcp_timer_rexmt(void *arg)
 	 * retransmit times until then.
 	 */
 	if (tp->t_rxtshift > TCP_MAXRXTSHIFT / 4) {
-#ifdef INET
 		if (tp->t_inpcb)
 			in_losing(tp->t_inpcb);
-#endif
 #ifdef INET6
 		if (tp->t_in6pcb)
 			in6_losing(tp->t_in6pcb);
@@ -453,10 +482,8 @@ tcp_timer_persist(void *arg)
 
 	KERNEL_LOCK(1, NULL);
 #ifdef TCP_DEBUG
-#ifdef INET
 	if (tp->t_inpcb)
 		so = tp->t_inpcb->inp_socket;
-#endif
 #ifdef INET6
 	if (tp->t_in6pcb)
 		so = tp->t_in6pcb->in6p_socket;
@@ -536,10 +563,8 @@ tcp_timer_keep(void *arg)
 	TCP_STATINC(TCP_STAT_KEEPTIMEO);
 	if (TCPS_HAVEESTABLISHED(tp->t_state) == 0)
 		goto dropit;
-#ifdef INET
 	if (tp->t_inpcb)
 		so = tp->t_inpcb->inp_socket;
-#endif
 #ifdef INET6
 	if (tp->t_in6pcb)
 		so = tp->t_in6pcb->in6p_socket;
@@ -564,19 +589,11 @@ tcp_timer_keep(void *arg)
 		 * correspondent TCP to respond.
 		 */
 		TCP_STATINC(TCP_STAT_KEEPPROBE);
-		if (tcp_compat_42) {
-			/*
-			 * The keepalive packet must have nonzero
-			 * length to get a 4.2 host to respond.
-			 */
-			(void)tcp_respond(tp, tp->t_template,
-			    NULL, NULL, tp->rcv_nxt - 1,
-			    tp->snd_una - 1, 0);
-		} else {
-			(void)tcp_respond(tp, tp->t_template,
-			    NULL, NULL, tp->rcv_nxt,
-			    tp->snd_una - 1, 0);
-		}
+
+		(void)tcp_respond(tp, tp->t_template,
+		    NULL, NULL, tp->rcv_nxt,
+		    tp->snd_una - 1, 0);
+
 		TCP_TIMER_ARM(tp, TCPT_KEEP, tp->t_keepintvl);
 	} else
 		TCP_TIMER_ARM(tp, TCPT_KEEP, tp->t_keepidle);
@@ -625,10 +642,8 @@ tcp_timer_2msl(void *arg)
 	tp->snd_fack = tp->snd_una;
 
 #ifdef TCP_DEBUG
-#ifdef INET
 	if (tp->t_inpcb)
 		so = tp->t_inpcb->inp_socket;
-#endif
 #ifdef INET6
 	if (tp->t_in6pcb)
 		so = tp->t_in6pcb->in6p_socket;

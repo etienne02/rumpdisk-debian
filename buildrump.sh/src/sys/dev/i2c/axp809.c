@@ -1,4 +1,4 @@
-/* $NetBSD: axp809.c,v 1.1 2014/12/07 00:33:26 jmcneill Exp $ */
+/* $NetBSD: axp809.c,v 1.3 2019/07/27 16:02:27 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2014 Jared D. McNeill <jmcneill@invisible.ca>
@@ -29,7 +29,7 @@
 #define AXP_DEBUG
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: axp809.c,v 1.1 2014/12/07 00:33:26 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: axp809.c,v 1.3 2019/07/27 16:02:27 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -105,7 +105,15 @@ CFATTACH_DECL_NEW(axp809pm, sizeof(struct axp809_softc),
 static int
 axp809_match(device_t parent, cfdata_t match, void *aux)
 {
-	return 1;
+	struct i2c_attach_args *ia = aux;
+	int match_result;
+
+	if (iic_use_direct_match(ia, match, NULL, &match_result))
+		return match_result;
+	
+	/* This device is direct-config only. */
+
+	return 0;
 }
 
 static void
@@ -139,15 +147,13 @@ axp809_attach(device_t parent, device_t self, void *aux)
 static int
 axp809_read(struct axp809_softc *sc, uint8_t reg, uint8_t *val)
 {
-	return iic_smbus_read_byte(sc->sc_i2c, sc->sc_addr, reg, val,
-	    cold ? I2C_F_POLL : 0);
+	return iic_smbus_read_byte(sc->sc_i2c, sc->sc_addr, reg, val, 0);
 }
 
 static int
 axp809_write(struct axp809_softc *sc, uint8_t reg, uint8_t val)
 {
-	return iic_smbus_write_byte(sc->sc_i2c, sc->sc_addr, reg, val,
-	    cold ? I2C_F_POLL : 0);
+	return iic_smbus_write_byte(sc->sc_i2c, sc->sc_addr, reg, val, 0);
 }
 
 static void

@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.13 2015/08/24 23:04:43 pooka Exp $
+#	$NetBSD: Makefile.inc,v 1.15 2021/03/08 20:43:22 christos Exp $
 #
 
 .PATH:	${.CURDIR}/../../../../netinet
@@ -7,7 +7,7 @@ CPPFLAGS+=	-DINET
 
 # INET
 SRCS+=	in_proto.c igmp.c in.c in_offload.c in_pcb.c ip_carp.c ip_icmp.c\
-	ip_flow.c ip_id.c ip_input.c ip_reass.c ip_output.c raw_ip.c	\
+	ip_flow.c ip_input.c ip_reass.c ip_output.c raw_ip.c	\
 	in_cksum.c cpu_in_cksum.c in4_cksum.c ip_encap.c portalgo.c
 
 # ARP
@@ -25,3 +25,9 @@ CPPFLAGS+=	-DPORTALGO_INET4_DEFAULT=PORTALGO_RANDOM_START
 # TCP debugging
 #SRCS+=		tcp_debug.c
 #CPPFLAGS+=	-DTCP_DEBUG
+
+# IPSEC
+SRCS+=			ip_ecn.c
+CPPFLAGS+=		-DIPSEC
+# To write rump-specific wrappers
+CPPFLAGS.in_proto.c+=	-DIPSEC_RUMPKERNEL

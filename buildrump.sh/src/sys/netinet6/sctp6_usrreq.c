@@ -1,5 +1,5 @@
 /* $KAME: sctp6_usrreq.c,v 1.38 2005/08/24 08:08:56 suz Exp $ */
-/* $NetBSD: sctp6_usrreq.c,v 1.7 2016/07/15 07:40:09 ozaki-r Exp $ */
+/* $NetBSD: sctp6_usrreq.c,v 1.22 2020/04/27 19:33:48 rjs Exp $ */
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -33,12 +33,13 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.7 2016/07/15 07:40:09 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.22 2020/04/27 19:33:48 rjs Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_ipsec.h"
 #include "opt_sctp.h"
+#include "opt_net_mpsafe.h"
 #endif /* _KERNEL_OPT */
 
 #include <sys/param.h>
@@ -71,6 +72,7 @@ __KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.7 2016/07/15 07:40:09 ozaki-r Exp
 #include <netinet/sctp_output.h>
 #include <netinet/sctp_input.h>
 #include <netinet/sctp_asconf.h>
+#include <netinet/sctp_route.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/scope6_var.h>
 #include <netinet/ip6.h>
@@ -78,7 +80,6 @@ __KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.7 2016/07/15 07:40:09 ozaki-r Exp
 #include <netinet/icmp6.h>
 #include <netinet6/sctp6_var.h>
 #include <netinet6/ip6protosw.h>
-#include <netinet6/nd6.h>
 
 #ifdef IPSEC
 #include <netipsec/ipsec.h>
@@ -88,10 +89,6 @@ __KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.7 2016/07/15 07:40:09 ozaki-r Exp
 #if defined(NFAITH) && NFAITH > 0
 #include <net/if_faith.h>
 #endif
-
-#include <net/net_osdep.h>
-
-extern struct protosw inetsw[];
 
 #if defined(HAVE_NRL_INPCB) || defined(__FreeBSD__)
 #ifndef in6pcb
@@ -237,7 +234,7 @@ sctp_skip_csum:
 	/*
 	 * Check AH/ESP integrity.
 	 */
-	if (ipsec_used && ipsec6_in_reject_so(m, in6p->sctp_socket)) {
+	if (ipsec_used && ipsec_in_reject(m, (struct in6pcb *)in6p_ip)) {
 /* XXX */
 #if 0
 		/* FIX ME: need to find right stat */
@@ -611,6 +608,9 @@ sctp6_attach(struct socket *so, int proto)
 	}
 	so->so_send = sctp_sosend;
 
+#ifdef IPSEC
+	inp6->in6p_af = proto;
+#endif
 	inp6->in6p_hops = -1;	        /* use kernel default */
 	inp6->in6p_cksum = -1;	/* just to be sure */
 #ifdef INET
@@ -834,6 +834,9 @@ sctp6_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 
 #ifdef INET
 	sin6 = (struct sockaddr_in6 *)nam;
+	/*
+	 * XXX XXX XXX Check sin6->sin6_len?
+	 */
 	if (inp6->in6p_flags & IN6P_IPV6_V6ONLY) {
 		/*
 		 * if IPV6_V6ONLY flag, we discard datagrams
@@ -913,10 +916,8 @@ sctp6_sendoob(struct socket *so, struct mbuf *m, struct mbuf *control)
 {
 	KASSERT(solocked(so));
 
-	if (m)
-		m_freem(m);
-	if (control)
-		m_freem(control);
+	m_freem(m);
+	m_freem(control);
 
 	return EOPNOTSUPP;
 }
@@ -964,6 +965,11 @@ sctp6_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 
 #ifdef INET
 	sin6 = (struct sockaddr_in6 *)nam;
+
+	/*
+	 * XXX XXX XXX Check sin6->sin6_len?
+	 */
+
 	if (inp6->in6p_flags & IN6P_IPV6_V6ONLY) {
 		/*
 		 * if IPV6_V6ONLY flag, ignore connections
@@ -1238,20 +1244,30 @@ sctp6_ioctl(struct socket *so, u_long cmd, void *nam, struct ifnet *ifp)
 	int error = 0;
 	int family;
 
-	family = so->so_proto->pr_domain->dom_family;
-	switch (family) {
+	if (cmd == SIOCCONNECTX) {
+		solock(so);
+		error = sctp_do_connect_x(so, nam, curlwp, 0);
+		sounlock(so);
+	} else if (cmd == SIOCCONNECTXDEL) {
+		solock(so);
+		error = sctp_do_connect_x(so, nam, curlwp, 1);
+		sounlock(so);
+	} else {
+		family = so->so_proto->pr_domain->dom_family;
+		switch (family) {
 #ifdef INET
-	case PF_INET:
-		error = in_control(so, cmd, nam, ifp);
-		break;
+		case PF_INET:
+			error = in_control(so, cmd, nam, ifp);
+			break;
 #endif
 #ifdef INET6
-	case PF_INET6:
-		error = in6_control(so, cmd, nam, ifp);
-		break;
+		case PF_INET6:
+			error = in6_control(so, cmd, nam, ifp);
+			break;
 #endif
-	default:
-		error = EAFNOSUPPORT;
+		default:
+			error = EAFNOSUPPORT;
+		}
 	}
 	return (error);
 }
@@ -1259,9 +1275,7 @@ sctp6_ioctl(struct socket *so, u_long cmd, void *nam, struct ifnet *ifp)
 static int
 sctp6_accept(struct socket *so, struct sockaddr *nam)
 {
-	KASSERT(solocked(so));
-
-	return EOPNOTSUPP;
+	return sctp_accept(so, nam);
 }
 
 static int
@@ -1294,15 +1308,20 @@ static int
 sctp6_purgeif(struct socket *so, struct ifnet *ifp)
 {
 	struct ifaddr *ifa;
+	/* FIXME NOMPSAFE */
 	IFADDR_READER_FOREACH(ifa, ifp) {
 		if (ifa->ifa_addr->sa_family == PF_INET6) {
 			sctp_delete_ip_address(ifa);
 		}
 	}
 
+#ifndef NET_MPSAFE
 	mutex_enter(softnet_lock);
+#endif
 	in6_purgeif(ifp);
+#ifndef NET_MPSAFE
 	mutex_exit(softnet_lock);
+#endif
 
 	return 0;
 }

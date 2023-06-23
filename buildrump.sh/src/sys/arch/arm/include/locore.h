@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.h,v 1.26 2015/06/09 08:13:17 skrll Exp $	*/
+/*	$NetBSD: locore.h,v 1.36 2021/02/01 19:31:34 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994-1996 Mark Brinicombe.
@@ -48,6 +48,8 @@
 #ifndef _ARM_LOCORE_H_
 #define _ARM_LOCORE_H_
 
+#ifdef __arm__
+
 #ifdef _KERNEL_OPT
 #include "opt_cpuoptions.h"
 #include "opt_cputypes.h"
@@ -66,7 +68,7 @@
 #if defined(_ARM_ARCH_6)
 #define IRQdisable	cpsid	i
 #define IRQenable	cpsie	i
-#elif defined(__PROG32)
+#else
 #define IRQdisable \
 	stmfd	sp!, {r0} ; \
 	mrs	r0, cpsr ; \
@@ -80,25 +82,28 @@
 	bic	r0, r0, #(I32_bit) ; \
 	msr	cpsr_c, r0 ; \
 	ldmfd	sp!, {r0}
-#else
-/* Not yet used in 26-bit code */
 #endif
 
 #if defined (TPIDRPRW_IS_CURCPU)
 #define GET_CURCPU(rX)		mrc	p15, 0, rX, c13, c0, 4
 #define GET_CURLWP(rX)		GET_CURCPU(rX); ldr rX, [rX, #CI_CURLWP]
+#define GET_CURX(rCPU, rLWP)	GET_CURCPU(rCPU); ldr rLWP, [rCPU, #CI_CURLWP]
 #elif defined (TPIDRPRW_IS_CURLWP)
 #define GET_CURLWP(rX)		mrc	p15, 0, rX, c13, c0, 4
 #if defined (MULTIPROCESSOR)
 #define GET_CURCPU(rX)		GET_CURLWP(rX); ldr rX, [rX, #L_CPU]
+#define GET_CURX(rCPU, rLWP)	GET_CURLWP(rLWP); ldr rCPU, [rLWP, #L_CPU]
 #elif defined(_ARM_ARCH_7)
 #define GET_CURCPU(rX)		movw rX, #:lower16:cpu_info_store; movt rX, #:upper16:cpu_info_store
+#define GET_CURX(rCPU, rLWP)	GET_CURLWP(rLWP); GET_CURCPU(rCPU)
 #else
 #define GET_CURCPU(rX)		ldr rX, =_C_LABEL(cpu_info_store)
+#define GET_CURX(rCPU, rLWP)	GET_CURLWP(rLWP); ldr rCPU, [rLWP, #L_CPU]
 #endif
 #elif !defined(MULTIPROCESSOR)
 #define GET_CURCPU(rX)		ldr rX, =_C_LABEL(cpu_info_store)
 #define GET_CURLWP(rX)		GET_CURCPU(rX); ldr rX, [rX, #CI_CURLWP]
+#define GET_CURX(rCPU, rLWP)	GET_CURCPU(rCPU); ldr rLWP, [rCPU, #CI_CURLWP]
 #endif
 #define GET_CURPCB(rX)		GET_CURLWP(rX); ldr rX, [rX, #L_PCB]
 
@@ -106,31 +111,20 @@
 
 #include <arm/cpufunc.h>
 
-#ifdef __PROG32
 #define IRQdisable __set_cpsr_c(I32_bit, I32_bit);
 #define IRQenable __set_cpsr_c(I32_bit, 0);
-#else
-#define IRQdisable set_r15(R15_IRQ_DISABLE, R15_IRQ_DISABLE);
-#define IRQenable set_r15(R15_IRQ_DISABLE, 0);
-#endif
 
 /*
  * Validate a PC or PSR for a user process.  Used by various system calls
  * that take a context passed by the user and restore it.
  */
 
-#ifdef __PROG32
 #ifdef __NO_FIQ
-#define VALID_R15_PSR(r15,psr)						\
-	(((psr) & PSR_MODE) == PSR_USR32_MODE && ((psr) & I32_bit) == 0)
+#define VALID_PSR(psr)						\
+    (((psr) & PSR_MODE) == PSR_USR32_MODE && ((psr) & I32_bit) == 0)
 #else
-#define VALID_R15_PSR(r15,psr)						\
-	(((psr) & PSR_MODE) == PSR_USR32_MODE && ((psr) & IF32_bits) == 0)
-#endif
-#else
-#define VALID_R15_PSR(r15,psr)						\
-	(((r15) & R15_MODE) == R15_MODE_USR &&				\
-		((r15) & (R15_IRQ_DISABLE | R15_FIQ_DISABLE)) == 0)
+#define VALID_PSR(psr)						\
+    (((psr) & PSR_MODE) == PSR_USR32_MODE && ((psr) & IF32_bits) == 0)
 #endif
 
 /*
@@ -141,7 +135,6 @@
 
 /* The address of the vector page. */
 extern vaddr_t vector_page;
-#ifdef __PROG32
 void	arm32_vector_init(vaddr_t, int);
 
 #define	ARM_VEC_RESET			(1 << 0)
@@ -155,14 +148,11 @@ void	arm32_vector_init(vaddr_t, int);
 
 #define	ARM_NVEC			8
 #define	ARM_VEC_ALL			0xffffffff
-#endif /* __PROG32 */
 
-#ifndef acorn26
 /*
  * cpu device glue (belongs in cpuvar.h)
  */
 void	cpu_attach(device_t, cpuid_t);
-#endif
 
 /* 1 == use cpu_sleep(), 0 == don't */
 extern int cpu_do_powersave;
@@ -181,10 +171,7 @@ extern int cpu_processor_features[2];
 extern int cpu_media_and_vfp_features[2];
 
 extern bool arm_has_tlbiasid_p;
-#ifdef MULTIPROCESSOR
-extern u_int arm_cpu_max;
-extern volatile u_int arm_cpu_hatched;
-#endif
+extern bool arm_has_mpext_p;
 
 #if !defined(CPU_ARMV7)
 #define	CPU_IS_ARMV7_P()		false
@@ -215,7 +202,7 @@ read_insn(vaddr_t va, bool user_p)
 	} else {
 		insn = *(const uint32_t *)va;
 	}
-#if defined(__ARMEB__) && defined(_ARM_ARCH_7)
+#ifdef _ARM_ARCH_BE8
 	insn = bswap32(insn);
 #endif
 	return insn;
@@ -245,40 +232,11 @@ read_thumb_insn(vaddr_t va, bool user_p)
 	} else {
 		insn = *(const uint16_t *)va;
 	}
-#if defined(__ARMEB__) && defined(_ARM_ARCH_7)
+#ifdef _ARM_ARCH_BE8
 	insn = bswap16(insn);
 #endif
 	return insn;
 }
-
-#ifndef _RUMPKERNEL
-static inline void
-arm_dmb(void)
-{
-	if (CPU_IS_ARMV6_P())
-		armreg_dmb_write(0);
-	else if (CPU_IS_ARMV7_P())
-		__asm __volatile("dmb" ::: "memory");
-}
-
-static inline void
-arm_dsb(void)
-{
-	if (CPU_IS_ARMV6_P())
-		armreg_dsb_write(0);
-	else if (CPU_IS_ARMV7_P())
-		__asm __volatile("dsb" ::: "memory");
-}
-
-static inline void
-arm_isb(void)
-{
-	if (CPU_IS_ARMV6_P())
-		armreg_isb_write(0);
-	else if (CPU_IS_ARMV7_P())
-		__asm __volatile("isb" ::: "memory");
-}
-#endif
 
 /*
  * Random cruft
@@ -305,18 +263,21 @@ int	badaddr_read(void *, size_t, void *);
 /* syscall.c */
 void	swi_handler(trapframe_t *);
 
-/* arm_machdep.c */
-void	ucas_ras_check(trapframe_t *);
-
 /* vfp_init.c */
 void	vfp_attach(struct cpu_info *);
-void	vfp_discardcontext(bool);
-void	vfp_savecontext(void);
+void	vfp_discardcontext(lwp_t *, bool);
+void	vfp_savecontext(lwp_t *);
 void	vfp_kernel_acquire(void);
 void	vfp_kernel_release(void);
-bool	vfp_used_p(void);
+bool	vfp_used_p(const lwp_t *);
 extern const pcu_ops_t arm_vfp_ops;
 
 #endif	/* !_LOCORE */
+
+#elif defined(__aarch64__)
+
+#include <aarch64/locore.h>
+
+#endif /* __arm__/__aarch64__ */
 
 #endif /* !_ARM_LOCORE_H_ */

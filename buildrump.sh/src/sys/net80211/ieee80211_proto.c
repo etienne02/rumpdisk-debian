@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee80211_proto.c,v 1.33 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: ieee80211_proto.c,v 1.37 2021/07/24 21:31:38 andvar Exp $	*/
 /*-
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
@@ -36,7 +36,7 @@
 __FBSDID("$FreeBSD: src/sys/net80211/ieee80211_proto.c,v 1.23 2005/08/10 16:22:29 sam Exp $");
 #endif
 #ifdef __NetBSD__
-__KERNEL_RCSID(0, "$NetBSD: ieee80211_proto.c,v 1.33 2016/07/07 06:55:43 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ieee80211_proto.c,v 1.37 2021/07/24 21:31:38 andvar Exp $");
 #endif
 
 /*
@@ -57,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: ieee80211_proto.c,v 1.33 2016/07/07 06:55:43 msaitoh
 #include <sys/errno.h>
 #include <sys/proc.h>
 #include <sys/sysctl.h>
+#include <sys/cpu.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
@@ -142,7 +143,7 @@ ieee80211_proto_detach(struct ieee80211com *ic)
 {
 
 	/*
-	 * This should not be needed as we detach when reseting
+	 * This should not be needed as we detach when resetting
 	 * the state but be conservative here since the
 	 * authenticator may do things like spawn kernel threads.
 	 */
@@ -710,7 +711,7 @@ ieee80211_wme_initparams(struct ieee80211com *ic)
 	/* NB: check ic_bss to avoid NULL deref on initial attach */
 	if (ic->ic_bss != NULL) {
 		/*
-		 * Calculate agressive mode switching threshold based
+		 * Calculate aggressive mode switching threshold based
 		 * on beacon interval.  This doesn't need locking since
 		 * we're only called before entering the RUN state at
 		 * which point we start sending beacon frames.
@@ -759,11 +760,11 @@ ieee80211_wme_updateparams_locked(struct ieee80211com *ic)
 	}
 
 	/*
-	 * This implements agressive mode as found in certain
+	 * This implements aggressive mode as found in certain
 	 * vendors' AP's.  When there is significant high
 	 * priority (VI/VO) traffic in the BSS throttle back BE
 	 * traffic by using conservative parameters.  Otherwise
-	 * BE uses agressive params to optimize performance of
+	 * BE uses aggressive params to optimize performance of
 	 * legacy/non-QoS traffic.
 	 */
         if ((ic->ic_opmode == IEEE80211_M_HOSTAP &&
@@ -917,6 +918,8 @@ ieee80211_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg
 	struct ifnet *ifp = ic->ic_ifp;
 	struct ieee80211_node *ni;
 	enum ieee80211_state ostate;
+
+	KASSERT(!cpu_intr_p());
 
 	ostate = ic->ic_state;
 	IEEE80211_DPRINTF(ic, IEEE80211_MSG_STATE, "%s: %s -> %s\n", __func__,
@@ -1100,8 +1103,9 @@ ieee80211_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg
 		case IEEE80211_S_SCAN:		/* adhoc/hostap mode */
 		case IEEE80211_S_ASSOC:		/* infra mode */
 			IASSERT(ni->ni_txrate < ni->ni_rates.rs_nrates,
-				("%s: bogus xmit rate %u setup\n", __func__,
-					ni->ni_txrate));
+				("%s: bogus xmit rate %u setup ostate %x "
+				 "nstate %x\n", __func__, ni->ni_txrate,
+				 ostate, nstate));
 #ifdef IEEE80211_DEBUG
 			if (ieee80211_msg_debug(ic)) {
 				if (ic->ic_opmode == IEEE80211_M_STA)

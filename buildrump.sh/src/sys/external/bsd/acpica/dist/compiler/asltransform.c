@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,6 +43,7 @@
 
 #include "aslcompiler.h"
 #include "aslcompiler.y.h"
+#include "acnamesp.h"
 
 #define _COMPONENT          ACPI_COMPILER
         ACPI_MODULE_NAME    ("asltransform")
@@ -85,6 +86,20 @@ TrDoDefinitionBlock (
 static void
 TrDoSwitch (
     ACPI_PARSE_OBJECT       *StartNode);
+
+static void
+TrCheckForDuplicateCase (
+    ACPI_PARSE_OBJECT       *CaseOp,
+    ACPI_PARSE_OBJECT       *Predicate1);
+
+static BOOLEAN
+TrCheckForBufferMatch (
+    ACPI_PARSE_OBJECT       *Next1,
+    ACPI_PARSE_OBJECT       *Next2);
+
+static void
+TrDoMethod (
+    ACPI_PARSE_OBJECT       *Op);
 
 
 /*******************************************************************************
@@ -296,8 +311,8 @@ TrAmlTransformWalkEnd (
 
     if (Op->Asl.ParseOpcode == PARSEOP_DEFINITION_BLOCK)
     {
-        Op->Asl.Value.Arg = Gbl_ExternalsListHead;
-        Gbl_ExternalsListHead = NULL;
+        Op->Asl.Value.Arg = AslGbl_ExternalsListHead;
+        AslGbl_ExternalsListHead = NULL;
     }
 
     return (AE_OK);
@@ -322,6 +337,9 @@ static void
 TrTransformSubtree (
     ACPI_PARSE_OBJECT           *Op)
 {
+    ACPI_PARSE_OBJECT           *MethodOp;
+    ACPI_NAMESTRING_INFO        Info;
+
 
     if (Op->Asl.AmlOpcode == AML_RAW_DATA_BYTE)
     {
@@ -341,20 +359,83 @@ TrTransformSubtree (
         break;
 
     case PARSEOP_METHOD:
-        /*
-         * TBD: Zero the tempname (_T_x) count. Probably shouldn't be a global,
-         * however
-         */
-        Gbl_TempCount = 0;
+
+        TrDoMethod (Op);
         break;
 
     case PARSEOP_EXTERNAL:
 
-        if (Gbl_DoExternals == TRUE)
+        ExDoExternal (Op);
+        break;
+
+    case PARSEOP___METHOD__:
+
+        /* Transform to a string op containing the parent method name */
+
+        Op->Asl.ParseOpcode = PARSEOP_STRING_LITERAL;
+        UtSetParseOpName (Op);
+
+        /* Find the parent control method op */
+
+        MethodOp = Op;
+        while (MethodOp)
         {
-            ExDoExternal (Op);
+            if (MethodOp->Asl.ParseOpcode == PARSEOP_METHOD)
+            {
+                /* First child contains the method name */
+
+                MethodOp = MethodOp->Asl.Child;
+                Op->Asl.Value.String = MethodOp->Asl.Value.String;
+                return;
+            }
+
+            MethodOp = MethodOp->Asl.Parent;
         }
 
+        /* At the root, invocation not within a control method */
+
+        Op->Asl.Value.String = "\\";
+        break;
+
+    case PARSEOP_NAMESTRING:
+        /*
+         * A NameString can be up to 255 (0xFF) individual NameSegs maximum
+         * (with 254 dot separators) - as per the ACPI specification. Note:
+         * Cannot check for NumSegments == 0 because things like
+         * Scope(\) are legal and OK.
+         */
+        Info.ExternalName = Op->Asl.Value.String;
+        AcpiNsGetInternalNameLength (&Info);
+
+        if (Info.NumSegments > 255)
+        {
+            AslError (ASL_ERROR, ASL_MSG_NAMESTRING_LENGTH, Op, NULL);
+        }
+        break;
+
+    case PARSEOP_UNLOAD:
+
+        AslError (ASL_WARNING, ASL_MSG_UNLOAD, Op, NULL);
+        break;
+
+    case PARSEOP_SLEEP:
+
+        /* Remark for very long sleep values */
+
+        if (Op->Asl.Child->Asl.Value.Integer > 1000)
+        {
+            AslError (ASL_REMARK, ASL_MSG_LONG_SLEEP, Op, NULL);
+        }
+        break;
+
+    case PARSEOP_PROCESSOR:
+
+        AslError (ASL_WARNING, ASL_MSG_LEGACY_PROCESSOR_OP, Op, Op->Asl.ExternalName);
+        break;
+
+    case PARSEOP_OBJECTTYPE_DDB:
+
+        AslError (ASL_WARNING, ASL_MSG_LEGACY_DDB_TYPE, Op, Op->Asl.ExternalName);
         break;
 
     default:
@@ -390,7 +471,7 @@ TrDoDefinitionBlock (
 
     /* Reset external list when starting a definition block */
 
-    Gbl_ExternalsListHead = NULL;
+    AslGbl_ExternalsListHead = NULL;
 
     Next = Op->Asl.Child;
     for (i = 0; i < 5; i++)
@@ -403,14 +484,14 @@ TrDoDefinitionBlock (
              * to be at the root of the namespace;  Therefore, namepath
              * optimization can only be performed on the DSDT.
              */
-            if (!ACPI_COMPARE_NAME (Next->Asl.Value.String, ACPI_SIG_DSDT))
+            if (!ACPI_COMPARE_NAMESEG (Next->Asl.Value.String, ACPI_SIG_DSDT))
             {
-                Gbl_ReferenceOptimizationFlag = FALSE;
+                AslGbl_ReferenceOptimizationFlag = FALSE;
             }
         }
     }
 
-    Gbl_FirstLevelInsertionNode = Next;
+    AslGbl_FirstLevelInsertionNode = Next;
 }
 
 
@@ -456,7 +537,7 @@ TrDoSwitch (
 
     /* Create a new temp name of the form _T_x */
 
-    PredicateValueName = TrAmlGetNextTempName (StartNode, &Gbl_TempCount);
+    PredicateValueName = TrAmlGetNextTempName (StartNode, &AslGbl_TempCount);
     if (!PredicateValueName)
     {
         return;
@@ -490,11 +571,13 @@ TrDoSwitch (
 
         if (Next->Asl.ParseOpcode == PARSEOP_CASE)
         {
+            TrCheckForDuplicateCase (Next, Next->Asl.Child);
+
             if (CaseOp)
             {
                 /* Add an ELSE to complete the previous CASE */
 
-                NewOp = TrCreateLeafNode (PARSEOP_ELSE);
+                NewOp = TrCreateLeafOp (PARSEOP_ELSE);
                 NewOp->Asl.Parent = Conditional->Asl.Parent;
                 TrAmlInitLineNumbers (NewOp, NewOp->Asl.Parent);
 
@@ -519,49 +602,49 @@ TrDoSwitch (
                  * If (LNotEqual (Match (Package(<size>){<data>},
                  *                       MEQ, _T_x, MTR, Zero, Zero), Ones))
                  */
-                NewOp2              = TrCreateLeafNode (PARSEOP_MATCHTYPE_MEQ);
+                NewOp2              = TrCreateLeafOp (PARSEOP_MATCHTYPE_MEQ);
                 Predicate->Asl.Next = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Conditional);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateValuedLeafNode (PARSEOP_NAMESTRING,
+                NewOp2              = TrCreateValuedLeafOp (PARSEOP_NAMESTRING,
                                         (UINT64) ACPI_TO_INTEGER (PredicateValueName));
                 NewOp->Asl.Next     = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Predicate);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateLeafNode (PARSEOP_MATCHTYPE_MTR);
+                NewOp2              = TrCreateLeafOp (PARSEOP_MATCHTYPE_MTR);
                 NewOp->Asl.Next     = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Predicate);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateLeafNode (PARSEOP_ZERO);
+                NewOp2              = TrCreateLeafOp (PARSEOP_ZERO);
                 NewOp->Asl.Next     = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Predicate);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateLeafNode (PARSEOP_ZERO);
+                NewOp2              = TrCreateLeafOp (PARSEOP_ZERO);
                 NewOp->Asl.Next     = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Predicate);
 
-                NewOp2              = TrCreateLeafNode (PARSEOP_MATCH);
+                NewOp2              = TrCreateLeafOp (PARSEOP_MATCH);
                 NewOp2->Asl.Child   = Predicate;  /* PARSEOP_PACKAGE */
                 TrAmlInitLineNumbers (NewOp2, Conditional);
                 TrAmlSetSubtreeParent (Predicate, NewOp2);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateLeafNode (PARSEOP_ONES);
+                NewOp2              = TrCreateLeafOp (PARSEOP_ONES);
                 NewOp->Asl.Next     = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Conditional);
 
-                NewOp2              = TrCreateLeafNode (PARSEOP_LEQUAL);
+                NewOp2              = TrCreateLeafOp (PARSEOP_LEQUAL);
                 NewOp2->Asl.Child   = NewOp;
                 NewOp->Asl.Parent   = NewOp2;
                 TrAmlInitLineNumbers (NewOp2, Conditional);
                 TrAmlSetSubtreeParent (NewOp, NewOp2);
 
                 NewOp               = NewOp2;
-                NewOp2              = TrCreateLeafNode (PARSEOP_LNOT);
+                NewOp2              = TrCreateLeafOp (PARSEOP_LNOT);
                 NewOp2->Asl.Child   = NewOp;
                 NewOp2->Asl.Parent  = Conditional;
                 NewOp->Asl.Parent   = NewOp2;
@@ -582,12 +665,12 @@ TrDoSwitch (
                  * CaseOp->Child is the case value
                  * CaseOp->Child->Peer is the beginning of the case block
                  */
-                NewOp = TrCreateValuedLeafNode (PARSEOP_NAMESTRING,
+                NewOp = TrCreateValuedLeafOp (PARSEOP_NAMESTRING,
                     (UINT64) ACPI_TO_INTEGER (PredicateValueName));
                 NewOp->Asl.Next = Predicate;
                 TrAmlInitLineNumbers (NewOp, Predicate);
 
-                NewOp2              = TrCreateLeafNode (PARSEOP_LEQUAL);
+                NewOp2              = TrCreateLeafOp (PARSEOP_LEQUAL);
                 NewOp2->Asl.Parent  = Conditional;
                 NewOp2->Asl.Child   = NewOp;
                 TrAmlInitLineNumbers (NewOp2, Conditional);
@@ -684,7 +767,7 @@ TrDoSwitch (
     /* Create the Name node */
 
     Predicate = StartNode->Asl.Child;
-    NewOp = TrCreateLeafNode (PARSEOP_NAME);
+    NewOp = TrCreateLeafOp (PARSEOP_NAME);
     TrAmlInitLineNumbers (NewOp, StartNode);
 
     /* Find the parent method */
@@ -697,7 +780,7 @@ TrDoSwitch (
     }
     MethodOp = Next;
 
-    NewOp->Asl.CompileFlags |= NODE_COMPILER_EMITTED;
+    NewOp->Asl.CompileFlags |= OP_COMPILER_EMITTED;
     NewOp->Asl.Parent = Next;
 
     /* Insert name after the method name and arguments */
@@ -728,10 +811,10 @@ TrDoSwitch (
 
     /* Create the NameSeg child for the Name node */
 
-    NewOp2 = TrCreateValuedLeafNode (PARSEOP_NAMESEG,
+    NewOp2 = TrCreateValuedLeafOp (PARSEOP_NAMESEG,
         (UINT64) ACPI_TO_INTEGER (PredicateValueName));
     TrAmlInitLineNumbers (NewOp2, NewOp);
-    NewOp2->Asl.CompileFlags |= NODE_IS_NAME_DECLARATION;
+    NewOp2->Asl.CompileFlags |= OP_IS_NAME_DECLARATION;
     NewOp->Asl.Child  = NewOp2;
 
     /* Create the initial value for the Name. Btype was already validated above */
@@ -740,31 +823,32 @@ TrDoSwitch (
     {
     case ACPI_BTYPE_INTEGER:
 
-        NewOp2->Asl.Next = TrCreateValuedLeafNode (PARSEOP_ZERO,
+        NewOp2->Asl.Next = TrCreateValuedLeafOp (PARSEOP_ZERO,
             (UINT64) 0);
         TrAmlInitLineNumbers (NewOp2->Asl.Next, NewOp);
         break;
 
     case ACPI_BTYPE_STRING:
 
-        NewOp2->Asl.Next = TrCreateValuedLeafNode (PARSEOP_STRING_LITERAL,
+        NewOp2->Asl.Next = TrCreateValuedLeafOp (PARSEOP_STRING_LITERAL,
             (UINT64) ACPI_TO_INTEGER (""));
         TrAmlInitLineNumbers (NewOp2->Asl.Next, NewOp);
         break;
 
     case ACPI_BTYPE_BUFFER:
 
-        (void) TrLinkPeerNode (NewOp2, TrCreateValuedLeafNode (PARSEOP_BUFFER,
+        (void) TrLinkPeerOp (NewOp2, TrCreateValuedLeafOp (PARSEOP_BUFFER,
             (UINT64) 0));
         Next = NewOp2->Asl.Next;
         TrAmlInitLineNumbers (Next, NewOp2);
-        (void) TrLinkChildren (Next, 1, TrCreateValuedLeafNode (PARSEOP_ZERO,
+
+        (void) TrLinkOpChildren (Next, 1, TrCreateValuedLeafOp (PARSEOP_ZERO,
             (UINT64) 1));
         TrAmlInitLineNumbers (Next->Asl.Child, Next);
 
-        BufferOp = TrCreateValuedLeafNode (PARSEOP_DEFAULT_ARG, (UINT64) 0);
+        BufferOp = TrCreateValuedLeafOp (PARSEOP_DEFAULT_ARG, (UINT64) 0);
         TrAmlInitLineNumbers (BufferOp, Next->Asl.Child);
-        (void) TrLinkPeerNode (Next->Asl.Child, BufferOp);
+        (void) TrLinkPeerOp (Next->Asl.Child, BufferOp);
 
         TrAmlSetSubtreeParent (Next->Asl.Child, Next);
         break;
@@ -783,7 +867,7 @@ TrDoSwitch (
      * where _T_x is the temp variable.
      */
     TrAmlInitNode (StartNode, PARSEOP_WHILE);
-    NewOp = TrCreateLeafNode (PARSEOP_ONE);
+    NewOp = TrCreateLeafOp (PARSEOP_ONE);
     TrAmlInitLineNumbers (NewOp, StartNode);
     NewOp->Asl.Next = Predicate->Asl.Next;
     NewOp->Asl.Parent = StartNode;
@@ -791,7 +875,7 @@ TrDoSwitch (
 
     /* Create a Store() node */
 
-    StoreOp = TrCreateLeafNode (PARSEOP_STORE);
+    StoreOp = TrCreateLeafOp (PARSEOP_STORE);
     TrAmlInitLineNumbers (StoreOp, NewOp);
     StoreOp->Asl.Parent = StartNode;
     TrAmlInsertPeer (NewOp, StoreOp);
@@ -801,7 +885,7 @@ TrDoSwitch (
     StoreOp->Asl.Child = Predicate;
     Predicate->Asl.Parent = StoreOp;
 
-    NewOp = TrCreateValuedLeafNode (PARSEOP_NAMESEG,
+    NewOp = TrCreateValuedLeafOp (PARSEOP_NAMESEG,
         (UINT64) ACPI_TO_INTEGER (PredicateValueName));
     TrAmlInitLineNumbers (NewOp, StoreOp);
     NewOp->Asl.Parent    = StoreOp;
@@ -815,8 +899,315 @@ TrDoSwitch (
         Conditional = Conditional->Asl.Next;
     }
 
-    BreakOp = TrCreateLeafNode (PARSEOP_BREAK);
+    BreakOp = TrCreateLeafOp (PARSEOP_BREAK);
     TrAmlInitLineNumbers (BreakOp, NewOp);
     BreakOp->Asl.Parent = StartNode;
     TrAmlInsertPeer (Conditional, BreakOp);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    TrCheckForDuplicateCase
+ *
+ * PARAMETERS:  CaseOp          - Parse node for first Case statement in list
+ *              Predicate1      - Case value for the input CaseOp
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Check for duplicate case values. Currently, only handles
+ *              Integers, Strings and Buffers. No support for Package objects.
+ *
+ ******************************************************************************/
+
+static void
+TrCheckForDuplicateCase (
+    ACPI_PARSE_OBJECT       *CaseOp,
+    ACPI_PARSE_OBJECT       *Predicate1)
+{
+    ACPI_PARSE_OBJECT       *Next;
+    ACPI_PARSE_OBJECT       *Predicate2;
+
+
+    /* Walk the list of CASE opcodes */
+
+    Next = CaseOp->Asl.Next;
+    while (Next)
+    {
+        if (Next->Asl.ParseOpcode == PARSEOP_CASE)
+        {
+            /* Emit error only once */
+
+            if (Next->Asl.CompileFlags & OP_IS_DUPLICATE)
+            {
+                goto NextCase;
+            }
+
+            /* Check for a duplicate plain integer */
+
+            Predicate2 = Next->Asl.Child;
+            if ((Predicate1->Asl.ParseOpcode == PARSEOP_INTEGER) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_INTEGER))
+            {
+                if (Predicate1->Asl.Value.Integer == Predicate2->Asl.Value.Integer)
+                {
+                    goto FoundDuplicate;
+                }
+            }
+
+            /* Check for pairs of the constants ZERO, ONE, ONES */
+
+            else if (((Predicate1->Asl.ParseOpcode == PARSEOP_ZERO) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_ZERO)) ||
+                ((Predicate1->Asl.ParseOpcode == PARSEOP_ONE) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_ONE)) ||
+                ((Predicate1->Asl.ParseOpcode == PARSEOP_ONES) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_ONES)))
+            {
+                goto FoundDuplicate;
+            }
+
+            /* Check for a duplicate string constant (literal) */
+
+            else if ((Predicate1->Asl.ParseOpcode == PARSEOP_STRING_LITERAL) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_STRING_LITERAL))
+            {
+                if (!strcmp (Predicate1->Asl.Value.String,
+                        Predicate2->Asl.Value.String))
+                {
+                    goto FoundDuplicate;
+                }
+            }
+
+            /* Check for a duplicate buffer constant */
+
+            else if ((Predicate1->Asl.ParseOpcode == PARSEOP_BUFFER) &&
+                (Predicate2->Asl.ParseOpcode == PARSEOP_BUFFER))
+            {
+                if (TrCheckForBufferMatch (Predicate1->Asl.Child,
+                        Predicate2->Asl.Child))
+                {
+                    goto FoundDuplicate;
+                }
+            }
+        }
+        goto NextCase;
+
+FoundDuplicate:
+        /* Emit error message only once */
+
+        Next->Asl.CompileFlags |= OP_IS_DUPLICATE;
+
+        AslDualParseOpError (ASL_ERROR, ASL_MSG_DUPLICATE_CASE, Next,
+            Next->Asl.Value.String, ASL_MSG_CASE_FOUND_HERE, CaseOp,
+            CaseOp->Asl.ExternalName);
+
+NextCase:
+        Next = Next->Asl.Next;
+    }
+}
+
+/*******************************************************************************
+ *
+ * FUNCTION:    TrBufferIsAllZero
+ *
+ * PARAMETERS:  Op          - Parse node for first opcode in buffer initializer
+ *                            list
+ *
+ * RETURN:      TRUE if buffer contains all zeros or a DEFAULT_ARG
+ *
+ * DESCRIPTION: Check for duplicate Buffer case values.
+ *
+ ******************************************************************************/
+
+static BOOLEAN
+TrBufferIsAllZero (
+    ACPI_PARSE_OBJECT       *Op)
+{
+    while (Op)
+    {
+        if (Op->Asl.ParseOpcode == PARSEOP_DEFAULT_ARG)
+        {
+            return (TRUE);
+        }
+        else if (Op->Asl.Value.Integer != 0)
+        {
+            return (FALSE);
+        }
+
+        Op = Op->Asl.Next;
+    }
+
+    return (TRUE);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    TrCheckForBufferMatch
+ *
+ * PARAMETERS:  Next1       - Parse node for first opcode in first buffer list
+ *                              (The DEFAULT_ARG or INTEGER node)
+ *              Next2       - Parse node for first opcode in second buffer list
+ *                              (The DEFAULT_ARG or INTEGER node)
+ *
+ * RETURN:      TRUE if buffers match, FALSE otherwise
+ *
+ * DESCRIPTION: Check for duplicate Buffer case values.
+ *
+ ******************************************************************************/
+
+static BOOLEAN
+TrCheckForBufferMatch (
+    ACPI_PARSE_OBJECT       *NextOp1,
+    ACPI_PARSE_OBJECT       *NextOp2)
+{
+    /*
+     * The buffer length can be a DEFAULT_ARG or INTEGER. If any of the nodes
+     * are DEFAULT_ARG, it means that the length has yet to be computed.
+     * However, the initializer list can be compared to determine if these two
+     * buffers match.
+     */
+    if ((NextOp1->Asl.ParseOpcode == PARSEOP_INTEGER &&
+        NextOp2->Asl.ParseOpcode == PARSEOP_INTEGER) &&
+        NextOp1->Asl.Value.Integer != NextOp2->Asl.Value.Integer)
+    {
+        return (FALSE);
+    }
+
+    /*
+     * Buffers that have explicit lengths but no initializer lists are
+     * filled with zeros at runtime. This is equivalent to buffers that have the
+     * same length that are filled with zeros.
+     *
+     * In other words, the following buffers are equivalent:
+     *
+     * Buffer(0x4) {}
+     * Buffer() {0x0, 0x0, 0x0, 0x0}
+     *
+     * This statement checks for matches where one buffer does not have an
+     * initializer list and another buffer contains all zeros.
+     */
+    if (NextOp1->Asl.ParseOpcode != NextOp2->Asl.ParseOpcode &&
+        TrBufferIsAllZero (NextOp1->Asl.Next) &&
+        TrBufferIsAllZero (NextOp2->Asl.Next))
+    {
+        return (TRUE);
+    }
+
+    /* Start at the BYTECONST initializer node list */
+
+    NextOp1 = NextOp1->Asl.Next;
+    NextOp2 = NextOp2->Asl.Next;
+
+    /*
+     * Walk both lists until either a mismatch is found, or one or more
+     * end-of-lists are found
+     */
+    while (NextOp1 && NextOp2)
+    {
+        if ((NextOp1->Asl.ParseOpcode == PARSEOP_STRING_LITERAL) &&
+            (NextOp2->Asl.ParseOpcode == PARSEOP_STRING_LITERAL))
+        {
+            if (!strcmp (NextOp1->Asl.Value.String, NextOp2->Asl.Value.String))
+            {
+                return (TRUE);
+            }
+            else
+            {
+                return (FALSE);
+            }
+        }
+        if ((UINT8) NextOp1->Asl.Value.Integer != (UINT8) NextOp2->Asl.Value.Integer)
+        {
+            return (FALSE);
+        }
+
+        NextOp1 = NextOp1->Asl.Next;
+        NextOp2 = NextOp2->Asl.Next;
+    }
+
+    /* Not a match if one of the lists is not at end-of-list */
+
+    if (NextOp1 || NextOp2)
+    {
+        return (FALSE);
+    }
+
+    /* Otherwise, the buffers match */
+
+    return (TRUE);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    TrDoMethod
+ *
+ * PARAMETERS:  Op               - Parse node for SWITCH
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Determine that parameter count of an ASL method node by
+ *              translating the parameter count parse node from
+ *              PARSEOP_DEFAULT_ARG to PARSEOP_BYTECONST.
+ *
+ ******************************************************************************/
+
+static void
+TrDoMethod (
+    ACPI_PARSE_OBJECT       *Op)
+{
+    ACPI_PARSE_OBJECT           *ArgCountOp;
+    UINT8                       ArgCount;
+    ACPI_PARSE_OBJECT           *ParameterOp;
+
+
+    /*
+     * TBD: Zero the tempname (_T_x) count. Probably shouldn't be a global,
+     * however
+     */
+    AslGbl_TempCount = 0;
+
+    ArgCountOp = Op->Asl.Child->Asl.Next;
+    if (ArgCountOp->Asl.ParseOpcode == PARSEOP_BYTECONST)
+    {
+        /*
+         * Parameter count for this method has already been recorded in the
+         * method declaration.
+         */
+        return;
+    }
+
+    /*
+     * Parameter count has been omitted in the method declaration.
+     * Count the amount of arguments here.
+     */
+    ParameterOp = ArgCountOp->Asl.Next->Asl.Next->Asl.Next->Asl.Next;
+    if (ParameterOp->Asl.ParseOpcode == PARSEOP_DEFAULT_ARG)
+    {
+        ArgCount = 0;
+        ParameterOp = ParameterOp->Asl.Child;
+
+        while (ParameterOp)
+        {
+            ParameterOp = ParameterOp->Asl.Next;
+            ArgCount++;
+        }
+
+        ArgCountOp->Asl.Value.Integer = ArgCount;
+        ArgCountOp->Asl.ParseOpcode = PARSEOP_BYTECONST;
+    }
+    else
+    {
+        /*
+         * Method parameters can be counted by analyzing the Parameter type
+         * list. If the Parameter list contains more than 1 parameter, it
+         * is nested under PARSEOP_DEFAULT_ARG. When there is only 1
+         * parameter, the parse tree contains a single node representing
+         * that type.
+         */
+        ArgCountOp->Asl.Value.Integer = 1;
+        ArgCountOp->Asl.ParseOpcode = PARSEOP_BYTECONST;
+    }
 }

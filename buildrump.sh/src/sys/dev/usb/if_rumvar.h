@@ -1,4 +1,4 @@
-/*	$NetBSD: if_rumvar.h,v 1.10 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: if_rumvar.h,v 1.12 2020/03/15 23:04:50 thorpej Exp $	*/
 /*	$OpenBSD: if_rumvar.h,v 1.7 2006/11/13 20:06:38 damien Exp $	*/
 
 /*-
@@ -29,7 +29,7 @@ struct rum_rx_radiotap_header {
 	uint16_t	wr_chan_flags;
 	uint8_t		wr_antenna;
 	uint8_t		wr_antsignal;
-} __packed;
+};
 
 #define RT2573_RX_RADIOTAP_PRESENT					\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -45,7 +45,7 @@ struct rum_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_antenna;
-} __packed;
+};
 
 #define RT2573_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -77,6 +77,8 @@ struct rum_softc {
 	struct ieee80211com		sc_ic;
 	int				(*sc_newstate)(struct ieee80211com *,
 					    enum ieee80211_state, int);
+
+	kmutex_t			sc_media_mtx;	/* XXX */
 
 	struct usbd_device *		sc_udev;
 	struct usbd_interface *		sc_iface;

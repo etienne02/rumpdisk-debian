@@ -1,4 +1,4 @@
-/* $NetBSD: tcds.c,v 1.25 2009/08/22 17:38:06 tsutsui Exp $ */
+/* $NetBSD: tcds.c,v 1.28 2021/08/07 16:19:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcds.c,v 1.25 2009/08/22 17:38:06 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcds.c,v 1.28 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -163,7 +163,7 @@ tcdsattach(device_t parent, device_t self, void *aux)
 	if (td == NULL)
 		panic("\ntcdsattach: impossible");
 
-	printf(": TurboChannel Dual SCSI");
+	printf(": TURBOchannel Dual SCSI");
 	if (td->td_flags & TCDSF_BASEBOARD)
 		printf(" (baseboard)");
 	printf("\n");
@@ -294,8 +294,9 @@ tcdsattach(device_t parent, device_t self, void *aux)
 
 		locs[TCDSCF_CHIP] = i;
 
-		config_found_sm_loc(self, "tcds", locs, &tcdsdev,
-				    tcdsprint, config_stdsubmatch);
+		config_found(self, &tcdsdev, tcdsprint,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
 #ifdef __alpha__
 		/*
 		 * The second SCSI chip isn't present on the baseboard TCDS

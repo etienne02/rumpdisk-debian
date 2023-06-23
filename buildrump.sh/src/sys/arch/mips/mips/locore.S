@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.204 2016/07/27 09:32:35 skrll Exp $	*/
+/*	$NetBSD: locore.S,v 1.228 2021/05/29 12:35:27 simonb Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -61,46 +61,53 @@
 #include <mips/asm.h>
 #include <mips/cpuregs.h>
 #include <mips/trap.h>
+#include <mips/locore.h>
 
-RCSID("$NetBSD: locore.S,v 1.204 2016/07/27 09:32:35 skrll Exp $")
+RCSID("$NetBSD: locore.S,v 1.228 2021/05/29 12:35:27 simonb Exp $")
 
 #include "assym.h"
 
-#if defined(MIPS1) || defined(MIPS2)
-#define	NOP_L		nop
-#else
-#define	NOP_L		/* nothing */
-#endif
-
-#if defined(MIPS1) || defined(MIPS2) || defined(MIPS3)
-#define MFC0_HAZARD	nop
-#else
-#define MFC0_HAZARD	/* nothing */
-#endif
-
 	.set	noreorder
 
-	.globl	start
-	.globl	_C_LABEL(kernel_text)		# libkvm refers this
-start:
-_C_LABEL(kernel_text):
-#if (defined(MIPS3_PLUS) && !defined(MIPS1)) || defined(emips)
-	/* keep firmware exception handler until we hook. */
-	mfc0	v0, MIPS_COP_0_STATUS
+EXPORT(start)
+EXPORT_OBJECT(kernel_text)			# libkvm refers this
+	/* First disable the interrupts only, for safety */
+	mfc0	k0, MIPS_COP_0_STATUS
 	MFC0_HAZARD
-#if defined(emips)
-	and	v0, MIPS_SR_TS | MIPS3_SR_RE
-#else
-	and	v0, MIPS_SR_BEV
-#endif
-	mtc0	v0, MIPS_COP_0_STATUS		# Disable interrupts
+
+	and	k0, ~MIPS_SR_INT_IE
+	mtc0	k0, MIPS_COP_0_STATUS
 	COP0_SYNC
-#else
-	mtc0	zero, MIPS_COP_0_STATUS		# Disable interrupts
-	COP0_SYNC
-#endif
+
+	/* Known state: BEV, coprocessors disabled. */
+	/* Leaving TS | RE alone (for emips) */
+	and	k0, MIPS_SR_TS | MIPS3_SR_RE
+	mtc0	k0, MIPS_COP_0_STATUS
 	mtc0	zero, MIPS_COP_0_CAUSE
 	COP0_SYNC
+
+#if defined(_LP64)
+	/* Enable 64-bit addressing */
+	mfc0	k0, MIPS_COP_0_STATUS
+	MFC0_HAZARD
+	or	k0, MIPS_SR_KX | MIPS_SR_UX
+	mtc0	k0, MIPS_COP_0_STATUS
+#elif defined(__mips_n32)
+        mfc0    k0, MIPS_COP_0_STATUS
+        MFC0_HAZARD
+        or      k0, MIPS_SR_KX
+        mtc0    k0, MIPS_COP_0_STATUS
+#endif
+
+#ifdef HPCMIPS_L1CACHE_DISABLE
+	mfc0	t0, MIPS_COP_0_CONFIG
+	li	t1, 0xfffffff8
+	and	t0, t0, t1
+	or	t0, 0x00000002			# XXX, KSEG0 is uncached
+	mtc0	t0, MIPS_COP_0_CONFIG
+	COP0_SYNC
+#endif /* HPCMIPS_L1CACHE_DISABLE */
+
 #ifdef MIPS64_OCTEON
 	//
 	// U-boot on the erlite starts all cpus at the kernel entry point.
@@ -110,7 +117,7 @@ _C_LABEL(kernel_text):
 	//
 	mfc0	a0, MIPS_COP_0_EBASE		# EBASE
 	COP0_SYNC
-	ext	a1, a0, 0, 10			# get CPU number
+	andi    a1, a0, MIPS_EBASE_CPUNUM	# fetch cpunum
 	beqz	a1, 2f				# normal startup if 0
 	 nop
 #ifdef MULTIPROCESSOR
@@ -141,44 +148,27 @@ _C_LABEL(kernel_text):
 	PTR_LA	gp, _C_LABEL(_gp)
 #endif
 
-#ifdef NOFPU /* No FPU; avoid touching FPU registers */
-#if !defined(emips)   /*  XXX??? we have already disabled interrupts! */
-#ifdef __mips_n32
-	li	t0, MIPS_SR_KX			# turn on XKSEG and XKPHYS
-#elif defined(_LP64)
-	li	t0, MIPS_SR_KX | MIPS_SR_UX	# turn on XKSEG and XKPHYS
-#else
-	li	t0, 0				# Disable interrupts and
-#endif
-	mtc0	t0, MIPS_COP_0_STATUS		# the fp coprocessor
-	COP0_SYNC
-#endif
-#ifdef HPCMIPS_L1CACHE_DISABLE
-	mfc0	t0, MIPS_COP_0_CONFIG
-	li	t1, 0xfffffff8
-	and	t0, t0, t1
-	or	t0, 0x00000002			# XXX, KSEG0 is uncached
-	mtc0	t0, MIPS_COP_0_CONFIG
-	COP0_SYNC
-#endif /* HPCMIPS_L1CACHE_DISABLE */
-#else
-	mfc0	t0, MIPS_COP_0_STATUS
-	MFC0_HAZARD
-#if defined(_LP64) || defined(__mips_n32)
-	or	t0, MIPS_SR_KX			# turn on XKSEG and XKPHYS
-#endif
-	or	t0, MIPS_SR_COP_1_BIT		# Disable interrupts, and
-	mtc0	t0, MIPS_COP_0_STATUS		# enable the fp coprocessor
-	COP0_HAZARD_FPUENABLE
-#endif
 	mfc0	t0, MIPS_COP_0_PRID		# read product revision ID
 	COP0_SYNC
 	nop
-#ifdef NOFPU /* No FPU; avoid touching FPU registers */
-	add	t1, zero, zero
+
+#ifdef NOFPU
+	li	t1, 0				# Dummy FPU_ID
 #else
-	cfc1	t1, MIPS_FPU_ID			# read FPU ID register
+	/* Enable the FPU to read FPUID */
+	mfc0	k0, MIPS_COP_0_STATUS
+	MFC0_HAZARD
+	or	k0, MIPS_SR_COP_1_BIT
+	mtc0	k0, MIPS_COP_0_STATUS
+	COP0_HAZARD_FPUENABLE
+
+	cfc1	t1, MIPS_FIR
+
+	/* Disable again, we don't want it on in the kernel */
+	and	k0, ~MIPS_SR_COP_1_BIT
+	mtc0	k0, MIPS_COP_0_STATUS
 #endif
+
 	INT_S	t0, _C_LABEL(mips_options)+MO_CPU_ID # save PRID register
 	INT_S	t1, _C_LABEL(mips_options)+MO_FPU_ID # save FPU ID register
 	PTR_LA	MIPS_CURLWP, _C_LABEL(lwp0)	# set curlwp
@@ -187,7 +177,7 @@ _C_LABEL(kernel_text):
 
 	# XXXuvm_lwp_getuarea
 	PTR_L	sp, L_PCB(MIPS_CURLWP)		# switch to lwp0 stack
-	nop
+	NOP_L
 	PTR_ADDU sp, USPACE - TF_SIZ - CALLFRAME_SIZ
 	/*
 	 * Raise to IPLHIGH
@@ -208,7 +198,8 @@ _C_LABEL(kernel_text):
 	COP0_SYNC
 
 	jal	_C_LABEL(main)			# main(void)
-	nop
+	 nop
+
 	PANIC("main() returned")		# main never returns
 	.set	at
 	.globl _C_LABEL(verylocore)
@@ -251,10 +242,8 @@ NESTED(cpu_switchto, CALLFRAME_SIZ, ra)
 #endif
 #endif /* PARANOIA */
 	/*
-	 * Save old context, unless the LWP is exiting.
+	 * Save old context
 	 */
-	beq	a0, zero, 1f
-	 nop
 	PTR_L	a2, L_PCB(a0)			# a2 = pcb of old lwp
 	mfc0	t0, MIPS_COP_0_STATUS
 	REG_PROLOGUE
@@ -275,7 +264,7 @@ NESTED(cpu_switchto, CALLFRAME_SIZ, ra)
 	REG_S	gp, PCB_CONTEXT+SF_REG_GP(a2)
 #endif
 	REG_EPILOGUE
-1:
+
 #if defined(PARANOID_SPL)
 	/*
 	 * Verify interrupt configuration matches IPL_SCHED
@@ -322,7 +311,7 @@ NESTED(cpu_switchto, CALLFRAME_SIZ, ra)
 	teqi	t1, 0
 #elif defined(PARANOID_LOOP)
 	and	t1, t0, MIPS_SR_INT_IE
-2:	beqz	t1, 2b			# status reg should not differ
+2:	beqz	t1, 2b				# status reg should not differ
 	 nop
 #endif /* PARANOID_LOOP */
 	DYNAMIC_STATUS_MASK(t0,ra)
@@ -362,37 +351,6 @@ END(cpu_switchto)
  *
  * called at IPL_HIGH
  *
- */
-softint_cleanup:
-#ifdef PARANOIA
-	mfc0	t1, MIPS_COP_0_STATUS
-	MFC0_HAZARD
-	and	v0, t1, MIPS_SR_INT_IE
-#if __mips >= 32
-	teqi	v0, 0
-#else
-1:	beqz	v0, 1b
-	 nop
-#endif
-#endif /* PARANOIA */
-	PTR_L	t0, L_CPU(MIPS_CURLWP)
-	NOP_L					# load delay
-	INT_L	t1, CPU_INFO_MTX_COUNT(t0)
-	NOP_L					# load delay
-	INT_ADDU t1, 1
-	INT_S	t1, CPU_INFO_MTX_COUNT(t0)
-	REG_L	ra, CALLFRAME_RA(sp)
-	REG_L	v0, CALLFRAME_S0(sp)		# get softint lwp
-	NOP_L					# load delay
-	PTR_S	zero, L_CTXSWITCH(v0)		# clear l_ctxswtch
-#if IPL_SCHED != IPL_HIGH
-	j	_C_LABEL(splhigh_noprof)
-#else
-	jr	ra
-#endif
-	 PTR_ADDU sp, CALLFRAME_SIZ
-
-/*
  * Arguments:
  *	a0	the LWP to switch to
  *	a1	IPL to execute at
@@ -475,6 +433,34 @@ NESTED(softint_fast_dispatch, CALLFRAME_SIZ, ra)
 	 */
 	jr	ra
 	 PTR_ADDU sp, CALLFRAME_SIZ
+
+softint_cleanup:
+#ifdef PARANOIA
+	mfc0	t1, MIPS_COP_0_STATUS
+	MFC0_HAZARD
+	and	v0, t1, MIPS_SR_INT_IE
+#if __mips >= 32
+	teqi	v0, 0
+#else
+1:	beqz	v0, 1b
+	 nop
+#endif
+#endif /* PARANOIA */
+	PTR_L	t0, L_CPU(MIPS_CURLWP)
+	NOP_L					# load delay
+	INT_L	t1, CPU_INFO_MTX_COUNT(t0)
+	NOP_L					# load delay
+	INT_ADDU t1, 1
+	INT_S	t1, CPU_INFO_MTX_COUNT(t0)
+	REG_L	ra, CALLFRAME_RA(sp)
+	REG_L	v0, CALLFRAME_S0(sp)		# get softint lwp
+	NOP_L					# load delay
+#if IPL_SCHED != IPL_HIGH
+	j	_C_LABEL(splhigh_noprof)
+#else
+	jr	ra
+#endif
+	 PTR_ADDU sp, CALLFRAME_SIZ
 END(softint_fast_dispatch)
 #endif /* __HAVE_FAST_SOFTINTS */
 
@@ -499,7 +485,7 @@ LEAF(lwp_oncpu)
 	jr	ra				# and return.
 	 nop
 END(lwp_oncpu)
-	
+
 
 /*
  * void savectx(struct pcb *)
@@ -679,8 +665,8 @@ XNESTED(mips_fpu_trap)
 	REG_L		a2, TF_REG_CAUSE(a1)
 	REG_EPILOGUE
 
-	cfc1		t0, MIPS_FPU_CSR	# stall til FP done
-	cfc1		t0, MIPS_FPU_CSR	# now get status
+	cfc1		t0, MIPS_FCSR		# stall til FP done
+	cfc1		t0, MIPS_FCSR		# now get status
 	nop
 	sll		t2, t0, (31 - 17)	# unimplemented operation?
 	bgez		t2, 3f			# no, normal trap
@@ -717,8 +703,8 @@ XNESTED(mips_fpu_trap)
 	REG_S		a2, TF_REG_CAUSE(a1)
 	REG_EPILOGUE
 
-	and		t2, t0, ~MIPS_FPU_EXCEPTION_BITS
-	ctc1		t2, MIPS_FPU_CSR
+	and		t2, t0, ~MIPS_FCSR_CAUSE
+	ctc1		t2, MIPS_FCSR
 
 	move		a1, a0				# code = instruction
 	jal		_C_LABEL(mips_fpuillinst)
@@ -736,8 +722,8 @@ XNESTED(mips_fpu_trap)
 	REG_S		a2, TF_REG_CAUSE(a1)
 	REG_EPILOGUE
 
-	and		a0, t0, ~MIPS_FPU_EXCEPTION_BITS
-	ctc1		a0, MIPS_FPU_CSR
+	and		a0, t0, ~MIPS_FCSR_CAUSE
+	ctc1		a0, MIPS_FCSR
 
 	move		a1, t0			# FPU status
 	jal		_C_LABEL(mips_fpuexcept)
@@ -827,7 +813,7 @@ END(mips_pagezero)
 
 
 #ifndef DDB_TRACE
-
+
 #if defined(DEBUG) || defined(DDB) || defined(KGDB) || defined(geo)
 /*
  * Stacktrace support hooks which use type punnign to access

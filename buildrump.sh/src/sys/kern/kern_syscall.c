@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_syscall.c,v 1.14 2015/11/30 23:34:47 pgoyette Exp $	*/
+/*	$NetBSD: kern_syscall.c,v 1.21 2020/08/31 19:51:30 christos Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_syscall.c,v 1.14 2015/11/30 23:34:47 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_syscall.c,v 1.21 2020/08/31 19:51:30 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_modular.h"
@@ -123,7 +123,10 @@ syscall_establish(const struct emul *em, const struct syscall_package *sp)
 	 * on error.
 	 */
 	for (i = 0; sp[i].sp_call != NULL; i++) {
-		if (sy[sp[i].sp_code].sy_call != sys_nomodule) {
+		if (sp[i].sp_code >= SYS_NSYSENT)
+			return EINVAL;
+		if (sy[sp[i].sp_code].sy_call != sys_nomodule &&
+		    sy[sp[i].sp_code].sy_call != sys_nosys) {
 #ifdef DIAGNOSTIC
 			printf("syscall %d is busy\n", sp[i].sp_code);
 #endif
@@ -142,7 +145,7 @@ int
 syscall_disestablish(const struct emul *em, const struct syscall_package *sp)
 {
 	struct sysent *sy;
-	uint64_t where;
+	const uint32_t *sb;
 	lwp_t *l;
 	int i;
 
@@ -152,14 +155,17 @@ syscall_disestablish(const struct emul *em, const struct syscall_package *sp)
 		em = &emul_netbsd;
 	}
 	sy = em->e_sysent;
+	sb = em->e_nomodbits;
 
 	/*
-	 * First, patch the system calls to sys_nomodule to gate further
-	 * activity.
+	 * First, patch the system calls to sys_nomodule or sys_nosys
+	 * to gate further activity.
 	 */
 	for (i = 0; sp[i].sp_call != NULL; i++) {
 		KASSERT(sy[sp[i].sp_code].sy_call == sp[i].sp_call);
-		sy[sp[i].sp_code].sy_call = sys_nomodule;
+		sy[sp[i].sp_code].sy_call =
+		    sb[sp[i].sp_code / 32] & (1 << (sp[i].sp_code % 32)) ?
+		      sys_nomodule : sys_nosys;
 	}
 
 	/*
@@ -168,21 +174,20 @@ syscall_disestablish(const struct emul *em, const struct syscall_package *sp)
 	 * of sy_call visible to all CPUs, and upon return we can be sure
 	 * that we see pertinent values of l_sysent posted by remote CPUs.
 	 */
-	where = xc_broadcast(0, (xcfunc_t)nullop, NULL, NULL);
-	xc_wait(where);
+	xc_barrier(0);
 
 	/*
 	 * Now it's safe to check l_sysent.  Run through all LWPs and see
 	 * if anyone is still using the system call.
 	 */
 	for (i = 0; sp[i].sp_call != NULL; i++) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		LIST_FOREACH(l, &alllwp, l_list) {
 			if (l->l_sysent == &sy[sp[i].sp_code]) {
 				break;
 			}
 		}
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		if (l == NULL) {
 			continue;
 		}
@@ -231,11 +236,16 @@ int
 trace_enter(register_t code, const struct sysent *sy, const void *args)
 {
 	int error = 0;
+#if defined(PTRACE) || defined(KDTRACE_HOOKS)
+	struct proc *p = curlwp->l_proc;
+#endif
 
 #ifdef KDTRACE_HOOKS
 	if (sy->sy_entry) {
-		struct emul *e = curlwp->l_proc->p_emul;
-		(*e->e_dtrace_syscall)(sy->sy_entry, code, sy, args, NULL, 0);
+		struct emul *e = p->p_emul;
+		if (e->e_dtrace_syscall)
+			(*e->e_dtrace_syscall)(sy->sy_entry, code, sy, args,
+			    NULL, 0);
 	}
 #endif
 
@@ -246,9 +256,9 @@ trace_enter(register_t code, const struct sysent *sy, const void *args)
 	ktrsyscall(code, args, sy->sy_narg);
 
 #ifdef PTRACE
-	if ((curlwp->l_proc->p_slflag & (PSL_SYSCALL|PSL_TRACED)) ==
+	if ((p->p_slflag & (PSL_SYSCALL|PSL_TRACED)) ==
 	    (PSL_SYSCALL|PSL_TRACED)) {
-		process_stoptrace();
+		proc_stoptrace(TRAP_SCE, code, args, NULL, 0);
 		if (curlwp->l_proc->p_slflag & PSL_SYSCALLEMU) {
 			/* tracer will emulate syscall for us */
 			error = EJUSTRETURN;
@@ -275,8 +285,10 @@ trace_exit(register_t code, const struct sysent *sy, const void *args,
 
 #ifdef KDTRACE_HOOKS
 	if (sy->sy_return) {
-		(*p->p_emul->e_dtrace_syscall)(sy->sy_return, code, sy, args,
-		    rval, error);
+		struct emul *e = p->p_emul;
+		if (e->e_dtrace_syscall)
+			(*p->p_emul->e_dtrace_syscall)(sy->sy_return, code, sy,
+			    args, rval, error);
 	}
 #endif
 
@@ -288,8 +300,9 @@ trace_exit(register_t code, const struct sysent *sy, const void *args,
 	
 #ifdef PTRACE
 	if ((p->p_slflag & (PSL_SYSCALL|PSL_TRACED|PSL_SYSCALLEMU)) ==
-	    (PSL_SYSCALL|PSL_TRACED))
-		process_stoptrace();
+	    (PSL_SYSCALL|PSL_TRACED)) {
+		proc_stoptrace(TRAP_SCX, code, args, rval, error);
+	}
 	CLR(p->p_slflag, PSL_SYSCALLEMU);
 #endif
 }

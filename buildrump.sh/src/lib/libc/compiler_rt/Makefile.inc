@@ -1,6 +1,7 @@
-# $NetBSD: Makefile.inc,v 1.31 2016/03/30 07:25:33 martin Exp $
+# $NetBSD: Makefile.inc,v 1.40 2021/06/16 05:21:08 rin Exp $
 
-COMPILER_RT_SRCDIR=	${NETBSDSRCDIR}/sys/external/bsd/compiler_rt/dist
+COMPILER_RT_DIR=	${NETBSDSRCDIR}/sys/external/bsd/compiler_rt
+COMPILER_RT_SRCDIR=	${COMPILER_RT_DIR}/dist
 
 .if ${LIBC_MACHINE_ARCH} == "powerpc" || ${LIBC_MACHINE_ARCH} == "powerpc64"
 COMPILER_RT_CPU_DIR=	${COMPILER_RT_SRCDIR}/lib/builtins/ppc
@@ -30,6 +31,52 @@ COMPILER_RT_ARCH_DIR=	${COMPILER_RT_SRCDIR}/lib/builtins/${LIBC_MACHINE_ARCH}
 GENERIC_SRCS+= \
 	gcc_personality_v0.c
 .endif
+
+GENERIC_SRCS+= \
+	absvsi2.c \
+	absvti2.c \
+	addvsi3.c \
+	addvti3.c \
+	ashlti3.c \
+	ashrti3.c \
+	clzti2.c \
+	cmpti2.c \
+	ctzti2.c \
+	divti3.c \
+	ffsti2.c \
+	fixsfdi.c \
+	fixdfdi.c \
+	fixunsdfdi.c \
+	fixunsdfsi.c \
+	fixunssfdi.c \
+	fixunssfsi.c \
+	fixunsxfdi.c \
+	fixunsxfsi.c \
+	int_util.c \
+	lshrti3.c \
+	modti3.c \
+	muldc3.c \
+	mulosi4.c \
+	muloti4.c \
+	multi3.c \
+	mulvsi3.c \
+	mulvti3.c \
+	negti2.c \
+	negvsi2.c \
+	negvti2.c \
+	paritysi2.c \
+	parityti2.c \
+	popcountsi2.c \
+	popcountti2.c \
+	subvsi3.c \
+	subvti3.c \
+	ucmpti2.c \
+	udivmodti4.c \
+	udivti3.c \
+	umodti3.c
+
+# only used for machines using IEEE 754 floating point formats
+.if ${MACHINE_ARCH} != "vax"
 
 .if 0
 # Conflicts with soft-float
@@ -64,60 +111,21 @@ GENERIC_SRCS+= \
 	trunctfsf2.c
 .endif
 
-GENERIC_SRCS+= \
-	absvsi2.c \
-	absvti2.c \
-	addvsi3.c \
-	addvti3.c \
-	ashlti3.c \
-	ashrti3.c \
-	clzti2.c \
-	cmpti2.c \
-	ctzti2.c \
-	divti3.c \
-	ffsti2.c \
-	fixsfdi.c \
-	fixdfdi.c \
-	fixunsdfdi.c \
-	fixunsdfsi.c \
-	fixunssfdi.c \
-	fixunssfsi.c \
-	fixunsxfdi.c \
-	fixunsxfsi.c \
+GENERIC_SRCS+=	\
 	floatdidf.c \
 	floatdisf.c \
 	floatdixf.c \
 	floatundidf.c \
 	floatundisf.c \
 	floatundixf.c \
-	int_util.c \
-	lshrti3.c \
-	modti3.c \
-	muldc3.c \
-	mulosi4.c \
-	muloti4.c \
-	multi3.c \
-	mulvsi3.c \
-	mulvti3.c \
 	negdf2.c \
 	negsf2.c \
-	negti2.c \
-	negvsi2.c \
-	negvti2.c \
-	paritysi2.c \
-	parityti2.c \
-	popcountsi2.c \
-	popcountti2.c \
 	powidf2.c \
 	powisf2.c \
 	powitf2.c \
-	powixf2.c \
-	subvsi3.c \
-	subvti3.c \
-	ucmpti2.c \
-	udivmodti4.c \
-	udivti3.c \
-	umodti3.c
+	powixf2.c
+
+.endif # IEEE 754 only machines
 
 .if ${MACHINE_ARCH} != "m68k"
 GENERIC_SRCS+= \
@@ -125,7 +133,7 @@ GENERIC_SRCS+= \
 .endif
 
 
-.if ${MACHINE_ARCH} != "aarch64"
+.if ${MACHINE_CPU} != "aarch64"
 GENERIC_SRCS+= \
 	fixunsdfti.c \
 	fixunssfti.c \
@@ -137,6 +145,9 @@ GENERIC_SRCS+= \
 	floatuntidf.c \
 	floatuntisf.c \
 	floatuntixf.c
+.else
+GENERIC_SRCS+= \
+	comparetf2.c
 .endif
 
 # These have h/w instructions which are always used.
@@ -186,7 +197,7 @@ GENERIC_SRCS+= \
 
 # These have h/w instructions which are always used.
 .if ${LIBC_MACHINE_ARCH} != "alpha" && ${LIBC_MACHINE_CPU} != "powerpc64" \
-    && ${LIBC_MACHINE_ARCH} != "aarch64" && ${LIBC_MACHINE_CPU} != "or1k"
+    && ${LIBC_MACHINE_CPU} != "aarch64" && ${LIBC_MACHINE_CPU} != "or1k"
 GENERIC_SRCS+= \
 	clzdi2.c \
 	ctzdi2.c \
@@ -242,6 +253,16 @@ GENERIC_SRCS+= \
 	clear_cache.c
 .endif
 
+.if ${LIBC_MACHINE_ARCH} == "powerpc" || ${LIBC_MACHINE_ARCH} == "powerpc64"
+GENERIC_SRCS+= \
+	clear_cache.c
+.endif
+
+.if ${LIBC_MACHINE_ARCH} == "sparc" || ${LIBC_MACHINE_ARCH} == "sparc64"
+GENERIC_SRCS+= \
+	clear_cache.c
+.endif
+
 .if ${LIBC_MACHINE_CPU} == "arm"
 .if !empty(LIBC_MACHINE_ARCH:Mearm*)
 GENERIC_SRCS+= \
@@ -279,3 +300,5 @@ COPTS.${src}+=	-Wno-missing-prototypes \
 COPTS.${src}+=	-D__SOFT_FP__
 .endif
 .endfor
+
+.include "${COMPILER_RT_DIR}/abi.mk"

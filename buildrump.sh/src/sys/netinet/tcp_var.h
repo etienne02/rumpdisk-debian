@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_var.h,v 1.177 2015/02/14 22:09:53 he Exp $	*/
+/*	$NetBSD: tcp_var.h,v 1.196 2021/07/31 20:29:37 andvar Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -142,7 +142,7 @@
 #endif
 
 /*
- * Kernel variables for tcp.
+ * TCP kernel structures and variables.
  */
 
 #include <sys/callout.h>
@@ -157,10 +157,36 @@
 #define	TCP_KEYLEN_MAX	80	/* maximum length of TCP-MD5 key */
 /*
  * Only a single SA per host may be specified at this time. An SPI is
- * needed in order for the KEY_ALLOCSA() lookup to work.
+ * needed in order for the KEY_LOOKUP_SA() lookup to work.
  */
 #define	TCP_SIG_SPI	0x1000
 #endif /* TCP_SIGNATURE */
+
+/*
+ * Tcp+ip header, after ip options removed.
+ */
+struct tcpiphdr {
+	struct ipovly ti_i;		/* overlaid ip structure */
+	struct tcphdr ti_t;		/* tcp header */
+};
+#ifdef CTASSERT
+CTASSERT(sizeof(struct tcpiphdr) == 40);
+#endif
+#define	ti_x1		ti_i.ih_x1
+#define	ti_pr		ti_i.ih_pr
+#define	ti_len		ti_i.ih_len
+#define	ti_src		ti_i.ih_src
+#define	ti_dst		ti_i.ih_dst
+#define	ti_sport	ti_t.th_sport
+#define	ti_dport	ti_t.th_dport
+#define	ti_seq		ti_t.th_seq
+#define	ti_ack		ti_t.th_ack
+#define	ti_x2		ti_t.th_x2
+#define	ti_off		ti_t.th_off
+#define	ti_flags	ti_t.th_flags
+#define	ti_win		ti_t.th_win
+#define	ti_sum		ti_t.th_sum
+#define	ti_urp		ti_t.th_urp
 
 /*
  * SACK option block.
@@ -273,7 +299,7 @@ struct tcpcb {
 
 /* congestion control (for slow start, source quench, retransmit after loss) */
 	u_long	snd_cwnd;		/* congestion-controlled window */
-	u_long	snd_ssthresh;		/* snd_cwnd size threshhold for
+	u_long	snd_ssthresh;		/* snd_cwnd size threshold for
 					 * for slow start exponential to
 					 * linear switch
 					 */
@@ -623,7 +649,7 @@ struct syn_cache_head {
  * Compute the initial window for slow start.
  */
 #define	TCP_INITIAL_WINDOW(iw, segsz) \
-	min((iw) * (segsz), max(2 * (segsz), tcp_init_win_max[(iw)]))
+	uimin((iw) * (segsz), uimax(2 * (segsz), tcp_init_win_max[(iw)]))
 
 /*
  * TCP statistics.
@@ -730,7 +756,9 @@ struct syn_cache_head {
 #define	TCPCTL_SACK		10	/* RFC2018 selective acknowledgement */
 #define	TCPCTL_WSCALE		11	/* RFC1323 window scaling */
 #define	TCPCTL_TSTAMP		12	/* RFC1323 timestamps */
+#if 0	/*obsoleted*/
 #define	TCPCTL_COMPAT_42	13	/* 4.2BSD TCP bug work-arounds */
+#endif
 #define	TCPCTL_CWM		14	/* Congestion Window Monitoring */
 #define	TCPCTL_CWM_BURSTSIZE	15	/* burst size allowed by CWM */
 #define	TCPCTL_ACK_ON_PUSH	16	/* ACK immediately on PUSH */
@@ -754,45 +782,6 @@ struct syn_cache_head {
 #define	TCPCTL_DEBX		32	/* # of tcp debug sockets */
 #define	TCPCTL_DROP		33	/* drop tcp connection */
 #define	TCPCTL_MSL		34	/* Max Segment Life */
-#define	TCPCTL_MAXID		35
-
-#define	TCPCTL_NAMES { \
-	{ 0, 0 }, \
-	{ "rfc1323",	CTLTYPE_INT }, \
-	{ "sendspace",	CTLTYPE_INT }, \
-	{ "recvspace",	CTLTYPE_INT }, \
-	{ "mssdflt",	CTLTYPE_INT }, \
-	{ "syn_cache_limit", CTLTYPE_INT }, \
-	{ "syn_bucket_limit", CTLTYPE_INT }, \
-	{ 0, 0 },\
-	{ "init_win", CTLTYPE_INT }, \
-	{ "mss_ifmtu", CTLTYPE_INT }, \
-	{ "sack", CTLTYPE_INT }, \
-	{ "win_scale", CTLTYPE_INT }, \
-	{ "timestamps", CTLTYPE_INT }, \
-	{ "compat_42", CTLTYPE_INT }, \
-	{ "cwm", CTLTYPE_INT }, \
-	{ "cwm_burstsize", CTLTYPE_INT }, \
-	{ "ack_on_push", CTLTYPE_INT }, \
-	{ "keepidle",	CTLTYPE_INT }, \
-	{ "keepintvl",	CTLTYPE_INT }, \
-	{ "keepcnt",	CTLTYPE_INT }, \
-	{ "slowhz",	CTLTYPE_INT }, \
-	{ 0, 0 }, \
-	{ "log_refused",CTLTYPE_INT }, \
-	{ 0, 0 }, \
-	{ "rstppslimit", CTLTYPE_INT }, \
-	{ "delack_ticks", CTLTYPE_INT }, \
-	{ "init_win_local", CTLTYPE_INT }, \
-	{ "ident", CTLTYPE_STRUCT }, \
-	{ "ackdropppslimit", CTLTYPE_INT }, \
-	{ "do_loopback_cksum", CTLTYPE_INT }, \
-	{ "stats", CTLTYPE_STRUCT }, \
-	{ "debug", CTLTYPE_STRUCT }, \
-	{ "debx", CTLTYPE_INT }, \
-	{ "drop", CTLTYPE_STRUCT }, \
-	{ "msl", CTLTYPE_INT }, \
-}
 
 #ifdef _KERNEL
 
@@ -811,7 +800,6 @@ extern	int tcp_init_win;	/* initial window */
 extern	int tcp_init_win_local;	/* initial window for local nets */
 extern	int tcp_init_win_max[11];/* max sizes for values of tcp_init_win_* */
 extern	int tcp_mss_ifmtu;	/* take MSS from interface, not in_maxmtu */
-extern	int tcp_compat_42;	/* work around ancient broken TCP peers */
 extern	int tcp_cwm;		/* enable Congestion Window Monitoring */
 extern	int tcp_cwm_burstsize;	/* burst size allowed by CWM */
 extern	int tcp_ack_on_push;	/* ACK immediately on PUSH */
@@ -862,38 +850,6 @@ extern int tcp_do_autosndbuf;
 extern int tcp_autosndbuf_inc;
 extern int tcp_autosndbuf_max;
 
-
-#define	TCPCTL_VARIABLES { \
-	{ 0 },					\
-	{ 1, 0, &tcp_do_rfc1323 },		\
-	{ 1, 0, &tcp_sendspace },		\
-	{ 1, 0, &tcp_recvspace },		\
-	{ 1, 0, &tcp_mssdflt },			\
-	{ 1, 0, &tcp_syn_cache_limit },		\
-	{ 1, 0, &tcp_syn_bucket_limit },	\
-	{ 0 },					\
-	{ 1, 0, &tcp_init_win },		\
-	{ 1, 0, &tcp_mss_ifmtu },		\
-	{ 1, 0, &tcp_do_sack },			\
-	{ 1, 0, &tcp_do_win_scale },		\
-	{ 1, 0, &tcp_do_timestamps },		\
-	{ 1, 0, &tcp_compat_42 },		\
-	{ 1, 0, &tcp_cwm },			\
-	{ 1, 0, &tcp_cwm_burstsize },		\
-	{ 1, 0, &tcp_ack_on_push },		\
-	{ 1, 0, &tcp_keepidle },		\
-	{ 1, 0, &tcp_keepintvl },		\
-	{ 1, 0, &tcp_keepcnt },			\
-	{ 1, 1, 0, PR_SLOWHZ },			\
-	{ 0 },					\
-	{ 1, 0, &tcp_log_refused },		\
-	{ 0 },					\
-	{ 1, 0, &tcp_rst_ppslim },		\
-	{ 1, 0, &tcp_delack_ticks },		\
-	{ 1, 0, &tcp_init_win_local },		\
-	{ 1, 0, &tcp_ackdrop_ppslim },		\
-}
-
 struct secasvar;
 
 void	 tcp_canceltimers(struct tcpcb *);
@@ -911,7 +867,7 @@ struct tcpcb *
 	 tcp_drop(struct tcpcb *, int);
 #ifdef TCP_SIGNATURE
 int	 tcp_signature_apply(void *, void *, u_int);
-struct secasvar *tcp_signature_getsav(struct mbuf *, struct tcphdr *);
+struct secasvar *tcp_signature_getsav(struct mbuf *);
 int	 tcp_signature(struct mbuf *, struct tcphdr *, int, struct secasvar *,
 	    char *);
 #endif
@@ -923,7 +879,7 @@ void	 tcp_init_common(unsigned);
 #ifdef INET6
 int	 tcp6_input(struct mbuf **, int *, int);
 #endif
-void	 tcp_input(struct mbuf *, ...);
+void	 tcp_input(struct mbuf *, int, int);
 u_int	 tcp_hdrsz(struct tcpcb *);
 u_long	 tcp_mss_to_advertise(const struct ifnet *, int);
 void	 tcp_mss_from_peer(struct tcpcb *, int);
@@ -938,9 +894,9 @@ u_int	 tcp_optlen(struct tcpcb *);
 int	 tcp_output(struct tcpcb *);
 void	 tcp_pulloutofband(struct socket *,
 	    struct tcphdr *, struct mbuf *, int);
-void	 tcp_quench(struct inpcb *, int);
+void	 tcp_quench(struct inpcb *);
 #ifdef INET6
-void	 tcp6_quench(struct in6pcb *, int);
+void	 tcp6_quench(struct in6pcb *);
 #endif
 void	 tcp_mtudisc(struct inpcb *, int);
 #ifdef INET6
@@ -959,8 +915,6 @@ void	 tcp_setpersist(struct tcpcb *);
 int	 tcp_signature_compute(struct mbuf *, struct tcphdr *, int, int,
 	    int, u_char *, u_int);
 #endif
-void	 tcp_slowtimo(void *);
-extern callout_t tcp_slowtimo_ch;
 void	 tcp_fasttimo(void);
 struct mbuf *
 	 tcp_template(struct tcpcb *);
@@ -969,9 +923,8 @@ struct tcpcb *
 	 tcp_usrclosed(struct tcpcb *);
 void	 tcp_usrreq_init(void);
 void	 tcp_xmit_timer(struct tcpcb *, uint32_t);
-tcp_seq	 tcp_new_iss(struct tcpcb *, tcp_seq);
-tcp_seq  tcp_new_iss1(void *, void *, u_int16_t, u_int16_t, size_t,
-	    tcp_seq);
+tcp_seq	 tcp_new_iss(struct tcpcb *);
+tcp_seq  tcp_new_iss1(void *, void *, u_int16_t, u_int16_t, size_t);
 
 void	 tcp_sack_init(void);
 void	 tcp_new_dsack(struct tcpcb *, tcp_seq, u_int32_t);
@@ -993,16 +946,14 @@ int	 syn_cache_add(struct sockaddr *, struct sockaddr *,
 void	 syn_cache_unreach(const struct sockaddr *, const struct sockaddr *,
 	   struct tcphdr *);
 struct socket *syn_cache_get(struct sockaddr *, struct sockaddr *,
-		struct tcphdr *, unsigned int, unsigned int,
-		struct socket *so, struct mbuf *);
+		struct tcphdr *, struct socket *so, struct mbuf *);
 void	 syn_cache_init(void);
 void	 syn_cache_insert(struct syn_cache *, struct tcpcb *);
 struct syn_cache *syn_cache_lookup(const struct sockaddr *, const struct sockaddr *,
 		struct syn_cache_head **);
 void	 syn_cache_reset(struct sockaddr *, struct sockaddr *,
 		struct tcphdr *);
-int	 syn_cache_respond(struct syn_cache *, struct mbuf *);
-void	 syn_cache_timer(void *);
+int	 syn_cache_respond(struct syn_cache *);
 void	 syn_cache_cleanup(struct tcpcb *);
 
 int	 tcp_input_checksum(int, struct mbuf *, const struct tcphdr *, int, int,

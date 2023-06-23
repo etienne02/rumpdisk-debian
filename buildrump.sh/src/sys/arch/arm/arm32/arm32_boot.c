@@ -1,4 +1,4 @@
-/*	$NetBSD: arm32_boot.c,v 1.17 2016/03/08 08:01:23 skrll Exp $	*/
+/*	$NetBSD: arm32_boot.c,v 1.43 2021/06/03 07:06:22 skrll Exp $	*/
 
 /*
  * Copyright (c) 2002, 2003, 2005  Genetec Corporation.  All rights reserved.
@@ -122,19 +122,22 @@
  */
 
 #include <sys/cdefs.h>
+__KERNEL_RCSID(1, "$NetBSD: arm32_boot.c,v 1.43 2021/06/03 07:06:22 skrll Exp $");
 
-__KERNEL_RCSID(1, "$NetBSD: arm32_boot.c,v 1.17 2016/03/08 08:01:23 skrll Exp $");
-
+#include "opt_arm_debug.h"
+#include "opt_cputypes.h"
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/param.h>
-#include <sys/reboot.h>
-#include <sys/cpu.h>
-#include <sys/intr.h>
+
+#include <sys/asan.h>
 #include <sys/atomic.h>
+#include <sys/cpu.h>
 #include <sys/device.h>
+#include <sys/intr.h>
+#include <sys/reboot.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -151,8 +154,10 @@ __KERNEL_RCSID(1, "$NetBSD: arm32_boot.c,v 1.17 2016/03/08 08:01:23 skrll Exp $"
 #include <sys/kgdb.h>
 #endif
 
-#ifdef MULTIPROCESSOR
-static kmutex_t cpu_hatch_lock;
+#ifdef VERBOSE_INIT_ARM
+#define VPRINTF(...)	printf(__VA_ARGS__)
+#else
+#define VPRINTF(...)	__nothing
 #endif
 
 vaddr_t
@@ -161,11 +166,9 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 {
 	struct bootmem_info * const bmi = &bootmem_info;
 
-#ifdef VERBOSE_INIT_ARM
-	printf("nfreeblocks = %u, free_pages = %d (%#x)\n",
+	VPRINTF("nfreeblocks = %u, free_pages = %d (%#x)\n",
 	    bmi->bmi_nfreeblocks, bmi->bmi_freepages,
 	    bmi->bmi_freepages);
-#endif
 
 	/*
 	 * Moved from cpu_startup() as data_abort_handler() references
@@ -173,17 +176,31 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 	 */
 	uvm_lwp_setuarea(&lwp0, kernelstack.pv_va);
 
-#ifdef VERBOSE_INIT_ARM
-	printf("bootstrap done.\n");
+	struct lwp * const l = &lwp0;
+	struct pcb * const pcb = lwp_getpcb(l);
+
+	/* Zero out the PCB. */
+ 	memset(pcb, 0, sizeof(*pcb));
+
+	pcb->pcb_ksp = uvm_lwp_getuarea(l) + USPACE_SVC_STACK_TOP;
+	pcb->pcb_ksp -= sizeof(struct trapframe);
+
+	struct trapframe * tf = (struct trapframe *)pcb->pcb_ksp;
+
+	/* Zero out the trapframe. */
+	memset(tf, 0, sizeof(*tf));
+	lwp_settrapframe(l, tf);
+
+ 	tf->tf_spsr = PSR_USR32_MODE;
+#ifdef _ARM_ARCH_BE8
+	tf->tf_spsr |= PSR_E_BIT;
 #endif
 
-#ifdef VERBOSE_INIT_ARM
-	printf("vectors");
-#endif
+	VPRINTF("bootstrap done.\n");
+
+	VPRINTF("vectors");
 	arm32_vector_init(systempage.pv_va, ARM_VEC_ALL);
-#ifdef VERBOSE_INIT_ARM
-	printf(" %#"PRIxVADDR"\n", vector_page);
-#endif
+	VPRINTF(" %#"PRIxVADDR"\n", vector_page);
 
 	/*
 	 * Pages were allocated during the secondary bootstrap for the
@@ -193,9 +210,7 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 	 * Since the ARM stacks use STMFD etc. we must set r13 to the top end
 	 * of the stack memory.
 	 */
-#ifdef VERBOSE_INIT_ARM
-	printf("init subsystems: stacks ");
-#endif
+	VPRINTF("init subsystems: stacks ");
 	set_stackptr(PSR_FIQ32_MODE,
 	    fiqstack.pv_va + FIQ_STACK_SIZE * PAGE_SIZE);
 	set_stackptr(PSR_IRQ32_MODE,
@@ -214,28 +229,20 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 	 * Initialisation of the vectors will just panic on a data abort.
 	 * This just fills in a slightly better one.
 	 */
-#ifdef VERBOSE_INIT_ARM
-	printf("vectors ");
-#endif
+	VPRINTF("vectors ");
 	data_abort_handler_address = (u_int)data_abort_handler;
 	prefetch_abort_handler_address = (u_int)prefetch_abort_handler;
 	undefined_handler_address = (u_int)undefinedinstruction_bounce;
 
 	/* Initialise the undefined instruction handlers */
-#ifdef VERBOSE_INIT_ARM
-	printf("undefined ");
-#endif
+	VPRINTF("undefined ");
 	undefined_init();
 
 	/* Load memory into UVM. */
-#ifdef VERBOSE_INIT_ARM
-	printf("page ");
-#endif
-	uvm_setpagesize();	/* initialize PAGE_SIZE-dependent variables */
+	VPRINTF("page ");
+	uvm_md_init();
 
-#ifdef VERBOSE_INIT_ARM
-	printf("pmap_physload ");
-#endif
+	VPRINTF("pmap_physload\n");
 	KASSERT(bp != NULL || nbp == 0);
 	KASSERT(bp == NULL || nbp != 0);
 
@@ -243,43 +250,64 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 		pv_addr_t * const pv = &bmi->bmi_freeblocks[i];
 		paddr_t start = atop(pv->pv_pa);
 		const paddr_t end = start + atop(pv->pv_size);
+		int vm_freelist = VM_FREELIST_DEFAULT;
 
-		while (start < end) {
-			int vm_freelist = VM_FREELIST_DEFAULT;
-			paddr_t segend = end;
-			/*
-			 * This assumes the bp list is sorted in ascending
-			 * order.
-			 */
-			for (size_t j = 0; j < nbp; j++) {
-				paddr_t bp_start = bp[j].bp_start;
-				paddr_t bp_end = bp_start + bp[j].bp_pages;
-				if (start < bp_start) {
-					if (segend > bp_start) {
-						segend = bp_start;
-					}
-					break;
+		VPRINTF("block %2zu start %08lx  end %08lx", i,
+		    pv->pv_pa, pv->pv_pa + pv->pv_size);
+
+		if (!bp) {
+			VPRINTF("... loading in freelist %d\n", vm_freelist);
+			uvm_page_physload(start, end, start, end, VM_FREELIST_DEFAULT);
+			continue;
+		}
+		VPRINTF("\n");
+
+		/*
+		 * This assumes the bp list is sorted in ascending
+		 * order.
+		 */
+		paddr_t segend = end;
+		for (size_t j = 0; j < nbp && start < end; j++) {
+			paddr_t bp_start = bp[j].bp_start;
+			paddr_t bp_end = bp_start + bp[j].bp_pages;
+
+			VPRINTF("   bp %2zu start %08lx  end %08lx\n",
+			    j, ptoa(bp_start), ptoa(bp_end));
+
+			KASSERT(bp_start < bp_end);
+			if (start >= bp_end || segend < bp_start)
+				continue;
+
+			if (start < bp_start)
+				start = bp_start;
+
+			if (start < bp_end) {
+				if (segend > bp_end) {
+					segend = bp_end;
 				}
-				if (start < bp_end) {
-					if (segend > bp_end) {
-						segend = bp_end;
-					}
-					vm_freelist = bp[j].bp_freelist;
-					break;
-				}
+				vm_freelist = bp[j].bp_freelist;
+
+				VPRINTF("         start %08lx  end %08lx"
+				    "... loading in freelist %d\n", ptoa(start),
+				    ptoa(segend), vm_freelist);
+
+				uvm_page_physload(start, segend, start, segend,
+				    vm_freelist);
+
+				start = segend;
+				segend = end;
 			}
-
-			uvm_page_physload(start, segend, start, segend,
-			    vm_freelist);
-			start = segend;
 		}
 	}
 
-	/* Boot strap pmap telling it where the kernel page table is */
-#ifdef VERBOSE_INIT_ARM
-	printf("pmap ");
-#endif
+	/*
+	 * Bootstrap pmap telling it where the managed kernel virtual memory
+	 * is.
+	 */
+	VPRINTF("pmap ");
 	pmap_bootstrap(kvm_base, kvm_base + kvm_size);
+
+	kasan_init();
 
 #ifdef __HAVE_MEMORY_DISK__
 	md_root_setconf(memory_disk, sizeof memory_disk);
@@ -305,15 +333,17 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 #endif
 
 #ifdef MULTIPROCESSOR
-	mutex_init(&cpu_hatch_lock, MUTEX_DEFAULT, IPL_NONE);
+	/*
+	 * Ensure BP cache is flushed to memory so that APs start cache
+	 * coherency with correct view.
+	 */
+	cpu_dcache_wbinv_all();
 #endif
 
-#ifdef VERBOSE_INIT_ARM
-	printf("done.\n");
-#endif
+	VPRINTF("done.\n");
 
 	/* We return the new stack pointer address */
-	return kernelstack.pv_va + USPACE_SVC_STACK_TOP;
+	return pcb->pcb_ksp;
 }
 
 #ifdef MULTIPROCESSOR
@@ -322,50 +352,33 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
  * of the idlelwp for this cpu.
  */
 void
-cpu_hatch(struct cpu_info *ci, cpuid_t cpuid, void (*md_cpu_init)(struct cpu_info *))
+cpu_hatch(struct cpu_info *ci, u_int cpuindex, void (*md_cpu_init)(struct cpu_info *))
 {
-	KASSERT(cpu_index(ci) == cpuid);
+	KASSERT(cpu_index(ci) == cpuindex);
 
 	/*
 	 * Raise our IPL to the max
 	 */
 	splhigh();
 
-#ifdef CPU_CORTEX
-#if 0
-	KASSERTMSG(armreg_auxctl_read() & CORTEXA9_AUXCTL_SMP, "auxctl %#x",
-	    armreg_auxctl_read());
-#endif
-#endif
-
-#ifdef VERBOSE_INIT_ARM
-	printf("%s(%s): ", __func__, ci->ci_data.cpu_name);
-#endif
-	uint32_t mpidr = armreg_mpidr_read();
-	if (mpidr & MPIDR_MT) {
-		ci->ci_data.cpu_smt_id = mpidr & MPIDR_AFF0;
-		ci->ci_data.cpu_core_id = mpidr & MPIDR_AFF1;
-		ci->ci_data.cpu_package_id = mpidr & MPIDR_AFF2;
-	} else {
-		ci->ci_data.cpu_core_id = mpidr & MPIDR_AFF0;
-		ci->ci_data.cpu_package_id = mpidr & MPIDR_AFF1;
-	}
+	VPRINTF("%s(%s): ", __func__, cpu_name(ci));
+	/* mpidr/midr filled in by armv7_mpcontinuation */
+	ci->ci_ctrl = armreg_sctlr_read();
+	ci->ci_arm_cpuid = cpu_idnum();
+	ci->ci_arm_cputype = ci->ci_arm_cpuid & CPU_ID_CPU_MASK;
+	ci->ci_arm_cpurev = ci->ci_arm_cpuid & CPU_ID_REVISION_MASK;
 
 	/*
 	 * Make sure we have the right vector page.
 	 */
-#ifdef VERBOSE_INIT_ARM
-	printf(" vectors");
-#endif
+	VPRINTF(" vectors");
 	arm32_vector_init(systempage.pv_va, ARM_VEC_ALL);
 
 	/*
 	 * Initialize the stack for each mode (we are already running on the
 	 * SVC32 stack of the idlelwp).
 	 */
-#ifdef VERBOSE_INIT_ARM
-	printf(" stacks");
-#endif
+	VPRINTF(" stacks");
 	set_stackptr(PSR_FIQ32_MODE,
 	    fiqstack.pv_va + (cpu_index(ci) + 1) * FIQ_STACK_SIZE * PAGE_SIZE);
 	set_stackptr(PSR_IRQ32_MODE,
@@ -378,9 +391,7 @@ cpu_hatch(struct cpu_info *ci, cpuid_t cpuid, void (*md_cpu_init)(struct cpu_inf
 	ci->ci_lastlwp = NULL;
 	ci->ci_pmap_lastuser = NULL;
 #ifdef ARM_MMU_EXTENDED
-#ifdef VERBOSE_INIT_ARM
-	printf(" tlb");
-#endif
+	VPRINTF(" tlb");
 	/*
 	 * Attach to the tlb.
 	 */
@@ -403,32 +414,23 @@ cpu_hatch(struct cpu_info *ci, cpuid_t cpuid, void (*md_cpu_init)(struct cpu_inf
 	aprint_naive("%s", device_xname(ci->ci_dev));
 	aprint_normal("%s", device_xname(ci->ci_dev));
 	identify_arm_cpu(ci->ci_dev, ci);
-#ifdef VERBOSE_INIT_ARM
-	printf(" vfp");
-#endif
+	VPRINTF(" vfp");
 	vfp_attach(ci);
 
 	mutex_exit(&cpu_hatch_lock);
 
-#ifdef VERBOSE_INIT_ARM
-	printf(" interrupts");
-#endif
+	VPRINTF(" md(%p)", md_cpu_init);
+	if (md_cpu_init != NULL)
+		(*md_cpu_init)(ci);
+
+	VPRINTF(" interrupts");
 	/*
 	 * Let the interrupts do what they need to on this CPU.
 	 */
 	intr_cpu_init(ci);
 
-#ifdef VERBOSE_INIT_ARM
-	printf(" md(%p)", md_cpu_init);
-#endif
-	if (md_cpu_init != NULL)
-		(*md_cpu_init)(ci);
+	VPRINTF(" done!\n");
 
-#ifdef VERBOSE_INIT_ARM
-	printf(" done!\n");
-#endif
-	atomic_and_32(&arm_cpu_mbox, ~(1 << cpuid));
-	membar_producer();
-	__asm __volatile("sev; sev; sev");
+	cpu_clr_mbox(cpuindex);
 }
 #endif /* MULTIPROCESSOR */

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_exec.h,v 1.51 2014/02/21 07:53:53 maxv Exp $	*/
+/*	$NetBSD: linux_exec.h,v 1.53 2018/08/22 01:05:23 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998 The NetBSD Foundation, Inc.
@@ -59,7 +59,7 @@
 
 /* Defines for a.out executables */
 #define LINUX_AOUT_HDR_SIZE (sizeof (struct exec))
-#define	LINUX_AOUT_AUX_ARGSIZ	2
+#define	LINUX_AOUT_AUX_ARGSIZ	8
 
 #define LINUX_N_MAGIC(ep)    ((ep)->a_midmag & 0xffff)
 #define LINUX_N_MACHTYPE(ep) (((ep)->a_midmag >> 16) & 0xff)
@@ -107,24 +107,10 @@
  * Emulation specific sysctls.
  */
 #define EMUL_LINUX_KERN			1
-#define EMUL_LINUX_MAXID		2
-
-#define EMUL_LINUX_NAMES { \
-	{ 0, 0 }, \
-	{ "kern", CTLTYPE_NODE }, \
-}
 
 #define EMUL_LINUX_KERN_OSTYPE		1
 #define EMUL_LINUX_KERN_OSRELEASE	2
 #define EMUL_LINUX_KERN_VERSION		3
-#define EMUL_LINUX_KERN_MAXID		4
-
-#define EMUL_LINUX_KERN_NAMES { \
-	{ 0, 0 }, \
-	{ "ostype", CTLTYPE_STRING }, \
-	{ "osrelease", CTLTYPE_STRING }, \
-	{ "osversion", CTLTYPE_STRING }, \
-}
 
 #ifdef _KERNEL
 __BEGIN_DECLS

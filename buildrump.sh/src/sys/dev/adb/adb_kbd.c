@@ -1,4 +1,4 @@
-/*	$NetBSD: adb_kbd.c,v 1.26 2015/07/29 08:45:28 christos Exp $	*/
+/*	$NetBSD: adb_kbd.c,v 1.32 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1998	Colin Wood
@@ -32,7 +32,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adb_kbd.c,v 1.26 2015/07/29 08:45:28 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adb_kbd.c,v 1.32 2021/08/07 16:19:09 thorpej Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_ddb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -59,6 +63,8 @@ __KERNEL_RCSID(0, "$NetBSD: adb_kbd.c,v 1.26 2015/07/29 08:45:28 christos Exp $"
 
 #include <dev/adb/adbvar.h>
 #include <dev/adb/adb_keymap.h>
+
+#include "ioconf.h"
 
 #include "opt_wsdisplay_compat.h"
 #include "opt_adbkbd.h"
@@ -111,8 +117,6 @@ static int	adbkbd_wait(struct adbkbd_softc *, int);
 CFATTACH_DECL_NEW(adbkbd, sizeof(struct adbkbd_softc),
     adbkbd_match, adbkbd_attach, NULL, NULL);
 
-extern struct cfdriver adbkbd_cd;
-
 static int adbkbd_enable(void *, int);
 static int adbkbd_ioctl(void *, u_long, void *, int, struct lwp *);
 static void adbkbd_set_leds(void *, int);
@@ -135,10 +139,10 @@ struct wskbd_consops adbkbd_consops = {
 
 struct wskbd_mapdata adbkbd_keymapdata = {
 	akbd_keydesctab,
-#ifdef AKBD_LAYOUT
-	AKBD_LAYOUT,
+#ifdef ADBKBD_LAYOUT
+	ADBKBD_LAYOUT,
 #else
-	KB_US,
+	KB_US | KB_APPLE,
 #endif
 };
 
@@ -232,7 +236,11 @@ adbkbd_attach(device_t parent, device_t self, void *aux)
 	sc->sc_power = 0xffff;
 	sc->sc_timestamp = 0;
 	sc->sc_emul_usb = FALSE;
+#ifdef ADBKBD_POWER_DDB
+	sc->sc_power_dbg = TRUE;
+#else
 	sc->sc_power_dbg = FALSE;
+#endif
 
 	aprint_normal(" addr %d: ", sc->sc_adbdev->current_addr);
 
@@ -375,7 +383,8 @@ adbkbd_attach(device_t parent, device_t self, void *aux)
 	a.accessops = &adbkbd_accessops;
 	a.accesscookie = sc;
 
-	sc->sc_wskbddev = config_found_ia(self, "wskbddev", &a, wskbddevprint);
+	sc->sc_wskbddev = config_found(self, &a, wskbddevprint,
+	    CFARGS(.iattr = "wskbddev"));
 #ifdef ADBKBD_EMUL_USB
 	sc->sc_emul_usb = TRUE;
 	wskbd_set_evtrans(sc->sc_wskbddev, adb_to_usb, 128);
@@ -385,9 +394,8 @@ adbkbd_attach(device_t parent, device_t self, void *aux)
 	/* attach the mouse device */
 	am.accessops = &adbkms_accessops;
 	am.accesscookie = sc;
-	sc->sc_wsmousedev = config_found_ia(self, "wsmousedev", &am, 
-	    wsmousedevprint);
-
+	sc->sc_wsmousedev = config_found(self, &am, wsmousedevprint,
+	    CFARGS(.iattr = "wsmousedev"));
 #endif
 	adbkbd_setup_sysctl(sc);
 
@@ -461,7 +469,12 @@ adbkbd_keys(struct adbkbd_softc *sc, uint8_t k1, uint8_t k2)
 		sc->sc_timestamp = now;
 		if (((diff > 1) && (diff < 5)) ||
 		     (sc->sc_power_button_delay == 0)) {
-
+#ifdef DDB
+			if (sc->sc_power_dbg) {
+				Debugger();
+				return;
+			}
+#endif
 			/* power button, report to sysmon */
 			sc->sc_pe = k1;
 			sysmon_task_queue_sched(0, adbkbd_powerbutton, sc);
@@ -479,17 +492,10 @@ adbkbd_powerbutton(void *cookie)
 {
 	struct adbkbd_softc *sc = cookie;
 
-	if (sc->sc_power_dbg) {
-#ifdef DDB
-		Debugger();
-#else
-		printf("kernel is not compiled with DDB support\n");
-#endif
-	} else {
-		sysmon_pswitch_event(&sc->sc_sm_pbutton, 
-		    ADBK_PRESS(sc->sc_pe) ? PSWITCH_EVENT_PRESSED :
-		    PSWITCH_EVENT_RELEASED);
-	}
+	sysmon_pswitch_event(&sc->sc_sm_pbutton, 
+	    ADBK_PRESS(sc->sc_pe) ? PSWITCH_EVENT_PRESSED :
+	    PSWITCH_EVENT_RELEASED);
+
 }
 
 static inline void

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_ptrace.c,v 1.29 2015/10/13 08:24:35 pgoyette Exp $ */
+/*	$NetBSD: linux_ptrace.c,v 1.32 2020/05/23 23:42:41 ad Exp $ */
 
 /*-
  * Copyright (c) 1999, 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_ptrace.c,v 1.29 2015/10/13 08:24:35 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_ptrace.c,v 1.32 2020/05/23 23:42:41 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -155,9 +155,9 @@ linux_sys_ptrace_arch(struct lwp *l, const struct linux_sys_ptrace_args *uap,
 	}
 
 	/* Find the process we are supposed to be operating on. */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	if ((t = proc_find(SCARG(uap, pid))) == NULL) {
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		error = ESRCH;
 		goto out;
 	}
@@ -169,24 +169,21 @@ linux_sys_ptrace_arch(struct lwp *l, const struct linux_sys_ptrace_args *uap,
 	 */
 	if (!ISSET(t->p_slflag, PSL_TRACED)) {
 		mutex_exit(t->p_lock);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		error = EPERM;
 		goto out;
 	}
 	/*
-	 * 2. It is being traced by procfs (which has different signal
-	 *    delivery semantics),
-	 * 3. It is not being traced by _you_, or
-	 * 4. It is not currently stopped.
+	 * 2. It is not being traced by _you_, or
+	 * 3. It is not currently stopped.
 	 */
-	if (ISSET(t->p_slflag, PSL_FSTRACE) || t->p_pptr != p ||
-	    t->p_stat != SSTOP || !t->p_waited) {
+	if (t->p_pptr != p || t->p_stat != SSTOP || !t->p_waited) {
 		mutex_exit(t->p_lock);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		error = EBUSY;
 		goto out;
 	}
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 	/* XXX: ptrace needs revamp for multi-threading support. */
 	if (t->p_nlwps > 1) {
 		mutex_exit(t->p_lock);
@@ -249,7 +246,7 @@ linux_sys_ptrace_arch(struct lwp *l, const struct linux_sys_ptrace_args *uap,
 			memset(linux_fpreg, '\0', (32 * sizeof(double)));
 		}
 		memcpy(linux_fpreg, fpregs,
-		    min(32 * sizeof(double), sizeof(struct fpreg)));
+		    uimin(32 * sizeof(double), sizeof(struct fpreg)));
 		error = copyout(linux_fpreg, (void *)SCARG(uap, data),
 		    32 * sizeof(double));
 		break;
@@ -257,7 +254,7 @@ linux_sys_ptrace_arch(struct lwp *l, const struct linux_sys_ptrace_args *uap,
 	case LINUX_PTRACE_SETFPREGS:
 		memset(fpregs, '\0', sizeof(struct fpreg));
 		memcpy(fpregs, linux_fpreg,
-		    min(32 * sizeof(double), sizeof(struct fpreg)));
+		    uimin(32 * sizeof(double), sizeof(struct fpreg)));
 		error = process_write_fpregs(lt, fpregs, sizeof fpregs);
 		mutex_exit(t->p_lock);
 		break;

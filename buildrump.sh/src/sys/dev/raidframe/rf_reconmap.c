@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_reconmap.c,v 1.34 2012/02/20 22:42:05 oster Exp $	*/
+/*	$NetBSD: rf_reconmap.c,v 1.38 2020/04/13 00:27:17 chs Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -34,7 +34,7 @@
  *************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_reconmap.c,v 1.34 2012/02/20 22:42:05 oster Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_reconmap.c,v 1.38 2020/04/13 00:27:17 chs Exp $");
 
 #include "rf_raid.h"
 #include <sys/time.h>
@@ -87,7 +87,7 @@ rf_MakeReconMap(RF_Raid_t *raidPtr, RF_SectorCount_t ru_sectors,
 	RF_ReconUnitCount_t num_rus = layoutPtr->stripeUnitsPerDisk / layoutPtr->SUsPerRU;
 	RF_ReconMap_t *p;
 
-	RF_Malloc(p, sizeof(RF_ReconMap_t), (RF_ReconMap_t *));
+	p = RF_Malloc(sizeof(*p));
 	p->sectorsPerReconUnit = ru_sectors;
 	p->sectorsInDisk = disk_sectors;
 
@@ -99,11 +99,8 @@ rf_MakeReconMap(RF_Raid_t *raidPtr, RF_SectorCount_t ru_sectors,
 	p->high_ru = p->status_size - 1;
 	p->head = 0;
 
-	RF_Malloc(p->status, p->status_size * sizeof(RF_ReconMapListElem_t *), (RF_ReconMapListElem_t **));
+	p->status = RF_Malloc(p->status_size * sizeof(*p->status));
 	RF_ASSERT(p->status != NULL);
-
-	(void) memset((char *) p->status, 0,
-	    p->status_size * sizeof(RF_ReconMapListElem_t *));
 
 	pool_init(&p->elem_pool, sizeof(RF_ReconMapListElem_t), 0,
 	    0, 0, "raidreconpl", NULL, IPL_BIO);
@@ -324,12 +321,7 @@ void
 rf_FreeReconMap(RF_ReconMap_t *mapPtr)
 {
 	RF_ReconMapListElem_t *p, *q;
-	RF_ReconUnitCount_t numRUs;
 	RF_ReconUnitNum_t i;
-
-	numRUs = mapPtr->sectorsInDisk / mapPtr->sectorsPerReconUnit;
-	if (mapPtr->sectorsInDisk % mapPtr->sectorsPerReconUnit)
-		numRUs++;
 
 	for (i = 0; i < mapPtr->status_size; i++) {
 		p = mapPtr->status[i];
@@ -405,4 +397,3 @@ rf_PrintReconSchedule(RF_ReconMap_t *mapPtr, struct timeval *starttime)
 	}
 }
 #endif
-

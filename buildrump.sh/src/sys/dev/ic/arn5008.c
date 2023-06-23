@@ -1,4 +1,4 @@
-/*	$NetBSD: arn5008.c,v 1.11 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: arn5008.c,v 1.18 2020/09/07 10:45:23 mrg Exp $	*/
 /*	$OpenBSD: ar5008.c,v 1.21 2012/08/25 12:14:31 kettenis Exp $	*/
 
 /*-
@@ -24,7 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arn5008.c,v 1.11 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arn5008.c,v 1.18 2020/09/07 10:45:23 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/sockio.h>
@@ -88,6 +88,7 @@ Static void	ar5008_hw_init(struct athn_softc *, struct ieee80211_channel *,
 		    struct ieee80211_channel *);
 Static void	ar5008_init_baseband(struct athn_softc *);
 Static void	ar5008_init_chains(struct athn_softc *);
+Static int	ar5008_intr_status(struct athn_softc *);
 Static int	ar5008_intr(struct athn_softc *);
 Static void	ar5008_next_calib(struct athn_softc *);
 Static int	ar5008_read_eep_word(struct athn_softc *, uint32_t,
@@ -175,6 +176,7 @@ ar5008_attach(struct athn_softc *sc)
 	ops->dma_alloc = ar5008_dma_alloc;
 	ops->dma_free = ar5008_dma_free;
 	ops->rx_enable = ar5008_rx_enable;
+	ops->intr_status = ar5008_intr_status;
 	ops->intr = ar5008_intr;
 	ops->tx = ar5008_tx;
 
@@ -311,9 +313,7 @@ ar5008_read_rom(struct athn_softc *sc)
 	}
 
 	/* Allocate space to store ROM in host memory. */
-	sc->sc_eep = malloc(sc->sc_eep_size, M_DEVBUF, M_NOWAIT);
-	if (sc->sc_eep == NULL)
-		return ENOMEM;
+	sc->sc_eep = malloc(sc->sc_eep_size, M_DEVBUF, M_WAITOK);
 
 	/* Read entire ROM and compute checksum. */
 	sum = 0;
@@ -584,9 +584,7 @@ ar5008_rx_alloc(struct athn_softc *sc)
 	int error, nsegs, i;
 
 	rxq->bf = malloc(ATHN_NRXBUFS * sizeof(*bf), M_DEVBUF,
-	    M_NOWAIT | M_ZERO);
-	if (rxq->bf == NULL)
-		return ENOMEM;
+	    M_WAITOK | M_ZERO);
 
 	size = ATHN_NRXBUFS * sizeof(struct ar_rx_desc);
 
@@ -782,7 +780,7 @@ ar5008_rx_radiotap(struct athn_softc *sc, struct mbuf *m,
 		case 0xc: tap->wr_rate = 108; break;
 		}
 	}
-	bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m);
+	bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_rxtap_len, m, BPF_D_IN);
 }
 
 static __inline int
@@ -797,7 +795,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	struct ieee80211_node *ni;
 	struct mbuf *m, *m1;
 	u_int32_t rstamp;
-	int error, len, rssi;
+	int error, len, rssi, s;
 
 	bf = SIMPLEQ_FIRST(&rxq->head);
 	if (__predict_false(bf == NULL)) {	/* Should not happen. */
@@ -824,7 +822,7 @@ ar5008_rx_process(struct athn_softc *sc)
 			/* HW will not "move" RXDP in this case, so do it. */
 			AR_WRITE(sc, AR_RXDP, nbf->bf_daddr);
 			AR_WRITE_BARRIER(sc);
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto skip;
 		}
 		return EBUSY;
@@ -833,7 +831,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	if (__predict_false(ds->ds_status1 & AR_RXS1_MORE)) {
 		/* Drop frames that span multiple Rx descriptors. */
 		DPRINTFN(DBG_RX, sc, "dropping split frame\n");
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto skip;
 	}
 	if (!(ds->ds_status8 & AR_RXS8_FRAME_OK)) {
@@ -856,14 +854,14 @@ ar5008_rx_process(struct athn_softc *sc)
 			/* Report Michael MIC failures to net80211. */
 			ieee80211_notify_michael_failure(ic, wh, 0 /* XXX: keyix */);
 		}
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto skip;
 	}
 
 	len = MS(ds->ds_status1, AR_RXS1_DATA_LEN);
 	if (__predict_false(len < (int)IEEE80211_MIN_LEN || len > ATHN_RXBUFSZ)) {
 		DPRINTFN(DBG_RX, sc, "corrupted descriptor length=%d\n", len);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto skip;
 	}
 
@@ -871,7 +869,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	m1 = MCLGETI(NULL, M_DONTWAIT, NULL, ATHN_RXBUFSZ);
 	if (__predict_false(m1 == NULL)) {
 		ic->ic_stats.is_rx_nobuf++;
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto skip;
 	}
 
@@ -891,7 +889,7 @@ ar5008_rx_process(struct athn_softc *sc)
 		    mtod(bf->bf_m, void *), ATHN_RXBUFSZ, NULL,
 		    BUS_DMA_NOWAIT | BUS_DMA_READ);
 		KASSERT(error != 0);
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto skip;
 	}
 
@@ -908,6 +906,8 @@ ar5008_rx_process(struct athn_softc *sc)
 	m_set_rcvif(m, ifp);
 	m->m_pkthdr.len = m->m_len = len;
 
+	s = splnet();
+
 	/* Grab a reference to the source node. */
 	wh = mtod(m, struct ieee80211_frame *);
 	ni = ieee80211_find_rxnode(ic, (struct ieee80211_frame_min *)wh);
@@ -916,7 +916,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	if (!(wh->i_fc[0] & IEEE80211_FC0_TYPE_CTL)) {
 		u_int hdrlen = ieee80211_anyhdrsize(wh);
 		if (hdrlen & 3) {
-			ovbcopy(wh, (uint8_t *)wh + 2, hdrlen);
+			memmove((uint8_t *)wh + 2, wh, hdrlen);
 			m_adj(m, 2);
 		}
 	}
@@ -933,6 +933,8 @@ ar5008_rx_process(struct athn_softc *sc)
 
 	/* Node is no longer needed. */
 	ieee80211_free_node(ni);
+
+	splx(s);
 
  skip:
 	/* Unlink this descriptor from head. */
@@ -983,12 +985,12 @@ ar5008_tx_process(struct athn_softc *sc, int qid)
 		return EBUSY;
 
 	SIMPLEQ_REMOVE_HEAD(&txq->head, bf_list);
-	ifp->if_opackets++;
+	if_statinc(ifp, if_opackets);
 
 	sc->sc_tx_timer = 0;
 
 	if (ds->ds_status1 & AR_TXS1_EXCESSIVE_RETRIES)
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 
 	if (ds->ds_status1 & AR_TXS1_UNDERRUN)
 		athn_inc_tx_trigger_level(sc);
@@ -1031,7 +1033,9 @@ ar5008_tx_intr(struct athn_softc *sc)
 	struct ifnet *ifp = &sc->sc_if;
 	uint16_t mask = 0;
 	uint32_t reg;
-	int qid;
+	int qid, s;
+
+	s = splnet();
 
 	reg = AR_READ(sc, AR_ISR_S0_S);
 	mask |= MS(reg, AR_ISR_S0_QCU_TXOK);
@@ -1048,8 +1052,10 @@ ar5008_tx_intr(struct athn_softc *sc)
 	}
 	if (!SIMPLEQ_EMPTY(&sc->sc_txbufs)) {
 		ifp->if_flags &= ~IFF_OACTIVE;
-		ifp->if_start(ifp);
+		ifp->if_start(ifp); /* in softint */
 	}
+
+	splx(s);
 }
 
 #ifndef IEEE80211_STA_ONLY
@@ -1165,7 +1171,7 @@ ar5008_swba_intr(struct athn_softc *sc)
 
 		if (sc->sc_ops.tx(sc, m, ni, ATHN_TXFLAG_CAB) != 0) {
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			break;
 		}
 	}
@@ -1177,10 +1183,10 @@ ar5008_swba_intr(struct athn_softc *sc)
 }
 #endif
 
-Static int
-ar5008_intr(struct athn_softc *sc)
+static int
+ar5008_get_intr_status(struct athn_softc *sc, uint32_t *intrp, uint32_t *syncp)
 {
-	uint32_t intr, intr5, sync;
+	uint32_t intr, sync;
 
 	/* Get pending interrupts. */
 	intr = AR_READ(sc, AR_INTR_ASYNC_CAUSE);
@@ -1199,6 +1205,31 @@ ar5008_intr(struct athn_softc *sc)
 	if (intr == 0 && sync == 0)
 		return 0;	/* Not for us. */
 
+	*intrp = intr;
+	*syncp = sync;
+	return 1;
+}
+
+
+Static int
+ar5008_intr_status(struct athn_softc *sc)
+{
+	uint32_t intr, sync;
+
+	return ar5008_get_intr_status(sc, &intr, &sync);
+}
+
+Static int
+ar5008_intr(struct athn_softc *sc)
+{
+	uint32_t intr, intr5, sync;
+#ifndef IEEE80211_STA_ONLY
+	int s;
+#endif
+
+	if (!ar5008_get_intr_status(sc, &intr, &sync))
+		return 0;
+
 	if (intr != 0) {
 		if (intr & AR_ISR_BCNMISC) {
 			uint32_t intr2 = AR_READ(sc, AR_ISR_S2);
@@ -1216,8 +1247,11 @@ ar5008_intr(struct athn_softc *sc)
 			return 1;
 
 #ifndef IEEE80211_STA_ONLY
-		if (intr & AR_ISR_SWBA)
+		if (intr & AR_ISR_SWBA) {
+			s = splnet();
 			ar5008_swba_intr(sc);
+			splx(s);
+		}
 #endif
 		if (intr & (AR_ISR_RXMINTR | AR_ISR_RXINTM))
 			ar5008_rx_intr(sc);
@@ -1385,7 +1419,7 @@ ar5008_tx(struct athn_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 		    (ic->ic_flags & IEEE80211_F_SHPREAMBLE))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_SHORTPRE;
 
-		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m);
+		bpf_mtap2(sc->sc_drvbpf, tap, sc->sc_txtap_len, m, BPF_D_OUT);
 	}
 
 	/* DMA map mbuf. */
@@ -2253,7 +2287,7 @@ ar5008_set_viterbi_mask(struct athn_softc *sc, int bin)
 	/* Compute viterbi mask. */
 	for (cur = 6100; cur >= 0; cur -= 100)
 		p[+cur / 100] = abs(cur - bin) < 75;
-	for (cur = -100; cur >= -6100; cur -= 100)
+	for (cur = 0; cur >= -6100; cur -= 100)
 		m[-cur / 100] = abs(cur - bin) < 75;
 
 	/* Write viterbi mask (XXX needs to be reworked). */

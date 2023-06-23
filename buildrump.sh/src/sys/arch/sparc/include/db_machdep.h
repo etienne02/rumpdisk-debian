@@ -1,4 +1,4 @@
-/*	$NetBSD: db_machdep.h,v 1.26 2011/05/26 15:34:13 joerg Exp $ */
+/*	$NetBSD: db_machdep.h,v 1.29 2021/01/24 07:36:54 mrg Exp $ */
 
 /*
  * Mach Operating System
@@ -32,7 +32,10 @@
 /*
  * Machine-dependent defines for new kernel debugger.
  */
+#include <sys/types.h>
+
 #include <uvm/uvm_extern.h>
+
 #include <machine/frame.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
@@ -90,6 +93,8 @@ int		db_inst_store(int inst);
 bool		db_inst_unconditional_flow_transfer(int inst);
 db_addr_t	db_branch_taken(int inst, db_addr_t pc, db_regs_t *regs);
 
+void		ddb_suspend(struct trapframe *);
+
 #define inst_trap_return(ins)	db_inst_trap_return(ins)
 #define inst_return(ins)	db_inst_return(ins)
 #define inst_call(ins)		db_inst_call(ins)
@@ -115,7 +120,6 @@ int kdb_trap(int, struct trapframe *);
  * We use elf symbols in DDB.
  */
 #define	DB_ELF_SYMBOLS
-#define DB_ELFSIZE 32
 
 
 /*

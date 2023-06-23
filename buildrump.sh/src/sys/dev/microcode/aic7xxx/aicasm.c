@@ -1,4 +1,4 @@
-/*	$NetBSD: aicasm.c,v 1.8 2009/12/27 16:03:49 jakllsch Exp $	*/
+/*	$NetBSD: aicasm.c,v 1.11 2021/07/24 21:31:37 andvar Exp $	*/
 
 /*
  * Aic7xxx SCSI host adapter firmware asssembler
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: aicasm.c,v 1.8 2009/12/27 16:03:49 jakllsch Exp $");
+__RCSID("$NetBSD: aicasm.c,v 1.11 2021/07/24 21:31:37 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -366,7 +366,7 @@ output_code(void)
 " *\n"
 "%s */\n", versions);
 
-	fprintf(ofile, "static uint8_t seqprog[] = {\n");
+	fprintf(ofile, "static const uint8_t seqprog[] = {\n");
 	for (cur_instr = STAILQ_FIRST(&seq_program);
 	     cur_instr != NULL;
 	     cur_instr = STAILQ_NEXT(cur_instr, links)) {
@@ -419,7 +419,7 @@ output_code(void)
 	}
 
 	fprintf(ofile,
-"static struct patch {\n"
+"static const struct patch {\n"
 "	%spatch_func_t		*patch_func;\n"
 "	uint32_t		 begin		:10,\n"
 "				 skip_instr	:10,\n"
@@ -439,7 +439,7 @@ output_code(void)
 	fprintf(ofile, "\n};\n\n");
 
 	fprintf(ofile,
-"static struct cs {\n"
+"static const struct cs {\n"
 "	uint16_t	begin;\n"
 "	uint16_t	end;\n"
 "} critical_sections[] = {\n");
@@ -595,6 +595,7 @@ output_listing(char *ifilename)
 				putchar(input);
 		}
 		free(func_values);
+		func_values = NULL;
 		fprintf(stdout, "\nThanks!\n");
 	}
 
@@ -604,6 +605,11 @@ output_listing(char *ifilename)
 	     cur_instr != NULL;
 	     cur_instr = STAILQ_NEXT(cur_instr, links), instrcount++) {
 
+		/*
+		 * XXX XXX XXX: What exactly are we trying to do here?
+		 * 'func_values' is always NULL, so check_patch will
+		 * necessarily crash.
+		 */
 		if (check_patch(&cur_patch, instrcount,
 				&skip_addr, func_values) == 0) {
 			/* Don't count this instruction as it is in a patch
@@ -661,7 +667,7 @@ check_patch(patch_t **start_patch, int start_instr,
 				cur_patch = STAILQ_NEXT(cur_patch, links);
 		} else {
 			/* Accepted this patch.  Advance to the next
-			 * one and wait for our intruction pointer to
+			 * one and wait for our instruction pointer to
 			 * hit this point.
 			 */
 			cur_patch = STAILQ_NEXT(cur_patch, links);

@@ -1,4 +1,4 @@
-/*	$NetBSD: siop_pci_common.c,v 1.35 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: siop_pci_common.c,v 1.37 2018/12/09 11:14:02 jdolecek Exp $	*/
 
 /*
  * Copyright (c) 2000 Manuel Bouyer.
@@ -27,7 +27,7 @@
 /* SYM53c8xx PCI-SCSI I/O Processors driver: PCI front-end */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: siop_pci_common.c,v 1.35 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siop_pci_common.c,v 1.37 2018/12/09 11:14:02 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -60,6 +60,12 @@ static const struct siop_product_desc siop_products[] = {
 	{ PCI_PRODUCT_SYMBIOS_810,
 	0x10,
 	"Symbios Logic 53c810a (fast scsi)",
+	SF_PCI_RL | SF_PCI_BOF | SF_CHIP_PF | SF_CHIP_LS,
+	4, 8, 3, 250, 0
+	},
+	{ PCI_PRODUCT_SYMBIOS_810AP,
+	0x00,
+	"Symbios Logic 53c810ap (fast scsi)",
 	SF_PCI_RL | SF_PCI_BOF | SF_CHIP_PF | SF_CHIP_LS,
 	4, 8, 3, 250, 0
 	},
@@ -330,8 +336,8 @@ siop_pci_attach_common(struct siop_pci_common_softc *pci_sc,
 		return 0;
 	}
 	intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf, sizeof(intrbuf));
-	pci_sc->sc_ih = pci_intr_establish(pa->pa_pc, intrhandle, IPL_BIO,
-	    intr, siop_sc);
+	pci_sc->sc_ih = pci_intr_establish_xname(pa->pa_pc, intrhandle, IPL_BIO,
+	    intr, siop_sc, device_xname(siop_sc->sc_dev));
 	if (pci_sc->sc_ih != NULL) {
 		aprint_normal_dev(siop_sc->sc_dev, "interrupting at %s\n",
 		    intrstr ? intrstr : "unknown interrupt");

@@ -1,4 +1,4 @@
-/*	$NetBSD: voyager.c,v 1.11 2016/01/01 20:48:15 macallan Exp $	*/
+/*	$NetBSD: voyager.c,v 1.17 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2009, 2011 Michael Lorenz
@@ -26,7 +26,7 @@
  */
  
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: voyager.c,v 1.11 2016/01/01 20:48:15 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: voyager.c,v 1.17 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,6 +87,8 @@ struct voyager_softc {
 	void *sc_ih;
 	struct voyager_intr sc_intrs[32];
 };
+
+void *voyager_cookie = NULL;
 
 static int	voyager_match(device_t, cfdata_t, void *);
 static void	voyager_attach(device_t, device_t, void *);
@@ -162,6 +164,8 @@ voyager_attach(device_t parent, device_t self, void *aux)
 	sc->sc_iot = pa->pa_iot;
 	sc->sc_dev = self;
 
+	voyager_cookie = sc;
+
 	pci_aprint_devinfo(pa, NULL);
 
 	if (pci_mapreg_map(pa, 0x14, PCI_MAPREG_TYPE_MEM, 0,
@@ -195,7 +199,9 @@ voyager_attach(device_t parent, device_t self, void *aux)
 	}
 
 	intrstr = pci_intr_string(sc->sc_pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(sc->sc_pc, ih, IPL_AUDIO, voyager_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(sc->sc_pc, ih, IPL_VM,
+	    voyager_intr, NULL, /* so we get the clock frame instead */
+	    device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -221,17 +227,20 @@ voyager_attach(device_t parent, device_t self, void *aux)
 	vaa.vaa_pcitag = sc->sc_pcitag;
 #if NVOYAGERFB > 0
 	strcpy(vaa.vaa_name, "voyagerfb");
-	config_found_ia(sc->sc_dev, "voyagerbus", &vaa, voyager_print);
+	config_found(sc->sc_dev, &vaa, voyager_print,
+	    CFARGS(.iattr = "voyagerbus"));
 #endif
 #if NPWMCLOCK > 0
 	strcpy(vaa.vaa_name, "pwmclock");
-	config_found_ia(sc->sc_dev, "voyagerbus", &vaa, voyager_print);
+	config_found(sc->sc_dev, &vaa, voyager_print,
+	    CFARGS(.iattr = "voyagerbus"));
 #endif
 #ifdef notyet
 	strcpy(vaa.vaa_name, "vac");
-	config_found_ia(sc->sc_dev, "voyagerbus", &vaa, voyager_print);
+	config_found(sc->sc_dev, &vaa, voyager_print,
+	    CFARGS(.iattr = "voyagerbus"));
 #endif
-	/* we use this mutex wether there's an i2c bus or not */
+	/* we use this mutex whether there's an i2c bus or not */
 	mutex_init(&sc->sc_i2c_lock, MUTEX_DEFAULT, IPL_NONE);
 
 	/*
@@ -244,8 +253,8 @@ voyager_attach(device_t parent, device_t self, void *aux)
 		voyager_gpio_dir(sc, 0xffffffff, GPIO_I2C_BITS);
 		
 		/* Fill in the i2c tag */
-		memset(&sc->sc_i2c, 0, sizeof(sc->sc_i2c));
 		memset(&iba, 0, sizeof(iba));
+		iic_tag_init(&sc->sc_i2c);
 		sc->sc_i2c.ic_cookie = sc;
 		sc->sc_i2c.ic_acquire_bus = voyager_i2c_acquire_bus;
 		sc->sc_i2c.ic_release_bus = voyager_i2c_release_bus;
@@ -254,9 +263,9 @@ voyager_attach(device_t parent, device_t self, void *aux)
 		sc->sc_i2c.ic_initiate_xfer = voyager_i2c_initiate_xfer;
 		sc->sc_i2c.ic_read_byte = voyager_i2c_read_byte;
 		sc->sc_i2c.ic_write_byte = voyager_i2c_write_byte;
-		sc->sc_i2c.ic_exec = NULL;
 		iba.iba_tag = &sc->sc_i2c;
-		config_found_ia(self, "i2cbus", &iba, iicbus_print);
+		config_found(self, &iba, iicbus_print,
+		    CFARGS(.iattr = "i2cbus"));
 	}
 	voyager_control_gpio(sc, ~(1 << 16), 0);
 	voyager_gpio_dir(sc, 0xffffffff, 1 << 16);
@@ -316,6 +325,7 @@ voyager_i2c_acquire_bus(void *cookie, int flags)
 {
 	struct voyager_softc *sc = cookie;
 
+	/* We also have to serialize against voyager_twiddle_bits() */
 	mutex_enter(&sc->sc_i2c_lock);
 	return 0;
 }
@@ -389,7 +399,7 @@ voyager_twiddle_bits(void *cookie, int regnum, uint32_t mask, uint32_t bits)
 static int
 voyager_intr(void *cookie)
 {
-	struct voyager_softc *sc = cookie;
+	struct voyager_softc *sc = voyager_cookie;
 	struct voyager_intr *ih;
 	uint32_t intrs;
 	uint32_t mask, bit;
@@ -405,7 +415,11 @@ voyager_intr(void *cookie)
 		intrs &= ~bit;
 		ih = &sc->sc_intrs[num];
 		if (ih->vih_func != NULL) {
-			ih->vih_func(ih->vih_arg);
+			if (ih->vih_arg == NULL) {
+				ih->vih_func(cookie);
+			} else {
+				ih->vih_func(ih->vih_arg);
+			}
 		}
 		ih->vih_count.ev_count++;
 	}

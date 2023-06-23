@@ -1,4 +1,4 @@
-/*	$NetBSD: proc.h,v 1.17 2014/02/24 16:57:57 christos Exp $	*/
+/*	$NetBSD: proc.h,v 1.19 2020/08/14 16:18:36 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994 Mark Brinicombe.
@@ -45,6 +45,7 @@ struct lwp;
 struct mdlwp {
 	struct trapframe *md_tf;
 	int	md_flags;
+	volatile uint32_t md_astpending;
 };
 
 /* Flags setttings for md_flags */
@@ -59,6 +60,7 @@ struct mdproc {
 	char	md_march[12];		/* machine arch of executable */
 };
 
-#define	PROC0_MD_INITIALIZERS .p_md = { .md_march = MACHINE_ARCH },
+#define	PROC_MACHINE_ARCH(P)	((P)->p_md.md_march)
+#define	PROC0_MD_INITIALIZERS	.p_md = { .md_march = MACHINE_ARCH },
 
 #endif /* _ARM_PROC_H_ */

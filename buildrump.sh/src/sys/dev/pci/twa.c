@@ -1,4 +1,4 @@
-/*	$NetBSD: twa.c,v 1.53 2016/07/07 06:55:41 msaitoh Exp $ */
+/*	$NetBSD: twa.c,v 1.60 2021/08/07 16:19:14 thorpej Exp $ */
 /*	$wasabi: twa.c,v 1.27 2006/07/28 18:17:21 wrstuden Exp $	*/
 
 /*-
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: twa.c,v 1.53 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: twa.c,v 1.60 2021/08/07 16:19:14 thorpej Exp $");
 
 //#define TWA_DEBUG
 
@@ -86,7 +86,7 @@ __KERNEL_RCSID(0, "$NetBSD: twa.c,v 1.53 2016/07/07 06:55:41 msaitoh Exp $");
 #include <sys/disk.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
-
+#include <sys/module.h>
 #include <sys/bus.h>
 
 #include <dev/pci/pcireg.h>
@@ -104,6 +104,7 @@ __KERNEL_RCSID(0, "$NetBSD: twa.c,v 1.53 2016/07/07 06:55:41 msaitoh Exp $");
 #include <dev/ldvar.h>
 
 #include "locators.h"
+#include "ioconf.h"
 
 #define	PCI_CBIO	0x10
 
@@ -114,6 +115,7 @@ static uint16_t	twa_enqueue_aen(struct twa_softc *sc,
 			struct twa_command_header *);
 
 static void	twa_attach(device_t, device_t, void *);
+static int	twa_request_bus_scan(device_t, const char *, const int *);
 static void	twa_shutdown(void *);
 static int	twa_init_connection(struct twa_softc *, uint16_t, uint32_t,
 					uint16_t, uint16_t, uint16_t, uint16_t,
@@ -140,8 +142,8 @@ extern struct	cfdriver twa_cd;
 extern uint32_t twa_fw_img_size;
 extern uint8_t	twa_fw_img[];
 
-CFATTACH_DECL_NEW(twa, sizeof(struct twa_softc),
-    twa_match, twa_attach, NULL, NULL);
+CFATTACH_DECL3_NEW(twa, sizeof(struct twa_softc),
+    twa_match, twa_attach, NULL, NULL, twa_request_bus_scan, NULL, 0);
 
 /* FreeBSD driver revision for sysctl expected by the 3ware cli */
 const char twaver[] = "1.50.01.002";
@@ -776,7 +778,7 @@ twa_read_capacity(struct twa_request *tr, int lunid)
 	if (error == 0) {
 #if BYTE_ORDER == BIG_ENDIAN
 		array_size = bswap64(_8btol(
-		    ((struct scsipi_read_capacity_16_data *)tr->tr_data->addr) + 1);
+		    ((struct scsipi_read_capacity_16_data *)tr->tr_data)->addr) + 1);
 #else
 		array_size = _8btol(((struct scsipi_read_capacity_16_data *)
 				tr->tr_data)->addr) + 1;
@@ -834,13 +836,10 @@ twa_alloc_req_pkts(struct twa_softc *sc, int num_reqs)
 	size_t max_segs, max_xfer;
 	int	i, rv, rseg, size;
 
-	if ((sc->sc_units = malloc(sc->sc_nunits *
-	    sizeof(struct twa_drive), M_DEVBUF, M_NOWAIT|M_ZERO)) == NULL) 
-		return(ENOMEM);
-
-	if ((sc->twa_req_buf = malloc(num_reqs * sizeof(struct twa_request),
-					M_DEVBUF, M_NOWAIT)) == NULL)
-		return(ENOMEM);
+	sc->sc_units = malloc(sc->sc_nunits *
+	    sizeof(struct twa_drive), M_DEVBUF, M_WAITOK | M_ZERO);
+	sc->twa_req_buf = malloc(num_reqs * sizeof(struct twa_request),
+	    M_DEVBUF, M_WAITOK);
 
 	size = num_reqs * sizeof(struct twa_command_packet);
 
@@ -970,9 +969,11 @@ twa_recompute_openings(struct twa_softc *sc)
 	}
 }
 
+/* ARGSUSED */
 static int
-twa_request_bus_scan(struct twa_softc *sc)
+twa_request_bus_scan(device_t self, const char *attr, const int *flags)
 {
+	struct twa_softc *sc = device_private(self);
 	struct twa_drive *td;
 	struct twa_request *tr;
 	struct twa_attach_args twaa;
@@ -989,13 +990,8 @@ twa_request_bus_scan(struct twa_softc *sc)
 
 		tr->tr_cmd_pkt_type |= TWA_CMD_PKT_TYPE_INTERNAL;
 
-		tr->tr_data = malloc(TWA_SECTOR_SIZE, M_DEVBUF, M_NOWAIT);
+		tr->tr_data = malloc(TWA_SECTOR_SIZE, M_DEVBUF, M_WAITOK);
 
-		if (tr->tr_data == NULL) {
-			twa_release_request(tr);
-			splx(s);
-			return (ENOMEM);
-		}
 		td = &sc->sc_units[unit];
 
 		if (twa_inquiry(tr, unit) == 0) {
@@ -1013,8 +1009,10 @@ twa_request_bus_scan(struct twa_softc *sc)
 				locs[TWACF_UNIT] = unit;
 
 				sc->sc_units[unit].td_dev =
-				    config_found_sm_loc(sc->twa_dv, "twa",
-				    locs, &twaa, twa_print, config_stdsubmatch);
+				    config_found(sc->twa_dv, &twaa, twa_print,
+				    CFARGS(.submatch = config_stdsubmatch,
+					   .iattr = attr,
+					   .locators = locs));
 			}
 		} else {
 			if (td->td_dev != NULL) {
@@ -1437,11 +1435,14 @@ twa_init_ctlr(struct twa_softc *sc)
 }
 
 static int
-twa_setup(struct twa_softc *sc)
+twa_setup(device_t self)
 {
+	struct twa_softc *sc;
 	struct tw_cl_event_packet *aen_queue;
 	uint32_t		i = 0;
 	int			error = 0;
+
+	sc = device_private(self);
 
 	/* Initialize request queues. */
 	TAILQ_INIT(&sc->twa_free);
@@ -1488,7 +1489,7 @@ twa_setup(struct twa_softc *sc)
 
 	twa_describe_controller(sc);
 
-	error = twa_request_bus_scan(sc);
+	error = twa_request_bus_scan(self, NULL, NULL);
 
 	twa_outl(sc, TWA_CONTROL_REGISTER_OFFSET,
 		TWA_CONTROL_CLEAR_ATTENTION_INTERRUPT |
@@ -1596,7 +1597,8 @@ twa_attach(device_t parent, device_t self, void *aux)
 	}
 	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
 
-	sc->twa_ih = pci_intr_establish(pc, ih, IPL_BIO, twa_intr, sc);
+	sc->twa_ih = pci_intr_establish_xname(pc, ih, IPL_BIO, twa_intr, sc,
+	    device_xname(self));
 	if (sc->twa_ih == NULL) {
 		aprint_error_dev(sc->twa_dv, "can't establish interrupt%s%s\n",
 			(intrstr) ? " at " : "",
@@ -1607,7 +1609,7 @@ twa_attach(device_t parent, device_t self, void *aux)
 	if (intrstr != NULL)
 		aprint_normal_dev(sc->twa_dv, "interrupting at %s\n", intrstr);
 
-	twa_setup(sc);
+	twa_setup(self);
 
 	if (twa_sdh == NULL)
 		twa_sdh = shutdownhook_establish(twa_shutdown, NULL);
@@ -2043,7 +2045,7 @@ fw_passthru_done:
 	}
 
 	case TW_OSL_IOCTL_SCAN_BUS:
-		twa_request_bus_scan(sc);
+		twa_request_bus_scan(sc->twa_dv, "twa", 0);
 		break;
 
 	case TW_CL_IOCTL_GET_FIRST_EVENT:
@@ -2248,7 +2250,7 @@ fw_passthru_done:
 
 		/* Copy compatibility information to user space. */
 		copyout(&comp_pkt, user_buf->pdata,
-				min(sizeof(struct tw_cl_compatibility_packet),
+				uimin(sizeof(struct tw_cl_compatibility_packet),
 					user_buf->twa_drvr_pkt.buffer_length));
 		break;
 	}
@@ -2748,11 +2750,11 @@ twa_aen_callback(struct twa_request *tr)
 		cmd_hdr->err_specific_desc[sizeof(cmd_hdr->err_specific_desc) - 1] = '\0';
 		for (i = 0; i < 18; i++)
 			printf("%x\t", tr->tr_command->cmd_hdr.sense_data[i]);
-
-		printf(""); /* print new line */
+		printf("\n"); /* print new line */
 
 		for (i = 0; i < 128; i++)
 			printf("%x\t", ((int8_t *)(tr->tr_data))[i]);
+		printf("\n"); /* print new line */
 	}
 	if (tr->tr_data)
 		free(tr->tr_data, M_DEVBUF);
@@ -3138,4 +3140,34 @@ twa_check_ctlr_state(struct twa_softc *sc, uint32_t status_reg)
 		}
 	}
 	return(result);
+}
+
+MODULE(MODULE_CLASS_DRIVER, twa, "pci");
+ 
+#ifdef _MODULE  
+#include "ioconf.c"
+#endif 
+
+static int      
+twa_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_init_component(cfdriver_ioconf_twa,
+		    cfattach_ioconf_twa, cfdata_ioconf_twa);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_fini_component(cfdriver_ioconf_twa,
+		    cfattach_ioconf_twa, cfdata_ioconf_twa);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif  
+        
+	return error;
 }

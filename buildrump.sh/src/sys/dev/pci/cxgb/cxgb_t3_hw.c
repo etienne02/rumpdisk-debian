@@ -28,7 +28,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cxgb_t3_hw.c,v 1.1 2010/03/21 21:11:13 jklos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cxgb_t3_hw.c,v 1.5 2021/08/02 12:56:24 andvar Exp $");
 
 
 #ifdef CONFIG_DEFINED
@@ -543,7 +543,7 @@ struct t3_vpd {
  *
  *  Read a 32-bit word from a location in VPD EEPROM using the card's PCI
  *  VPD ROM capability.  A zero is written to the flag bit when the
- *  addres is written to the control register.  The hardware device will
+ *  address is written to the control register.  The hardware device will
  *  set the flag to 1 when 4 bytes have been read into the data register.
  */
 int t3_seeprom_read(adapter_t *adapter, u32 addr, u32 *data)
@@ -838,7 +838,7 @@ static int t3_write_flash(adapter_t *adapter, unsigned int addr,
         return ret;
 
     for (left = n; left; left -= c) {
-        c = min(left, 4U);
+        c = uimin(left, 4U);
         for (val = 0, i = 0; i < c; ++i)
             val = (val << 8) + *data++;
 
@@ -1050,7 +1050,7 @@ int t3_load_fw(adapter_t *adapter, const u8 *fw_data, unsigned int size)
 
     size -= 8;  /* trim off version and checksum */
     for (addr = FW_FLASH_BOOT_ADDR; size; ) {
-        unsigned int chunk_size = min(size, 256U);
+        unsigned int chunk_size = uimin(size, 256U);
 
         ret = t3_write_flash(adapter, addr, chunk_size, fw_data);
         if (ret)
@@ -1214,7 +1214,7 @@ struct intr_info {
  *  @reg: the interrupt status register to process
  *  @mask: a mask to apply to the interrupt status
  *  @acts: table of interrupt actions
- *  @stats: statistics counters tracking interrupt occurences
+ *  @stats: statistics counters tracking interrupt occurrences
  *
  *  A table driven interrupt handler that applies a set of masks to an
  *  interrupt status word and performs the corresponding actions if the
@@ -2658,7 +2658,7 @@ int t3_tp_set_coalescing_size(adapter_t *adap, unsigned int size, int psh)
         val |= F_RXCOALESCEENABLE;
         if (psh)
             val |= F_RXCOALESCEPSHEN;
-        size = min(MAX_RX_COALESCING_LEN, size);
+        size = uimin(MAX_RX_COALESCING_LEN, size);
         t3_write_reg(adap, A_TP_PARA_REG2, V_RXCOALESCESIZE(size) |
                  V_MAXRXDATA(MAX_RX_COALESCING_LEN));
     }
@@ -2684,7 +2684,7 @@ static void __devinit init_mtus(unsigned short mtus[])
 {
     /*
      * See draft-mathis-plpmtud-00.txt for the values.  The min is 88 so
-     * it can accomodate max size TCP/IP headers when SACK and timestamps
+     * it can accommodate max size TCP/IP headers when SACK and timestamps
      * are enabled and still have at least 8 bytes of payload.
      */
     mtus[0] = 88;
@@ -2776,7 +2776,7 @@ void t3_load_mtus(adapter_t *adap, unsigned short mtus[NMTUS],
     unsigned int i, w;
 
     for (i = 0; i < NMTUS; ++i) {
-        unsigned int mtu = min(mtus[i], mtu_cap);
+        unsigned int mtu = uimin(mtus[i], mtu_cap);
         unsigned int log2 = fls(mtu);
 
         if (!(mtu & ((1 << log2) >> 2)))     /* round */
@@ -2787,7 +2787,7 @@ void t3_load_mtus(adapter_t *adap, unsigned short mtus[NMTUS],
         for (w = 0; w < NCCTRL_WIN; ++w) {
             unsigned int inc;
 
-            inc = max(((mtu - 40) * alpha[w]) / avg_pkts[w],
+            inc = uimax(((mtu - 40) * alpha[w]) / avg_pkts[w],
                   CC_MIN_INCR);
 
             t3_write_reg(adap, A_TP_CCTRL_TABLE, (i << 21) |
@@ -3461,10 +3461,10 @@ int t3_init_hw(adapter_t *adapter, u32 fw_params)
 
 #ifdef CONFIG_CHELSIO_T3_CORE
     t3_tp_set_coalescing_size(adapter,
-                  min(adapter->params.sge.max_pkt_size,
+                  uimin(adapter->params.sge.max_pkt_size,
                       MAX_RX_COALESCING_LEN), 1);
     t3_tp_set_max_rxsize(adapter,
-                 min(adapter->params.sge.max_pkt_size, 16384U));
+                 uimin(adapter->params.sge.max_pkt_size, 16384U));
     ulp_config(adapter, &adapter->params.tp);
 #endif
     if (is_pcie(adapter))

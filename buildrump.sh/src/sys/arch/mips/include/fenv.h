@@ -1,4 +1,4 @@
-/*	$NetBSD: fenv.h,v 1.1 2015/12/21 17:02:33 christos Exp $	*/
+/*	$NetBSD: fenv.h,v 1.6 2020/07/26 08:08:41 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2004-2005 David Schultz <das@FreeBSD.ORG>
@@ -33,19 +33,12 @@
 
 #include <sys/stdint.h>
 
-#ifndef	__fenv_static
-#define	__fenv_static	static
-#endif
-
-typedef	uint32_t	fenv_t;
-typedef	uint32_t	fexcept_t;
-
 /* Exception flags */
-#define	FE_INVALID	0x0001
-#define	FE_DIVBYZERO	0x0002
-#define	FE_OVERFLOW	0x0004
+#define	FE_INEXACT	0x0004
 #define	FE_UNDERFLOW	0x0008
-#define	FE_INEXACT	0x0010
+#define	FE_OVERFLOW	0x0010
+#define	FE_DIVBYZERO	0x0020
+#define	FE_INVALID	0x0040
 #define	FE_ALL_EXCEPT	(FE_DIVBYZERO | FE_INEXACT | \
 			 FE_INVALID | FE_OVERFLOW | FE_UNDERFLOW)
 
@@ -56,6 +49,17 @@ typedef	uint32_t	fexcept_t;
 #define	FE_DOWNWARD	0x0003
 #define	_ROUND_MASK	(FE_TONEAREST | FE_DOWNWARD | \
 			 FE_UPWARD | FE_TOWARDZERO)
+
+#ifndef __mips_soft_float
+
+#ifndef	__fenv_static
+#define	__fenv_static	static
+#endif
+
+typedef	uint32_t 	fpu_control_t __attribute__((__mode__(__SI__)));
+typedef	fpu_control_t	fenv_t;
+typedef	fpu_control_t	fexcept_t;
+
 __BEGIN_DECLS
 
 /* Default floating-point environment */
@@ -63,15 +67,28 @@ extern const fenv_t	__fe_dfl_env;
 #define	FE_DFL_ENV	(&__fe_dfl_env)
 
 /* We need to be able to map status flag positions to mask flag positions */
-#define _FPUSW_SHIFT	16
-#define	_ENABLE_MASK	(FE_ALL_EXCEPT << _FPUSW_SHIFT)
+#define	_ENABLE_MASK	(FE_ALL_EXCEPT << _ENABLE_SHIFT)
+#define	_ENABLE_SHIFT    5
 
-#ifdef	ARM_HARD_FLOAT
-#define	__rfs(__fpsr)	__asm __volatile("rfs %0" : "=r" (*(__fpsr)))
-#define	__wfs(__fpsr)	__asm __volatile("wfs %0" : : "r" (__fpsr))
-#else
-#define __rfs(__fpsr)
-#define __wfs(__fpsr)
+static inline fpu_control_t
+__rfs(void)
+{
+	fpu_control_t __fpsr;
+
+	__asm __volatile("cfc1 %0,$31" : "=r" (__fpsr));
+	return __fpsr;
+}
+
+static inline void
+__wfs(fpu_control_t __fpsr)
+{
+
+	__asm __volatile("ctc1 %0,$31" : : "r" (__fpsr));
+}
+
+#if __GNUC_PREREQ__(8, 0)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
 #endif
 
 __fenv_static inline int
@@ -79,10 +96,11 @@ feclearexcept(int __excepts)
 {
 	fexcept_t __fpsr;
 
-	__rfs(&__fpsr);
-	__fpsr &= ~__excepts;
+	__excepts &= FE_ALL_EXCEPT;
+	__fpsr = __rfs();
+	__fpsr &= ~(__excepts | (__excepts << _ENABLE_SHIFT));
 	__wfs(__fpsr);
-	return (0);
+	return 0;
 }
 
 __fenv_static inline int
@@ -90,7 +108,7 @@ fegetexceptflag(fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fpsr;
 
-	__rfs(&__fpsr);
+	__fpsr = __rfs();
 	*__flagp = __fpsr & __excepts;
 	return (0);
 }
@@ -100,7 +118,7 @@ fesetexceptflag(const fexcept_t *__flagp, int __excepts)
 {
 	fexcept_t __fpsr;
 
-	__rfs(&__fpsr);
+	__fpsr = __rfs();
 	__fpsr &= ~__excepts;
 	__fpsr |= *__flagp & __excepts;
 	__wfs(__fpsr);
@@ -121,34 +139,39 @@ fetestexcept(int __excepts)
 {
 	fexcept_t __fpsr;
 
-	__rfs(&__fpsr);
+	__fpsr = __rfs();
 	return (__fpsr & __excepts);
 }
 
 __fenv_static inline int
 fegetround(void)
 {
+	fexcept_t __fpsr;
 
-	/*
-	 * Apparently, the rounding mode is specified as part of the
-	 * instruction format on ARM, so the dynamic rounding mode is
-	 * indeterminate.  Some FPUs may differ.
-	 */
-	return (-1);
+	__fpsr = __rfs();
+	return __fpsr & _ROUND_MASK;
 }
 
 __fenv_static inline int
 fesetround(int __round)
 {
+	fexcept_t __fpsr;
 
-	return (-1);
+	if (__round & ~_ROUND_MASK)
+		return 1;
+	__fpsr = __rfs();
+	__fpsr &= ~_ROUND_MASK;
+	__fpsr |= __round;
+	__wfs(__fpsr);
+
+	return 0;
 }
 
 __fenv_static inline int
 fegetenv(fenv_t *__envp)
 {
 
-	__rfs(__envp);
+	*__envp = __rfs();
 	return (0);
 }
 
@@ -157,7 +180,7 @@ feholdexcept(fenv_t *__envp)
 {
 	fenv_t __env;
 
-	__rfs(&__env);
+	__env = __rfs();
 	*__envp = __env;
 	__env &= ~(FE_ALL_EXCEPT | _ENABLE_MASK);
 	__wfs(__env);
@@ -177,49 +200,57 @@ feupdateenv(const fenv_t *__envp)
 {
 	fexcept_t __fpsr;
 
-	__rfs(&__fpsr);
+	__fpsr = __rfs();
 	__wfs(*__envp);
 	feraiseexcept(__fpsr & FE_ALL_EXCEPT);
 	return (0);
 }
 
+#if __GNUC_PREREQ__(8, 0)
+#pragma GCC diagnostic pop
+#endif
+
 #if defined(_NETBSD_SOURCE) || defined(_GNU_SOURCE)
 
-/* We currently provide no external definitions of the functions below. */
-
-static inline int
-feenableexcept(int __mask)
+__fenv_static inline int
+feenableexcept(int __excepts)
 {
 	fenv_t __old_fpsr, __new_fpsr;
 
-	__rfs(&__old_fpsr);
-	__new_fpsr = __old_fpsr | (__mask & FE_ALL_EXCEPT) << _FPUSW_SHIFT;
+	__new_fpsr = __rfs();
+	__old_fpsr = (__new_fpsr & _ENABLE_MASK) >> _ENABLE_SHIFT;
+	__excepts &= FE_ALL_EXCEPT;
+	__new_fpsr |= __excepts << _ENABLE_SHIFT;
 	__wfs(__new_fpsr);
-	return ((__old_fpsr >> _FPUSW_SHIFT) & FE_ALL_EXCEPT);
+	return __old_fpsr;
 }
 
-static inline int
-fedisableexcept(int __mask)
+__fenv_static inline int
+fedisableexcept(int __excepts)
 {
 	fenv_t __old_fpsr, __new_fpsr;
 
-	__rfs(&__old_fpsr);
-	__new_fpsr = __old_fpsr & ~((__mask & FE_ALL_EXCEPT) << _FPUSW_SHIFT);
+	__new_fpsr = __rfs();
+	__old_fpsr = (__new_fpsr & _ENABLE_MASK) >> _ENABLE_SHIFT;
+	__excepts &= FE_ALL_EXCEPT;
+	__new_fpsr &= ~(__excepts << _ENABLE_SHIFT);
 	__wfs(__new_fpsr);
-	return ((__old_fpsr >> _FPUSW_SHIFT) & FE_ALL_EXCEPT);
+	return __old_fpsr;
 }
 
-static inline int
+__fenv_static inline int
 fegetexcept(void)
 {
 	fenv_t __fpsr;
 
-	__rfs(&__fpsr);
-	return ((__fpsr & _ENABLE_MASK) >> _FPUSW_SHIFT);
+	__fpsr = __rfs();
+	return ((__fpsr & _ENABLE_MASK) >> _ENABLE_SHIFT);
 }
 
 #endif /* _NETBSD_SOURCE || _GNU_SOURCE */
 
 __END_DECLS
+
+#endif /* __mips_soft_float */
 
 #endif	/* !_FENV_H_ */

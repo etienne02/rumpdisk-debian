@@ -1,8 +1,8 @@
-/* $NetBSD: if_srt.c,v 1.22 2016/06/20 06:46:37 knakahara Exp $ */
+/* $NetBSD: if_srt.c,v 1.32 2021/06/16 00:21:19 riastradh Exp $ */
 /* This file is in the public domain. */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_srt.c,v 1.22 2016/06/20 06:46:37 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_srt.c,v 1.32 2021/06/16 00:21:19 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -31,8 +31,14 @@ __KERNEL_RCSID(0, "$NetBSD: if_srt.c,v 1.22 2016/06/20 06:46:37 knakahara Exp $"
 #include <sys/fcntl.h>
 #include <sys/param.h>
 #include <sys/ioctl.h>
+#include <sys/module.h>
+#include <sys/device.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
+#include <netinet6/in6_var.h>
+#include <netinet6/ip6_var.h>
+#include <netinet6/nd6.h>
+#include <netinet6/scope6_var.h>
 #include <net/if_types.h>
 
 #include "if_srt.h"
@@ -51,10 +57,35 @@ struct srt_softc {
 #define SKF_CDEVOPEN 0x00000001
 };
 
-void srtattach(void);
+#include "ioconf.h"
 
 static struct srt_softc *softcv[SRT_MAXUNIT+1];
 static unsigned int global_flags;
+
+static u_int srt_count;
+
+#ifdef _MODULE
+devmajor_t srt_bmajor = -1, srt_cmajor = -1;
+#endif
+
+static int srt_open(dev_t, int, int, struct lwp *);
+static int srt_close(dev_t, int, int, struct lwp *);
+static int srt_ioctl(dev_t, u_long, void *, int, struct lwp *);
+
+const struct cdevsw srt_cdevsw = {
+	.d_open = srt_open,
+	.d_close = srt_close,
+	.d_read = nullread,
+	.d_write = nullwrite,
+	.d_ioctl = srt_ioctl,
+	.d_stop = nullstop,
+	.d_tty = notty,
+	.d_poll = nullpoll,
+	.d_mmap = nommap,
+	.d_kqfilter = nullkqfilter,
+	.d_discard = nodiscard,
+	.d_flag = D_OTHER
+};
 
 /* Internal routines. */
 
@@ -80,7 +111,7 @@ update_mtu(struct srt_softc *sc)
 	if (sc->flags & SSF_MTULOCK)
 		return;
 	mtu = 65535;
-	for (i=sc->nrt-1;i>=0;i--) {
+	for (i = sc->nrt-1; i>=0; i--) {
 		r = sc->rts[i];
 		if (r->u.dstifp->if_mtu < mtu)
 			mtu = r->u.dstifp->if_mtu;
@@ -215,9 +246,9 @@ srt_if_output(
 	}
 	/* XXX Do we need to bpf_tap?  Or do higher layers now handle that? */
 	/* if_gif.c seems to imply the latter. */
-	ifp->if_opackets ++;
+	if_statinc(ifp, if_opackets);
 	if (! r) {
-		ifp->if_oerrors ++;
+		if_statinc(ifp, if_oerrors);
 		m_freem(m);
 		return 0;
 	}
@@ -226,12 +257,14 @@ srt_if_output(
 		m_freem(m);
 		return 0;
 	}
-	ifp->if_obytes += m->m_pkthdr.len;
+	if_statadd(ifp, if_obytes, m->m_pkthdr.len);
 	if (! (r->u.dstifp->if_flags & IFF_UP)) {
 		m_freem(m);
 		return 0; /* XXX ENETDOWN? */
 	}
 	/* XXX is 0 the right last arg here? */
+	if (to->sa_family == AF_INET6)
+		return ip6_if_output(r->u.dstifp, r->u.dstifp, m, &r->dst.sin6, 0);
 	return if_output_lock(r->u.dstifp, r->u.dstifp, m, &r->dst.sa, 0);
 }
 
@@ -244,7 +277,7 @@ srt_clone_create(struct if_clone *cl, int unit)
 		return ENXIO;
 	if (softcv[unit])
 		return EBUSY;
-	sc = malloc(sizeof(struct srt_softc), M_DEVBUF, M_WAITOK|M_ZERO);
+	sc = malloc(sizeof(struct srt_softc), M_DEVBUF, M_WAITOK | M_ZERO);
 	sc->unit = unit;
 	sc->nrt = 0;
 	sc->rts = 0;
@@ -264,6 +297,7 @@ srt_clone_create(struct if_clone *cl, int unit)
 	bpf_attach(&sc->intf, 0, 0);
 #endif
 	softcv[unit] = sc;
+	atomic_inc_uint(&srt_count);
 	return 0;
 }
 
@@ -284,25 +318,68 @@ srt_clone_destroy(struct ifnet *ifp)
 	}
 	if (softcv[sc->unit] != sc) {
 		panic("srt_clone_destroy: bad backpointer ([%d]=%p not %p)\n",
-		sc->unit,(void *)softcv[sc->unit],(void *)sc);
+		sc->unit, (void *)softcv[sc->unit], (void *)sc);
 	}
 	softcv[sc->unit] = 0;
-	free(sc,M_DEVBUF);
+	free(sc, M_DEVBUF);
+	atomic_inc_uint(&srt_count);
 	return 0;
 }
 
 struct if_clone srt_clone =
-    IF_CLONE_INITIALIZER("srt",&srt_clone_create,&srt_clone_destroy);
+    IF_CLONE_INITIALIZER("srt", &srt_clone_create, &srt_clone_destroy);
 
 void
-srtattach(void)
+srtattach(int n)
+{
+
+	/*
+	 * Nothing to do here, initialization is handled by the
+	 * module initialization code in srtinit() below).
+	 */
+}
+
+static void
+srtinit(void)
 {
 	int i;
 
-	for (i=SRT_MAXUNIT;i>=0;i--)
+	for (i = SRT_MAXUNIT; i >= 0; i--)
 		softcv[i] = 0;
 	global_flags = 0;
 	if_clone_attach(&srt_clone);
+#ifdef _MODULE
+	devsw_attach("srt", NULL, &srt_bmajor, &srt_cdevsw, &srt_cmajor);
+#endif
+}
+
+static int
+srtdetach(void)
+{
+	int error = 0;
+	int i;
+
+	if_clone_detach(&srt_clone);
+#ifdef _MODULE
+	devsw_detach(NULL, &srt_cdevsw);
+	if (error != 0) {
+		if_clone_attach(&srt_clone);
+		return error;
+	}
+#endif
+
+	for (i = SRT_MAXUNIT; i >= 0; i--)
+		if(softcv[i]) {
+			error = EBUSY;
+#ifdef _MODULE
+			devsw_attach("srt", NULL, &srt_bmajor,
+			    &srt_cdevsw, &srt_cmajor);
+#endif
+			if_clone_attach(&srt_clone);
+			break;
+		}
+
+	return error;
 }
 
 /* Special-device interface. */
@@ -317,6 +394,10 @@ srt_open(dev_t dev, int flag, int mode, struct lwp *l)
 	if (unit < 0 || unit > SRT_MAXUNIT)
 		return ENXIO;
 	sc = softcv[unit];
+	if (sc == NULL) {
+		(void)srt_clone_create(&srt_clone, minor(dev));
+		sc = softcv[unit];
+	}
 	if (! sc)
 		return ENXIO;
 	sc->kflags |= SKF_CDEVOPEN;
@@ -368,8 +449,9 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		dr->af = scr->af;
 		dr->srcmatch = scr->srcmatch;
 		dr->srcmask = scr->srcmask;
-		strncpy(&dr->u.dstifn[0],&scr->u.dstifp->if_xname[0],IFNAMSIZ);
-		memcpy(&dr->dst,&scr->dst,scr->dst.sa.sa_len);
+		strlcpy(&dr->u.dstifn[0], &scr->u.dstifp->if_xname[0],
+		    IFNAMSIZ);
+		memcpy(&dr->dst, &scr->dst, scr->dst.sa.sa_len);
 		return 0;
 	case SRT_SETRT:
 		if (! (flag & FWRITE))
@@ -377,7 +459,7 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		dr = (struct srt_rt *) data;
 		if (dr->inx > sc->nrt)
 			return EDOM;
-		strncpy(&nbuf[0],&dr->u.dstifn[0],IFNAMSIZ);
+		strlcpy(&nbuf[0], &dr->u.dstifn[0], IFNAMSIZ);
 		nbuf[IFNAMSIZ-1] = '\0';
 		if (dr->dst.sa.sa_family != dr->af)
 			return EIO;
@@ -420,7 +502,7 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		}
 		scr = sc->rts[dr->inx];
 		if (scr == 0) {
-			scr = malloc(sizeof(struct srt_rt),M_DEVBUF,M_WAITOK);
+			scr = malloc(sizeof(struct srt_rt), M_DEVBUF,M_WAITOK);
 			if (scr == 0)
 				return ENOBUFS;
 			scr->inx = dr->inx;
@@ -432,6 +514,8 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		scr->srcmask = dr->srcmask;
 		scr->u.dstifp = ifp;
 		memcpy(&scr->dst,&dr->dst,dr->dst.sa.sa_len);
+		if (dr->af == AF_INET6)
+			in6_setzoneid(&scr->dst.sin6.sin6_addr, ifp->if_index);
 		update_mtu(sc);
 		return 0;
 	case SRT_DELRT:
@@ -446,7 +530,7 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		sc->nrt--;
 		if (i < sc->nrt) {
 			memcpy(sc->rts+i, sc->rts+i+1,
-			    (sc->nrt-i)*sizeof(*sc->rts));
+			    (sc->nrt-i) * sizeof(*sc->rts));
 		}
 		if (sc->nrt == 0) {
 			free(sc->rts, M_DEVBUF);
@@ -468,7 +552,7 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		*(unsigned int *)data = sc->flags | global_flags;
 		return 0;
 	case SRT_SGFLAGS:
-		if ((flag & (FWRITE|FREAD)) != (FWRITE|FREAD))
+		if ((flag & (FWRITE | FREAD)) != (FWRITE | FREAD))
 			return EBADF;
 		o = sc->flags | global_flags;
 		n = *(unsigned int *)data & SSF_UCHG;
@@ -483,17 +567,9 @@ srt_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	return ENOTTY;
 }
 
-const struct cdevsw srt_cdevsw = {
-	.d_open = srt_open,
-	.d_close = srt_close,
-	.d_read = nullread,
-	.d_write = nullwrite,
-	.d_ioctl = srt_ioctl,
-	.d_stop = nullstop,
-	.d_tty = notty,
-	.d_poll = nullpoll,
-	.d_mmap = nommap,
-	.d_kqfilter = nullkqfilter,
-	.d_discard = nodiscard,
-	.d_flag = D_OTHER
-};
+/*
+ * Module infrastructure
+ */
+#include "if_module.h"
+
+IF_MODULE(MODULE_CLASS_DRIVER, srt, NULL)

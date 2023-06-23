@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_ioctl.h,v 1.54 2016/07/13 11:11:53 jmcneill Exp $	*/
+/*	$NetBSD: netbsd32_ioctl.h,v 1.78 2021/04/14 16:26:23 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -35,8 +35,14 @@
 #include <dev/dkvar.h>
 #include <dev/vndvar.h>
 
+#include <dev/lockstat.h>
 #include <dev/wscons/wsconsio.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <netinet/ip_mroute.h>
 #include <net80211/ieee80211_ioctl.h>
+
+#include <compat/netbsd32/netbsd32.h>
 
 /* we define some handy macros here... */
 #define IOCTL_STRUCT_CONV_TO(cmd, type)	\
@@ -83,6 +89,19 @@ struct netbsd32_format_op {
 #define DIOCWFORMAT32	_IOWR('d', 106, struct netbsd32_format_op)
 #endif
 
+/* from <sys/event.h> */
+
+struct netbsd32_kfilter_mapping {
+	netbsd32_charp	name;		/* name to lookup or return */
+	netbsd32_size_t	len;		/* length of name */
+	uint32_t	filter;		/* filter to lookup or return */
+};
+
+/* map filter to name (max size len) */
+#define KFILTER_BYFILTER32	_IOWR('k', 0, struct netbsd32_kfilter_mapping)
+/* map name to filter (len ignored) */
+#define KFILTER_BYNAME32	_IOWR('k', 1, struct netbsd32_kfilter_mapping)
+
 /* from <sys/ataio.h> */
 struct netbsd32_atareq {
 	netbsd32_u_long		flags;
@@ -116,6 +135,8 @@ struct netbsd32_bpf_dltlist {
 #define BIOCSTCPF32	_IOW('B',114, struct netbsd32_bpf_program)
 #define BIOCSUDPF32	_IOW('B',115, struct netbsd32_bpf_program)
 #define BIOCGDLTLIST32	_IOWR('B',119, struct netbsd32_bpf_dltlist)
+#define BIOCSRTIMEOUT32	_IOW('B',122, struct netbsd32_timeval)
+#define BIOCSETWF32	_IOW('B',127, struct netbsd32_bpf_program)
 
 
 struct netbsd32_wsdisplay_addscreendata {
@@ -179,6 +200,21 @@ struct netbsd32_wsdisplay_cursor {
 #define	WSDISPLAYIO_GCURSOR32	_IOWR('W', 73, struct netbsd32_wsdisplay_cursor)
 #define	WSDISPLAYIO_SCURSOR32	_IOW('W', 74, struct netbsd32_wsdisplay_cursor)
 
+struct netbsd32_wsdisplay_font {
+	netbsd32_charp name;
+	int firstchar, numchars;
+	int encoding;
+	u_int fontwidth, fontheight, stride;
+	int bitorder, byteorder;
+	netbsd32_charp data;
+};
+#define	WSDISPLAYIO_LDFONT32	_IOW('W', 77, struct netbsd32_wsdisplay_font)
+
+struct netbsd32_wsdisplay_usefontdata {
+	netbsd32_charp name;
+};
+#define	WSDISPLAYIO_SFONT32	_IOW('W', 80, struct netbsd32_wsdisplay_usefontdata)
+
 /* can wait! */
 #if 0
 dev/ccdvar.h:219:#define CCDIOCSET	_IOWR('F', 16, struct ccd_ioctl)   /* enable ccd */
@@ -198,40 +234,7 @@ dev/wscons/wsconsio.h:241:#define WSDISPLAYIO_SFONT	_IOW('W', 77, struct wsdispl
 net/if_ppp.h:110:#define PPPIOCSPASS	_IOW('t', 71, struct bpf_program) /* set pass filter */
 net/if_ppp.h:111:#define PPPIOCSACTIVE	_IOW('t', 70, struct bpf_program) /* set active filt */
 
-net/if_atm.h:88:#define SIOCATMENA	_IOWR('a', 123, struct atm_pseudoioctl) /* enable */
-net/if_atm.h:89:#define SIOCATMDIS	_IOWR('a', 124, struct atm_pseudoioctl) /* disable */
-
 net/if_ppp.h:105:#define PPPIOCSCOMPRESS	_IOW('t', 77, struct ppp_option_data)
-
-netccitt/x25.h:157:#define	SIOCSIFCONF_X25	_IOW('i', 12, struct ifreq_x25)	/* set ifnet config */
-netccitt/x25.h:158:#define	SIOCGIFCONF_X25	_IOWR('i',13, struct ifreq_x25)	/* get ifnet config */
-
-netinet/ip_fil.h:46:#define	SIOCGETFS	_IOR('r', 64, struct friostat)
-netinet/ip_fil.h:56:#define	SIOCFRZST	_IOWR('r', 74, struct friostat)
-
-netinet/ip_fil.h:42:#define	SIOCADAFR	_IOW('r', 60, struct frentry)
-netinet/ip_fil.h:43:#define	SIOCRMAFR	_IOW('r', 61, struct frentry)
-netinet/ip_fil.h:49:#define	SIOCADIFR	_IOW('r', 67, struct frentry)
-netinet/ip_fil.h:50:#define	SIOCRMIFR	_IOW('r', 68, struct frentry)
-netinet/ip_fil.h:52:#define	SIOCINAFR	_IOW('r', 70, struct frentry)
-netinet/ip_fil.h:53:#define	SIOCINIFR	_IOW('r', 71, struct frentry)
-netinet/ip_fil.h:57:#define	SIOCZRLST	_IOWR('r', 75, struct frentry)
-
-netinet/ip_fil.h:78:#define	SIOCAUTHW	_IOWR(r, 76, struct fr_info)
-netinet/ip_fil.h:79:#define	SIOCAUTHR	_IOWR(r, 77, struct fr_info)
-
-netinet/ip_fil.h:60:#define	SIOCATHST	_IOWR('r', 78, struct fr_authstat)
-
-netinet/ip_nat.h:22:#define	SIOCADNAT	_IOW('r', 80, struct ipnat)
-netinet/ip_nat.h:23:#define	SIOCRMNAT	_IOW('r', 81, struct ipnat)
-
-netinet/ip_nat.h:24:#define	SIOCGNATS	_IOR('r', 82, struct natstat)
-
-netinet/ip_nat.h:25:#define	SIOCGNATL	_IOWR('r', 83, struct natlookup)
-
-netinet/ip_nat.h:26:#define SIOCGFRST	_IOR('r', 84, struct ipfrstat)
-
-netinet/ip_nat.h:27:#define SIOCGIPST	_IOR('r', 85, struct ips_stat)
 
 sys/module.h?
 
@@ -371,8 +374,12 @@ struct netbsd32_if_clonereq {
 #define	SIOCDELMULTI32	 _IOW('i', 50, struct netbsd32_ifreq)	/* del m'cast addr */
 #define	OSIOCDELMULTI32	 _IOW('i', 50, struct netbsd32_oifreq)	/* del m'cast addr */
 
-#define	SIOCSIFMEDIA32	_IOWR('i', 53, struct netbsd32_ifreq)	/* set net media */
-#define	OSIOCSIFMEDIA32	_IOWR('i', 53, struct netbsd32_oifreq)	/* set net media */
+#define	SIOCSIFMEDIA32_80	_IOWR('i', 53, struct netbsd32_ifreq)	/* set net media */
+#define	SIOCSIFMEDIA32_43	_IOWR('i', 53, struct netbsd32_oifreq)	/* set net media */
+#define	SIOCSIFMEDIA32		_IOWR('i', 55, struct netbsd32_ifreq)	/* set net media */
+
+#define	SIOCSIFGENERIC32 _IOW('i', 57, struct netbsd32_ifreq)	/* generic IF set op */
+#define	SIOCGIFGENERIC32 _IOWR('i', 58, struct netbsd32_ifreq)	/* generic IF get op */
 
 #define	SIOCIFGCLONERS32 _IOWR('i', 120, struct netbsd32_if_clonereq) /* get cloners */
 
@@ -417,7 +424,8 @@ struct netbsd32_ifmediareq {
 	netbsd32_intp	ifm_ulist;		/* media words */
 };
 /* from <sys/sockio.h> */
-#define	SIOCGIFMEDIA32	_IOWR('i', 54, struct netbsd32_ifmediareq) /* get net media */
+#define	SIOCGIFMEDIA32_80 _IOWR('i', 54, struct netbsd32_ifmediareq) /* get net media */
+#define	SIOCGIFMEDIA32	_IOWR('i', 56, struct netbsd32_ifmediareq) /* get net media */
 
 /* from net/if_pppoe.h */
 struct netbsd32_pppoediscparms {
@@ -472,6 +480,18 @@ struct netbsd32_sioc_vif_req {
 /* from <sys/sockio.h> */
 #define	SIOCGETVIFCNT32	_IOWR('u', 51, struct netbsd32_sioc_vif_req)/* vif pkt cnt */
 
+/* from <netinet6/nd6.h> */
+struct netbsd32_in6_nbrinfo {
+	char ifname[IFNAMSIZ];	/* if name, e.g. "en0" */
+	struct in6_addr addr;	/* IPv6 address of the neighbor */
+	netbsd32_long	asked;	/* number of queries already sent for this addr */
+	int	isrouter;	/* if it acts as a router */
+	int	state;		/* reachability state */
+	int	expire;		/* lifetime for NDP state transition */
+};
+/* from <netinet6/in6_var.h> */
+#define SIOCGNBRINFO_IN632	_IOWR('i', 78, struct netbsd32_in6_nbrinfo)
+
 struct netbsd32_sioc_sg_req {
 	struct	in_addr src;
 	struct	in_addr grp;
@@ -482,23 +502,39 @@ struct netbsd32_sioc_sg_req {
 /* from <sys/sockio.h> */
 #define	SIOCGETSGCNT32	_IOWR('u', 52, struct netbsd32_sioc_sg_req) /* sg pkt cnt */
 
-/*
- * The next two structures are marked "__packed" as they normally end up
- * being padded in 64-bit mode.
- */
+/* from <dev/ffsvar.h> */
+struct netbsd32_fss_set {
+	netbsd32_charp	fss_mount;	/* Mount point of file system */
+	netbsd32_charp	fss_bstore;	/* Path of backing store */
+	blksize_t	fss_csize;	/* Preferred cluster size */
+	int		fss_flags;	/* Initial flags */
+};
+
+struct netbsd32_fss_get {
+	char		fsg_mount[MNAMELEN]; /* Mount point of file system */
+	struct netbsd32_timeval	fsg_time;	/* Time this snapshot was taken */
+	blksize_t	fsg_csize;	/* Current cluster size */
+	netbsd32_blkcnt_t	fsg_mount_size;	/* # clusters on file system */
+	netbsd32_blkcnt_t	fsg_bs_size;	/* # clusters on backing store */
+};
+
+/* XXX: FSSIOCSET50 and FSSIOCGET50 are not (yet) handled */
+#define FSSIOCSET32	_IOW('F', 5, struct netbsd32_fss_set)	/* Configure */
+#define FSSIOCGET32	_IOR('F', 1, struct netbsd32_fss_get)	/* Status */
+
 struct netbsd32_vnd_ioctl {
 	netbsd32_charp	vnd_file;	/* pathname of file to mount */
 	int		vnd_flags;	/* flags; see below */
 	struct vndgeom	vnd_geom;	/* geometry to emulate */
 	unsigned int	vnd_osize;	/* (returned) size of disk */
-	uint64_t	vnd_size;	/* (returned) size of disk */
-} __packed;
+	netbsd32_uint64	vnd_size;	/* (returned) size of disk */
+};
 
 struct netbsd32_vnd_user {
 	int		vnu_unit;	/* which vnd unit */
-	dev_t		vnu_dev;	/* file is on this device... */
-	ino_t		vnu_ino;	/* ...at this inode */
-} __packed;
+	netbsd32_dev_t	vnu_dev;	/* file is on this device... */
+	netbsd32_ino_t	vnu_ino;	/* ...at this inode */
+};
 
 /* from <dev/vndvar.h> */
 #define VNDIOCSET32	_IOWR('F', 0, struct netbsd32_vnd_ioctl)	/* enable disk */
@@ -552,7 +588,7 @@ struct netbsd32_clockctl_clock_settime {
 
 struct netbsd32_clockctl_ntp_adjtime {
 	netbsd32_timexp_t tp;
-	/* register_t */ int32_t retval;
+	register32_t retval;
 };
 
 #define CLOCKCTL_NTP_ADJTIME32 _IOWR('C', 0x8, \
@@ -575,15 +611,7 @@ struct netbsd32_ksyms_gvalue {
 #define	KIOCGSYMBOL32	_IOWR('l', 5, struct netbsd32_ksyms_gsymbol)
 #endif /* KIOCGSYMBOL */
 
-/* From net/npf/npf.h */
-typedef struct in6_addr		netbsd32_npf_addr_t;
-typedef uint8_t			netbsd32_npf_netmask_t;
-
-typedef struct netbsd32_npf_ioctl_ent {
-	int			alen;
-	netbsd32_npf_addr_t	addr;
-	netbsd32_npf_netmask_t	mask;
-} netbsd32_npf_ioctl_ent_t;
+#include <net/npf/npf.h>
 
 typedef struct netbsd32_npf_ioctl_buf {
 	netbsd32_voidp		buf;
@@ -591,19 +619,20 @@ typedef struct netbsd32_npf_ioctl_buf {
 } netbsd32_npf_ioctl_buf_t;
 
 typedef struct netbsd32_npf_ioctl_table {
-	int			nct_cmd;
-	netbsd32_charp		nct_name;
-	union {
-		netbsd32_npf_ioctl_ent_t ent;
+        int			nct_cmd;  
+        netbsd32_charp		nct_name;
+        union {
+		npf_ioctl_ent_t ent;
 		netbsd32_npf_ioctl_buf_t buf;
-	} nct_data;
+        } nct_data;
 } netbsd32_npf_ioctl_table_t;
 
-#define IOC_NPF_LOAD32          _IOWR('N', 102, struct netbsd32_plistref)
-#define IOC_NPF_TABLE32         _IOW('N', 103, struct netbsd32_npf_ioctl_table)
-#define IOC_NPF_STATS32         _IOW('N', 104, netbsd32_voidp)
-#define IOC_NPF_SAVE32          _IOR('N', 105, struct netbsd32_plistref)
-#define IOC_NPF_RULE32          _IOWR('N', 107, struct netbsd32_plistref)
+#define IOC_NPF_LOAD32		_IOWR('N', 102, netbsd32_nvlist_ref_t)
+#define IOC_NPF_TABLE32		_IOW('N', 103, struct netbsd32_npf_ioctl_table)
+#define IOC_NPF_STATS32		_IOW('N', 104, netbsd32_voidp)
+#define IOC_NPF_SAVE32		_IOR('N', 105, netbsd32_nvlist_ref_t)
+#define IOC_NPF_RULE32		_IOWR('N', 107, netbsd32_nvlist_ref_t)
+#define IOC_NPF_CONN_LOOKUP32	_IOWR('N', 108, netbsd32_nvlist_ref_t)
 
 /* From sys/drvctlio.h */
 struct netbsd32_devlistargs {
@@ -623,3 +652,46 @@ struct netbsd32_devrescanargs {
 #define DRVCTLCOMMAND32		_IOWR('D', 125, struct netbsd32_plistref)
 #define	DRVLISTDEV32		_IOWR('D', 127, struct netbsd32_devlistargs)
 #define DRVGETEVENT32		_IOR('D', 128, struct netbsd32_plistref)
+
+/* From sys/disk.h, sys/dkio.h */
+
+struct netbsd32_dkwedge_list {
+	netbsd32_voidp		dkwl_buf; /* storage for dkwedge_info array */
+	netbsd32_size_t		dkwl_bufsize;	/* size	of that	buffer */
+	u_int			dkwl_nwedges;	/* total number	of wedges */
+	u_int			dkwl_ncopied;	/* number actually copied */
+} __packed;
+
+#define DIOCLWEDGES32		_IOWR('d', 124, struct netbsd32_dkwedge_list)
+
+struct netbsd32_disk_strategy {
+	char dks_name[DK_STRATEGYNAMELEN];	/* name of strategy */
+	netbsd32_charp dks_param;		/* notyet; should be NULL */
+	netbsd32_size_t dks_paramlen;		/* notyet; should be 0 */
+} __packed;
+
+#define DIOCGSTRATEGY32		_IOR('d', 125, struct netbsd32_disk_strategy)
+#define DIOCSSTRATEGY32		_IOW('d', 126, struct netbsd32_disk_strategy)
+#define DIOCGDISKINFO32		_IOR('d', 127, struct netbsd32_plistref)
+
+/* from <dev/lockstat.h> */
+struct netbsd32_lsenable {
+	netbsd32_uintptr_t	le_csstart;	/* callsite start */
+	netbsd32_uintptr_t	le_csend;	/* callsite end */
+	netbsd32_uintptr_t	le_lockstart;	/* lock address start */
+	netbsd32_uintptr_t	le_lockend;	/* lock address end */
+	netbsd32_uintptr_t	le_nbufs;	/* buffers to allocate, 0 = default */
+	u_int			le_flags;	/* request flags */
+	u_int			le_mask;	/* event mask (LB_*) */
+};
+
+struct netbsd32_lsdisable {
+	netbsd32_size_t		ld_size;	/* buffer space allocated */
+	struct netbsd32_timespec ld_time;	/* time spent enabled */
+	uint64_t		ld_freq[64];	/* counter HZ by CPU number */
+};
+
+#define	IOC_LOCKSTAT_ENABLE32	_IOW('L', 1, struct netbsd32_lsenable)
+#define	IOC_LOCKSTAT_DISABLE32	_IOR('L', 2, struct netbsd32_lsdisable)
+
+int	netbsd32_drm_ioctl(struct file *, unsigned long, void *, struct lwp *);

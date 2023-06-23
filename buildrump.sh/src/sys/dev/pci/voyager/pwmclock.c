@@ -1,4 +1,4 @@
-/*	$NetBSD: pwmclock.c,v 1.10 2013/05/14 09:19:36 macallan Exp $	*/
+/*	$NetBSD: pwmclock.c,v 1.12 2020/05/29 12:30:41 rin Exp $	*/
 
 /*
  * Copyright (c) 2011 Michael Lorenz
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pwmclock.c,v 1.10 2013/05/14 09:19:36 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pwmclock.c,v 1.12 2020/05/29 12:30:41 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -77,7 +77,6 @@ static u_int get_pwmclock_timecount(struct timecounter *);
 
 struct pwmclock_softc *pwmclock;
 extern void (*initclocks_ptr)(void);
-extern struct clockframe cf;
 
 /* 0, 1/4, 3/8, 1/2, 5/8, 3/4, 7/8, 1 */
 static int scale_m[] = {1, 1, 3, 1, 5, 3, 7, 1};
@@ -93,14 +92,10 @@ static int  pwmclock_cpuspeed_available(SYSCTLFN_ARGS);
 static void pwmclock_shutdown(void *);
 
 static struct timecounter pwmclock_timecounter = {
-	get_pwmclock_timecount,	/* get_timecount */
-	0,			/* no poll_pps */
-	0xffffffff,		/* counter_mask */
-	0,			/* frequency */
-	"pwm",			/* name */
-	100,			/* quality */
-	NULL,			/* tc_priv */
-	NULL			/* tc_next */
+	.tc_get_timecount = get_pwmclock_timecount,
+	.tc_counter_mask = 0xffffffff,
+	.tc_name = "pwm",
+	.tc_quality = 100,
 };
 
 static int
@@ -137,7 +132,8 @@ pwmclock_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
-	voyager_establish_intr(parent, 22, pwmclock_intr, sc);
+	/* NULL here gets us the clockframe */
+	voyager_establish_intr(parent, 22, pwmclock_intr, NULL);
 	reg = voyager_set_pwm(100, 100); /* 100Hz, 10% duty cycle */
 	reg |= SM502_PWM_ENABLE | SM502_PWM_ENABLE_INTR |
 	       SM502_PWM_INTR_PENDING;
@@ -273,7 +269,8 @@ pwmclock_set_speed(struct pwmclock_softc *sc, int speed)
 int
 pwmclock_intr(void *cookie)
 {
-	struct pwmclock_softc *sc = cookie;
+	struct clockframe *cf = cookie;
+	struct pwmclock_softc *sc = pwmclock;
 	uint32_t reg, now, diff;
 
 	/* is it us? */
@@ -307,7 +304,7 @@ pwmclock_intr(void *cookie)
 		sc->sc_step = sc->sc_step_wanted;
 	}
 		 
-	hardclock(&cf);
+	hardclock(cf);
 
 	return 1;
 }

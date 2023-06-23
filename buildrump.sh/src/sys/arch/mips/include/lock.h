@@ -1,4 +1,4 @@
-/*	$NetBSD: lock.h,v 1.19 2015/06/01 22:55:13 matt Exp $	*/
+/*	$NetBSD: lock.h,v 1.21 2020/08/05 05:24:44 simonb Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2007 The NetBSD Foundation, Inc.
@@ -42,13 +42,13 @@
 #include <sys/param.h>
 
 static __inline int
-__SIMPLELOCK_LOCKED_P(__cpu_simple_lock_t *__ptr)
+__SIMPLELOCK_LOCKED_P(const __cpu_simple_lock_t *__ptr)
 {
 	return *__ptr != __SIMPLELOCK_UNLOCKED;
 }
 
 static __inline int
-__SIMPLELOCK_UNLOCKED_P(__cpu_simple_lock_t *__ptr)
+__SIMPLELOCK_UNLOCKED_P(const __cpu_simple_lock_t *__ptr)
 {
 	return *__ptr == __SIMPLELOCK_UNLOCKED;
 }
@@ -78,15 +78,15 @@ __cpu_simple_lock_try(__cpu_simple_lock_t *lp)
 		"	.set mips2		\n"
 		"1:	ll	%0, %4		\n"
 		"	bnez	%0, 2f		\n"
-		"	nop	       # BDslot	\n"
+		"	 nop			\n"
 		"	li	%0, %3		\n"
 		"	sc	%0, %2		\n"
 		"	beqz	%0, 2f		\n"
-		"	nop	       # BDslot	\n"
+		"	 nop			\n"
 		"	li	%1, 1		\n"
 		"	sync			\n"
 		"	j	3f		\n"
-		"	nop			\n"
+		"	 nop			\n"
 		"	nop			\n"
 		"2:	li	%1, 0		\n"
 		"3:				\n"
@@ -121,11 +121,11 @@ static __inline void
 mb_read(void)
 {
 	__asm volatile(
-	    "	.set push\n"
-	    "	.set mips2\n"
-	    "	sync\n"
-	    "	.set pop"
-	    ::: "memory"
+		"	.set push		\n"
+		"	.set mips2		\n"
+		"	sync			\n"
+		"	.set pop"
+		::: "memory"
 	);
 }
 

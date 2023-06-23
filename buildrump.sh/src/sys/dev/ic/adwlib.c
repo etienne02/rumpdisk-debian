@@ -1,4 +1,4 @@
-/* $NetBSD: adwlib.c,v 1.41 2013/09/12 11:23:37 martin Exp $        */
+/* $NetBSD: adwlib.c,v 1.44 2019/12/15 16:48:27 tsutsui Exp $        */
 
 /*
  * Low level routines for the Advanced Systems Inc. SCSI controllers chips
@@ -16,13 +16,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -52,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adwlib.c,v 1.41 2013/09/12 11:23:37 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adwlib.c,v 1.44 2019/12/15 16:48:27 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -463,12 +456,15 @@ XXX	  TODO!!!	if (ASC_PCI_ID2FUNC(sc->cfg.pci_slot_info) != 0) {
 		case 3:
 			/* Enable manual control with low on / high on. */
 			sc->cfg.termination |= ADW_TERM_CTL_L;
+			/* FALLTHROUGH */
 		case 2:
 			/* Enable manual control with low off / high on. */
 			sc->cfg.termination |= ADW_TERM_CTL_H;
+			/* FALLTHROUGH */
 		case 1:
 			/* Enable manual control with low off / high off. */
 			sc->cfg.termination |= ADW_TERM_CTL_SEL;
+			/* FALLTHROUGH */
 		case 0:
 			break;
 		default:
@@ -2018,7 +2014,7 @@ AdwISR(ADW_SOFTC *sc)
 		}
 
 		if (sc->async_callback != 0) {
-		    (*(ADW_ASYNC_CALLBACK)sc->async_callback)(sc, intrb_code);
+			(*sc->async_callback)(sc, intrb_code);
 		}
 	}
 
@@ -2095,7 +2091,7 @@ AdwISR(ADW_SOFTC *sc)
 		 * Notify the driver of the completed request by passing
 		 * the ADW_SCSI_REQ_Q pointer to its callback function.
 		 */
-		(*(ADW_ISR_CALLBACK)sc->isr_callback)(sc, scsiq);
+		(*sc->isr_callback)(sc, scsiq);
 		/*
 		 * Note: After the driver callback function is called, 'scsiq'
 		 * can no longer be referenced.

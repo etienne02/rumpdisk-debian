@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisatavar.h,v 1.17 2015/05/24 22:30:05 jmcneill Exp $	*/
+/*	$NetBSD: ahcisatavar.h,v 1.26 2020/12/28 14:08:42 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -58,8 +58,7 @@ struct ahci_softc {
 #define AHCI_PCI_QUIRK_FORCE	__BIT(0)  /* force attach */
 #define AHCI_PCI_QUIRK_BAD64	__BIT(1)  /* broken 64-bit DMA */
 #define AHCI_QUIRK_BADPMP	__BIT(2)  /* broken PMP support, ignore */
-#define AHCI_QUIRK_BADPMPRESET	__BIT(3)  /* broken PMP support for reset */
-#define AHCI_QUIRK_SKIP_RESET	__BIT(4)  /* skip drive reset sequence */
+#define AHCI_QUIRK_BADNCQ	__BIT(3)  /* possibly broken NCQ support, ignore */
 
 	uint32_t sc_ahci_cap;	/* copy of AHCI_CAP */
 	int sc_ncmds; /* number of command slots */
@@ -82,12 +81,13 @@ struct ahci_softc {
 		struct ahci_cmd_tbl *ahcic_cmd_tbl[AHCI_MAX_CMDS];
 		bus_addr_t ahcic_bus_cmd_tbl[AHCI_MAX_CMDS];
 		bus_dmamap_t ahcic_datad[AHCI_MAX_CMDS];
-		uint32_t  ahcic_cmds_active; /* active commands */
 	} sc_channels[AHCI_MAX_PORTS];
 
 	void	(*sc_channel_start)(struct ahci_softc *, struct ata_channel *);
 	void	(*sc_channel_stop)(struct ahci_softc *, struct ata_channel *);
+	int	(*sc_intr_establish)(struct ahci_softc *, int);
 
+	bool sc_ghc_mrsm;
 	bool sc_save_init_data;
 	struct {
 		uint32_t cap;
@@ -103,7 +103,8 @@ struct ahci_softc {
     (char *)(&(achp)->ahcic_cmdh[(cmd)]) - (char *)(sc)->sc_cmd_hdr, \
     sizeof(struct ahci_cmd_header), (op))
 #define AHCI_RFIS_SYNC(sc, achp, op) bus_dmamap_sync((sc)->sc_dmat, \
-    (sc)->sc_cmd_hdrd, (void *)(achp)->ahcic_rfis - (sc)->sc_cmd_hdr, \
+    (sc)->sc_cmd_hdrd, \
+    (char *)(achp)->ahcic_rfis - (char *)(sc)->sc_cmd_hdr, \
     AHCI_RFIS_SIZE, (op))
 #define AHCI_CMDTBL_SYNC(sc, achp, cmd, op) bus_dmamap_sync((sc)->sc_dmat, \
     (achp)->ahcic_cmd_tbld, AHCI_CMDTBL_SIZE * (cmd), \
@@ -113,11 +114,14 @@ struct ahci_softc {
     (sc)->sc_ahcih, (reg))
 #define AHCI_WRITE(sc, reg, val) bus_space_write_4((sc)->sc_ahcit, \
     (sc)->sc_ahcih, (reg), (val))
-    
+
+#define AHCI_CH2SC(chp)		(struct ahci_softc *)((chp)->ch_atac)
 
 void ahci_attach(struct ahci_softc *);
 int  ahci_detach(struct ahci_softc *, int);
+void ahci_childdetached(struct ahci_softc *, device_t);
 void ahci_resume(struct ahci_softc *);
 
 int  ahci_intr(void *);
+int  ahci_intr_port(void *);
 

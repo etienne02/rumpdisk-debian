@@ -60,7 +60,7 @@
 #if 0
 __FBSDID("$FreeBSD: head/sys/dev/ismt/ismt.c 266474 2014-05-20 19:55:06Z jimharris $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: ismt.c,v 1.4 2016/07/11 06:14:51 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ismt.c,v 1.9 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -68,7 +68,6 @@ __KERNEL_RCSID(0, "$NetBSD: ismt.c,v 1.4 2016/07/11 06:14:51 knakahara Exp $");
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
-#include <sys/mutex.h>
 #include <sys/proc.h>
 
 #include <sys/bus.h>
@@ -186,7 +185,6 @@ struct ismt_softc {
 	device_t		smbdev;
 
 	struct i2c_controller	sc_i2c_tag;
-	kmutex_t 		sc_i2c_mutex;
 
 	pci_chipset_tag_t	sc_pc;
 	pcitag_t		sc_pcitag;
@@ -215,8 +213,6 @@ struct ismt_softc {
 };
 
 static int	ismt_intr(void *);
-static int	ismt_i2c_acquire_bus(void *, int);
-static void	ismt_i2c_release_bus(void *, int);
 static int	ismt_i2c_exec(void *, i2c_op_t, i2c_addr_t, const void *,
     size_t, void *, size_t, int);
 static struct ismt_desc *ismt_alloc_desc(struct ismt_softc *);
@@ -266,23 +262,6 @@ ismt_intr(void *arg)
 		wakeup(sc);
 
 	return 1;
-}
-
-static int
-ismt_i2c_acquire_bus(void *cookie, int flags)
-{
-	struct ismt_softc *sc = cookie;
-
-	mutex_enter(&sc->sc_i2c_mutex);
-	return 0;
-}
-
-static void
-ismt_i2c_release_bus(void *cookie, int flags)
-{
-	struct ismt_softc *sc = cookie;
-
-	mutex_exit(&sc->sc_i2c_mutex);
 }
 
 static int
@@ -341,8 +320,6 @@ static struct ismt_desc *
 ismt_alloc_desc(struct ismt_softc *sc)
 {
 	struct ismt_desc *desc;
-
-	KASSERT(mutex_owned(&sc->sc_i2c_mutex));
 
 	desc = &sc->desc[sc->head++];
 	if (sc->head == ISMT_DESC_ENTRIES)
@@ -675,7 +652,7 @@ ismt_detach(device_t self, int flags)
 	if (sc->mmio_size)
 		bus_space_unmap(sc->mmio_tag, sc->mmio_handle, sc->mmio_size);
 
-	mutex_destroy(&sc->sc_i2c_mutex);
+	iic_tag_fini(&sc->sc_i2c_tag);
 	return rv;
 }
 
@@ -761,8 +738,8 @@ ismt_attach(device_t parent, device_t self, void *aux)
 	}
 	intrstr = pci_intr_string(pa->pa_pc, sc->sc_pihp[0], intrbuf,
 	    sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pa->pa_pc, sc->sc_pihp[0], IPL_BIO,
-	    ismt_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(pa->pa_pc, sc->sc_pihp[0],
+	    IPL_BIO, ismt_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(sc->pcidev, "unable to establish %s\n",
 		    (pci_intr_type(pa->pa_pc, sc->sc_pihp[0])
@@ -776,7 +753,6 @@ ismt_attach(device_t parent, device_t self, void *aux)
 	aprint_normal_dev(sc->pcidev, "interrupting at %s\n", intrstr);
 
 	sc->smbdev = NULL;
-	mutex_init(&sc->sc_i2c_mutex, MUTEX_DEFAULT, IPL_NONE);
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
 
@@ -801,6 +777,7 @@ ismt_match(device_t parent, cfdata_t match, void *aux)
 	case PCI_PRODUCT_INTEL_S1200_SMBUS_0:
 	case PCI_PRODUCT_INTEL_S1200_SMBUS_1:
 	case PCI_PRODUCT_INTEL_C2000_SMBUS:
+	case PCI_PRODUCT_INTEL_C3K_SMBUS:
 		break;
 	default:
 		return 0;
@@ -810,27 +787,22 @@ ismt_match(device_t parent, cfdata_t match, void *aux)
 }
 
 static int
-ismt_rescan(device_t self, const char *ifattr, const int *flags)
+ismt_rescan(device_t self, const char *ifattr, const int *locators)
 {
 	struct ismt_softc *sc = device_private(self);
 	struct i2cbus_attach_args iba;
 
-	if (!ifattr_match(ifattr, "i2cbus"))
-		return 0;
-
-	if (sc->smbdev)
+	if (sc->smbdev != NULL)
 		return 0;
 
 	/* Attach I2C bus */
+	iic_tag_init(&sc->sc_i2c_tag);
 	sc->sc_i2c_tag.ic_cookie = sc;
-	sc->sc_i2c_tag.ic_acquire_bus = ismt_i2c_acquire_bus;
-	sc->sc_i2c_tag.ic_release_bus = ismt_i2c_release_bus;
 	sc->sc_i2c_tag.ic_exec = ismt_i2c_exec;
 
 	memset(&iba, 0, sizeof(iba));
-	iba.iba_type = I2C_TYPE_SMBUS;
 	iba.iba_tag = &sc->sc_i2c_tag;
-	sc->smbdev = config_found_ia(self, ifattr, &iba, iicbus_print);
+	sc->smbdev = config_found(self, &iba, iicbus_print, CFARGS_NONE);
 
 	return 0;
 }
@@ -838,9 +810,8 @@ ismt_rescan(device_t self, const char *ifattr, const int *flags)
 static void
 ismt_config_interrupts(device_t self)
 {
-	int flags = 0;
 
-	ismt_rescan(self, "i2cbus", &flags);
+	ismt_rescan(self, NULL, NULL);
 }
 
 static void

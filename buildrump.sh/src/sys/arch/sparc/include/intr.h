@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.12 2012/07/27 05:36:11 matt Exp $ */
+/*	$NetBSD: intr.h,v 1.14 2021/01/24 07:36:54 mrg Exp $ */
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -47,7 +47,7 @@
 #define IPL_HIGH	15	/* everything */
 
 /*
- * fd hardware, ts102, and tadpole microcontoller interrupts are at level 11
+ * fd hardware, ts102, and tadpole microcontroller interrupts are at level 11
  */
 
 #define	IPL_FD		IPL_SCHED
@@ -80,6 +80,8 @@ sparc_softintr_disestablish(void *cookie);
  * structure, which is otherwise internal to intr.c.
  */
 #if defined(SUN4M) || defined(SUN4D)
+extern int (*moduleerr_handler)(void);
+extern int (*memerr_handler)(void);
 extern void	raise(int, int);
 #if !(defined(SUN4) || defined(SUN4C))
 #define sparc_softintr_schedule(cookie)	raise(0, *((int *) (cookie)))

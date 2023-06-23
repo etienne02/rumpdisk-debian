@@ -28,7 +28,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cxgb_sge.c,v 1.4 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cxgb_sge.c,v 1.7 2018/12/22 14:28:56 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -190,8 +190,8 @@ reclaim_completed_tx(struct sge_txq *q, int nbufs, struct mbuf **mvec)
 
     mtx_assert(&q->lock, MA_OWNED);
     if (reclaim > 0) {
-        n = free_tx_desc(q, min(reclaim, nbufs), mvec);
-        reclaimed = min(reclaim, nbufs);
+        n = free_tx_desc(q, uimin(reclaim, nbufs), mvec);
+        reclaimed = uimin(reclaim, nbufs);
         q->cleaned += reclaimed;
         q->in_use -= reclaimed;
     }
@@ -294,7 +294,7 @@ get_imm_packet(adapter_t *sc, const struct rsp_desc *resp, struct t3_mbuf_hdr *m
     len = G_RSPD_LEN(ntohl(resp->len_cq));
 
     if (m) {
-        MH_ALIGN(m, IMMED_PKT_SIZE);
+        m_align(m, IMMED_PKT_SIZE);
         memcpy(m->m_data, resp->imm_data, IMMED_PKT_SIZE);
         m->m_len = len;
 
@@ -443,7 +443,7 @@ void
 t3_update_qset_coalesce(struct sge_qset *qs, const struct qset_params *p)
 {
 
-    qs->rspq.holdoff_tmr = max(p->coalesce_nsecs/100, 1U);
+    qs->rspq.holdoff_tmr = uimax(p->coalesce_nsecs/100, 1U);
     qs->rspq.polling = 0 /* p->polling */;
 }
 
@@ -549,7 +549,7 @@ free_rx_bufs(adapter_t *sc, struct sge_fl *q)
 static __inline void
 __refill_fl(adapter_t *adap, struct sge_fl *fl)
 {
-    refill_fl(adap, fl, min(16U, fl->size - fl->credits));
+    refill_fl(adap, fl, uimin(16U, fl->size - fl->credits));
 }
 
 #ifndef DISABLE_MBUF_IOVEC
@@ -1133,7 +1133,7 @@ write_wr_hdr_sgl(unsigned int ndesc, struct tx_desc *txd, struct txq_state *txqs
             wrp = (struct work_request_hdr *)txd;
             wrp->wr_hi = htonl(V_WR_DATATYPE(1) |
                 V_WR_SGLSFLT(1)) | wr_hi;
-            wrp->wr_lo = htonl(V_WR_LEN(min(WR_FLITS,
+            wrp->wr_lo = htonl(V_WR_LEN(uimin(WR_FLITS,
                     sgl_flits + 1)) |
                 V_WR_GEN(txqs->gen)) | wr_lo;
             wr_gen2(txd, txqs->gen);
@@ -1198,8 +1198,8 @@ t3_encap(struct port_info *p, struct mbuf **m, int *free_it)
      * XXX need to add VLAN support for 6.x
      */
 #ifdef VLAN_SUPPORTED
-    if (m0->m_flags & M_VLANTAG)
-        cntrl |= F_TXPKT_VLAN_VLD | V_TXPKT_VLAN(m0->m_pkthdr.ether_vtag);
+    if (vlan_has_tag(m0))
+        cntrl |= F_TXPKT_VLAN_VLD | V_TXPKT_VLAN(vlan_get_tag(m0));
     if  (m0->m_pkthdr.csum_flags & (CSUM_TSO))
         tso_info = V_LSO_MSS(m0->m_pkthdr.tso_segsz);
 #endif
@@ -1222,7 +1222,7 @@ t3_encap(struct port_info *p, struct mbuf **m, int *free_it)
         }
 
 #ifdef VLAN_SUPPORTED
-        if (__predict_false(m0->m_flags & M_VLANTAG)) {
+        if (vlan_has_tag(m0)) {
             eth_type = CPL_ETH_II_VLAN;
             ip = (struct ip *)(pkthdr + ETHER_HDR_LEN +
                 ETHER_VLAN_ENCAP_LEN);
@@ -2163,9 +2163,8 @@ t3_rx_eth(struct adapter *adap, struct sge_rspq *rq, struct mbuf *m, int ethpad)
      * XXX need to add VLAN support for 6.x
      */
 #ifdef VLAN_SUPPORTED
-    if (__predict_false(cpl->vlan_valid)) {
-        m->m_pkthdr.ether_vtag = ntohs(cpl->vlan);
-        m->m_flags |= M_VLANTAG;
+    if (cpl->vlan_valid) {
+        vlan_set_tag(ntohs(cpl->vlan));
     }
 #endif
 

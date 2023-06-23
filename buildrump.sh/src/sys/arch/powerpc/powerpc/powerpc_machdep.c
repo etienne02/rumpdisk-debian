@@ -1,4 +1,4 @@
-/*	$NetBSD: powerpc_machdep.c,v 1.71 2015/01/23 07:27:05 nonaka Exp $	*/
+/*	$NetBSD: powerpc_machdep.c,v 1.83 2021/04/15 00:04:07 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,13 +32,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: powerpc_machdep.c,v 1.71 2015/01/23 07:27:05 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: powerpc_machdep.c,v 1.83 2021/04/15 00:04:07 rin Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_altivec.h"
 #include "opt_ddb.h"
 #include "opt_modular.h"
 #include "opt_multiprocessor.h"
 #include "opt_ppcarch.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -89,9 +91,7 @@ extern int powersave;
 char *booted_kernel;
 
 const pcu_ops_t * const pcu_ops_md_defs[PCU_UNIT_COUNT] = {
-#if defined(PPC_HAVE_FPU)
 	[PCU_FPU] = &fpu_ops,
-#endif
 #if defined(ALTIVEC) || defined(PPC_HAVE_SPE)
 	[PCU_VEC] = &vec_ops,
 #endif
@@ -160,6 +160,11 @@ setregs(struct lwp *l, struct exec_package *epp, vaddr_t stack)
 	tf->tf_vrsave = 0;
 #endif
 	pcb->pcb_flags = PSL_FE_DFLT;
+
+#if defined(PPC_BOOKE) || defined(PPC_IBM4XX)
+	p->p_md.md_ss_addr[0] = p->p_md.md_ss_addr[1] = 0;
+	p->p_md.md_ss_insn[0] = p->p_md.md_ss_insn[1] = 0;
+#endif
 }
 
 /*
@@ -285,6 +290,17 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 		       CTLTYPE_STRING, "booted_kernel", NULL,
 		       sysctl_machdep_booted_kernel, 0, NULL, 0,
 		       CTL_MACHDEP, CPU_BOOTED_KERNEL, CTL_EOL);
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
+		       CTLTYPE_INT, "fpu_present", NULL,
+		       NULL,
+#if defined(PPC_HAVE_FPU)
+		       1,
+#else
+		       0,
+#endif
+		       NULL, 0,
+		       CTL_MACHDEP, CPU_FPU, CTL_EOL);
 }
 
 /*
@@ -365,7 +381,8 @@ void
 cpu_idle(void)
 {
 	KASSERT(mfmsr() & PSL_EE);
-	KASSERT(curcpu()->ci_cpl == IPL_NONE);
+	KASSERTMSG(curcpu()->ci_cpl == IPL_NONE,
+	    "ci_cpl = %d", curcpu()->ci_cpl);
 	(*curcpu()->ci_idlespin)();
 }
 
@@ -373,73 +390,34 @@ void
 cpu_ast(struct lwp *l, struct cpu_info *ci)
 {
 	l->l_md.md_astpending = 0;	/* we are about to do it */
-
 	if (l->l_pflag & LP_OWEUPC) {
 		l->l_pflag &= ~LP_OWEUPC;
 		ADDUPROF(l);
 	}
-
-	/* Check whether we are being preempted. */
-	if (ci->ci_want_resched) {
-		preempt();
-	}
 }
 
 void
-cpu_need_resched(struct cpu_info *ci, int flags)
+cpu_need_resched(struct cpu_info *ci, struct lwp *l, int flags)
 {
-	struct lwp * const l = ci->ci_data.cpu_onproc;
-#if defined(MULTIPROCESSOR)
-	struct cpu_info * const cur_ci = curcpu();
-#endif
-
 	KASSERT(kpreempt_disabled());
 
-#ifdef MULTIPROCESSOR
-	atomic_or_uint(&ci->ci_want_resched, flags);
-#else
-	ci->ci_want_resched |= flags;
-#endif
-
-	if (__predict_false((l->l_pflag & LP_INTR) != 0)) {
-		/*
-		 * No point doing anything, it will switch soon.
-		 * Also here to prevent an assertion failure in
-		 * kpreempt() due to preemption being set on a
-		 * soft interrupt LWP.
-		 */
-		return;
-	}
-
-	if (__predict_false(l == ci->ci_data.cpu_idlelwp)) {
-#if defined(MULTIPROCESSOR)
-		/*
-		 * If the other CPU is idling, it must be waiting for an
-		 * interrupt.  So give it one.
-		 */
-		if (__predict_false(ci != cur_ci))
-			cpu_send_ipi(cpu_index(ci), IPI_NOMESG);
-#endif
-		return;
-	}
-
 #ifdef __HAVE_PREEMPTION
-	if (flags & RESCHED_KPREEMPT) {
-		atomic_or_uint(&l->l_dopreempt, DOPREEMPT_ACTIVE);
-		if (ci == cur_ci) {
-			softint_trigger(SOFTINT_KPREEMPT);
-		} else {
+	if ((flags & RESCHED_KPREEMPT) != 0) {
+		if ((flags & RESCHED_REMOTE) != 0) {
 			cpu_send_ipi(cpu_index(ci), IPI_KPREEMPT);
+		} else {
+			softint_trigger(SOFTINT_KPREEMPT);
 		}
 		return;
 	}
 #endif
-	l->l_md.md_astpending = 1;		/* force call to ast() */
+	if ((flags & RESCHED_REMOTE) != 0) {
 #if defined(MULTIPROCESSOR)
-	if (ci != cur_ci && (flags & RESCHED_IMMED)) {
-		cpu_send_ipi(cpu_index(ci), IPI_NOMESG);
-	} 
+		cpu_send_ipi(cpu_index(ci), IPI_AST);
 #endif
+	} else {
+		l->l_md.md_astpending = 1;	/* force call to cpu_ast() */
+	}
 }
 
 void
@@ -452,7 +430,13 @@ cpu_need_proftick(lwp_t *l)
 void
 cpu_signotify(lwp_t *l)
 {
-	l->l_md.md_astpending = 1;
+	if (l->l_cpu != curcpu()) {
+#if defined(MULTIPROCESSOR)
+		cpu_send_ipi(cpu_index(l->l_cpu), IPI_AST);
+#endif
+	} else {
+		l->l_md.md_astpending = 1;
+	}
 }
 
 vaddr_t
@@ -533,7 +517,7 @@ CTASSERT(MAXCPUS <= 32);
 #define	CPUSET_EXPORT(kset, set)	kcpuset_export_u32((kset), &(set), sizeof(set))
 
 /*
- * Send an inter-processor interupt to CPUs in cpuset (excludes curcpu())
+ * Send an inter-processor interrupt to CPUs in cpuset (excludes curcpu())
  */
 static void
 cpu_multicast_ipi(__cpuset_t cpuset, uint32_t msg)
@@ -760,7 +744,83 @@ cpu_debug_dump(void)
 #endif	/* DDB */
 #endif /* MULTIPROCESSOR */
 
-#ifdef MODULAR
+int
+emulate_mxmsr(struct lwp *l, struct trapframe *tf, uint32_t opcode)
+{
+
+#define	OPC_MFMSR_CODE		0x7c0000a6
+#define	OPC_MFMSR_MASK		0xfc1fffff
+#define	OPC_MFMSR_P(o)		(((o) & OPC_MFMSR_MASK) == OPC_MFMSR_CODE)
+
+#define	OPC_MTMSR_CODE		0x7c000124
+#define	OPC_MTMSR_MASK		0xfc1fffff
+#define	OPC_MTMSR_P(o)		(((o) & OPC_MTMSR_MASK) == OPC_MTMSR_CODE)
+
+#define	OPC_MXMSR_REG(o)	(((o) >> 21) & 0x1f)
+
+	if (OPC_MFMSR_P(opcode)) {
+		struct pcb * const pcb = lwp_getpcb(l);
+		register_t msr = tf->tf_srr1 & PSL_USERSRR1;
+
+		if (fpu_used_p(l))
+			msr |= PSL_FP;
+#ifdef ALTIVEC
+		if (vec_used_p(l))
+			msr |= PSL_VEC;
+#endif
+
+		msr |= (pcb->pcb_flags & PSL_FE_PREC);
+		tf->tf_fixreg[OPC_MXMSR_REG(opcode)] = msr;
+		return 1;
+	}
+
+	if (OPC_MTMSR_P(opcode)) {
+		struct pcb * const pcb = lwp_getpcb(l);
+		register_t msr = tf->tf_fixreg[OPC_MXMSR_REG(opcode)];
+
+		/*
+		 * Ignore the FP enable bit in the requested MSR.
+		 * It might be set in the thread's actual MSR but the
+		 * user code isn't allowed to change it.
+		 */
+		msr &= ~PSL_FP;
+#ifdef ALTIVEC
+		msr &= ~PSL_VEC;
+#endif
+
+		/*
+		 * Don't let the user muck with bits he's not allowed to.
+		 */
+#ifdef PPC_HAVE_FPU
+		if (!PSL_USEROK_P(msr))
+#else
+		if (!PSL_USEROK_P(msr & ~PSL_FE_PREC))
+#endif
+			return 0;
+
+		/*
+		 * For now, only update the FP exception mode.
+		 */
+		pcb->pcb_flags &= ~PSL_FE_PREC;
+		pcb->pcb_flags |= msr & PSL_FE_PREC;
+
+#ifdef PPC_HAVE_FPU
+		/*
+		 * If we think we have the FPU, update SRR1 too.  If we're
+		 * wrong userret() will take care of it.
+		 */
+		if (tf->tf_srr1 & PSL_FP) {
+			tf->tf_srr1 &= ~(PSL_FE0|PSL_FE1);
+			tf->tf_srr1 |= msr & (PSL_FE0|PSL_FE1);
+		}
+#endif
+		return 1;
+	}
+
+	return 0;
+}
+
+#if defined(MODULAR) && !defined(__PPC_HAVE_MODULE_INIT_MD)
 /*
  * Push any modules loaded by the boot loader.
  */
@@ -768,7 +828,7 @@ void
 module_init_md(void)
 {
 }
-#endif /* MODULAR */
+#endif
 
 bool
 mm_md_direct_mapped_phys(paddr_t pa, vaddr_t *vap)

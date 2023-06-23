@@ -1,4 +1,4 @@
-/*	$NetBSD: ntfs_vfsops.c,v 1.104 2015/03/28 19:24:05 maxv Exp $	*/
+/*	$NetBSD: ntfs_vfsops.c,v 1.110 2020/04/13 19:23:18 ad Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 Semen Ustimenko
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ntfs_vfsops.c,v 1.104 2015/03/28 19:24:05 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ntfs_vfsops.c,v 1.110 2020/04/13 19:23:18 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -67,12 +67,12 @@ MALLOC_JUSTDEFINE(M_NTFSDIR,"NTFS dir",  "NTFS dir buffer");
 
 static int	ntfs_superblock_validate(struct ntfsmount *);
 static int	ntfs_mount(struct mount *, const char *, void *, size_t *);
-static int	ntfs_root(struct mount *, struct vnode **);
+static int	ntfs_root(struct mount *, int, struct vnode **);
 static int	ntfs_start(struct mount *, int);
 static int	ntfs_statvfs(struct mount *, struct statvfs *);
 static int	ntfs_sync(struct mount *, int, kauth_cred_t);
 static int	ntfs_unmount(struct mount *, int);
-static int	ntfs_vget(struct mount *mp, ino_t ino,
+static int	ntfs_vget(struct mount *mp, ino_t ino, int,
 			       struct vnode **vpp);
 static int	ntfs_loadvnode(struct mount *, struct vnode *,
 		                    const void *, size_t, const void **);
@@ -83,7 +83,7 @@ static int	ntfs_vptofh(struct vnode *, struct fid *, size_t *);
 static void	ntfs_init(void);
 static void	ntfs_reinit(void);
 static void	ntfs_done(void);
-static int	ntfs_fhtovp(struct mount *, struct fid *,
+static int	ntfs_fhtovp(struct mount *, struct fid *, int,
 				struct vnode **);
 static int	ntfs_mountroot(void);
 
@@ -115,14 +115,14 @@ ntfs_mountroot(void)
 	args.mode = 0777;
 
 	if ((error = ntfs_mountfs(rootvp, mp, &args, l)) != 0) {
-		vfs_unbusy(mp, false, NULL);
-		vfs_destroy(mp);
+		vfs_unbusy(mp);
+		vfs_rele(mp);
 		return (error);
 	}
 
 	mountlist_append(mp);
 	(void)ntfs_statvfs(mp, &mp->mnt_stat);
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 	return (0);
 }
 
@@ -322,6 +322,7 @@ ntfs_mountfs(struct vnode *devvp, struct mount *mp, struct ntfs_args *argsp, str
 	dev_t dev = devvp->v_rdev;
 	int error, i;
 	struct vnode *vp;
+	struct vnode_iterator *marker;
 
 	ntmp = NULL;
 
@@ -386,7 +387,8 @@ ntfs_mountfs(struct vnode *devvp, struct mount *mp, struct ntfs_args *argsp, str
 	{
 		int pi[3] = { NTFS_MFTINO, NTFS_ROOTINO, NTFS_BITMAPINO };
 		for (i = 0; i < 3; i++) {
-			error = VFS_VGET(mp, pi[i], &(ntmp->ntm_sysvn[pi[i]]));
+			error = VFS_VGET(mp, pi[i], LK_EXCLUSIVE,
+			    &(ntmp->ntm_sysvn[pi[i]]));
 			if (error)
 				goto out1;
 			ntmp->ntm_sysvn[pi[i]]->v_vflag |= VV_SYSTEM;
@@ -416,7 +418,7 @@ ntfs_mountfs(struct vnode *devvp, struct mount *mp, struct ntfs_args *argsp, str
 		struct attrdef ad;
 
 		/* Open $AttrDef */
-		error = VFS_VGET(mp, NTFS_ATTRDEFINO, &vp);
+		error = VFS_VGET(mp, NTFS_ATTRDEFINO, LK_EXCLUSIVE, &vp);
 		if (error)
 			goto out1;
 
@@ -471,9 +473,13 @@ out1:
 		if (ntmp->ntm_sysvn[i])
 			vrele(ntmp->ntm_sysvn[i]);
 
-	if (vflush(mp, NULLVP, 0)) {
-		dprintf(("ntfs_mountfs: vflush failed\n"));
+	vfs_vnode_iterator_init(mp, &marker);
+	while ((vp = vfs_vnode_iterator_next(marker, NULL, NULL))) {
+		if (vrecycle(vp))
+			continue;
+		panic("%s: cannot recycle vnode %p", __func__, vp);
 	}
+	vfs_vnode_iterator_destroy(marker);
 out:
 	spec_node_setmountedfs(devvp, NULL);
 	if (bp)
@@ -520,7 +526,7 @@ ntfs_unmount(struct mount *mp, int mntflags)
 	/* Check if only system vnodes are rest */
 	for (i = 0; i < NTFS_SYSNODESNUM; i++)
 		if ((ntmp->ntm_sysvn[i]) &&
-		    (ntmp->ntm_sysvn[i]->v_usecount > 1))
+		    (vrefcnt(ntmp->ntm_sysvn[i]) > 1))
 			return (EBUSY);
 
 	/* Dereference all system vnodes */
@@ -565,14 +571,14 @@ ntfs_unmount(struct mount *mp, int mntflags)
 }
 
 static int
-ntfs_root(struct mount *mp, struct vnode **vpp)
+ntfs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct vnode *nvp;
 	int error = 0;
 
 	dprintf(("ntfs_root(): sysvn: %p\n",
 		VFSTONTFS(mp)->ntm_sysvn[NTFS_ROOTINO]));
-	error = VFS_VGET(mp, (ino_t)NTFS_ROOTINO, &nvp);
+	error = VFS_VGET(mp, (ino_t)NTFS_ROOTINO, lktype, &nvp);
 	if (error) {
 		printf("ntfs_root: VFS_VGET failed: %d\n", error);
 		return (error);
@@ -644,7 +650,7 @@ ntfs_sync(struct mount *mp, int waitfor, kauth_cred_t cred)
 
 /*ARGSUSED*/
 static int
-ntfs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
+ntfs_fhtovp(struct mount *mp, struct fid *fhp, int lktype, struct vnode **vpp)
 {
 	struct ntfid ntfh;
 	int error;
@@ -656,7 +662,7 @@ ntfs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
 	    (unsigned long long)ntfh.ntfid_ino));
 
 	error = ntfs_vgetex(mp, ntfh.ntfid_ino, ntfh.ntfid_attr, "",
-			LK_EXCLUSIVE, vpp);
+			lktype, vpp);
 	if (error != 0) {
 		*vpp = NULLVP;
 		return (error);
@@ -817,9 +823,9 @@ out:
 }
 
 static int
-ntfs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+ntfs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
-	return ntfs_vgetex(mp, ino, NTFS_A_DATA, "", LK_EXCLUSIVE, vpp);
+	return ntfs_vgetex(mp, ino, NTFS_A_DATA, "", lktype, vpp);
 }
 
 int
@@ -883,7 +889,7 @@ struct vfsops ntfs_vfsops = {
 	.vfs_mountroot = ntfs_mountroot,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,

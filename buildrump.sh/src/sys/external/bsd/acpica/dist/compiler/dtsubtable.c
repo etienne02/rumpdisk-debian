@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,7 +42,6 @@
  */
 
 #include "aslcompiler.h"
-#include "dtcompiler.h"
 
 #define _COMPONENT          DT_COMPILER
         ACPI_MODULE_NAME    ("dtsubtable")
@@ -78,7 +77,7 @@ DtCreateSubtable (
 
     /* Create a new buffer for the subtable data */
 
-    String = UtStringCacheCalloc (Length);
+    String = UtLocalCacheCalloc (Length);
     Subtable->Buffer = ACPI_CAST_PTR (UINT8, String);
     memcpy (Subtable->Buffer, Buffer, Length);
 
@@ -154,8 +153,8 @@ DtPushSubtable (
     DT_SUBTABLE             *Subtable)
 {
 
-    Subtable->StackTop = Gbl_SubtableStack;
-    Gbl_SubtableStack = Subtable;
+    Subtable->StackTop = AslGbl_SubtableStack;
+    AslGbl_SubtableStack = Subtable;
 }
 
 
@@ -178,11 +177,11 @@ DtPopSubtable (
     DT_SUBTABLE             *Subtable;
 
 
-    Subtable = Gbl_SubtableStack;
+    Subtable = AslGbl_SubtableStack;
 
     if (Subtable)
     {
-        Gbl_SubtableStack = Subtable->StackTop;
+        AslGbl_SubtableStack = Subtable->StackTop;
     }
 }
 
@@ -204,7 +203,7 @@ DtPeekSubtable (
     void)
 {
 
-    return (Gbl_SubtableStack);
+    return (AslGbl_SubtableStack);
 }
 
 
@@ -348,9 +347,9 @@ DtGetSubtableLength (
 Error:
     if (!Field)
     {
-        snprintf (MsgBuffer, sizeof(MsgBuffer), "Found NULL field - Field name \"%s\" needed",
+        snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer), "Found NULL field - Field name \"%s\" needed",
             Info->Name);
-        DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, MsgBuffer);
+        DtFatal (ASL_MSG_COMPILER_INTERNAL, NULL, AslGbl_MsgBuffer);
     }
 
     return (ASL_EOF);

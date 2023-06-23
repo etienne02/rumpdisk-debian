@@ -1,4 +1,4 @@
-/*	$NetBSD: aic6915.c,v 1.33 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: aic6915.c,v 1.44 2020/03/15 22:19:00 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aic6915.c,v 1.33 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aic6915.c,v 1.44 2020/03/15 22:19:00 thorpej Exp $");
 
 
 #include <sys/param.h>
@@ -83,8 +83,8 @@ static int	sf_add_rxbuf(struct sf_softc *, int);
 static uint8_t	sf_read_eeprom(struct sf_softc *, int);
 static void	sf_set_filter(struct sf_softc *);
 
-static int	sf_mii_read(device_t, int, int);
-static void	sf_mii_write(device_t, int, int, int);
+static int	sf_mii_read(device_t, int, int, uint16_t *);
+static int	sf_mii_write(device_t, int, int, uint16_t);
 static void	sf_mii_statchg(struct ifnet *);
 
 static void	sf_tick(void *);
@@ -137,11 +137,13 @@ void
 sf_attach(struct sf_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
+	struct mii_data * const mii = &sc->sc_mii;
 	int i, rseg, error;
 	bus_dma_segment_t seg;
-	u_int8_t enaddr[ETHER_ADDR_LEN];
+	uint8_t enaddr[ETHER_ADDR_LEN];
 
 	callout_init(&sc->sc_tick_callout, 0);
+	callout_setfunc(&sc->sc_tick_callout, sf_tick, sc);
 
 	/*
 	 * If we're I/O mapped, the functional register handle is
@@ -182,7 +184,7 @@ sf_attach(struct sf_softc *sc)
 
 	if ((error = bus_dmamem_map(sc->sc_dmat, &seg, rseg,
 	    sizeof(struct sf_control_data), (void **)&sc->sc_control_data,
-	    BUS_DMA_NOWAIT|BUS_DMA_COHERENT)) != 0) {
+	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(sc->sc_dev,
 		    "unable to map control data, error = %d\n", error);
 		goto fail_1;
@@ -254,20 +256,20 @@ sf_attach(struct sf_softc *sc)
 	/*
 	 * Initialize our media structures and probe the MII.
 	 */
-	sc->sc_mii.mii_ifp = ifp;
-	sc->sc_mii.mii_readreg = sf_mii_read;
-	sc->sc_mii.mii_writereg = sf_mii_write;
-	sc->sc_mii.mii_statchg = sf_mii_statchg;
-	sc->sc_ethercom.ec_mii = &sc->sc_mii;
-	ifmedia_init(&sc->sc_mii.mii_media, IFM_IMASK, ether_mediachange,
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = sf_mii_read;
+	mii->mii_writereg = sf_mii_write;
+	mii->mii_statchg = sf_mii_statchg;
+	sc->sc_ethercom.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
 	    ether_mediastatus);
-	mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(sc->sc_dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE, 0, NULL);
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE);
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
 	} else
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 
 	strlcpy(ifp->if_xname, device_xname(sc->sc_dev), IFNAMSIZ);
 	ifp->if_softc = sc;
@@ -283,6 +285,7 @@ sf_attach(struct sf_softc *sc)
 	 * Attach the interface.
 	 */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, enaddr);
 
 	/*
@@ -394,13 +397,14 @@ sf_start(struct ifnet *ifp)
 		 * again.
 		 */
 		if (bus_dmamap_load_mbuf(sc->sc_dmat, dmamap, m0,
-		    BUS_DMA_WRITE|BUS_DMA_NOWAIT) != 0) {
+		    BUS_DMA_WRITE | BUS_DMA_NOWAIT) != 0) {
 			MGETHDR(m, M_DONTWAIT, MT_DATA);
 			if (m == NULL) {
 				aprint_error_dev(sc->sc_dev,
 				    "unable to allocate Tx mbuf\n");
 				break;
 			}
+			MCLAIM(m, &sc->sc_ethercom.ec_tx_mowner);
 			if (m0->m_pkthdr.len > MHLEN) {
 				MCLGET(m, M_DONTWAIT);
 				if ((m->m_flags & M_EXT) == 0) {
@@ -413,7 +417,7 @@ sf_start(struct ifnet *ifp)
 			m_copydata(m0, 0, m0->m_pkthdr.len, mtod(m, void *));
 			m->m_pkthdr.len = m->m_len = m0->m_pkthdr.len;
 			error = bus_dmamap_load_mbuf(sc->sc_dmat, dmamap,
-			    m, BUS_DMA_WRITE|BUS_DMA_NOWAIT);
+			    m, BUS_DMA_WRITE | BUS_DMA_NOWAIT);
 			if (error) {
 				aprint_error_dev(sc->sc_dev,
 				    "unable to load Tx buffer, error = %d\n",
@@ -462,12 +466,7 @@ sf_start(struct ifnet *ifp)
 		/*
 		 * Pass the packet to any BPF listeners.
 		 */
-		bpf_mtap(ifp, m0);
-	}
-
-	if (sc->sc_txpending == (SF_NTXDESC - 1)) {
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 	}
 
 	if (sc->sc_txpending != opending) {
@@ -500,7 +499,7 @@ sf_watchdog(struct ifnet *ifp)
 	struct sf_softc *sc = ifp->if_softc;
 
 	printf("%s: device timeout\n", device_xname(sc->sc_dev));
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 
 	(void) sf_init(ifp);
 
@@ -564,7 +563,7 @@ sf_intr(void *arg)
 			sf_rxintr(sc);
 
 		/* Handle transmit completion interrupts. */
-		if (isr & (IS_TxDmaDoneInt|IS_TxQueueDoneInt))
+		if (isr & (IS_TxDmaDoneInt | IS_TxQueueDoneInt))
 			sf_txintr(sc);
 
 		/* Handle abnormal interrupts. */
@@ -605,7 +604,7 @@ sf_intr(void *arg)
 			sf_init(&sc->sc_ethercom.ec_if);
 
 		/* Try and get more packets going. */
-		sf_start(&sc->sc_ethercom.ec_if);
+		if_schedule_deferred_start(&sc->sc_ethercom.ec_if);
 	}
 
 	return (handled);
@@ -633,8 +632,6 @@ sf_txintr(struct sf_softc *sc)
 
 	if (consumer == producer)
 		return;
-
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	while (consumer != producer) {
 		SF_CDTXCSYNC(sc, consumer, BUS_DMASYNC_POSTREAD);
@@ -709,9 +706,9 @@ sf_rxintr(struct sf_softc *sc)
 	while (consumer != producer) {
 		rcd = &sc->sc_rxcomp[consumer];
 		SF_CDRXCSYNC(sc, consumer,
-		    BUS_DMASYNC_POSTREAD|BUS_DMASYNC_POSTWRITE);
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		SF_CDRXCSYNC(sc, consumer,
-		    BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		word0 = le32toh(rcd->rcd_word0);
 		rxidx = RCD_W0_EndIndex(word0);
@@ -744,7 +741,7 @@ sf_rxintr(struct sf_softc *sc)
 		 */
 		m = ds->ds_mbuf;
 		if (sf_add_rxbuf(sc, rxidx) != 0) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			SF_INIT_RXDESC(sc, rxidx);
 			bus_dmamap_sync(sc->sc_dmat, ds->ds_dmamap, 0,
 			    ds->ds_dmamap->dm_mapsize, BUS_DMASYNC_PREREAD);
@@ -760,12 +757,13 @@ sf_rxintr(struct sf_softc *sc)
 		MGETHDR(m, M_DONTWAIT, MT_DATA);
 		if (m == NULL) {
  dropit:
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			SF_INIT_RXDESC(sc, rxidx);
 			bus_dmamap_sync(sc->sc_dmat, ds->ds_dmamap, 0,
 			    ds->ds_dmamap->dm_mapsize, BUS_DMASYNC_PREREAD);
 			continue;
 		}
+		MCLAIM(m, &sc->sc_ethercom.ec_rx_mowner);
 		if (len > (MHLEN - 2)) {
 			MCLGET(m, M_DONTWAIT);
 			if ((m->m_flags & M_EXT) == 0) {
@@ -789,11 +787,6 @@ sf_rxintr(struct sf_softc *sc)
 
 		m_set_rcvif(m, ifp);
 		m->m_pkthdr.len = m->m_len = len;
-
-		/*
-		 * Pass this up to any BPF listeners.
-		 */
-		bpf_mtap(ifp, m);
 
 		/* Pass it on. */
 		if_percpuq_enqueue(ifp->if_percpuq, m);
@@ -826,7 +819,7 @@ sf_tick(void *arg)
 	sf_stats_update(sc);
 	splx(s);
 
-	callout_reset(&sc->sc_tick_callout, hz, sf_tick, sc);
+	callout_schedule(&sc->sc_tick_callout, hz);
 }
 
 /*
@@ -849,21 +842,26 @@ sf_stats_update(struct sf_softc *sc)
 		sf_genreg_write(sc, SF_STATS_BASE + (i * sizeof(uint32_t)), 0);
 	}
 
-	ifp->if_opackets += stats.TransmitOKFrames;
+	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 
-	ifp->if_collisions += stats.SingleCollisionFrames +
-	    stats.MultipleCollisionFrames;
+	if_statadd_ref(nsr, if_opackets, stats.TransmitOKFrames);
 
-	ifp->if_oerrors += stats.TransmitAbortDueToExcessiveCollisions +
+	if_statadd_ref(nsr, if_collisions,
+	    stats.SingleCollisionFrames +
+	    stats.MultipleCollisionFrames);
+
+	if_statadd_ref(nsr, if_oerrors,
+	    stats.TransmitAbortDueToExcessiveCollisions +
 	    stats.TransmitAbortDueToExcessingDeferral +
-	    stats.FramesLostDueToInternalTransmitErrors;
+	    stats.FramesLostDueToInternalTransmitErrors);
 
-	ifp->if_ipackets += stats.ReceiveOKFrames;
-
-	ifp->if_ierrors += stats.ReceiveCRCErrors + stats.AlignmentErrors +
+	if_statadd_ref(nsr, if_ierrors,
+	    stats.ReceiveCRCErrors + stats.AlignmentErrors +
 	    stats.ReceiveFramesTooLong + stats.ReceiveFramesTooShort +
 	    stats.ReceiveFramesJabbersError +
-	    stats.FramesLostDueToInternalReceiveErrors;
+	    stats.FramesLostDueToInternalReceiveErrors);
+
+	IF_STAT_PUTREF(ifp);
 }
 
 /*
@@ -950,7 +948,7 @@ sf_init(struct ifnet *ifp)
 	 */
 	for (i = 0; i < SF_NTCD; i++) {
 		sc->sc_txcomp[i].tcd_word0 = TCD_DMA_ID;
-		SF_CDTXCSYNC(sc, i, BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
+		SF_CDTXCSYNC(sc, i, BUS_DMASYNC_PREREAD |BUS_DMASYNC_PREWRITE);
 	}
 	sf_funcreg_write(sc, SF_CompletionQueueHighAddr, 0);
 	sf_funcreg_write(sc, SF_TxCompletionQueueCtrl, SF_CDTXCADDR(sc, 0));
@@ -987,7 +985,7 @@ sf_init(struct ifnet *ifp)
 		sc->sc_rxcomp[i].rcd_word1 = 0;
 		sc->sc_rxcomp[i].rcd_word2 = 0;
 		sc->sc_rxcomp[i].rcd_timestamp = 0;
-		SF_CDRXCSYNC(sc, i, BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE);
+		SF_CDRXCSYNC(sc, i, BUS_DMASYNC_PREREAD |BUS_DMASYNC_PREWRITE);
 	}
 	sf_funcreg_write(sc, SF_RxCompletionQueue1Ctrl, SF_CDRXCADDR(sc, 0) |
 	    RCQ1C_RxCompletionQ1Type(3));
@@ -1083,20 +1081,19 @@ sf_init(struct ifnet *ifp)
 	 * Start the transmit and receive processes.
 	 */
 	sf_funcreg_write(sc, SF_GeneralEthernetCtrl,
-	    GEC_TxDmaEn|GEC_RxDmaEn|GEC_TransmitEn|GEC_ReceiveEn);
+	    GEC_TxDmaEn | GEC_RxDmaEn | GEC_TransmitEn | GEC_ReceiveEn);
 
 	/* Start the on second clock. */
-	callout_reset(&sc->sc_tick_callout, hz, sf_tick, sc);
+	callout_schedule(&sc->sc_tick_callout, hz);
 
 	/*
 	 * Note that the interface is now running.
 	 */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
  out:
 	if (error) {
-		ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+		ifp->if_flags &= ~IFF_RUNNING;
 		ifp->if_timer = 0;
 		printf("%s: interface not running\n", device_xname(sc->sc_dev));
 	}
@@ -1163,7 +1160,7 @@ sf_stop(struct ifnet *ifp, int disable)
 	/*
 	 * Mark the interface down and cancel the watchdog timer.
 	 */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 
 	if (disable)
@@ -1200,6 +1197,7 @@ sf_add_rxbuf(struct sf_softc *sc, int idx)
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL)
 		return (ENOBUFS);
+	MCLAIM(m, &sc->sc_ethercom.ec_rx_mowner);
 
 	MCLGET(m, M_DONTWAIT);
 	if ((m->m_flags & M_EXT) == 0) {
@@ -1214,7 +1212,7 @@ sf_add_rxbuf(struct sf_softc *sc, int idx)
 
 	error = bus_dmamap_load(sc->sc_dmat, ds->ds_dmamap,
 	    m->m_ext.ext_buf, m->m_ext.ext_size, NULL,
-	    BUS_DMA_READ|BUS_DMA_NOWAIT);
+	    BUS_DMA_READ | BUS_DMA_NOWAIT);
 	if (error) {
 		aprint_error_dev(sc->sc_dev,
 		    "can't load rx DMA map %d, error = %d\n", idx, error);
@@ -1309,9 +1307,12 @@ sf_set_filter(struct sf_softc *sc)
 	 * Now set the hash bits for each multicast address in our
 	 * list.
 	 */
+	ETHER_LOCK(ec);
 	ETHER_FIRST_MULTI(step, ec, enm);
-	if (enm == NULL)
+	if (enm == NULL) {
+		ETHER_UNLOCK(ec);
 		goto done;
+	}
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi, ETHER_ADDR_LEN)) {
 			/*
@@ -1322,11 +1323,13 @@ sf_set_filter(struct sf_softc *sc)
 			 * ranges is for IP multicast routing, for which the
 			 * range is big enough to require all bits set.)
 			 */
+			ETHER_UNLOCK(ec);
 			goto allmulti;
 		}
 		sf_set_filter_hash(sc, enm->enm_addrlo);
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 
 	/*
 	 * Set "hash only multicast dest, match regardless of VLAN ID".
@@ -1352,7 +1355,7 @@ sf_set_filter(struct sf_softc *sc)
  *	Read from the MII.
  */
 static int
-sf_mii_read(device_t self, int phy, int reg)
+sf_mii_read(device_t self, int phy, int reg, uint16_t *data)
 {
 	struct sf_softc *sc = device_private(self);
 	uint32_t v;
@@ -1366,12 +1369,13 @@ sf_mii_read(device_t self, int phy, int reg)
 	}
 
 	if ((v & MiiDataValid) == 0)
-		return (0);
+		return -1;
 
 	if (MiiRegDataPort(v) == 0xffff)
-		return (0);
+		return -1;
 
-	return (MiiRegDataPort(v));
+	*data = MiiRegDataPort(v);
+	return 0;
 }
 
 /*
@@ -1379,8 +1383,8 @@ sf_mii_read(device_t self, int phy, int reg)
  *
  *	Write to the MII.
  */
-static void
-sf_mii_write(device_t self, int phy, int reg, int val)
+static int
+sf_mii_write(device_t self, int phy, int reg, uint16_t val)
 {
 	struct sf_softc *sc = device_private(self);
 	int i;
@@ -1390,11 +1394,12 @@ sf_mii_write(device_t self, int phy, int reg, int val)
 	for (i = 0; i < 1000; i++) {
 		if ((sf_genreg_read(sc, SF_MII_PHY_REG(phy, reg)) &
 		     MiiBusy) == 0)
-			return;
+			return 0;
 		delay(1);
 	}
 
 	printf("%s: MII write timed out\n", device_xname(sc->sc_dev));
+	return ETIMEDOUT;
 }
 
 /*

@@ -1,4 +1,4 @@
-/*	$NetBSD: clmpcc.c,v 1.51 2014/11/15 19:18:18 christos Exp $ */
+/*	$NetBSD: clmpcc.c,v 1.54 2019/11/10 21:16:35 chs Exp $ */
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: clmpcc.c,v 1.51 2014/11/15 19:18:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: clmpcc.c,v 1.54 2019/11/10 21:16:35 chs Exp $");
 
 #include "opt_ddb.h"
 
@@ -61,6 +61,7 @@ __KERNEL_RCSID(0, "$NetBSD: clmpcc.c,v 1.51 2014/11/15 19:18:18 christos Exp $")
 #include <dev/ic/clmpccvar.h>
 #include <dev/cons.h>
 
+#include "ioconf.h"
 
 #if defined(CLMPCC_ONLY_BYTESWAP_LOW) && defined(CLMPCC_ONLY_BYTESWAP_HIGH)
 #error	"CLMPCC_ONLY_BYTESWAP_LOW and CLMPCC_ONLY_BYTESWAP_HIGH are mutually exclusive."
@@ -83,8 +84,6 @@ static int 	clmpcc_modem_control(struct clmpcc_chan *, int, int);
  * These should be in a header file somewhere...
  */
 #define	ISCLR(v, f)	(((v) & (f)) == 0)
-
-extern struct cfdriver clmpcc_cd;
 
 dev_type_open(clmpccopen);
 dev_type_close(clmpccclose);
@@ -304,13 +303,7 @@ clmpcc_attach(struct clmpcc_softc *sc)
 
 		ch->ch_tty = tp;
 
-		ch->ch_ibuf = malloc(clmpcc_ibuf_size * 2, M_DEVBUF, M_NOWAIT);
-		if ( ch->ch_ibuf == NULL ) {
-			aprint_error_dev(sc->sc_dev, "(%d): unable to allocate ring buffer\n",
-		    		chan);
-			return;
-		}
-
+		ch->ch_ibuf = malloc(clmpcc_ibuf_size * 2, M_DEVBUF, M_WAITOK);
 		ch->ch_ibuf_end = &(ch->ch_ibuf[clmpcc_ibuf_size * 2]);
 		ch->ch_ibuf_rd = ch->ch_ibuf_wr = ch->ch_ibuf;
 
@@ -1234,7 +1227,7 @@ clmpcc_txintr(void *arg)
 	}
 
 	if ( ch->ch_obuf_size > 0 ) {
-		u_int n = min(ch->ch_obuf_size, ftc);
+		u_int n = uimin(ch->ch_obuf_size, ftc);
 
 		clmpcc_wrtx_multi(sc, ch->ch_obuf_addr, n);
 

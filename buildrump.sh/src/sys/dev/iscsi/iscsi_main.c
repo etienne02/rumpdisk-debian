@@ -1,4 +1,4 @@
-/*	$netBSD: iscsi_main.c,v 1.1.1.1 2011/05/02 07:01:11 agc Exp $	*/
+/*	$NetBSD: iscsi_main.c,v 1.37 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2004,2005,2006,2011 The NetBSD Foundation, Inc.
@@ -47,6 +47,7 @@ extern struct cfdriver iscsi_cd;
 #if defined(ISCSI_DEBUG)
 int iscsi_debug_level = ISCSI_DEBUG;
 #endif
+bool iscsi_hex_bignums = false;
 
 bool iscsi_detaching;
 
@@ -85,8 +86,16 @@ static dev_type_open(iscsiopen);
 static int iscsiclose(struct file *);
 
 static const struct fileops iscsi_fileops = {
+	.fo_name = "iscsi",
+	.fo_read = fbadop_read,
+	.fo_write = fbadop_write,
 	.fo_ioctl = iscsiioctl,
+	.fo_fcntl = fnullop_fcntl,
+	.fo_poll = fnullop_poll,
+	.fo_stat = fbadop_stat,
 	.fo_close = iscsiclose,
+	.fo_kqfilter = fnullop_kqfilter,
+	.fo_restart = fnullop_restart
 };
 
 struct cdevsw iscsi_cdevsw = {
@@ -140,8 +149,8 @@ iscsiopen(dev_t dev, int flag, int mode, struct lwp *l)
 		return error;
 
 	d = kmem_alloc(sizeof(*d), KM_SLEEP);
-	d->dev = sc->dev;
-	d->unit = unit;
+	d->fd_dev = sc->dev;
+	d->fd_unit = unit;
 
 	mutex_enter(&sc->lock);
 	if (iscsi_detaching) {
@@ -151,7 +160,7 @@ iscsiopen(dev_t dev, int flag, int mode, struct lwp *l)
 		fd_abort(curproc, fp, fd);
 		return ENXIO;
 	}
-	TAILQ_INSERT_TAIL(&sc->fds, d, link);
+	TAILQ_INSERT_TAIL(&sc->fds, d, fd_link);
 	mutex_exit(&sc->lock);
 
 	return fd_clone(fp, fd, flag, &iscsi_fileops, d);
@@ -163,15 +172,12 @@ iscsiclose(struct file *fp)
 	struct iscsifd *d = fp->f_iscsi;
 	struct iscsi_softc *sc;
 
-	sc = device_lookup_private(&iscsi_cd, d->unit);
-	if (sc == NULL) {
-		DEBOUT(("%s: Cannot find private data\n",__func__));
-		return ENXIO;
+	sc = device_lookup_private(&iscsi_cd, d->fd_unit);
+	if (sc != NULL) {
+		mutex_enter(&sc->lock);
+		TAILQ_REMOVE(&sc->fds, d, fd_link);
+		mutex_exit(&sc->lock);
 	}
-
-	mutex_enter(&sc->lock);
-	TAILQ_REMOVE(&sc->fds, d, link);
-	mutex_exit(&sc->lock);
 
 	kmem_free(d, sizeof(*d));
 	fp->f_iscsi = NULL;
@@ -215,12 +221,7 @@ iscsiattach(int n)
 		aprint_error("%s: only one device supported\n",
 		    iscsi_cd.cd_name);
 
-	cf = kmem_alloc(sizeof(struct cfdata), KM_NOSLEEP);
-	if (cf == NULL) {
-		aprint_error("%s: couldn't allocate cfdata\n",
-		    iscsi_cd.cd_name);
-		return;
-	}
+	cf = kmem_alloc(sizeof(struct cfdata), KM_SLEEP);
 	cf->cf_name = iscsi_cd.cd_name;
 	cf->cf_atname = iscsi_cd.cd_name;
 	cf->cf_unit = 0;
@@ -250,7 +251,10 @@ iscsi_attach(device_t parent, device_t self, void *aux)
 	iscsi_detaching = false;
 	iscsi_init_cleanup();
 
-	aprint_normal("%s: attached.  major = %d\n", iscsi_cd.cd_name,
+	if (!pmf_device_register(self, NULL, NULL))
+		aprint_error_dev(self, "couldn't establish power handler\n");
+
+	aprint_verbose("%s: attached.  major = %d\n", iscsi_cd.cd_name,
 	    cdevsw_lookup_major(&iscsi_cdevsw));
 }
 
@@ -282,6 +286,8 @@ iscsi_detach(device_t self, int flags)
 	error = iscsi_destroy_cleanup();
 	if (error)
 		return error;
+
+	pmf_device_deregister(sc->dev);
 
 	mutex_destroy(&sc->lock);
 
@@ -348,15 +354,15 @@ getquirks(const char *iqn)
  */
 
 int
-map_session(session_t *session, device_t dev)
+map_session(session_t *sess, device_t dev)
 {
-	struct scsipi_adapter *adapt = &session->sc_adapter;
-	struct scsipi_channel *chan = &session->sc_channel;
+	struct scsipi_adapter *adapt = &sess->s_sc_adapter;
+	struct scsipi_channel *chan = &sess->s_sc_channel;
 	const quirktab_t	*tgt;
 
-	mutex_enter(&session->lock);
-	session->send_window = max(2, window_size(session, CCBS_FOR_SCSIPI));
-	mutex_exit(&session->lock);
+	mutex_enter(&sess->s_lock);
+	sess->s_send_window = max(2, window_size(sess, CCBS_FOR_SCSIPI));
+	mutex_exit(&sess->s_lock);
 
 	/*
 	 * Fill in the scsipi_adapter.
@@ -365,8 +371,9 @@ map_session(session_t *session, device_t dev)
 	adapt->adapt_nchannels = 1;
 	adapt->adapt_request = iscsi_scsipi_request;
 	adapt->adapt_minphys = iscsi_minphys;
-	adapt->adapt_openings = session->send_window;
+	adapt->adapt_openings = sess->s_send_window;
 	adapt->adapt_max_periph = CCBS_FOR_SCSIPI;
+	adapt->adapt_flags = SCSIPI_ADAPT_MPSAFE;
 
 	/*
 	 * Fill in the scsipi_channel.
@@ -381,12 +388,12 @@ map_session(session_t *session, device_t dev)
 	chan->chan_channel = 0;
 	chan->chan_flags = SCSIPI_CHAN_NOSETTLE | SCSIPI_CHAN_CANGROW;
 	chan->chan_ntargets = 1;
-	chan->chan_nluns = 16;		/* ToDo: ??? */
-	chan->chan_id = session->id;
+	chan->chan_nluns = 16;
+	chan->chan_id = sess->s_id;
 
-	session->child_dev = config_found(dev, chan, scsiprint);
+	sess->s_child_dev = config_found(dev, chan, scsiprint, CFARGS_NONE);
 
-	return session->child_dev != NULL;
+	return sess->s_child_dev != NULL;
 }
 
 
@@ -401,13 +408,13 @@ map_session(session_t *session, device_t dev)
  */
 
 int
-unmap_session(session_t *session)
+unmap_session(session_t *sess)
 {
 	device_t dev;
 	int rv = 1;
 
-	if ((dev = session->child_dev) != NULL) {
-		session->child_dev = NULL;
+	if ((dev = sess->s_child_dev) != NULL) {
+		sess->s_child_dev = NULL;
 		if (config_detach(dev, 0))
 			rv = 0;
 	}
@@ -419,23 +426,27 @@ unmap_session(session_t *session)
  * grow_resources
  *    Try to grow openings up to current window size
  */
-static void
-grow_resources(session_t *session)
+static int
+grow_resources(session_t *sess)
 {
-	struct scsipi_adapter *adapt = &session->sc_adapter;
+	struct scsipi_adapter *adapt = &sess->s_sc_adapter;
 	int win;
+	int rc = -1;
 
-	mutex_enter(&session->lock);
-	if (session->refcount < CCBS_FOR_SCSIPI &&
-	    session->send_window < CCBS_FOR_SCSIPI) {
-		win = window_size(session, CCBS_FOR_SCSIPI - session->refcount);
-		if (win > session->send_window) {
-			session->send_window++;
+	mutex_enter(&sess->s_lock);
+	if (sess->s_refcount < CCBS_FOR_SCSIPI &&
+	    sess->s_send_window < CCBS_FOR_SCSIPI) {
+		win = window_size(sess, CCBS_FOR_SCSIPI - sess->s_refcount);
+		if (win > sess->s_send_window) {
+			sess->s_send_window++;
 			adapt->adapt_openings++;
-			DEB(5, ("Grow send window to %d\n", session->send_window));
+			rc = 0;
+			DEB(5, ("Grow send window to %d\n", sess->s_send_window));
 		}
 	}
-	mutex_exit(&session->lock);
+	mutex_exit(&sess->s_lock);
+
+	return rc;
 }
 
 /******************************************************************************/
@@ -455,14 +466,14 @@ iscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 {
 	struct scsipi_adapter *adapt = chan->chan_adapter;
 	struct scsipi_xfer *xs;
-	session_t *session;
+	session_t *sess;
 	int flags;
 	struct scsipi_xfer_mode *xm;
 	int error;
 
-	session = (session_t *) adapt;	/* adapter is first field in session */
+	sess = (session_t *) adapt;	/* adapter is first field in session */
 
-	error = ref_session(session);
+	error = ref_session(sess);
 
 	switch (req) {
 	case ADAPTER_REQ_RUN_XFER:
@@ -472,7 +483,7 @@ iscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 
 		if (error) {
 			DEB(9, ("ISCSI: refcount too high: %d, winsize %d\n",
-				session->refcount, session->send_window));
+				sess->s_refcount, sess->s_send_window));
 			xs->error = XS_BUSY;
 			xs->status = XS_BUSY;
 			scsipi_done(xs);
@@ -499,13 +510,16 @@ iscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 			break;
 		}
 
-		send_run_xfer(session, xs);
-		DEB(15, ("scsipi_req returns, refcount = %d\n", session->refcount));
+		send_run_xfer(sess, xs);
+		DEB(15, ("scsipi_req returns, refcount = %d\n", sess->s_refcount));
 		return;
 
 	case ADAPTER_REQ_GROW_RESOURCES:
 		DEB(5, ("ISCSI: scsipi_request GROW_RESOURCES\n"));
-		grow_resources(session);
+		if (grow_resources(sess)) {
+			/* reached maximum */
+			chan->chan_flags &= ~SCSIPI_CHAN_CANGROW;
+		}
 		break;
 
 	case ADAPTER_REQ_SET_XFER_MODE:
@@ -521,7 +535,7 @@ iscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 	}
 
 	if (!error)
-		unref_session(session);
+		unref_session(sess);
 }
 
 /* cap the transfer at 64K */
@@ -553,13 +567,15 @@ iscsi_minphys(struct buf *bp)
 void
 iscsi_done(ccb_t *ccb)
 {
-	struct scsipi_xfer *xs = ccb->xs;
+	struct scsipi_xfer *xs = ccb->ccb_xs;
 	DEB(9, ("iscsi_done\n"));
 
 	if (xs != NULL) {
-		xs->resid = ccb->residual;
+		xs->resid = ccb->ccb_residual;
+		ccb->ccb_xs = NULL;
+		xs->resid = ccb->ccb_residual;
 
-		switch (ccb->status) {
+		switch (ccb->ccb_status) {
 		case ISCSI_STATUS_SUCCESS:
 			xs->error = XS_NOERROR;
 			xs->status = SCSI_OK;
@@ -572,7 +588,7 @@ iscsi_done(ccb_t *ccb)
 
 		case ISCSI_STATUS_TARGET_BUSY:
 		case ISCSI_STATUS_NO_RESOURCES:
-			DEBC(ccb->connection, 5, ("target busy, ccb %p\n", ccb));
+			DEBC(ccb->ccb_connection, 5, ("target busy, ccb %p\n", ccb));
 			xs->error = XS_BUSY;
 			xs->status = SCSI_BUSY;
 			break;
@@ -584,7 +600,7 @@ iscsi_done(ccb_t *ccb)
 			break;
 
 		case ISCSI_STATUS_QUEUE_FULL:
-			DEBC(ccb->connection, 5, ("queue full, ccb %p\n", ccb));
+			DEBC(ccb->ccb_connection, 5, ("queue full, ccb %p\n", ccb));
 			xs->error = XS_BUSY;
 			xs->status = SCSI_QUEUE_FULL;
 			break;
@@ -594,16 +610,14 @@ iscsi_done(ccb_t *ccb)
 			break;
 		}
 
+		unref_session(ccb->ccb_session);
+
 		DEB(99, ("Calling scsipi_done (%p), err = %d\n", xs, xs->error));
-		KERNEL_LOCK(1, curlwp);
 		scsipi_done(xs);
-		KERNEL_UNLOCK_ONE(curlwp);
 		DEB(99, ("scsipi_done returned\n"));
 	} else {
 		DEBOUT(("ISCSI: iscsi_done CCB %p without XS\n", ccb));
 	}
-
-	unref_session(ccb->session);
 }
 
 SYSCTL_SETUP(sysctl_iscsi_setup, "ISCSI subtree setup")
@@ -616,6 +630,12 @@ SYSCTL_SETUP(sysctl_iscsi_setup, "ISCSI subtree setup")
 		SYSCTL_DESCR("iscsi controls"),
 		NULL, 0, NULL, 0,
 		CTL_HW, CTL_CREATE, CTL_EOL);
+	sysctl_createv(clog, 0, &node, NULL,
+		CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		CTLTYPE_BOOL, "hexbignums",
+		SYSCTL_DESCR("encode parameters in hex"),
+		NULL, 0,  &iscsi_hex_bignums, 0,
+		CTL_CREATE, CTL_EOL);
 
 #ifdef ISCSI_DEBUG
 	sysctl_createv(clog, 0, &node, NULL,
@@ -663,7 +683,6 @@ iscsi_modcmd(modcmd_t cmd, void *arg)
 #ifdef _MODULE
 	devmajor_t cmajor = NODEVMAJOR, bmajor = NODEVMAJOR;
 	int error;
-	static struct sysctllog *clog;
 #endif
 
 	switch (cmd) {
@@ -709,8 +728,6 @@ iscsi_modcmd(modcmd_t cmd, void *arg)
 			config_cfdriver_detach(&iscsi_cd);
 			return ENXIO;
 		}
-
-		sysctl_iscsi_setup(&clog);
 #endif
 		return 0;
 		break;
@@ -720,8 +737,6 @@ iscsi_modcmd(modcmd_t cmd, void *arg)
 		error = config_cfdata_detach(iscsi_cfdata);
 		if (error)
 			return error;
-
-		sysctl_teardown(&clog);
 
 		config_cfattach_detach(iscsi_cd.cd_name, &iscsi_ca);
 		config_cfdriver_detach(&iscsi_cd);

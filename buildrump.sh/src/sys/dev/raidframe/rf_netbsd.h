@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_netbsd.h,v 1.30 2013/04/27 21:18:42 christos Exp $	*/
+/*	$NetBSD: rf_netbsd.h,v 1.38 2021/07/23 02:18:26 oster Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -54,14 +54,15 @@ struct raidcinfo {
 
 
 /* a little structure to serve as a container for all the various
-   global pools used in RAIDframe */
+   per-device pools used in RAIDframe */
 
 struct RF_Pools_s {
-	struct pool alloclist;   /* AllocList */
 	struct pool asm_hdr;     /* Access Stripe Map Header */
 	struct pool asmap;       /* Access Stripe Map */
 	struct pool asmhle;      /* Access Stripe Map Header List Elements */
-	struct pool callback;    /* Callback descriptors */
+	struct pool bufio;       /* Buffer IO Pool */
+	struct pool callbackf;   /* Callback function descriptors */
+	struct pool callbackv;   /* Callback value descriptors */
 	struct pool dagh;        /* DAG headers */
 	struct pool dagnode;     /* DAG nodes */
 	struct pool daglist;     /* DAG lists */
@@ -72,7 +73,6 @@ struct RF_Pools_s {
 	struct pool mcpair;      /* Mutex/Cond Pairs */
 	struct pool pda;         /* Physical Disk Access structures */
 	struct pool pss;         /* Parity Stripe Status */
-	struct pool pss_issued;  /* Parity Stripe Status Issued */
 	struct pool rad;         /* Raid Access Descriptors */
 	struct pool reconbuffer; /* reconstruction buffer (header) pool */
 	struct pool revent;      /* reconstruct events */
@@ -81,8 +81,34 @@ struct RF_Pools_s {
 	struct pool vple;        /* VoidPointer List Elements */
 };
 
-extern struct RF_Pools_s rf_pools;
-void rf_pool_init(struct pool *, size_t, const char *, size_t, size_t);
+#define RF_MAX_POOLNAMELEN 30
+struct RF_PoolNames_s {
+	char asm_hdr[RF_MAX_POOLNAMELEN];     /* Access Stripe Map Header */
+	char asmap[RF_MAX_POOLNAMELEN];       /* Access Stripe Map */
+	char asmhle[RF_MAX_POOLNAMELEN];      /* Access Stripe Map Header List Elements */
+	char bufio[RF_MAX_POOLNAMELEN];       /* Buffer IO Pool */
+	char callbackf[RF_MAX_POOLNAMELEN];   /* Callback function descriptors */
+	char callbackv[RF_MAX_POOLNAMELEN];   /* Callback value descriptors */
+	char dagh[RF_MAX_POOLNAMELEN];        /* DAG headers */
+	char dagnode[RF_MAX_POOLNAMELEN];     /* DAG nodes */
+	char daglist[RF_MAX_POOLNAMELEN];     /* DAG lists */
+	char dagpcache[RF_MAX_POOLNAMELEN];   /* DAG pointer/param cache */
+	char dqd[RF_MAX_POOLNAMELEN];         /* Disk Queue Data */
+	char fss[RF_MAX_POOLNAMELEN];         /* Failed Stripe Structures */
+	char funclist[RF_MAX_POOLNAMELEN];    /* Function Lists */
+	char mcpair[RF_MAX_POOLNAMELEN];      /* Mutex/Cond Pairs */
+	char pda[RF_MAX_POOLNAMELEN];         /* Physical Disk Access structures */
+	char pss[RF_MAX_POOLNAMELEN];         /* Parity Stripe Status */
+	char rad[RF_MAX_POOLNAMELEN];         /* Raid Access Descriptors */
+	char reconbuffer[RF_MAX_POOLNAMELEN]; /* reconstruction buffer (header) pool */
+	char revent[RF_MAX_POOLNAMELEN];      /* reconstruct events */
+	char stripelock[RF_MAX_POOLNAMELEN];  /* StripeLock */
+	char vfple[RF_MAX_POOLNAMELEN];       /* VoidFunctionPtr List Elements */
+	char vple[RF_MAX_POOLNAMELEN];        /* VoidPointer List Elements */
+};
+
+extern struct pool rf_alloclist_pool;   /* AllocList */
+void rf_pool_init(RF_Raid_t *, char *, struct pool *, size_t, const char *, size_t, size_t);
 int rf_buf_queue_check(RF_Raid_t *);
 
 /* XXX probably belongs in a different .h file. */
@@ -102,5 +128,7 @@ typedef struct RF_ConfigSet_s {
 	int rootable;               /* Set to 1 if this set can be root */
 	struct RF_ConfigSet_s *next;
 } RF_ConfigSet_t;
+
+extern const int rf_b_pass;
 
 #endif /* _RF__RF_NETBSDSTUFF_H_ */

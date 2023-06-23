@@ -28,7 +28,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cxgb_main.c,v 1.4 2013/01/23 23:31:26 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cxgb_main.c,v 1.10 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -468,8 +468,9 @@ cxgb_controller_attach(device_t parent, device_t dev, void *context)
         locs[0] = 1;
         locs[1] = i;
 	printf("\n"); // for cleaner formatting in dmesg
-        child = config_found_sm_loc(dev, "cxgbc", locs, &cxgb_args,
-                    cxgb_cfprint, config_stdsubmatch);
+        child = config_found(dev, &cxgb_args, cxgb_cfprint,
+	    CFARGS(.submatch = config_stdsubmatch,
+		   .locators = locs));
 	printf("\n"); // for cleaner formatting in dmesg
         sc->portdev[i] = child;
     }
@@ -640,8 +641,8 @@ cxgb_setup_msix(adapter_t *sc, int msix_count)
         printf("cxgb_setup_msix(%d): pci_intr_map() failed\n", __LINE__);
         return (EINVAL);
     }
-    sc->intr_cookie = pci_intr_establish(sc->pa.pa_pc, sc->intr_handle,
-                        IPL_NET, cxgb_async_intr, sc);
+    sc->intr_cookie = pci_intr_establish_xname(sc->pa.pa_pc, sc->intr_handle,
+                        IPL_NET, cxgb_async_intr, sc, device_xname(sc->dev));
     if (sc->intr_cookie == NULL)
     {
         printf("cxgb_setup_msix(%d): pci_intr_establish() failed\n", __LINE__);
@@ -809,6 +810,8 @@ cxgb_port_detach(device_t self, int flags)
      */
     PORT_LOCK_DEINIT(p);
     if_detach(p->ifp);
+
+    ifmedia_fini(&p->media);
 
     return (0);
 }
@@ -1009,8 +1012,8 @@ setup_rss(adapter_t *adap)
 
         nq[pi->tx_chan] += pi->nqsets;
     }
-    nq[0] = max(nq[0], 1U);
-    nq[1] = max(nq[1], 1U);
+    nq[0] = uimax(nq[0], 1U);
+    nq[1] = uimax(nq[1], 1U);
     for (i = 0; i < RSS_TABLE_SIZE / 2; ++i) {
         rspq_map[i] = i % nq[0];
         rspq_map[i + RSS_TABLE_SIZE / 2] = (i % nq[1]) + nq[0];
@@ -1124,9 +1127,9 @@ cxgb_up(struct adapter *sc)
             goto out;
         }
         device_printf(sc->dev, "allocated intr_handle=%d\n", sc->intr_handle);
-        sc->intr_cookie = pci_intr_establish(sc->pa.pa_pc,
+        sc->intr_cookie = pci_intr_establish_xname(sc->pa.pa_pc,
                     sc->intr_handle, IPL_NET,
-                    sc->cxgb_intr, sc);
+                    sc->cxgb_intr, sc, device_xname(sc->dev));
         if (sc->intr_cookie == NULL)
         {
             device_printf(sc->dev, "Cannot establish interrupt\n");
@@ -1423,7 +1426,7 @@ cxgb_start_tx(struct ifnet *ifp, uint32_t txmax)
             printf("t3_encap() returned %d\n", err);
             break;
         }
-//        bpf_mtap(ifp, m);
+//        bpf_mtap(ifp, m, BPF_D_OUT);
         if (free_it)
 	{
             m_freem(m);

@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -80,7 +80,7 @@ AcpiUtPredefinedWarning (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...)
 {
@@ -129,7 +129,7 @@ AcpiUtPredefinedInfo (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...)
 {
@@ -178,7 +178,7 @@ AcpiUtPredefinedBiosError (
     const char              *ModuleName,
     UINT32                  LineNumber,
     char                    *Pathname,
-    UINT8                   NodeFlags,
+    UINT16                  NodeFlags,
     const char              *Format,
     ...)
 {
@@ -203,6 +203,82 @@ AcpiUtPredefinedBiosError (
 }
 
 
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiUtPrefixedNamespaceError
+ *
+ * PARAMETERS:  ModuleName          - Caller's module name (for error output)
+ *              LineNumber          - Caller's line number (for error output)
+ *              PrefixScope         - Scope/Path that prefixes the internal path
+ *              InternalPath        - Name or path of the namespace node
+ *              LookupStatus        - Exception code from NS lookup
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Print error message with the full pathname constructed this way:
+ *
+ *                  PrefixScopeNodeFullPath.ExternalizedInternalPath
+ *
+ * NOTE:        10/2017: Treat the major NsLookup errors as firmware errors
+ *
+ ******************************************************************************/
+
+void
+AcpiUtPrefixedNamespaceError (
+    const char              *ModuleName,
+    UINT32                  LineNumber,
+    ACPI_GENERIC_STATE      *PrefixScope,
+    const char              *InternalPath,
+    ACPI_STATUS             LookupStatus)
+{
+    char                    *FullPath;
+    const char              *Message;
+
+
+    /*
+     * Main cases:
+     * 1) Object creation, object must not already exist
+     * 2) Object lookup, object must exist
+     */
+    switch (LookupStatus)
+    {
+    case AE_ALREADY_EXISTS:
+
+        AcpiOsPrintf (ACPI_MSG_BIOS_ERROR);
+        Message = "Failure creating named object";
+        break;
+
+    case AE_NOT_FOUND:
+
+        AcpiOsPrintf (ACPI_MSG_BIOS_ERROR);
+        Message = "Could not resolve symbol";
+        break;
+
+    default:
+
+        AcpiOsPrintf (ACPI_MSG_ERROR);
+        Message = "Failure resolving symbol";
+        break;
+    }
+
+    /* Concatenate the prefix path and the internal path */
+
+    FullPath = AcpiNsBuildPrefixedPathname (PrefixScope, InternalPath);
+
+    AcpiOsPrintf ("%s [%s], %s", Message,
+        FullPath ? FullPath : "Could not get pathname",
+        AcpiFormatException (LookupStatus));
+
+    if (FullPath)
+    {
+        ACPI_FREE (FullPath);
+    }
+
+    ACPI_MSG_SUFFIX;
+}
+
+
+#ifdef __OBSOLETE_FUNCTION
 /*******************************************************************************
  *
  * FUNCTION:    AcpiUtNamespaceError
@@ -270,7 +346,7 @@ AcpiUtNamespaceError (
     ACPI_MSG_SUFFIX;
     ACPI_MSG_REDIRECT_END;
 }
-
+#endif
 
 /*******************************************************************************
  *
@@ -316,7 +392,8 @@ AcpiUtMethodError (
     }
 
     AcpiNsPrintNodePathname (Node, Message);
-    AcpiOsPrintf (", %s", AcpiFormatException (MethodStatus));
+    AcpiOsPrintf (" due to previous error (%s)",
+        AcpiFormatException (MethodStatus));
 
     ACPI_MSG_SUFFIX;
     ACPI_MSG_REDIRECT_END;

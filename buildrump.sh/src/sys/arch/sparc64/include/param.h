@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.57 2016/04/15 20:29:13 martin Exp $ */
+/*	$NetBSD: param.h,v 1.62 2021/05/31 14:38:56 simonb Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -64,6 +64,7 @@
  */
 
 #if defined(_KERNEL_OPT)
+#include "opt_param.h"
 #include "opt_sparc_arch.h"
 #endif
 
@@ -101,11 +102,6 @@
 #if (defined(_KERNEL) || defined(_STANDALONE)) && !defined(_LOCORE)
 extern int nbpg, pgofset, pgshift;
 #endif
-
-#define	DEV_BSIZE	512
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define	BLKDEV_IOSIZE	2048
-#define	MAXPHYS		(64 * 1024)
 
 #ifdef __arch64__
 
@@ -169,7 +165,6 @@ extern int nbpg, pgofset, pgshift;
  */
 #define	KERNBASE	0x001000000	/* start of kernel virtual space */
 #define	KERNEND		0x0e0000000	/* end of kernel virtual space */
-#define	VM_MAX_KERNEL_BUF	((KERNEND-KERNBASE)/4)
 
 #define	_MAXNBPG	8192	/* fixed VAs, independent of actual NBPG */
 
@@ -230,13 +225,10 @@ extern int nbpg, pgofset, pgshift;
 #ifdef _KERNEL
 #ifndef _LOCORE
 
+#ifndef __HIDE_DELAY
 extern void	delay(unsigned int);
 #define	DELAY(n)	delay(n)
-
-#ifdef	__arch64__
-/* If we're using a 64-bit kernel use 64-bit math */
-#define mstohz(ms) ((ms + 0UL) * hz / 1000)
-#endif
+#endif /* __HIDE_DELAY */
 
 /* Keep this a const so compiler optimization is done */
 extern const int cputyp;

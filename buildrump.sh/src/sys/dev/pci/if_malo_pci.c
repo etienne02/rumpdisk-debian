@@ -1,4 +1,4 @@
-/*	$NetBSD: if_malo_pci.c,v 1.5 2014/03/29 19:28:25 christos Exp $	*/
+/*	$NetBSD: if_malo_pci.c,v 1.8 2021/05/08 00:27:02 thorpej Exp $	*/
 /*	$OpenBSD: if_malo_pci.c,v 1.6 2010/08/28 23:19:29 deraadt Exp $ */
 
 /*
@@ -22,7 +22,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_malo_pci.c,v 1.5 2014/03/29 19:28:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_malo_pci.c,v 1.8 2021/05/08 00:27:02 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/sockio.h>
@@ -75,22 +75,23 @@ struct malo_pci_softc {
 CFATTACH_DECL_NEW(malo_pci, sizeof(struct malo_pci_softc),
     malo_pci_match, malo_pci_attach, malo_pci_detach, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .id = PCI_ID_CODE(PCI_VENDOR_MARVELL,
+		PCI_PRODUCT_MARVELL_88W8310) },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_MARVELL,
+		PCI_PRODUCT_MARVELL_88W8335_1) },
+	{ .id = PCI_ID_CODE(PCI_VENDOR_MARVELL,
+		PCI_PRODUCT_MARVELL_88W8335_2) },
+
+	PCI_COMPAT_EOL
+};
+
 static int
 malo_pci_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pci_attach_args *pa = aux;
 
-	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_MARVELL)
-		return (0);
-
-	switch (PCI_PRODUCT(pa->pa_id)) {
-	case PCI_PRODUCT_MARVELL_88W8310:
-	case PCI_PRODUCT_MARVELL_88W8335_1:
-	case PCI_PRODUCT_MARVELL_88W8335_2:
-		return (1);
-	}
-
-	return (0);
+	return pci_compatible_match(pa, compat_data);
 }
 
 static void
@@ -139,7 +140,7 @@ malo_pci_attach(device_t parent, device_t self, void *aux)
 		break;
 	default:
 		aprint_error_dev(self, "invalid base address register\n");
-		return;
+		goto unmap1;
 	}
 
 	error = pci_mapreg_map(pa, MALO_PCI_BAR2,
@@ -147,33 +148,49 @@ malo_pci_attach(device_t parent, device_t self, void *aux)
 		NULL, &psc->sc_mapsize2);
 	if (error != 0) {
 		aprint_error_dev(self, "can't map 2nd mem space\n");
-		return;
+		goto unmap1;
+	}
+
+	sc->sc_soft_ih = softint_establish(SOFTINT_NET, malo_softintr, sc);
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(self, "could not establish softint\n");
+		goto unmap2;
 	}
 
 	/* map interrupt */
 	if (pci_intr_map(pa, &ih) != 0) {
 		aprint_error_dev(self, "can't map interrupt\n");
-		return;
+		goto failsi;
 	}
 
 	/* establish interrupt */
 	intrstr = pci_intr_string(psc->sc_pc, ih, intrbuf, sizeof(intrbuf));
-	psc->sc_ih = pci_intr_establish(psc->sc_pc, ih, IPL_NET, malo_intr, sc);
+	psc->sc_ih = pci_intr_establish_xname(psc->sc_pc, ih, IPL_NET,
+	    malo_intr, sc, device_xname(self));
 	if (psc->sc_ih == NULL) {
 		aprint_error_dev(self, "could not establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
 		aprint_error("\n");
-		return;
+		goto failsi;
 	}
 	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
 
-	malo_attach(sc);
+	if (malo_attach(sc))
+		goto failih;
 
 	if (pmf_device_register(self, malo_pci_suspend, malo_pci_resume))
 		pmf_class_network_register(self, &sc->sc_if);
 	else
 		aprint_error_dev(self, "couldn't establish power handler\n");
+	return;
+
+failih:	pci_intr_disestablish(psc->sc_pc, psc->sc_ih);
+	psc->sc_ih = NULL;
+failsi:	softint_disestablish(sc->sc_soft_ih);
+	sc->sc_soft_ih = NULL;
+unmap2:	bus_space_unmap(sc->sc_mem2_bt, sc->sc_mem2_bh, psc->sc_mapsize2);
+unmap1:	bus_space_unmap(sc->sc_mem1_bt, sc->sc_mem1_bh, psc->sc_mapsize1);
 }
 
 int
@@ -183,7 +200,16 @@ malo_pci_detach(device_t self, int flags)
 	struct malo_softc *sc = &psc->sc_malo;
 
 	malo_detach(sc);
-	pci_intr_disestablish(psc->sc_pc, psc->sc_ih);
+	if (psc->sc_ih != NULL) {
+		pci_intr_disestablish(psc->sc_pc, psc->sc_ih);
+		psc->sc_ih = NULL;
+	}
+	if (sc->sc_soft_ih != NULL) {
+		softint_disestablish(sc->sc_soft_ih);
+		sc->sc_soft_ih = NULL;
+	}
+	bus_space_unmap(sc->sc_mem2_bt, sc->sc_mem2_bh, psc->sc_mapsize2);
+	bus_space_unmap(sc->sc_mem1_bt, sc->sc_mem1_bh, psc->sc_mapsize1);
 
 	return (0);
 }

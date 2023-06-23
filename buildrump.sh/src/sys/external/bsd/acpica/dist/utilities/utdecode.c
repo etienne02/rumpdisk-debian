@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -44,6 +44,7 @@
 #include "acpi.h"
 #include "accommon.h"
 #include "acnamesp.h"
+#include "amlcode.h"
 
 #define _COMPONENT          ACPI_UTILITIES
         ACPI_MODULE_NAME    ("utdecode")
@@ -105,17 +106,18 @@ const UINT8                     AcpiGbl_NsProperties[ACPI_NUM_NS_TYPES] =
 
 const char        *AcpiGbl_RegionTypes[ACPI_NUM_PREDEFINED_REGIONS] =
 {
-    "SystemMemory",     /* 0x00 */
-    "SystemIO",         /* 0x01 */
-    "PCI_Config",       /* 0x02 */
-    "EmbeddedControl",  /* 0x03 */
-    "SMBus",            /* 0x04 */
-    "SystemCMOS",       /* 0x05 */
-    "PCIBARTarget",     /* 0x06 */
-    "IPMI",             /* 0x07 */
-    "GeneralPurposeIo", /* 0x08 */
-    "GenericSerialBus", /* 0x09 */
-    "PCC"               /* 0x0A */
+    "SystemMemory",       /* 0x00 */
+    "SystemIO",           /* 0x01 */
+    "PCI_Config",         /* 0x02 */
+    "EmbeddedControl",    /* 0x03 */
+    "SMBus",              /* 0x04 */
+    "SystemCMOS",         /* 0x05 */
+    "PCIBARTarget",       /* 0x06 */
+    "IPMI",               /* 0x07 */
+    "GeneralPurposeIo",   /* 0x08 */
+    "GenericSerialBus",   /* 0x09 */
+    "PCC",                /* 0x0A */
+    "PlatformRtMechanism" /* 0x0B */
 };
 
 
@@ -268,7 +270,7 @@ AcpiUtGetObjectTypeName (
     if (!ObjDesc)
     {
         ACPI_DEBUG_PRINT ((ACPI_DB_EXEC, "Null Object Descriptor\n"));
-        return_PTR (__UNCONST("[NULL Object Descriptor]"));
+        return_STR ("[NULL Object Descriptor]");
     }
 
     /* These descriptor types share a common area */
@@ -281,7 +283,7 @@ AcpiUtGetObjectTypeName (
             ACPI_GET_DESCRIPTOR_TYPE (ObjDesc),
             AcpiUtGetDescriptorName (ObjDesc), ObjDesc));
 
-        return_PTR (__UNCONST("Invalid object"));
+        return_STR ("Invalid object");
     }
 
     return_STR (AcpiUtGetTypeName (ObjDesc->Common.Type));
@@ -307,7 +309,7 @@ AcpiUtGetNodeName (
     ACPI_NAMESPACE_NODE     *Node = (ACPI_NAMESPACE_NODE *) Object;
 
 
-    /* Must return a string of exactly 4 characters == ACPI_NAME_SIZE */
+    /* Must return a string of exactly 4 characters == ACPI_NAMESEG_SIZE */
 
     if (!Object)
     {
@@ -358,7 +360,7 @@ AcpiUtGetNodeName (
 static const char           *AcpiGbl_DescTypeNames[] =
 {
     /* 00 */ "Not a Descriptor",
-    /* 01 */ "Cached",
+    /* 01 */ "Cached Object",
     /* 02 */ "State-Generic",
     /* 03 */ "State-Update",
     /* 04 */ "State-Package",
@@ -369,10 +371,10 @@ static const char           *AcpiGbl_DescTypeNames[] =
     /* 09 */ "State-Result",
     /* 10 */ "State-Notify",
     /* 11 */ "State-Thread",
-    /* 12 */ "Walk",
-    /* 13 */ "Parser",
-    /* 14 */ "Operand",
-    /* 15 */ "Node"
+    /* 12 */ "Tree Walk State",
+    /* 13 */ "Parse Tree Op",
+    /* 14 */ "Operand Object",
+    /* 15 */ "Namespace Node"
 };
 
 
@@ -449,11 +451,6 @@ AcpiUtGetReferenceName (
 }
 
 
-#if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DEBUGGER)
-/*
- * Strings and procedures used for debug only
- */
-
 /*******************************************************************************
  *
  * FUNCTION:    AcpiUtGetMutexName
@@ -492,6 +489,12 @@ AcpiUtGetMutexName (
 }
 
 
+#if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DEBUGGER)
+
+/*
+ * Strings and procedures used for debug only
+ */
+
 /*******************************************************************************
  *
  * FUNCTION:    AcpiUtGetNotifyName
@@ -520,8 +523,10 @@ static const char           *AcpiGbl_GenericNotify[ACPI_GENERIC_NOTIFY_MAX + 1] 
     /* 09 */ "Device PLD Check",
     /* 0A */ "Reserved",
     /* 0B */ "System Locality Update",
-    /* 0C */ "Shutdown Request", /* Reserved in ACPI 6.0 */
-    /* 0D */ "System Resource Affinity Update"
+    /* 0C */ "Reserved (was previously Shutdown Request)",  /* Reserved in ACPI 6.0 */
+    /* 0D */ "System Resource Affinity Update",
+    /* 0E */ "Heterogeneous Memory Attributes Update",      /* ACPI 6.2 */
+    /* 0F */ "Error Disconnect Recover"                     /* ACPI 6.3 */
 };
 
 static const char           *AcpiGbl_DeviceNotify[5] =
@@ -558,14 +563,14 @@ AcpiUtGetNotifyName (
     ACPI_OBJECT_TYPE        Type)
 {
 
-    /* 00 - 0D are "common to all object types" (from ACPI Spec) */
+    /* 00 - 0F are "common to all object types" (from ACPI Spec) */
 
     if (NotifyValue <= ACPI_GENERIC_NOTIFY_MAX)
     {
         return (AcpiGbl_GenericNotify[NotifyValue]);
     }
 
-    /* 0E - 7F are reserved */
+    /* 10 - 7F are reserved */
 
     if (NotifyValue <= ACPI_MAX_SYS_NOTIFY)
     {
@@ -604,6 +609,59 @@ AcpiUtGetNotifyName (
 
     return ("Hardware-Specific");
 }
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiUtGetArgumentTypeName
+ *
+ * PARAMETERS:  ArgType             - an ARGP_* parser argument type
+ *
+ * RETURN:      Decoded ARGP_* type
+ *
+ * DESCRIPTION: Decode an ARGP_* parser type, as defined in the amlcode.h file,
+ *              and used in the acopcode.h file. For example, ARGP_TERMARG.
+ *              Used for debug only.
+ *
+ ******************************************************************************/
+
+static const char           *AcpiGbl_ArgumentType[20] =
+{
+    /* 00 */ "Unknown ARGP",
+    /* 01 */ "ByteData",
+    /* 02 */ "ByteList",
+    /* 03 */ "CharList",
+    /* 04 */ "DataObject",
+    /* 05 */ "DataObjectList",
+    /* 06 */ "DWordData",
+    /* 07 */ "FieldList",
+    /* 08 */ "Name",
+    /* 09 */ "NameString",
+    /* 0A */ "ObjectList",
+    /* 0B */ "PackageLength",
+    /* 0C */ "SuperName",
+    /* 0D */ "Target",
+    /* 0E */ "TermArg",
+    /* 0F */ "TermList",
+    /* 10 */ "WordData",
+    /* 11 */ "QWordData",
+    /* 12 */ "SimpleName",
+    /* 13 */ "NameOrRef"
+};
+
+const char *
+AcpiUtGetArgumentTypeName (
+    UINT32                  ArgType)
+{
+
+    if (ArgType > ARGP_MAX)
+    {
+        return ("Unknown ARGP");
+    }
+
+    return (AcpiGbl_ArgumentType[ArgType]);
+}
+
 #endif
 
 

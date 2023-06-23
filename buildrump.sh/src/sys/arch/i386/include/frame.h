@@ -1,4 +1,4 @@
-/*	$NetBSD: frame.h,v 1.35 2012/02/19 21:06:11 rmind Exp $	*/
+/*	$NetBSD: frame.h,v 1.40 2019/02/14 08:18:25 cherry Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -100,11 +100,6 @@ struct trapframe {
 	/* below used when transitting rings (e.g. user to kernel) */
 	int	tf_esp;
 	int	tf_ss;
-	/* below used when switching out of VM86 mode */
-	int	tf_vm86_es;
-	int	tf_vm86_ds;
-	int	tf_vm86_fs;
-	int	tf_vm86_gs;
 };
 
 /*
@@ -133,6 +128,14 @@ struct intrframe {
 	int	if_esp;
 	int	if_ss;
 };
+
+#ifdef XEN
+/*
+ * need arch independant way to access ip and cs from intrframe
+ */
+#define	_INTRFRAME_CS	if_cs
+#define	_INTRFRAME_IP	if_eip
+#endif
 
 /*
  * Stack frame inside cpu_switchto()
@@ -173,6 +176,7 @@ struct sigframe_siginfo {
 void *getframe(struct lwp *, int, int *);
 void buildcontext(struct lwp *, int, void *, void *);
 void sendsig_sigcontext(const ksiginfo_t *, const sigset_t *);
+#define lwp_trapframe(l)	((l)->l_md.md_regs)
 #endif
 
 #endif  /* _I386_FRAME_H_ */

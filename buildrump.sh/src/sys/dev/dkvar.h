@@ -1,4 +1,4 @@
-/* $NetBSD: dkvar.h,v 1.25 2015/12/21 12:33:12 mlelstv Exp $ */
+/* $NetBSD: dkvar.h,v 1.32 2020/03/01 03:21:54 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -29,6 +29,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef _DEV_DKVAR_H_
+#define _DEV_DKVAR_H_
+
 #include <sys/rndsource.h>
 
 struct pathbuf; /* from namei.h */
@@ -50,7 +53,7 @@ struct dk_softc {
 	struct bufq_state	*sc_bufq;	/* buffer queue */
 	int			 sc_dtype;	/* disk type */
 	struct buf		*sc_deferred;	/* retry after start failed */
-	bool			 sc_busy;	/* processing buffers */
+	int			 sc_busy;	/* processing buffers */
 	krndsource_t		 sc_rnd_source;	/* entropy source */
 };
 
@@ -68,6 +71,7 @@ struct dk_softc {
 #define DKF_KLABEL      0x00400000 /* keep label on close */
 #define DKF_VLABEL      0x00800000 /* label is valid */
 #define DKF_SLEEP       0x80000000 /* dk_start/dk_done may sleep */
+#define DKF_NO_RND	0x01000000 /* do not attach as rnd source */
 
 /* Mask of flags that dksubr.c understands, other flags are fair game */
 #define DK_FLAGMASK	0xffff0000
@@ -78,6 +82,8 @@ struct dk_softc {
 	(((_dksc)->sc_dkdev.dk_openmask & ~(_pmask)) ||	\
 	((_dksc)->sc_dkdev.dk_bopenmask & (_pmask)  &&	\
 	((_dksc)->sc_dkdev.dk_copenmask & (_pmask))))
+
+#define	DK_DUMP_RECURSIVE	__BIT(0) /* this is a virtual disk */
 
 /*
  * Functions that are exported to the pseudo disk implementations:
@@ -102,8 +108,8 @@ int	dk_size(struct dk_softc *, dev_t);
 int	dk_ioctl(struct dk_softc *, dev_t,
 		 u_long, void *, int, struct lwp *);
 int	dk_dump(struct dk_softc *, dev_t,
-		daddr_t, void *, size_t);
+		daddr_t, void *, size_t, int);
 void	dk_getdisklabel(struct dk_softc *, dev_t);
 void	dk_getdefaultlabel(struct dk_softc *, struct disklabel *);
 
-int	dk_lookup(struct pathbuf *, struct lwp *, struct vnode **);
+#endif /* ! _DEV_DKVAR_H_ */   

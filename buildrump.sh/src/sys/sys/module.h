@@ -1,4 +1,4 @@
-/*	$NetBSD: module.h,v 1.40 2016/01/18 16:46:08 pooka Exp $	*/
+/*	$NetBSD: module.h,v 1.47 2019/08/07 00:38:02 pgoyette Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -32,20 +32,21 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/cdefs.h>
-#include <sys/queue.h>
 #include <sys/uio.h>
 
 #define	MAXMODNAME	32
 #define	MAXMODDEPS	10
 
-/* Module classes, provided only for system boot and cosmetic purposes. */
+/* Module classes, provided only for system boot and module validation. */
 typedef enum modclass {
 	MODULE_CLASS_ANY,
 	MODULE_CLASS_MISC,
 	MODULE_CLASS_VFS,
 	MODULE_CLASS_DRIVER,
 	MODULE_CLASS_EXEC,
-	MODULE_CLASS_SECMODEL
+	MODULE_CLASS_SECMODEL,
+	MODULE_CLASS_BUFQ,
+	MODULE_CLASS_MAX
 } modclass_t;
 
 /* Module sources: where did it come from? */
@@ -67,34 +68,39 @@ typedef enum modcmd {
 
 #include <sys/kernel.h>
 #include <sys/mutex.h>
+#include <sys/queue.h>
+#include <sys/specificdata.h>
 
 #include <prop/proplib.h>
 
 /* Module header structure. */
 typedef struct modinfo {
-	u_int		mi_version;
-	modclass_t	mi_class;
-	int		(*mi_modcmd)(modcmd_t, void *);
-	const char	*mi_name;
-	const char	*mi_required;
+	u_int			mi_version;
+	modclass_t		mi_class;
+	int			(*mi_modcmd)(modcmd_t, void *);
+	const char		*mi_name;
+	const char		*mi_required;
 } const modinfo_t;
 
 /* Per module information, maintained by kern_module.c */ 
+
+struct sysctllog;
+
 typedef struct module {
 	u_int			mod_refcnt;
-	const modinfo_t		*mod_info;
-	struct kobj		*mod_kobj;
-	TAILQ_ENTRY(module)	mod_chain;
-	struct module		*mod_required[MAXMODDEPS];
-	u_int			mod_nrequired;
-	modsrc_t		mod_source;
-	time_t			mod_autotime;
-	void 			*mod_ctf;
-	u_int			mod_fbtentries;	/* DTrace FBT entry count */
 	int			mod_flags;
 #define MODFLG_MUST_FORCE	0x01
 #define MODFLG_AUTO_LOADED	0x02
-
+	const modinfo_t		*mod_info;
+	struct kobj		*mod_kobj;
+	TAILQ_ENTRY(module)	mod_chain;
+	struct module		*(*mod_required)[MAXMODDEPS];
+	u_int			mod_nrequired;
+	u_int			mod_arequired;
+	modsrc_t		mod_source;
+	time_t			mod_autotime;
+	specificdata_reference	mod_sdref;
+	struct sysctllog	*mod_sysctllog;
 } module_t;
 
 /*
@@ -176,17 +182,28 @@ void	module_init_md(void);
 void	module_init_class(modclass_t);
 int	module_prime(const char *, void *, size_t);
 
+module_t *module_kernel(void);
+const char *module_name(struct module *);
+modsrc_t module_source(struct module *);
 bool	module_compatible(int, int);
 int	module_load(const char *, int, prop_dictionary_t, modclass_t);
 int	module_builtin_add(modinfo_t * const *, size_t, bool);
 int	module_builtin_remove(modinfo_t *, bool);
 int	module_autoload(const char *, modclass_t);
 int	module_unload(const char *);
-int	module_hold(const char *);
-void	module_rele(const char *);
+void	module_hold(module_t *);
+void	module_rele(module_t *);
 int	module_find_section(const char *, void **, size_t *);
 void	module_thread_kick(void);
 void	module_load_vfs_init(void);
+
+specificdata_key_t module_specific_key_create(specificdata_key_t *, specificdata_dtor_t);
+void	module_specific_key_delete(specificdata_key_t);
+void	*module_getspecific(module_t *, specificdata_key_t);
+void	module_setspecific(module_t *, specificdata_key_t, void *);
+void	*module_register_callbacks(void (*)(struct module *),
+				  void (*)(struct module *));
+void	module_unregister_callbacks(void *);
 
 void	module_whatis(uintptr_t, void (*)(const char *, ...)
     __printflike(1, 2));
@@ -206,6 +223,10 @@ void	module_print(const char *, ...) __printflike(1, 2);
 extern char	module_base[MODULE_BASE_SIZE];
 extern const char	*module_machine;
 
+struct netbsd32_modctl_args;
+extern int compat32_80_modctl_compat_stub(struct lwp *,
+    const struct netbsd32_modctl_args *, register_t *);
+
 #else	/* _KERNEL */
 
 #include <stdint.h>
@@ -223,27 +244,28 @@ typedef struct modctl_load {
 	size_t ml_propslen;
 } modctl_load_t;
 
-typedef enum modctl {
+enum modctl {
 	MODCTL_LOAD,		/* modctl_load_t *ml */
 	MODCTL_UNLOAD,		/* char *name */
-	MODCTL_STAT,		/* struct iovec *buffer */
-	MODCTL_EXISTS		/* enum: 0: load, 1: autoload */
-} modctl_t;
+	MODCTL_OSTAT,		/* struct iovec *buffer */
+	MODCTL_EXISTS,		/* enum: 0: load, 1: autoload */
+	MODCTL_STAT		/* struct iovec *buffer */
+};
 
 /*
- * This structure intentionally has the same layout for 32 and 64
- * bit builds.
+ * This structure is used with the newer version of MODCTL_STAT, which
+ * exports strings of arbitrary length for the list of required modules.
  */
 typedef struct modstat {
 	char		ms_name[MAXMODNAME];
-	char		ms_required[MAXMODNAME * MAXMODDEPS];
 	uint64_t	ms_addr;
 	modsrc_t	ms_source;
 	modclass_t	ms_class;
 	u_int		ms_size;
 	u_int		ms_refcnt;
 	u_int		ms_flags;
-	u_int		ms_reserved[3];
+	u_int		ms_reqoffset;	/* offset to module's required list
+					   from beginning of iovec buffer! */
 } modstat_t;
 
 int	modctl(int, void *);

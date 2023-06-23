@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_evenodd.c,v 1.21 2014/03/23 09:30:59 christos Exp $	*/
+/*	$NetBSD: rf_evenodd.c,v 1.23 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -33,7 +33,7 @@
  ****************************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_evenodd.c,v 1.21 2014/03/23 09:30:59 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_evenodd.c,v 1.23 2021/07/23 00:54:45 oster Exp $");
 
 #include "rf_archs.h"
 
@@ -74,7 +74,7 @@ rf_ConfigureEvenOdd(RF_ShutdownList_t **listp, RF_Raid_t *raidPtr,
 	RF_EvenOddConfigInfo_t *info;
 	RF_RowCol_t i, j, startdisk;
 
-	RF_MallocAndAdd(info, sizeof(RF_EvenOddConfigInfo_t), (RF_EvenOddConfigInfo_t *), raidPtr->cleanupList);
+	info = RF_MallocAndAdd(sizeof(*info), raidPtr->cleanupList);
 	layoutPtr->layoutSpecificInfo = (void *) info;
 
 	info->stripeIdentifier = rf_make_2d_array(raidPtr->numCol, raidPtr->numCol, raidPtr->cleanupList);
@@ -356,12 +356,14 @@ rf_VerifyParityEvenOdd(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 
 	retcode = RF_PARITY_OKAY;
 
-	mcpair = rf_AllocMCPair();
+	mcpair = rf_AllocMCPair(raidPtr);
 	rf_MakeAllocList(alloclist);
-	RF_MallocAndAdd(buf, numbytes * (layoutPtr->numDataCol + layoutPtr->numParityCol), (char *), alloclist);
-	RF_MallocAndAdd(pbuf, numbytes, (char *), alloclist);
+	buf = RF_MallocAndAdd(
+	    numbytes * (layoutPtr->numDataCol + layoutPtr->numParityCol),
+	    alloclist);
+	pbuf = RF_MallocAndAdd(numbytes, alloclist);
 	end_p = buf + bytesPerStripe;
-	RF_MallocAndAdd(redundantbuf2, numbytes, (char *), alloclist);
+	redundantbuf2 = RF_MallocAndAdd(numbytes, alloclist);
 
 	rd_dag_h = rf_MakeSimpleDAG(raidPtr, stripeWidth, numbytes, buf, rf_DiskReadFunc, rf_DiskReadUndoFunc,
 	    "Rod", alloclist, flags, RF_IO_NORMAL_PRIORITY);
@@ -401,7 +403,7 @@ rf_VerifyParityEvenOdd(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 	blockNode->succedents[layoutPtr->numDataCol + 1]->params[0].p = asmap->qInfo;
 
 	/* fire off the DAG */
-	memset((char *) &tracerec, 0, sizeof(tracerec));
+	memset(&tracerec, 0, sizeof(tracerec));
 	rd_dag_h->tracerec = &tracerec;
 
 #if RF_DEBUG_VALIDATE_DAG
@@ -463,7 +465,7 @@ rf_VerifyParityEvenOdd(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 		wrBlock->succedents[0]->params[0].p = asmap->parityInfo;
 		wrBlock->succedents[0]->params[2].v = psID;
 		wrBlock->succedents[0]->params[3].v = RF_CREATE_PARAM3(RF_IO_NORMAL_PRIORITY, which_ru);
-		memset((char *) &tracerec, 0, sizeof(tracerec));
+		memset(&tracerec, 0, sizeof(tracerec));
 		wr_dag_h->tracerec = &tracerec;
 #if RF_DEBUG_VALIDATE_DAG
 		if (rf_verifyParityDebug) {
@@ -493,7 +495,7 @@ rf_VerifyParityEvenOdd(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 		wrBlock->succedents[0]->params[0].p = asmap->qInfo;
 		wrBlock->succedents[0]->params[2].v = psID;
 		wrBlock->succedents[0]->params[3].v = RF_CREATE_PARAM3(RF_IO_NORMAL_PRIORITY, which_ru);
-		memset((char *) &tracerec, 0, sizeof(tracerec));
+		memset(&tracerec, 0, sizeof(tracerec));
 		wr_dag_h->tracerec = &tracerec;
 #if RF_DEBUG_VALIDATE_DAG
 		if (rf_verifyParityDebug) {
@@ -524,10 +526,10 @@ rf_VerifyParityEvenOdd(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 
 
 out:
-	rf_FreeAccessStripeMap(asm_h);
+	rf_FreeAccessStripeMap(raidPtr, asm_h);
 	rf_FreeAllocList(alloclist);
 	rf_FreeDAG(rd_dag_h);
-	rf_FreeMCPair(mcpair);
+	rf_FreeMCPair(raidPtr, mcpair);
 	return (retcode);
 }
 #endif				/* RF_INCLUDE_EVENODD > 0 */

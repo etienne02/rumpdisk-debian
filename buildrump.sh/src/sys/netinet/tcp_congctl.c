@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp_congctl.c,v 1.21 2016/04/26 08:44:44 ozaki-r Exp $	*/
+/*	$NetBSD: tcp_congctl.c,v 1.28 2021/07/31 20:29:37 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2001, 2005, 2006 The NetBSD Foundation, Inc.
@@ -135,7 +135,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcp_congctl.c,v 1.21 2016/04/26 08:44:44 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcp_congctl.c,v 1.28 2021/07/31 20:29:37 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -167,16 +167,12 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_congctl.c,v 1.21 2016/04/26 08:44:44 ozaki-r Exp
 #include <netinet/ip_var.h>
 
 #ifdef INET6
-#ifndef INET
-#include <netinet/in.h>
-#endif
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_var.h>
 #include <netinet/icmp6.h>
-#include <netinet6/nd6.h>
 #endif
 
 #include <netinet/tcp.h>
@@ -184,7 +180,6 @@ __KERNEL_RCSID(0, "$NetBSD: tcp_congctl.c,v 1.21 2016/04/26 08:44:44 ozaki-r Exp
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
-#include <netinet/tcpip.h>
 #include <netinet/tcp_congctl.h>
 #ifdef TCP_DEBUG
 #include <netinet/tcp_debug.h>
@@ -432,12 +427,12 @@ tcp_congctl_fillnames(void)
 static void
 tcp_common_congestion_exp(struct tcpcb *tp, int betaa, int betab)
 {
-	u_int win;
+	u_long win;
 
 	/* 
 	 * Reduce the congestion window and the slow start threshold.
 	 */
-	win = min(tp->snd_wnd, tp->snd_cwnd) * betaa / betab / tp->t_segsz;
+	win = ulmin(tp->snd_wnd, tp->snd_cwnd) * betaa / betab / tp->t_segsz;
 	if (win < 2)
 		win = 2;
 
@@ -524,7 +519,7 @@ tcp_reno_fast_retransmit(struct tcpcb *tp, const struct tcphdr *th)
 static void
 tcp_reno_slow_retransmit(struct tcpcb *tp)
 {
-	u_int win;
+	u_long win;
 
 	/*
 	 * Close the congestion window down to one segment
@@ -542,16 +537,16 @@ tcp_reno_slow_retransmit(struct tcpcb *tp)
 	 * almost immediately.  To get more time between
 	 * drops but still "push" the network to take advantage
 	 * of improving conditions, we switch from exponential
-	 * to linear window opening at some threshhold size.
-	 * For a threshhold, we use half the current window
+	 * to linear window opening at some threshold size.
+	 * For a threshold, we use half the current window
 	 * size, truncated to a multiple of the mss.
 	 *
 	 * (the minimum cwnd that will give us exponential
-	 * growth is 2 mss.  We don't allow the threshhold
+	 * growth is 2 mss.  We don't allow the threshold
 	 * to go below this.)
 	 */
 
-	win = min(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_segsz;
+	win = ulmin(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_segsz;
 	if (win < 2)
 		win = 2;
 	/* Loss Window MUST be one segment. */
@@ -628,7 +623,7 @@ tcp_reno_newack(struct tcpcb *tp, const struct tcphdr *th)
 
 			abc_lim = (tcp_abc_aggressive == 0 ||
 			    tp->snd_nxt != tp->snd_max) ? incr : incr * 2;
-			incr = min(acked, abc_lim);
+			incr = uimin(acked, abc_lim);
 		}
 	} else {
 
@@ -644,7 +639,7 @@ tcp_reno_newack(struct tcpcb *tp, const struct tcphdr *th)
 		}
 	}
 
-	tp->snd_cwnd = min(cw + incr, TCP_MAXWIN << tp->snd_scale);
+	tp->snd_cwnd = uimin(cw + incr, TCP_MAXWIN << tp->snd_scale);
 }
 
 const struct tcp_congctl tcp_reno_ctl = {
@@ -708,7 +703,6 @@ tcp_newreno_fast_retransmit_newack(struct tcpcb *tp, const struct tcphdr *th)
 		tp->t_partialacks++;
 		TCP_TIMER_DISARM(tp, TCPT_REXMT);
 		tp->t_rtttime = 0;
-		tp->snd_nxt = th->th_ack;
 
 		if (TCP_SACK_ENABLED(tp)) {
 			/*
@@ -735,6 +729,7 @@ tcp_newreno_fast_retransmit_newack(struct tcpcb *tp, const struct tcphdr *th)
 			tp->t_flags |= TF_ACKNOW;
 			(void) tcp_output(tp);
 		} else {
+			tp->snd_nxt = th->th_ack;
 			/*
 			 * Set snd_cwnd to one segment beyond ACK'd offset
 			 * snd_una is not yet updated when we're called
@@ -901,7 +896,7 @@ tcp_cubic_congestion_exp(struct tcpcb *tp)
 		tp->snd_cubic_wmax = tp->snd_cwnd;
 	}
 
-	tp->snd_cubic_wmax = max(tp->t_segsz, tp->snd_cubic_wmax);
+	tp->snd_cubic_wmax = uimax(tp->t_segsz, tp->snd_cubic_wmax);
 
 	/* Shrink CWND */
 	tcp_common_congestion_exp(tp, CUBIC_BETAA, CUBIC_BETAB);
@@ -956,8 +951,8 @@ tcp_cubic_newack(struct tcpcb *tp, const struct tcphdr *th)
 		}
 
 		/* Make sure we are within limits */
-		tp->snd_cwnd = max(tp->snd_cwnd, tp->t_segsz);
-		tp->snd_cwnd = min(tp->snd_cwnd, TCP_MAXWIN << tp->snd_scale);
+		tp->snd_cwnd = uimax(tp->snd_cwnd, tp->t_segsz);
+		tp->snd_cwnd = uimin(tp->snd_cwnd, TCP_MAXWIN << tp->snd_scale);
 	} else {
 		/* Use New Reno */
 		tcp_newreno_newack(tp, th);

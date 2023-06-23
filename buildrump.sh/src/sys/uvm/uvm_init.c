@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_init.c,v 1.46 2015/04/03 01:03:42 riastradh Exp $	*/
+/*	$NetBSD: uvm_init.c,v 1.55 2020/11/04 01:30:19 chs Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_init.c,v 1.46 2015/04/03 01:03:42 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_init.c,v 1.55 2020/11/04 01:30:19 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -46,6 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_init.c,v 1.46 2015/04/03 01:03:42 riastradh Exp 
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_pdpolicy.h>
+#include <uvm/uvm_physseg.h>
 #include <uvm/uvm_readahead.h>
 
 /*
@@ -63,10 +64,19 @@ const int * const uvmexp_pagemask = &uvmexp.pagemask;
 const int * const uvmexp_pageshift = &uvmexp.pageshift;
 #endif
 
-kmutex_t uvm_pageqlock;
-kmutex_t uvm_fpageqlock;
-kmutex_t uvm_kentry_lock;
-kmutex_t uvm_swap_data_lock;
+kmutex_t uvm_kentry_lock __cacheline_aligned;
+
+/*
+ * uvm_md_init: Init dependant on the MD boot context.
+ *		called from MD code.
+ */
+
+void
+uvm_md_init(void)
+{
+	uvm_setpagesize(); /* initialize PAGE_SIZE-dependent variables */
+	uvm_physseg_init();
+}
 
 /*
  * uvm_init: init the VM system.   called from kern/init_main.c.
@@ -97,6 +107,7 @@ uvm_init(void)
 	 */
 
 	uvm_page_init(&kvm_start, &kvm_end);
+	uvm_pglistalloc_init();
 
 	/*
 	 * Init the map sub-system.
@@ -154,17 +165,12 @@ uvm_init(void)
 	uvm_loan_init();
 
 	/*
-	 * Init emap subsystem.
+	 * Enable paging of kernel objects.
+	 * This second pass of initializing kernel_object requires rw_obj,
+	 * so initialize that first.
 	 */
 
-	uvm_emap_sysinit();
-
-	/*
-	 * The VM system is now up!  Now that kmem is up we can resize the
-	 * <obj,off> => <page> hash table for general use and enable paging
-	 * of kernel objects.
-	 */
-
+	rw_obj_init();
 	uao_create(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS,
 	    UAO_FLAG_KERNSWAP);
 

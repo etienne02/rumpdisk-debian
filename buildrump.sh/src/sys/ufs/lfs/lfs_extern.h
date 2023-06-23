@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_extern.h,v 1.111 2016/06/20 03:29:52 dholland Exp $	*/
+/*	$NetBSD: lfs_extern.h,v 1.118 2020/02/23 08:49:46 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2002, 2003 The NetBSD Foundation, Inc.
@@ -83,7 +83,6 @@ MALLOC_DECLARE(M_SEGMENT);
 #define LFS_DO_RFW	 7
 #define LFS_DEBUGLOG	 8
 #define LFS_IGNORE_LAZY_SYNC	9
-#define LFS_MAXID	 10
 
 /* not ours */
 struct fid;
@@ -109,7 +108,7 @@ __BEGIN_DECLS
 
 #if defined(_KERNEL)
 
-extern int lfs_allclean_wakeup;
+extern kcondvar_t lfs_allclean_wakeup;
 extern struct pool lfs_inode_pool;		/* memory pool for inodes */
 extern struct pool lfs_dinode_pool;		/* memory pool for dinodes */
 extern struct pool lfs_inoext_pool;	/* memory pool for inode extension */
@@ -128,9 +127,10 @@ extern kcondvar_t locked_queue_cv;
 int lfs_valloc(struct vnode *, int, kauth_cred_t, ino_t *, int *);
 int lfs_valloc_fixed(struct lfs *, ino_t, int);
 int lfs_vfree(struct vnode *, ino_t, int);
-void lfs_order_freelist(struct lfs *);
+void lfs_order_freelist(struct lfs *, ino_t **, size_t *);
 int lfs_extend_ifile(struct lfs *, kauth_cred_t);
 void lfs_orphan(struct lfs *, ino_t);
+void lfs_free_orphans(struct lfs *, ino_t *, size_t);
 
 /* lfs_balloc.c */
 int lfs_balloc(struct vnode *, off_t, int, kauth_cred_t, int, struct buf **);
@@ -149,6 +149,8 @@ void lfs_freebuf(struct lfs *, struct buf *);
 struct buf *lfs_newbuf(struct lfs *, struct vnode *, daddr_t, size_t, int);
 void lfs_countlocked(int *, long *, const char *);
 int lfs_reserve(struct lfs *, struct vnode *, struct vnode *, int);
+int lfs_max_bufs(void);
+int lfs_wait_bufs(void);
 
 /* lfs_debug.c */
 #ifdef DEBUG
@@ -196,7 +198,7 @@ int lfs_match_data(struct lfs *, struct buf *);
 int lfs_match_indir(struct lfs *, struct buf *);
 int lfs_match_dindir(struct lfs *, struct buf *);
 int lfs_match_tindir(struct lfs *, struct buf *);
-void lfs_callback(struct buf *);
+void lfs_free_aiodone(struct buf *);
 void lfs_acquire_finfo(struct lfs *fs, ino_t, int);
 void lfs_release_finfo(struct lfs *fs);
 
@@ -209,7 +211,8 @@ void lfs_free(struct lfs *, void *, int);
 int lfs_seglock(struct lfs *, unsigned long);
 void lfs_segunlock(struct lfs *);
 void lfs_segunlock_relock(struct lfs *);
-int lfs_writer_enter(struct lfs *, const char *);
+void lfs_writer_enter(struct lfs *, const char *);
+int lfs_writer_tryenter(struct lfs *);
 void lfs_writer_leave(struct lfs *);
 void lfs_wakeup_cleaner(struct lfs *);
 

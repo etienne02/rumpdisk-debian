@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.54 2014/10/29 14:14:14 skrll Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.63 2020/12/03 07:45:52 skrll Exp $	*/
 
 /*
  * Copyright (c) 1996 Scott K. Stevens
@@ -35,19 +35,20 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.54 2014/10/29 14:14:14 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.63 2020/12/03 07:45:52 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/param.h>
+
+#include <sys/atomic.h>
+#include <sys/exec.h>
+#include <sys/intr.h>
 #include <sys/proc.h>
 #include <sys/reboot.h>
 #include <sys/systm.h>	/* just for boothowto */
-#include <sys/exec.h>
-#include <sys/atomic.h>
-#include <sys/intr.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -133,7 +134,7 @@ kdb_trap(int type, db_regs_t *regs)
 			/*
 			 * While we aren't the master, wait until the master
 			 * gives control to us or exits.  If it exited, we
-			 * just exit to.  Otherwise this cpu will enter DDB.
+			 * just exit too.  Otherwise this cpu will enter DDB.
 			 */
 			membar_consumer();
 			while (db_onproc != ci) {
@@ -171,10 +172,8 @@ kdb_trap(int type, db_regs_t *regs)
 		if (is_mp_p && db_newcpu != NULL) {
 			db_onproc = db_newcpu;
 			db_newcpu = NULL;
-#ifdef _ARM_ARCH_6
-			membar_producer();
-			__asm __volatile("sev; sev");
-#endif
+			dsb(ishst);
+			sev();
 			continue;
 		}
 		break;
@@ -186,13 +185,12 @@ kdb_trap(int type, db_regs_t *regs)
 		 * the other CPUs to exit.
 		 */
 		db_onproc = NULL;
-#ifdef _ARM_ARCH_6
-		__asm __volatile("sev; sev");
-#endif
+		dsb(ishst);
+		sev();
 	}
 #endif
 
-	return (1);
+	return 1;
 }
 #endif
 
@@ -203,17 +201,13 @@ db_validate_address(vaddr_t addr)
 	struct pmap *pmap;
 
 	if (!p || !p->p_vmspace || !p->p_vmspace->vm_map.pmap ||
-#ifndef ARM32_NEW_VM_LAYOUT
-	    addr >= VM_MAXUSER_ADDRESS
-#else
 	    addr >= VM_MIN_KERNEL_ADDRESS
-#endif
 	   )
 		pmap = pmap_kernel();
 	else
 		pmap = p->p_vmspace->vm_map.pmap;
 
-	return (pmap_extract(pmap, addr, NULL) == false);
+	return pmap_extract(pmap, addr, NULL) == false;
 }
 
 /*
@@ -251,87 +245,8 @@ db_read_bytes(vaddr_t addr, size_t size, char *data)
 static void
 db_write_text(vaddr_t addr, size_t size, const char *data)
 {
-	struct pmap *pmap = pmap_kernel();
-	pd_entry_t *pde, oldpde, tmppde;
-	pt_entry_t *pte, oldpte, tmppte;
-	vaddr_t pgva;
-	size_t limit, savesize;
-	char *dst;
 
-	/* XXX: gcc */
-	oldpte = 0;
-
-	if ((savesize = size) == 0)
-		return;
-
-	dst = (char *) addr;
-
-	do {
-		/* Get the PDE of the current VA. */
-		if (pmap_get_pde_pte(pmap, (vaddr_t) dst, &pde, &pte) == false)
-			goto no_mapping;
-		switch ((oldpde = *pde) & L1_TYPE_MASK) {
-		case L1_TYPE_S:
-			pgva = (vaddr_t)dst & L1_S_FRAME;
-			limit = L1_S_SIZE - ((vaddr_t)dst & L1_S_OFFSET);
-
-			tmppde = l1pte_set_writable(oldpde);
-			*pde = tmppde;
-			PTE_SYNC(pde);
-			break;
-
-		case L1_TYPE_C:
-			pgva = (vaddr_t)dst & L2_S_FRAME;
-			limit = L2_S_SIZE - ((vaddr_t)dst & L2_S_OFFSET);
-
-			if (pte == NULL)
-				goto no_mapping;
-			oldpte = *pte;
-			tmppte = l2pte_set_writable(oldpte);
-			*pte = tmppte;
-			PTE_SYNC(pte);
-			break;
-
-		default:
-		no_mapping:
-			printf(" address 0x%08lx not a valid page\n",
-			    (vaddr_t) dst);
-			return;
-		}
-		cpu_tlb_flushD_SE(pgva);
-		cpu_cpwait();
-
-		if (limit > size)
-			limit = size;
-		size -= limit;
-
-		/*
-		 * Page is now writable.  Do as much access as we
-		 * can in this page.
-		 */
-		for (; limit > 0; limit--)
-			*dst++ = *data++;
-
-		/*
-		 * Restore old mapping permissions.
-		 */
-		switch (oldpde & L1_TYPE_MASK) {
-		case L1_TYPE_S:
-			*pde = oldpde;
-			PTE_SYNC(pde);
-			break;
-
-		case L1_TYPE_C:
-			*pte = oldpte;
-			PTE_SYNC(pte);
-			break;
-		}
-		cpu_tlb_flushD_SE(pgva);
-		cpu_cpwait();
-	} while (size != 0);
-
-	/* Sync the I-cache. */
-	cpu_icache_sync_range(addr, savesize);
+	ktext_write((void *)addr, data, size);
 }
 
 /*
@@ -385,7 +300,11 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 void
 cpu_Debugger(void)
 {
+#ifdef _ARM_ARCH_BE8
+	__asm(".word	0xffffffe7");
+#else
 	__asm(".word	0xe7ffffff");
+#endif
 }
 
 int
@@ -398,8 +317,8 @@ db_trapper(u_int addr, u_int inst, trapframe_t *frame, int fault_code)
 		else
 			kdb_trap(-1, frame);
 	} else
-		return (1);
-	return (0);
+		return 1;
+	return 0;
 }
 
 extern u_int esym;
@@ -426,37 +345,37 @@ db_fetch_reg(int reg, db_regs_t *regs)
 
 	switch (reg) {
 	case 0:
-		return (regs->tf_r0);
+		return regs->tf_r0;
 	case 1:
-		return (regs->tf_r1);
+		return regs->tf_r1;
 	case 2:
-		return (regs->tf_r2);
+		return regs->tf_r2;
 	case 3:
-		return (regs->tf_r3);
+		return regs->tf_r3;
 	case 4:
-		return (regs->tf_r4);
+		return regs->tf_r4;
 	case 5:
-		return (regs->tf_r5);
+		return regs->tf_r5;
 	case 6:
-		return (regs->tf_r6);
+		return regs->tf_r6;
 	case 7:
-		return (regs->tf_r7);
+		return regs->tf_r7;
 	case 8:
-		return (regs->tf_r8);
+		return regs->tf_r8;
 	case 9:
-		return (regs->tf_r9);
+		return regs->tf_r9;
 	case 10:
-		return (regs->tf_r10);
+		return regs->tf_r10;
 	case 11:
-		return (regs->tf_r11);
+		return regs->tf_r11;
 	case 12:
-		return (regs->tf_r12);
+		return regs->tf_r12;
 	case 13:
-		return (regs->tf_svc_sp);
+		return regs->tf_svc_sp;
 	case 14:
-		return (regs->tf_svc_lr);
+		return regs->tf_svc_lr;
 	case 15:
-		return (regs->tf_pc);
+		return regs->tf_pc;
 	default:
 		panic("db_fetch_reg: botch");
 	}
@@ -473,19 +392,19 @@ branch_taken(u_int insn, u_int pc, db_regs_t *regs)
 		addr = ((insn << 2) & 0x03ffffff);
 		if (addr & 0x02000000)
 			addr |= 0xfc000000;
-		return (pc + 8 + addr);
+		return pc + 8 + addr;
 	case 0x7:	/* ldr pc, [pc, reg, lsl #2] */
 		addr = db_fetch_reg(insn & 0xf, regs);
 		addr = pc + 8 + (addr << 2);
 		db_read_bytes(addr, 4, (char *)&addr);
-		return (addr);
+		return addr;
 	case 0x5:	/* ldr pc, [reg] */
 		addr = db_fetch_reg((insn >> 16) & 0xf, regs);
 		db_read_bytes(addr, 4, (char *)&addr);
-		return (addr);
+		return addr;
 	case 0x1:	/* mov pc, reg */
 		addr = db_fetch_reg(insn & 0xf, regs);
-		return (addr);
+		return addr;
 	case 0x8:	/* ldmxx reg, {..., pc} */
 	case 0x9:
 		addr = db_fetch_reg((insn >> 16) & 0xf, regs);
@@ -508,7 +427,7 @@ branch_taken(u_int insn, u_int pc, db_regs_t *regs)
 			break;
 		}
 		db_read_bytes(addr, 4, (char *)&addr);
-		return (addr);
+		return addr;
 	default:
 		panic("branch_taken: botch");
 	}

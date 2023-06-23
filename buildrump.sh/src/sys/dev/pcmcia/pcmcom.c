@@ -1,4 +1,4 @@
-/*	$NetBSD: pcmcom.c,v 1.40 2012/10/27 17:18:37 chs Exp $	*/
+/*	$NetBSD: pcmcom.c,v 1.43 2021/08/07 16:19:15 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000, 2004 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcmcom.c,v 1.40 2012/10/27 17:18:37 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcmcom.c,v 1.43 2021/08/07 16:19:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -173,9 +173,10 @@ pcmcom_attach(device_t parent, device_t self, void *aux)
 
 		locs[PCMCOMCF_SLAVE] = slave;
 
-		sc->sc_slaves[slave] = config_found_sm_loc(sc->sc_dev,
-			"pcmcom", locs,
-			&pca, pcmcom_print, config_stdsubmatch);
+		sc->sc_slaves[slave] =
+		    config_found(sc->sc_dev, &pca, pcmcom_print,
+				 CFARGS(.submatch = config_stdsubmatch,
+					.locators = locs));
 	}
 
 	pcmcom_disable(sc);
@@ -319,7 +320,7 @@ com_pcmcom_attach(device_t parent, device_t self, void *aux)
 	struct pcmcom_attach_args *pca = aux;
 
 	sc->sc_dev = self;
-	COM_INIT_REGS(sc->sc_regs, pca->pca_iot, pca->pca_ioh, -1);
+	com_init_regs(&sc->sc_regs, pca->pca_iot, pca->pca_ioh, -1);
 	sc->enabled = 1;
 
 	sc->sc_frequency = COM_FREQ;

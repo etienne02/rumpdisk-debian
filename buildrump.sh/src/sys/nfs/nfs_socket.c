@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_socket.c,v 1.198 2016/06/17 14:28:29 christos Exp $	*/
+/*	$NetBSD: nfs_socket.c,v 1.200 2018/09/03 16:29:36 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1991, 1993, 1995
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_socket.c,v 1.198 2016/06/17 14:28:29 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_socket.c,v 1.200 2018/09/03 16:29:36 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs.h"
@@ -166,6 +166,7 @@ int nfsrtton = 0;
 struct nfsrtt nfsrtt;
 static const int nfs_backoff[8] = { 2, 4, 8, 16, 32, 64, 128, 256, };
 struct nfsreqhead nfs_reqq;
+kmutex_t nfs_reqq_lock;
 static callout_t nfs_timer_ch;
 static struct evcnt nfs_timer_ev;
 static struct evcnt nfs_timer_start_ev;
@@ -285,11 +286,11 @@ nfs_connect(struct nfsmount *nmp, struct nfsreq *rep, struct lwp *l)
 	}
 	if (nmp->nm_sotype == SOCK_DGRAM) {
 		sndreserve = (nmp->nm_wsize + NFS_MAXPKTHDR) * 3;
-		rcvreserve = (max(nmp->nm_rsize, nmp->nm_readdirsize) +
+		rcvreserve = (uimax(nmp->nm_rsize, nmp->nm_readdirsize) +
 		    NFS_MAXPKTHDR) * 2;
 	} else if (nmp->nm_sotype == SOCK_SEQPACKET) {
 		sndreserve = (nmp->nm_wsize + NFS_MAXPKTHDR) * 3;
-		rcvreserve = (max(nmp->nm_rsize, nmp->nm_readdirsize) +
+		rcvreserve = (uimax(nmp->nm_rsize, nmp->nm_readdirsize) +
 		    NFS_MAXPKTHDR) * 3;
 	} else {
 		sounlock(so);
@@ -385,6 +386,7 @@ nfs_reconnect(struct nfsreq *rep)
 	 * on old socket.
 	 */
 	s = splsoftnet();
+	mutex_enter(&nfs_reqq_lock);
 	TAILQ_FOREACH(rp, &nfs_reqq, r_chain) {
 		if (rp->r_nmp == nmp) {
 			if ((rp->r_flags & R_MUSTRESEND) == 0)
@@ -392,6 +394,7 @@ nfs_reconnect(struct nfsreq *rep)
 			rp->r_rexmit = 0;
 		}
 	}
+	mutex_exit(&nfs_reqq_lock);
 	splx(s);
 	return (0);
 }
@@ -759,7 +762,7 @@ nfs_timer(void *arg)
 
 	nfs_timer_ev.ev_count++;
 
-	mutex_enter(softnet_lock);	/* XXX PR 40491 */
+	mutex_enter(&nfs_reqq_lock);
 	TAILQ_FOREACH(rep, &nfs_reqq, r_chain) {
 		more = true;
 		nmp = rep->r_nmp;
@@ -813,7 +816,7 @@ nfs_timer(void *arg)
 		 *	Resend it
 		 * Set r_rtt to -1 in case we fail to send it now.
 		 */
-		/* solock(so);		XXX PR 40491 */
+		solock(so);
 		rep->r_rtt = -1;
 		if (sbspace(&so->so_snd) >= rep->r_mreq->m_pkthdr.len &&
 		   ((nmp->nm_flag & NFSMNT_DUMBTIMR) ||
@@ -858,9 +861,9 @@ nfs_timer(void *arg)
 				rep->r_rtt = 0;
 			}
 		}
-		/* sounlock(so);	XXX PR 40491 */
+		sounlock(so);
 	}
-	mutex_exit(softnet_lock);	/* XXX PR 40491 */
+	mutex_exit(&nfs_reqq_lock);
 
 	mutex_enter(&nfs_timer_lock);
 	if (nfs_timer_srvvec != NULL) {
@@ -1094,7 +1097,7 @@ nfs_getreq(struct nfsrv_descript *nd, struct nfsd *nfsd, int has_header)
 		nfsm_dissect(tl, u_int32_t *, (len + 2) * NFSX_UNSIGNED);
 
 		if (len > 0) {
-			size_t grbuf_size = min(len, NGROUPS) * sizeof(gid_t);
+			size_t grbuf_size = uimin(len, NGROUPS) * sizeof(gid_t);
 			gid_t *grbuf = kmem_alloc(grbuf_size, KM_SLEEP);
 
 			for (i = 0; i < len; i++) {
@@ -1104,7 +1107,7 @@ nfs_getreq(struct nfsrv_descript *nd, struct nfsd *nfsd, int has_header)
 					tl++;
 			}
 			kauth_cred_setgroups(nd->nd_cr, grbuf,
-			    min(len, NGROUPS), -1, UIO_SYSSPACE);
+			    uimin(len, NGROUPS), -1, UIO_SYSSPACE);
 			kmem_free(grbuf, grbuf_size);
 		}
 

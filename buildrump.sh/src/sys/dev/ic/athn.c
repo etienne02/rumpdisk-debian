@@ -1,4 +1,4 @@
-/*	$NetBSD: athn.c,v 1.13 2016/05/26 05:01:12 ozaki-r Exp $	*/
+/*	$NetBSD: athn.c,v 1.25 2021/06/16 00:21:18 riastradh Exp $	*/
 /*	$OpenBSD: athn.c,v 1.83 2014/07/22 13:12:11 mpi Exp $	*/
 
 /*-
@@ -23,7 +23,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: athn.c,v 1.13 2016/05/26 05:01:12 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: athn.c,v 1.25 2021/06/16 00:21:18 riastradh Exp $");
 
 #ifndef _MODULE
 #include "athn_usb.h"		/* for NATHN_USB */
@@ -118,6 +118,7 @@ Static void	athn_tx_reclaim(struct athn_softc *, int);
 Static void	athn_watchdog(struct ifnet *);
 Static void	athn_write_serdes(struct athn_softc *,
 		    const struct athn_serdes *);
+Static void	athn_softintr(void *);
 
 #ifdef ATHN_BT_COEXISTENCE
 Static void	athn_btcoex_disable(struct athn_softc *);
@@ -135,8 +136,8 @@ Static void	athn_ani_lower_immunity(struct athn_softc *);
 Static void	athn_ani_monitor(struct athn_softc *);
 Static void	athn_ani_ofdm_err_trigger(struct athn_softc *);
 Static void	athn_ani_restart(struct athn_softc *);
-Static void	athn_set_multi(struct athn_softc *);
 #endif /* notyet */
+Static void	athn_set_multi(struct athn_softc *);
 
 PUBLIC int
 athn_attach(struct athn_softc *sc)
@@ -188,6 +189,14 @@ athn_attach(struct athn_softc *sc)
 	athn_set_power_sleep(sc);
 
 	if (!(sc->sc_flags & ATHN_FLAG_USB)) {
+		sc->sc_soft_ih = softint_establish(SOFTINT_NET, athn_softintr,
+		    sc);
+		if (sc->sc_soft_ih == NULL) {
+			aprint_error_dev(sc->sc_dev,
+			    "could not establish softint\n");
+			return EINVAL;
+		}
+
 		error = sc->sc_ops.dma_alloc(sc);
 		if (error != 0) {
 			aprint_error_dev(sc->sc_dev,
@@ -240,8 +249,7 @@ athn_attach(struct athn_softc *sc)
 		    sc->sc_mac_rev,
 		    sc->sc_ntxchains, sc->sc_nrxchains, sc->sc_eep_rev,
 		    ether_sprintf(ic->ic_myaddr));
-	}
-	else {
+	} else {
 		aprint_normal(": Atheros %s, RF %s\n", athn_get_mac_name(sc),
 		    athn_get_rf_name(sc));
 		aprint_verbose_dev(sc->sc_dev,
@@ -329,15 +337,22 @@ athn_attach(struct athn_softc *sc)
 
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_init = athn_init;
-	ifp->if_ioctl = athn_ioctl;
-	ifp->if_start = athn_start;
-	ifp->if_watchdog = athn_watchdog;
+	if (!ifp->if_init)
+		ifp->if_init = athn_init;
+	if (!ifp->if_ioctl)
+		ifp->if_ioctl = athn_ioctl;
+	if (!ifp->if_start)
+		ifp->if_start = athn_start;
+	if (!ifp->if_watchdog)
+		ifp->if_watchdog = athn_watchdog;
 	IFQ_SET_READY(&ifp->if_snd);
 	memcpy(ifp->if_xname, device_xname(sc->sc_dev), IFNAMSIZ);
 
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+	/* Use common softint-based if_input */
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
 
 	ic->ic_node_alloc = athn_node_alloc;
 	ic->ic_newassoc = athn_newassoc;
@@ -378,6 +393,11 @@ athn_detach(struct athn_softc *sc)
 
 		/* Free Tx/Rx DMA resources. */
 		sc->sc_ops.dma_free(sc);
+
+		if (sc->sc_soft_ih != NULL) {
+			softint_disestablish(sc->sc_soft_ih);
+			sc->sc_soft_ih = NULL;
+		}
 	}
 	/* Free ROM copy. */
 	if (sc->sc_eep != NULL) {
@@ -391,6 +411,9 @@ athn_detach(struct athn_softc *sc)
 
 	callout_destroy(&sc->sc_scan_to);
 	callout_destroy(&sc->sc_calib_to);
+
+	pmf_event_deregister(sc->sc_dev, PMFE_RADIO_OFF, athn_pmf_wlan_off,
+	    false);
 }
 
 /*
@@ -533,7 +556,39 @@ athn_intr(void *xsc)
 		 */
 		return 0;
 
-	return sc->sc_ops.intr(sc);
+	if (!sc->sc_ops.intr_status(sc))
+		return 0;
+
+	AR_WRITE(sc, AR_INTR_ASYNC_MASK, 0);
+	AR_WRITE(sc, AR_INTR_SYNC_MASK, 0);
+	AR_WRITE_BARRIER(sc);
+
+	softint_schedule(sc->sc_soft_ih);
+
+	return 1;
+}
+
+Static void
+athn_softintr(void *xsc)
+{
+	struct athn_softc *sc = xsc;
+	struct ifnet *ifp = &sc->sc_if;
+
+	if (!IS_UP_AND_RUNNING(ifp))
+		return;
+
+	if (!device_activation(sc->sc_dev, DEVACT_LEVEL_DRIVER))
+		/*
+		 * The hardware is not ready/present, don't touch anything.
+		 * Note this can happen early on if the IRQ is shared.
+		 */
+		return;
+
+	sc->sc_ops.intr(sc);
+
+	AR_WRITE(sc, AR_INTR_ASYNC_MASK, AR_INTR_MAC_IRQ);
+	AR_WRITE(sc, AR_INTR_SYNC_MASK, sc->sc_isync);
+	AR_WRITE_BARRIER(sc);
 }
 
 Static void
@@ -547,8 +602,7 @@ athn_get_chipid(struct athn_softc *sc)
 		sc->sc_mac_rev = MS(reg, AR_SREV_REVISION2);
 		if (!(reg & AR_SREV_TYPE2_HOST_MODE))
 			sc->sc_flags |= ATHN_FLAG_PCIE;
-	}
-	else {
+	} else {
 		sc->sc_mac_ver = MS(reg, AR_SREV_VERSION);
 		sc->sc_mac_rev = MS(reg, AR_SREV_REVISION);
 		if (sc->sc_mac_ver == AR_SREV_VERSION_5416_PCIE)
@@ -656,8 +710,7 @@ athn_reset(struct athn_softc *sc, int cold_reset)
 		AR_WRITE(sc, AR_INTR_SYNC_ENABLE, 0);
 		AR_WRITE(sc, AR_RC, AR_RC_HOSTIF |
 		    (!AR_SREV_9380_10_OR_LATER(sc) ? AR_RC_AHB : 0));
-	}
-	else if (!AR_SREV_9380_10_OR_LATER(sc))
+	} else if (!AR_SREV_9380_10_OR_LATER(sc))
 		AR_WRITE(sc, AR_RC, AR_RC_AHB);
 
 	AR_WRITE(sc, AR_RTC_RC, AR_RTC_RC_MAC_WARM |
@@ -743,8 +796,7 @@ athn_init_pll(struct athn_softc *sc, const struct ieee80211_channel *c)
 			AR_WRITE(sc, AR_RTC_PLL_CONTROL2, 0x886666);
 		pll = SM(AR_RTC_9160_PLL_REFDIV, 0x5);
 		pll |= SM(AR_RTC_9160_PLL_DIV, 0x2c);
-	}
-	else if (AR_SREV_9280_10_OR_LATER(sc)) {
+	} else if (AR_SREV_9280_10_OR_LATER(sc)) {
 		pll = SM(AR_RTC_9160_PLL_REFDIV, 0x05);
 		if (c != NULL && IEEE80211_IS_CHAN_5GHZ(c)) {
 			if (sc->sc_flags & ATHN_FLAG_FAST_PLL_CLOCK)
@@ -753,18 +805,15 @@ athn_init_pll(struct athn_softc *sc, const struct ieee80211_channel *c)
 		 		pll = 0x2850;
 			else
 				pll |= SM(AR_RTC_9160_PLL_DIV, 0x28);
-		}
-		else
+		} else
 			pll |= SM(AR_RTC_9160_PLL_DIV, 0x2c);
-	}
-	else if (AR_SREV_9160_10_OR_LATER(sc)) {
+	} else if (AR_SREV_9160_10_OR_LATER(sc)) {
 		pll = SM(AR_RTC_9160_PLL_REFDIV, 0x05);
 		if (c != NULL && IEEE80211_IS_CHAN_5GHZ(c))
 			pll |= SM(AR_RTC_9160_PLL_DIV, 0x50);
 		else
 			pll |= SM(AR_RTC_9160_PLL_DIV, 0x58);
-	}
-	else {
+	} else {
 		pll = AR_RTC_PLL_REFDIV_5 | AR_RTC_PLL_DIV2;
 		if (c != NULL && IEEE80211_IS_CHAN_5GHZ(c))
 			pll |= SM(AR_RTC_PLL_DIV, 0x0a);
@@ -963,7 +1012,7 @@ athn_get_delta_slope(uint32_t coeff, uint32_t *exponent, uint32_t *mantissa)
 
 	/* exponent = 14 - floor(log2(coeff)) */
 	for (exp = 31; exp > 0; exp--)
-		if (coeff & (1 << exp))
+		if (coeff & (1U << exp))
 			break;
 	exp = 14 - (exp - COEFF_SCALE_SHIFT);
 
@@ -1040,8 +1089,7 @@ athn_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 		if (ic->ic_opmode == IEEE80211_M_HOSTAP) {
 			txmic = &key[16];
 			rxmic = &key[24];
-		}
-		else
+		} else
 #endif
 		{
 			rxmic = &key[16];
@@ -1073,8 +1121,7 @@ athn_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 		hi = LE_READ_2(&addr[4]);
 		lo = lo >> 1 | hi << 31;
 		hi = hi >> 1;
-	}
-	else
+	} else
 		lo = hi = 0;
 	AR_WRITE(sc, AR_KEYTABLE_MAC0(entry), lo);
 	AR_WRITE(sc, AR_KEYTABLE_MAC1(entry), hi | AR_KEYTABLE_VALID);
@@ -1149,8 +1196,7 @@ athn_btcoex_init(struct athn_softc *sc)
 		AR_WRITE_BARRIER(sc);
 
 		ops->gpio_config_input(sc, AR_GPIO_BTACTIVE_PIN);
-	}
-	else {	/* 3-wire. */
+	} else {	/* 3-wire. */
 		AR_SETBITS(sc, sc->sc_gpio_input_en_off,
 		    AR_GPIO_INPUT_EN_VAL_BT_PRIORITY_BB |
 		    AR_GPIO_INPUT_EN_VAL_BT_ACTIVE_BB);
@@ -1196,8 +1242,7 @@ athn_btcoex_enable(struct athn_softc *sc)
 		ops->gpio_config_output(sc, AR_GPIO_WLANACTIVE_PIN,
 		    AR_GPIO_OUTPUT_MUX_AS_RX_CLEAR_EXTERNAL);
 
-	}
-	else {	/* 2-wire. */
+	} else {	/* 2-wire. */
 		ops->gpio_config_output(sc, AR_GPIO_WLANACTIVE_PIN,
 		    AR_GPIO_OUTPUT_MUX_AS_TX_FRAME);
 	}
@@ -1325,8 +1370,7 @@ athn_init_calib(struct athn_softc *sc, struct ieee80211_channel *curchan,
 		if (AR_SREV_9380_10_OR_LATER(sc)) {
 			/* Support temperature compensation calibration. */
 			sc->sc_sup_calib_mask |= ATHN_CAL_TEMP;
-		}
-		else if (IEEE80211_IS_CHAN_5GHZ(curchan) || extchan != NULL) {
+		} else if (IEEE80211_IS_CHAN_5GHZ(curchan) || extchan != NULL) {
 			/*
 			 * ADC gain calibration causes uplink throughput
 			 * drops in HT40 mode on AR9287.
@@ -1396,13 +1440,11 @@ athn_ani_ofdm_err_trigger(struct athn_softc *sc)
 			ops->disable_ofdm_weak_signal(sc);
 			ani->spur_immunity_level = 0;
 			ops->set_spur_immunity_level(sc, 0);
-		}
-		else if (ani->firstep_level < 2) {
+		} else if (ani->firstep_level < 2) {
 			ani->firstep_level++;
 			ops->set_firstep_level(sc, ani->firstep_level);
 		}
-	}
-	else if (rssi > ATHN_ANI_RSSI_THR_LOW) {
+	} else if (rssi > ATHN_ANI_RSSI_THR_LOW) {
 		/*
 		 * Beacon RSSI is in mid range, we need OFDM weak signal
 		 * detection but we can raise first step level.
@@ -1415,8 +1457,7 @@ athn_ani_ofdm_err_trigger(struct athn_softc *sc)
 			ani->firstep_level++;
 			ops->set_firstep_level(sc, ani->firstep_level);
 		}
-	}
-	else if (sc->sc_ic.ic_curmode != IEEE80211_MODE_11A) {
+	} else if (sc->sc_ic.ic_curmode != IEEE80211_MODE_11A) {
 		/*
 		 * Beacon RSSI is low, if in b/g mode, turn off OFDM weak
 		 * signal detection and zero first step level to maximize
@@ -1468,8 +1509,7 @@ athn_ani_cck_err_trigger(struct athn_softc *sc)
 			ani->firstep_level++;
 			ops->set_firstep_level(sc, ani->firstep_level);
 		}
-	}
-	else if (sc->sc_ic.ic_curmode != IEEE80211_MODE_11A) {
+	} else if (sc->sc_ic.ic_curmode != IEEE80211_MODE_11A) {
 		/*
 		 * Beacon RSSI is low, zero first step level to maximize
 		 * CCK sensitivity.
@@ -1505,8 +1545,7 @@ athn_ani_lower_immunity(struct athn_softc *sc)
 		 * Beacon RSSI is high, leave OFDM weak signal detection
 		 * off or it may oscillate.
 		 */
-	}
-	else if (rssi > ATHN_ANI_RSSI_THR_LOW) {
+	} else if (rssi > ATHN_ANI_RSSI_THR_LOW) {
 		/*
 		 * Beacon RSSI is in mid range, turn on OFDM weak signal
 		 * detection or lower first step level.
@@ -1521,8 +1560,7 @@ athn_ani_lower_immunity(struct athn_softc *sc)
 			ops->set_firstep_level(sc, ani->firstep_level);
 			return;
 		}
-	}
-	else {
+	} else {
 		/* Beacon RSSI is low, lower first step level. */
 		if (ani->firstep_level > 0) {
 			ani->firstep_level--;
@@ -1537,8 +1575,7 @@ athn_ani_lower_immunity(struct athn_softc *sc)
 	if (ani->spur_immunity_level > 0) {
 		ani->spur_immunity_level--;
 		ops->set_spur_immunity_level(sc, ani->spur_immunity_level);
-	}
-	else if (ani->noise_immunity_level > 0) {
+	} else if (ani->noise_immunity_level > 0) {
 		ani->noise_immunity_level--;
 		ops->set_noise_immunity_level(sc, ani->noise_immunity_level);
 	}
@@ -1583,8 +1620,7 @@ athn_ani_monitor(struct athn_softc *sc)
 
 		listen_time = (cycdelta - txfdelta - rxfdelta) /
 		    (athn_clock_rate(sc) * 1000);
-	}
-	else
+	} else
 		listen_time = 0;
 
 	ani->cyccnt = cyccnt;
@@ -1624,15 +1660,13 @@ athn_ani_monitor(struct athn_softc *sc)
 			athn_ani_lower_immunity(sc);
 		athn_ani_restart(sc);
 
-	}
-	else if (ani->listen_time > ATHN_ANI_PERIOD) {
+	} else if (ani->listen_time > ATHN_ANI_PERIOD) {
 		/* Check to see if we need to raise immunity. */
 		if (ani->ofdm_phy_err_count >
 		    ani->listen_time * ani->ofdm_trig_high / 1000) {
 			athn_ani_ofdm_err_trigger(sc);
 			athn_ani_restart(sc);
-		}
-		else if (ani->cck_phy_err_count >
+		} else if (ani->cck_phy_err_count >
 		    ani->listen_time * ani->cck_trig_high / 1000) {
 			athn_ani_cck_err_trigger(sc);
 			athn_ani_restart(sc);
@@ -1711,8 +1745,7 @@ athn_init_dma(struct athn_softc *sc)
 	if (AR_SREV_9285(sc)) {
 		AR_WRITE(sc, AR_PCU_TXBUF_CTRL,
 		    AR9285_PCU_TXBUF_CTRL_USABLE_SIZE);
-	}
-	else if (!AR_SREV_9271(sc)) {
+	} else if (!AR_SREV_9271(sc)) {
 		AR_WRITE(sc, AR_PCU_TXBUF_CTRL,
 		    AR_PCU_TXBUF_CTRL_USABLE_SIZE);
 	}
@@ -1859,8 +1892,7 @@ athn_txtime(struct athn_softc *sc, int len, int ridx, u_int flags)
 		txtime = divround(8 + 4 * len + 3, athn_rates[ridx].rate);
 		/* SIFS is 10us for 11g but Signal Extension adds 6us. */
 		txtime = 16 + 4 + 4 * txtime + 16;
-	}
-	else {
+	} else {
 		txtime = divround(16 * len, athn_rates[ridx].rate);
 		if (ridx != ATHN_RIDX_CCK1 && (flags & IEEE80211_F_SHPREAMBLE))
 			txtime +=  72 + 24;
@@ -2187,8 +2219,7 @@ athn_hw_reset(struct athn_softc *sc, struct ieee80211_channel *curchan,
 
 		/* NB: RTC reset clears TSF. */
 		error = athn_reset_power_on(sc);
-	}
-	else {
+	} else {
 		tsfhi = tsflo = 0;	/* XXX: gcc */
 		error = athn_reset(sc, 0);
 	}
@@ -2250,8 +2281,7 @@ athn_hw_reset(struct athn_softc *sc, struct ieee80211_channel *curchan,
 		    (uint32_t)~(IEEE80211_FC1_RETRY | IEEE80211_FC1_PWR_MGT |
 		      IEEE80211_FC1_MORE_DATA));
 		AR_WRITE(sc, AR_AES_MUTE_MASK1, reg);
-	}
-	else if (AR_SREV_9160_10_OR_LATER(sc)) {
+	} else if (AR_SREV_9160_10_OR_LATER(sc)) {
 		/* Disable hardware crypto for management frames. */
 		AR_CLRBITS(sc, AR_PCU_MISC_MODE2,
 		    AR_PCU_MISC_MODE2_MGMT_CRYPTO_ENABLE);
@@ -2504,8 +2534,7 @@ athn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			athn_set_hostap_timers(sc);
 			/* Enable software beacon alert interrupts. */
 			sc->sc_imask |= AR_IMR_SWBA;
-		}
-		else
+		} else
 #endif
 		{
 			athn_set_sta_timers(sc);
@@ -2557,8 +2586,7 @@ athn_updateedca(struct ieee80211com *ic)
 			    SM(AR_D_CHNTIME_DUR,
 			       IEEE80211_TXOP_TO_US(ac->ac_txoplimit)) |
 			    AR_D_CHNTIME_EN);
-		}
-		else
+		} else
 			AR_WRITE(sc, AR_DCHNTIME(qid), 0);
 	}
 	AR_WRITE_BARRIER(sc);
@@ -2577,11 +2605,9 @@ athn_clock_rate(struct athn_softc *sc)
 			clockrate = AR_CLOCK_RATE_FAST_5GHZ_OFDM;
 		else
 			clockrate = AR_CLOCK_RATE_5GHZ_OFDM;
-	}
-	else if (ic->ic_curmode == IEEE80211_MODE_11B) {
+	} else if (ic->ic_curmode == IEEE80211_MODE_11B) {
 		clockrate = AR_CLOCK_RATE_CCK;
-	}
-	else
+	} else
 		clockrate = AR_CLOCK_RATE_2GHZ_OFDM;
 #ifndef IEEE80211_NO_HT
 	if (sc->sc_curchanext != NULL)
@@ -2636,27 +2662,27 @@ athn_start(struct ifnet *ifp)
 
 		if (m->m_len < (int)sizeof(*eh) &&
 		    (m = m_pullup(m, sizeof(*eh))) == NULL) {
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 		eh = mtod(m, struct ether_header *);
 		ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 		if (ni == NULL) {
 			m_freem(m);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
-		bpf_mtap(ifp, m);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		if ((m = ieee80211_encap(ic, m, ni)) == NULL)
 			continue;
  sendit:
-		bpf_mtap3(ic->ic_rawbpf, m);
+		bpf_mtap3(ic->ic_rawbpf, m, BPF_D_OUT);
 
 		if (sc->sc_ops.tx(sc, m, ni, 0) != 0) {
 			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			continue;
 		}
 
@@ -2678,7 +2704,7 @@ athn_watchdog(struct ifnet *ifp)
 			/* see athn_init, no need to call athn_stop here */
 			/* athn_stop(ifp, 0); */
 			(void)athn_init(ifp);
-			ifp->if_oerrors++;
+			if_statinc(ifp, if_oerrors);
 			return;
 		}
 		ifp->if_timer = 1;
@@ -2686,12 +2712,11 @@ athn_watchdog(struct ifnet *ifp)
 	ieee80211_watchdog(&sc->sc_ic);
 }
 
-#ifdef notyet
 Static void
 athn_set_multi(struct athn_softc *sc)
 {
-	struct arpcom *ac = &sc->sc_ic.ic_ac;
-	struct ifnet *ifp = &ac->ac_if;
+	struct ethercom *ec = &sc->sc_ec;
+	struct ifnet *ifp = &ec->ec_if;
 	struct ether_multi *enm;
 	struct ether_multistep step;
 	const uint8_t *addr;
@@ -2700,10 +2725,11 @@ athn_set_multi(struct athn_softc *sc)
 
 	if ((ifp->if_flags & (IFF_ALLMULTI | IFF_PROMISC)) != 0) {
 		lo = hi = 0xffffffff;
-		goto done;
+		goto done2;
 	}
 	lo = hi = 0;
-	ETHER_FIRST_MULTI(step, ac, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi, 6) != 0) {
 			ifp->if_flags |= IFF_ALLMULTI;
@@ -2724,11 +2750,12 @@ athn_set_multi(struct athn_softc *sc)
 		ETHER_NEXT_MULTI(step, enm);
 	}
  done:
+	ETHER_UNLOCK(ec);
+ done2:
 	AR_WRITE(sc, AR_MCAST_FIL0, lo);
 	AR_WRITE(sc, AR_MCAST_FIL1, hi);
 	AR_WRITE_BARRIER(sc);
 }
-#endif /* notyet */
 
 Static int
 athn_ioctl(struct ifnet *ifp, u_long cmd, void *data)
@@ -2770,9 +2797,7 @@ athn_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 	case SIOCDELMULTI:
 		if ((error = ether_ioctl(ifp, cmd, data)) == ENETRESET) {
 			/* setup multicast filter, etc */
-#ifdef notyet
 			athn_set_multi(sc);
-#endif
 			error = 0;
 		}
 		break;

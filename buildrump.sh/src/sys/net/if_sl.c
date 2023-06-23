@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sl.c,v 1.124 2016/06/10 13:27:16 ozaki-r Exp $	*/
+/*	$NetBSD: if_sl.c,v 1.132 2020/01/29 04:28:27 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1987, 1989, 1992, 1993
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.124 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.132 2020/01/29 04:28:27 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -85,6 +85,8 @@ __KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.124 2016/06/10 13:27:16 ozaki-r Exp $");
 #endif
 #include <sys/cpu.h>
 #include <sys/intr.h>
+#include <sys/device.h>
+#include <sys/module.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -190,7 +192,7 @@ struct if_clone sl_cloner =
 
 static void	slintr(void *);
 
-static int	slinit(struct sl_softc *);
+static int	slcreate(struct sl_softc *);
 static struct mbuf *sl_btom(struct sl_softc *, int);
 
 static int	slclose(struct tty *, int);
@@ -219,10 +221,37 @@ void
 slattach(int n __unused)
 {
 
+	/*
+	 * Nothing to do here, initialization is handled by the
+	 * module initialization code in slinit() below).
+	 */
+}
+
+static void
+slinit(void)
+{
+
 	if (ttyldisc_attach(&slip_disc) != 0)
-		panic("slattach");
+		panic("%s", __func__);
 	LIST_INIT(&sl_softc_list);
 	if_clone_attach(&sl_cloner);
+}
+
+static int
+sldetach(void)
+{
+	int error = 0;
+
+	if (!LIST_EMPTY(&sl_softc_list))
+		error = EBUSY;
+
+	if (error == 0)
+		error = ttyldisc_detach(&slip_disc);
+
+	if (error == 0)
+		if_clone_detach(&sl_cloner);
+
+	return error;
 }
 
 static int
@@ -267,7 +296,7 @@ sl_clone_destroy(struct ifnet *ifp)
 }
 
 static int
-slinit(struct sl_softc *sc)
+slcreate(struct sl_softc *sc)
 {
 
 	if (sc->sc_mbuf == NULL) {
@@ -312,7 +341,7 @@ slopen(dev_t dev, struct tty *tp)
 			    slintr, sc);
 			if (sc->sc_si == NULL)
 				return ENOMEM;
-			if (slinit(sc) == 0) {
+			if (slcreate(sc) == 0) {
 				softint_disestablish(sc->sc_si);
 				return ENOBUFS;
 			}
@@ -414,6 +443,12 @@ sltioctl(struct tty *tp, u_long cmd, void *data, int flag,
 {
 	struct sl_softc *sc = (struct sl_softc *)tp->t_sc;
 
+	/*
+	 * XXX
+	 * This function can be called without KERNEL_LOCK when caller's
+	 * struct cdevsw is set D_MPSAFE. Is KERNEL_LOCK required?
+	 */
+
 	switch (cmd) {
 	case SLIOCGUNIT:
 		*(int *)data = sc->sc_unit;	/* XXX */
@@ -450,7 +485,7 @@ sloutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		printf("%s: af%d not supported\n", sc->sc_if.if_xname,
 		    dst->sa_family);
 		m_freem(m);
-		sc->sc_if.if_noproto++;
+		if_statinc(&sc->sc_if, if_noproto);
 		return EAFNOSUPPORT;
 	}
 
@@ -590,7 +625,7 @@ slinput(int c, struct tty *tp)
 	}
 	c &= TTY_CHARMASK;
 
-	++sc->sc_if.if_ibytes;
+	if_statinc(&sc->sc_if, if_ibytes);
 
 	if (sc->sc_if.if_flags & IFF_DEBUG) {
 		if (c == ABT_ESC) {
@@ -662,7 +697,7 @@ slinput(int c, struct tty *tp)
 	sc->sc_flags |= SC_ERROR;
 
 error:
-	sc->sc_if.if_ierrors++;
+	if_statinc(&sc->sc_if, if_ierrors);
 newpack:
 	sc->sc_mp = sc->sc_pktstart = (u_char *)sc->sc_mbuf->m_ext.ext_buf +
 	    BUFOFFSET;
@@ -676,12 +711,9 @@ slintr(void *arg)
 {
 	struct sl_softc *sc = arg;
 	struct tty *tp = sc->sc_ttyp;
-	struct mbuf *m;
+	struct mbuf *m, *n;
 	int s, len;
 	u_char *pktstart;
-#ifdef INET
-	u_char c;
-#endif
 	u_char chdr[CHDR_LEN];
 
 	KASSERT(tp != NULL);
@@ -691,9 +723,6 @@ slintr(void *arg)
 	 */
 	mutex_enter(softnet_lock);
 	for (;;) {
-#ifdef INET
-		struct ip *ip;
-#endif
 		struct mbuf *m2;
 		struct mbuf *bpf_m;
 
@@ -717,7 +746,7 @@ slintr(void *arg)
 		s = splnet();
 		IF_DEQUEUE(&sc->sc_fastq, m);
 		if (m)
-			sc->sc_if.if_omcasts++;	/* XXX */
+			if_statinc(&sc->sc_if, if_omcasts);	/* XXX */
 		else
 			IFQ_DEQUEUE(&sc->sc_if.if_snd, m);
 		splx(s);
@@ -745,6 +774,7 @@ slintr(void *arg)
 		} else
 			bpf_m = NULL;
 #ifdef INET
+		struct ip *ip;
 		if ((ip = mtod(m, struct ip *))->ip_p == IPPROTO_TCP) {
 			if (sc->sc_if.if_flags & SC_COMPRESS)
 				*mtod(m, u_char *) |=
@@ -764,7 +794,7 @@ slintr(void *arg)
 		 * some time.
 		 */
 		if (tp->t_outq.c_cc == 0) {
-			sc->sc_if.if_obytes++;
+			if_statinc(&sc->sc_if, if_obytes);
 			(void)putc(FRAME_END, &tp->t_outq);
 		}
 
@@ -795,7 +825,8 @@ slintr(void *arg)
 					 */
 					if (b_to_q(bp, cp - bp, &tp->t_outq))
 						break;
-					sc->sc_if.if_obytes += cp - bp;
+					if_statadd(&sc->sc_if, if_obytes,
+					    cp - bp);
 				}
 				/*
 				 * If there are characters left in
@@ -813,12 +844,11 @@ slintr(void *arg)
 						(void)unputc(&tp->t_outq);
 						break;
 					}
-					sc->sc_if.if_obytes += 2;
+					if_statadd(&sc->sc_if, if_obytes, 2);
 				}
 				bp = cp;
 			}
-			MFREE(m, m2);
-			m = m2;
+			m = m2 = m_free(m);
 		}
 
 		if (putc(FRAME_END, &tp->t_outq)) {
@@ -832,10 +862,9 @@ slintr(void *arg)
 			 */
 			(void)unputc(&tp->t_outq);
 			(void)putc(FRAME_END, &tp->t_outq);
-			sc->sc_if.if_collisions++;
+			if_statinc(&sc->sc_if, if_collisions);
 		} else {
-			sc->sc_if.if_obytes++;
-			sc->sc_if.if_opackets++;
+			if_statadd2(&sc->sc_if, if_obytes, 1, if_opackets, 1);
 		}
 
 		/*
@@ -869,6 +898,7 @@ slintr(void *arg)
 			memcpy(chdr, pktstart, CHDR_LEN);
 		}
 #ifdef INET
+		u_char c;
 		if ((c = (*pktstart & 0xf0)) != (IPVERSION << 4)) {
 			if (c & 0x80)
 				c = TYPE_COMPRESSED_TCP;
@@ -914,30 +944,28 @@ slintr(void *arg)
 		}
 		/*
 		 * If the packet will fit into a single
-		 * header mbuf, copy it into one, to save
-		 * memory.
+		 * header mbuf, try to copy it into one,
+		 * to save memory.
 		 */
-		if (m->m_pkthdr.len < MHLEN) {
-			struct mbuf *n;
+		if ((m->m_pkthdr.len < MHLEN) &&
+		    (n = m_gethdr(M_DONTWAIT, MT_DATA))) {
 			int pktlen;
 
-			MGETHDR(n, M_DONTWAIT, MT_DATA);
 			pktlen = m->m_pkthdr.len;
-			M_MOVE_PKTHDR(n, m);
+			m_move_pkthdr(n, m);
 			memcpy(mtod(n, void *), mtod(m, void *), pktlen);
 			n->m_len = m->m_len;
 			m_freem(m);
 			m = n;
 		}
 
-		sc->sc_if.if_ipackets++;
+		if_statinc(&sc->sc_if, if_ipackets);
 		getbinuptime(&sc->sc_lastpacket);
 
 #ifdef INET
 		s = splnet();
 		if (__predict_false(!pktq_enqueue(ip_pktq, m, 0))) {
-			sc->sc_if.if_ierrors++;
-			sc->sc_if.if_iqdrops++;
+			if_statadd2(&sc->sc_if, if_ierrors, 1, if_iqdrops, 1);
 			m_freem(m);
 		}
 		splx(s);
@@ -969,7 +997,7 @@ slioctl(struct ifnet *ifp, u_long cmd, void *data)
 		break;
 
 	case SIOCSIFDSTADDR:
-		if (ifa->ifa_addr->sa_family != AF_INET)
+		if (ifreq_getaddr(cmd, ifr)->sa_family != AF_INET)
 			error = EAFNOSUPPORT;
 		break;
 
@@ -1003,15 +1031,18 @@ slioctl(struct ifnet *ifp, u_long cmd, void *data)
 		}
 		break;
 
-	case SIOCGPPPSTATS:
+	case SIOCGPPPSTATS: {
+		struct if_data ifi;
+
+		if_export_if_data(&sc->sc_if, &ifi, false);
 		psp = &((struct ifpppstatsreq *) data)->stats;
 		(void)memset(psp, 0, sizeof(*psp));
-		psp->p.ppp_ibytes = sc->sc_if.if_ibytes;
-		psp->p.ppp_ipackets = sc->sc_if.if_ipackets;
-		psp->p.ppp_ierrors = sc->sc_if.if_ierrors;
-		psp->p.ppp_obytes = sc->sc_if.if_obytes;
-		psp->p.ppp_opackets = sc->sc_if.if_opackets;
-		psp->p.ppp_oerrors = sc->sc_if.if_oerrors;
+		psp->p.ppp_ibytes = ifi.ifi_ibytes;
+		psp->p.ppp_ipackets = ifi.ifi_ipackets;
+		psp->p.ppp_ierrors = ifi.ifi_ierrors;
+		psp->p.ppp_obytes = ifi.ifi_obytes;
+		psp->p.ppp_opackets = ifi.ifi_opackets;
+		psp->p.ppp_oerrors = ifi.ifi_oerrors;
 #ifdef INET
 		psp->vj.vjs_packets = sc->sc_comp.sls_packets;
 		psp->vj.vjs_compressed = sc->sc_comp.sls_compressed;
@@ -1022,6 +1053,7 @@ slioctl(struct ifnet *ifp, u_long cmd, void *data)
 		psp->vj.vjs_errorin = sc->sc_comp.sls_errorin;
 		psp->vj.vjs_tossed = sc->sc_comp.sls_tossed;
 #endif
+	    }
 		break;
 
 	case SIOCGPPPCSTATS:
@@ -1036,3 +1068,12 @@ slioctl(struct ifnet *ifp, u_long cmd, void *data)
 	splx(s);
 	return error;
 }
+
+
+/*
+ * Module infrastructure
+ */
+
+#include "if_module.h"
+
+IF_MODULE(MODULE_CLASS_DRIVER, sl, "slcompress");

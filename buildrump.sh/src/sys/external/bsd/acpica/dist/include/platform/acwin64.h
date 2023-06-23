@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -44,14 +44,56 @@
 #ifndef __ACWIN64_H__
 #define __ACWIN64_H__
 
-/*! [Begin] no source code translation (Keep the include) */
+#define ACPI_USE_STANDARD_HEADERS
+#define ACPI_USE_SYSTEM_CLIBRARY
 
-#include "acintel.h"
-/*! [End] no source code translation !*/
+ /* Note: do not include any C library headers here */
+
+ /*
+ * Note: MSVC project files should define ACPI_DEBUGGER and ACPI_DISASSEMBLER
+ * as appropriate to enable editor functions like "Find all references".
+ * The editor isn't smart enough to dig through the include files to find
+ * out if these are actually defined.
+ */
+
+ /* Eliminate warnings for "old" (non-secure) versions of clib functions */
+
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
+/* Eliminate warnings for POSIX clib function names (open, write, etc.) */
+
+#ifndef _CRT_NONSTDC_NO_DEPRECATE
+#define _CRT_NONSTDC_NO_DEPRECATE
+#endif
+
 
 #define ACPI_MACHINE_WIDTH          64
 
-#define ACPI_USE_STANDARD_HEADERS
+/*
+ * Map low I/O functions for MS. This allows us to disable MS language
+ * extensions for maximum portability.
+ */
+#define open            _open
+#define read            _read
+#define write           _write
+#define close           _close
+#define stat            _stat
+#define fstat           _fstat
+#define mkdir           _mkdir
+#define snprintf        _snprintf
+#if _MSC_VER <= 1200 /* Versions below VC++ 6 */
+#define vsnprintf       _vsnprintf
+#endif
+#define O_RDONLY        _O_RDONLY
+#define O_BINARY        _O_BINARY
+#define O_CREAT         _O_CREAT
+#define O_WRONLY        _O_WRONLY
+#define O_TRUNC         _O_TRUNC
+#define S_IREAD         _S_IREAD
+#define S_IWRITE        _S_IWRITE
+#define S_IFDIR         _S_IFDIR
 
 /*
  * Handle platform- and compiler-specific assembly language differences.

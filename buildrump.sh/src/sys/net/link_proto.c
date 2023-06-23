@@ -1,4 +1,4 @@
-/*	$NetBSD: link_proto.c,v 1.31 2016/07/07 09:32:02 ozaki-r Exp $	*/
+/*	$NetBSD: link_proto.c,v 1.39 2019/09/25 09:53:37 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1993
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: link_proto.c,v 1.31 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: link_proto.c,v 1.39 2019/09/25 09:53:37 ozaki-r Exp $");
 
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -141,6 +141,7 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 	} u;
 	struct ifaddr *ifa;
 	const struct sockaddr_dl *asdl, *nsdl;
+	struct psref psref;
 
 	switch (cmd) {
 	case SIOCALIFADDR:
@@ -168,15 +169,19 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 
 		error = 0;
 
-		s = splnet();
-
+		s = pserialize_read_enter();
 		IFADDR_READER_FOREACH(ifa, ifp) {
-			if (sockaddr_cmp(&u.sa, ifa->ifa_addr) == 0)
+			if (sockaddr_cmp(&u.sa, ifa->ifa_addr) == 0) {
+				ifa_acquire(ifa, &psref);
 				break;
+			}
 		}
+		pserialize_read_exit(s);
 
 		switch (cmd) {
 		case SIOCGLIFADDR:
+			ifa_release(ifa, &psref);
+			s = pserialize_read_enter();
 			if ((iflr->flags & IFLR_PREFIX) == 0) {
 				IFADDR_READER_FOREACH(ifa, ifp) {
 					if (ifa->ifa_addr->sa_family == AF_LINK)
@@ -184,6 +189,7 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 				}
 			}
 			if (ifa == NULL) {
+				pserialize_read_exit(s);
 				error = EADDRNOTAVAIL;
 				break;
 			}
@@ -198,6 +204,8 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 
 			sockaddr_copy(sstosa(&iflr->addr), sizeof(iflr->addr),
 			    ifa->ifa_addr);
+			pserialize_read_exit(s);
+			ifa = NULL;
 
 			break;
 		case SIOCDLIFADDR:
@@ -207,21 +215,29 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 				error = EBUSY;
 			else {
 				/* TBD routing socket */
-				rt_newaddrmsg(RTM_DELETE, ifa, 0, NULL);
+				rt_addrmsg(RTM_DELETE, ifa);
+				/* We need to release psref for ifa_remove */
+				ifaref(ifa);
+				ifa_release(ifa, &psref);
 				ifa_remove(ifp, ifa);
+				KASSERTMSG(ifa->ifa_refcnt == 1, "ifa_refcnt=%d",
+				    ifa->ifa_refcnt);
+				ifafree(ifa);
+				ifa = NULL;
 			}
 			break;
 		case SIOCALIFADDR:
-			if (ifa != NULL)
-				;
-			else if ((ifa = if_dl_create(ifp, &nsdl)) == NULL) {
-				error = ENOMEM;
-				break;
-			} else {
+			if (ifa == NULL) {
+				ifa = if_dl_create(ifp, &nsdl);
+				if (ifa == NULL) {
+					error = ENOMEM;
+					break;
+				}
+				ifa_acquire(ifa, &psref);
 				sockaddr_copy(ifa->ifa_addr,
 				    ifa->ifa_addr->sa_len, &u.sa);
 				ifa_insert(ifp, ifa);
-				rt_newaddrmsg(RTM_ADD, ifa, 0, NULL);
+				rt_addrmsg(RTM_ADD, ifa);
 			}
 
 			mkactive = (iflr->flags & IFLR_ACTIVE) != 0;
@@ -229,12 +245,12 @@ link_control(struct socket *so, unsigned long cmd, void *data,
 
 			if (!isactive && mkactive) {
 				if_activate_sadl(ifp, ifa, nsdl);
-				rt_newaddrmsg(RTM_CHANGE, ifa, 0, NULL);
+				rt_addrmsg(RTM_CHANGE, ifa);
 				error = ENETRESET;
 			}
 			break;
 		}
-		splx(s);
+		ifa_release(ifa, &psref);
 		if (error != ENETRESET)
 			return error;
 		else if ((ifp->if_flags & IFF_RUNNING) != 0 &&
@@ -337,7 +353,7 @@ link_stat(struct socket *so, struct stat *ub)
 {
 	KASSERT(solocked(so));
 
-	return EOPNOTSUPP;
+	return 0;
 }
 
 static int
@@ -385,6 +401,9 @@ static int
 link_sendoob(struct socket *so, struct mbuf *m, struct mbuf *control)
 {
 	KASSERT(solocked(so));
+
+	m_freem(m);
+	m_freem(control);
 
 	return EOPNOTSUPP;
 }

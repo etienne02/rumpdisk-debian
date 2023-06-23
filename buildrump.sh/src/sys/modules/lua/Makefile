@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.10 2014/07/19 20:21:52 christos Exp $
+#	$NetBSD: Makefile,v 1.12 2021/04/12 02:54:08 mrg Exp $
 
 .include "../Makefile.inc"
 
@@ -21,5 +21,9 @@ SRCS+=		lauxlib.c lbaselib.c lbitlib.c lcorolib.c ldblib.c \
 
 CPPFLAGS+=	-I${S}/../external/mit/lua/dist/src \
 		-I${S}/sys
+
+CWARNFLAGS.clang+=     -Wno-error=string-plus-int
+
+COPTS.lstring.c+=	${GCC_NO_STRINGOP_OVERFLOW}
 
 .include <bsd.kmodule.mk>

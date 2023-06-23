@@ -1,7 +1,6 @@
-/*	$NetBSD: copy.S,v 1.24 2016/05/13 13:24:01 maxv Exp $	*/
-/*	NetBSD: locore.S,v 1.34 2005/04/01 11:59:31 yamt Exp $	*/
+/*	$NetBSD: copy.S,v 1.32 2020/06/30 16:20:01 maxv Exp $	*/
 
-/*-
+/*
  * Copyright (c) 1998, 2000, 2004, 2008 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -30,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*-
+/*
  * Copyright (c) 1990 The Regents of the University of California.
  * All rights reserved.
  *
@@ -65,7 +64,7 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: copy.S,v 1.24 2016/05/13 13:24:01 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: copy.S,v 1.32 2020/06/30 16:20:01 maxv Exp $");
 
 #include "assym.h"
 
@@ -75,8 +74,8 @@ __KERNEL_RCSID(0, "$NetBSD: copy.S,v 1.24 2016/05/13 13:24:01 maxv Exp $");
 #include <machine/cputypes.h>
 
 #define GET_CURPCB(reg)	\
-	movl	CPUVAR(CURLWP), reg; \
-	movl	L_PCB(reg), reg
+	movl	CPUVAR(CURLWP),reg; \
+	movl	L_PCB(reg),reg
 
 /*
  * These are arranged so that the abnormal case is a forwards
@@ -86,10 +85,10 @@ __KERNEL_RCSID(0, "$NetBSD: copy.S,v 1.24 2016/05/13 13:24:01 maxv Exp $");
 #define DEFERRED_SWITCH_CHECK \
 	CHECK_DEFERRED_SWITCH			; \
 	jnz	99f				; \
-	98:
+98:
 
 #define DEFERRED_SWITCH_CALL \
-	99:						; \
+99:						; \
 	call	_C_LABEL(do_pmap_load)		; \
 	jmp	98b
 
@@ -107,27 +106,28 @@ LABEL(x86_copyfunc_start)
  * pmap on returning, because a preemption occurred within one of the
  * copy functions.
  */
-NENTRY(do_pmap_load)
+ENTRY(do_pmap_load)
 	pushl	%ebp
-	movl	%esp, %ebp
+	movl	%esp,%ebp
 	pushl	%ebx
-	movl	CPUVAR(CURLWP), %ebx
+	movl	CPUVAR(CURLWP),%ebx
 1:
 	incl	L_NOPREEMPT(%ebx)
 	call	_C_LABEL(pmap_load)
 	decl	L_NOPREEMPT(%ebx)
 	jnz	2f
-	cmpl	$0, L_DOPREEMPT(%ebx)
+	cmpl	$0,L_DOPREEMPT(%ebx)
 	jz	2f
 	pushl	$0
 	call	_C_LABEL(kpreempt)
-	addl	$4, %esp
+	addl	$4,%esp
 2:
-	cmpl	$0, CPUVAR(WANT_PMAPLOAD)
+	cmpl	$0,CPUVAR(WANT_PMAPLOAD)
 	jnz	1b
 	popl	%ebx
 	leave
 	ret
+END(do_pmap_load)
 
 /*
  * void *return_address(unsigned int level);
@@ -151,12 +151,12 @@ ENTRY(return_address)
 	movl	0x4(%eax),%eax
 	movl	$0,PCB_ONFAULT(%edx)
 	ret
+END(return_address)
 
 /*
  * int kcopy(const void *from, void *to, size_t len);
- * Copy len bytes, abort on fault.
+ * Copy len bytes from and to kernel memory, and abort on fault.
  */
-/* LINTSTUB: Func: int kcopy(const void *from, void *to, size_t len) */
 ENTRY(kcopy)
 	pushl	%esi
 	pushl	%edi
@@ -206,6 +206,7 @@ ENTRY(kcopy)
 	popl	%esi
 	xorl	%eax,%eax
 	ret
+END(kcopy)
 
 /*****************************************************************************/
 
@@ -219,110 +220,113 @@ ENTRY(kcopy)
  * Copy len bytes into the user's address space.
  * see copyout(9)
  */
-
-/* LINTSTUB: Func: int copyout(const void *kaddr, void *uaddr, size_t len) */
 ENTRY(copyout)
 	DEFERRED_SWITCH_CHECK
 	pushl	%esi
 	pushl	%edi
-	movl	12(%esp),%esi
-	movl	16(%esp),%edi
-	movl	20(%esp),%eax
-.Lcopyout_start:
-	/*
-	 * We check that the end of the destination buffer is not past the end
-	 * of the user's address space.
-	 */
+	movl	12(%esp),%esi	/* from */
+	movl	16(%esp),%edi	/* to */
+	movl	20(%esp),%eax	/* len */
+
 	movl	%edi,%edx
 	addl	%eax,%edx
 	jc	_C_LABEL(copy_efault)
 	cmpl	$VM_MAXUSER_ADDRESS,%edx
 	ja	_C_LABEL(copy_efault)
+
+	SMAP_DISABLE
+.Lcopyout_start:
 	movl	%eax,%ecx
 	shrl	$2,%ecx
 	rep
 	movsl
 	andl	$3,%eax
-	jz	1f
+	jz	.Lcopyout_end
 	movl	%eax,%ecx
 	rep
 	movsb
-1:
 .Lcopyout_end:
+	SMAP_ENABLE
+
 	popl	%edi
 	popl	%esi
 	xorl	%eax,%eax
 	ret
 	DEFERRED_SWITCH_CALL
+END(copyout)
 
 /*
  * int copyin(const void *from, void *to, size_t len);
  * Copy len bytes from the user's address space.
  * see copyin(9)
  */
-
-/* LINTSTUB: Func: int copyin(const void *uaddr, void *kaddr, size_t len) */
 ENTRY(copyin)
 	DEFERRED_SWITCH_CHECK
 	pushl	%esi
 	pushl	%edi
-	movl	12(%esp),%esi
-	movl	16(%esp),%edi
-	movl	20(%esp),%eax
-	/*
-	 * We check that the end of the source buffer is not past the end of
-	 * the user's address space.  If it's not, then we only need to check
-	 * that each page is readable, and the CPU will do that for us.
-	 */
-.Lcopyin_start:
+	movl	12(%esp),%esi	/* from */
+	movl	16(%esp),%edi	/* to */
+	movl	20(%esp),%eax	/* len */
+
 	movl	%esi,%edx
 	addl	%eax,%edx
 	jc	_C_LABEL(copy_efault)
 	cmpl	$VM_MAXUSER_ADDRESS,%edx
 	ja	_C_LABEL(copy_efault)
+
+	SMAP_DISABLE
+.Lcopyin_start:
 	movl	%eax,%ecx
 	shrl	$2,%ecx
 	rep
 	movsl
 	andl	$3,%eax
-	jz	1f
+	jz	.Lcopyin_end
 	movl	%eax,%ecx
 	rep
 	movsb
-1:
 .Lcopyin_end:
+	SMAP_ENABLE
+
 	popl	%edi
 	popl	%esi
 	xorl	%eax,%eax
 	ret
 	DEFERRED_SWITCH_CALL
+END(copyin)
 
-/* LINTSTUB: Ignore */
-NENTRY(copy_efault)
+ENTRY(copy_efault)
 	movl	$EFAULT,%eax
+	popl	%edi
+	popl	%esi
+	ret
+END(copy_efault)
 
 /*
  * kcopy_fault is used by kcopy and copy_fault is used by copyin/out.
  *
  * they're distinguished for lazy pmap switching.  see trap().
  */
-/* LINTSTUB: Ignore */
-NENTRY(kcopy_fault)
+
+ENTRY(kcopy_fault)
+	cld
 	popl	%edi
 	popl	%esi
 	ret
+END(kcopy_fault)
 
-/* LINTSTUB: Ignore */
-NENTRY(copy_fault)
+ENTRY(copy_fault)
+	SMAP_ENABLE
 	popl	%edi
 	popl	%esi
 	ret
+END(copy_fault)
 
-/* LINTSTUB: Ignore */
-NENTRY(return_address_fault)
-	movl $0,PCB_ONFAULT(%edx)
-	movl $0,%eax
+ENTRY(return_address_fault)
+	movl	$0,PCB_ONFAULT(%edx)
+	movl	$0,%eax
 	ret
+END(return_address_fault)
 
 /*
  * int copyoutstr(const void *from, void *to, size_t maxlen, size_t *lencopied);
@@ -332,16 +336,14 @@ NENTRY(return_address_fault)
  * return 0 or EFAULT.
  * see copyoutstr(9)
  */
-/* LINTSTUB: Func: int copyoutstr(const void *kaddr, void *uaddr, size_t len, size_t *done) */
 ENTRY(copyoutstr)
 	DEFERRED_SWITCH_CHECK
 	pushl	%esi
 	pushl	%edi
-	movl	12(%esp),%esi		/* esi = from */
-	movl	16(%esp),%edi		/* edi = to */
-	movl	20(%esp),%edx		/* edx = maxlen */
-.Lcopyoutstr_start:
-5:
+	movl	12(%esp),%esi	/* esi = from */
+	movl	16(%esp),%edi	/* edi = to */
+	movl	20(%esp),%edx	/* edx = maxlen */
+
 	/*
 	 * Get min(%edx, VM_MAXUSER_ADDRESS-%edi).
 	 */
@@ -352,16 +354,18 @@ ENTRY(copyoutstr)
 	jae	1f
 	movl	%eax,%edx
 	movl	%eax,20(%esp)
-
 1:	incl	%edx
 
+	SMAP_DISABLE
+.Lcopyoutstr_start:
 1:	decl	%edx
 	jz	2f
 	lodsb
 	stosb
 	testb	%al,%al
-.Lcopyoutstr_end:
 	jnz	1b
+.Lcopyoutstr_end:
+	SMAP_ENABLE
 
 	/* Success -- 0 byte reached. */
 	decl	%edx
@@ -369,11 +373,13 @@ ENTRY(copyoutstr)
 	jmp	copystr_return
 
 2:	/* edx is zero -- return EFAULT or ENAMETOOLONG. */
+	SMAP_ENABLE
 	cmpl	$VM_MAXUSER_ADDRESS,%edi
 	jae	_C_LABEL(copystr_efault)
 	movl	$ENAMETOOLONG,%eax
 	jmp	copystr_return
 	DEFERRED_SWITCH_CALL
+END(copyoutstr)
 
 /*
  * int copyinstr(const void *from, void *to, size_t maxlen, size_t *lencopied);
@@ -383,7 +389,6 @@ ENTRY(copyoutstr)
  * return 0 or EFAULT.
  * see copyinstr(9)
  */
-/* LINTSTUB: Func: int copyinstr(const void *uaddr, void *kaddr, size_t len, size_t *done) */
 ENTRY(copyinstr)
 	DEFERRED_SWITCH_CHECK
 	pushl	%esi
@@ -395,7 +400,6 @@ ENTRY(copyinstr)
 	/*
 	 * Get min(%edx, VM_MAXUSER_ADDRESS-%esi).
 	 */
-.Lcopyinstr_start:
 	movl	$VM_MAXUSER_ADDRESS,%eax
 	subl	%esi,%eax
 	jc	_C_LABEL(copystr_efault)
@@ -403,16 +407,18 @@ ENTRY(copyinstr)
 	jae	1f
 	movl	%eax,%edx
 	movl	%eax,20(%esp)
-
 1:	incl	%edx
 
+	SMAP_DISABLE
+.Lcopyinstr_start:
 1:	decl	%edx
 	jz	2f
 	lodsb
 	stosb
 	testb	%al,%al
-.Lcopyinstr_end:
 	jnz	1b
+.Lcopyinstr_end:
+	SMAP_ENABLE
 
 	/* Success -- 0 byte reached. */
 	decl	%edx
@@ -420,18 +426,21 @@ ENTRY(copyinstr)
 	jmp	copystr_return
 
 2:	/* edx is zero -- return EFAULT or ENAMETOOLONG. */
+	SMAP_ENABLE
 	cmpl	$VM_MAXUSER_ADDRESS,%esi
 	jae	_C_LABEL(copystr_efault)
 	movl	$ENAMETOOLONG,%eax
 	jmp	copystr_return
 	DEFERRED_SWITCH_CALL
+END(copyinstr)
 
-/* LINTSTUB: Ignore */
-NENTRY(copystr_efault)
+ENTRY(copystr_efault)
 	movl	$EFAULT,%eax
+	jmp	copystr_return
+END(copystr_efault)
 
-/* LINTSTUB: Ignore */
-NENTRY(copystr_fault)
+ENTRY(copystr_fault)
+	SMAP_ENABLE
 copystr_return:
 	/* Set *lencopied and return %eax. */
 	movl	20(%esp),%ecx
@@ -444,237 +453,175 @@ copystr_return:
 8:	popl	%edi
 	popl	%esi
 	ret
+END(copystr_fault)
 
-/*
- * int copystr(const void *from, void *to, size_t maxlen, size_t *lencopied);
- * Copy a NUL-terminated string, at most maxlen characters long.  Return the
- * number of characters copied (including the NUL) in *lencopied.  If the
- * string is too long, return ENAMETOOLONG; else return 0.
- * see copystr(9)
- */
-/* LINTSTUB: Func: int copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done) */
-ENTRY(copystr)
-	pushl	%esi
-	pushl	%edi
+/**************************************************************************/
 
-	movl	12(%esp),%esi		/* esi = from */
-	movl	16(%esp),%edi		/* edi = to */
-	movl	20(%esp),%edx		/* edx = maxlen */
-	incl	%edx
+#define	UFETCHSTORE_PROLOGUE(x)						\
+	movl	4(%esp),%edx					;	\
+	cmpl	$VM_MAXUSER_ADDRESS-x,%edx			;	\
+	ja	_C_LABEL(ufetchstore_efault)
 
-1:	decl	%edx
-	jz	4f
-	lodsb
-	stosb
-	testb	%al,%al
-	jnz	1b
-
-	/* Success -- 0 byte reached. */
-	decl	%edx
-	xorl	%eax,%eax
-	jmp	6f
-
-4:	/* edx is zero -- return ENAMETOOLONG. */
-	movl	$ENAMETOOLONG,%eax
-
-6:	/* Set *lencopied and return %eax. */
-	movl	20(%esp),%ecx
-	subl	%edx,%ecx
-	movl	24(%esp),%edx
-	testl	%edx,%edx
-	jz	7f
-	movl	%ecx,(%edx)
-
-7:	popl	%edi
-	popl	%esi
-	ret
-
-/*
- * long fuword(const void *uaddr);
- * Fetch an int from the user's address space.
- * see fuword(9)
- */
-/* LINTSTUB: Func: long fuword(const void *base) */
-ENTRY(fuword)
+/* LINTSTUB: int _ufetch_8(const uint8_t *uaddr, uint8_t *valp); */
+ENTRY(_ufetch_8)
 	DEFERRED_SWITCH_CHECK
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-4,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	GET_CURPCB(%ecx)
-	movl	$_C_LABEL(fusufault),PCB_ONFAULT(%ecx)
-	movl	(%edx),%eax
-	movl	$0,PCB_ONFAULT(%ecx)
-	ret
-	DEFERRED_SWITCH_CALL
+	UFETCHSTORE_PROLOGUE(1)
 
-/*
- * int fuswintr(const void *uaddr);
- * Fetch a short from the user's address space.  Can be called during an
- * interrupt.
- * see fuswintr(9)
- */
-/* LINTSTUB: Func: int fuswintr(const void *base) */
-ENTRY(fuswintr)
-	cmpl	$TLBSTATE_VALID, CPUVAR(TLBSTATE)
-	jnz	_C_LABEL(fusuaddrfault)
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-2,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	movl	CPUVAR(CURLWP),%ecx
-	movl	L_PCB(%ecx),%ecx
-	movl	$_C_LABEL(fusubail),PCB_ONFAULT(%ecx)
-	movzwl	(%edx),%eax
-	movl	$0,PCB_ONFAULT(%ecx)
-	ret
+	SMAP_DISABLE
+.L_ufetch_8_start:
+	movb	(%edx),%al
+.L_ufetch_8_end:
+	SMAP_ENABLE
 
-/*
- * int fubyte(const void *uaddr);
- * Fetch a byte from the user's address space.
- * see fubyte(9)
- */
-/* LINTSTUB: Func: int fubyte(const void *base) */
-ENTRY(fubyte)
-	DEFERRED_SWITCH_CHECK
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-1,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	GET_CURPCB(%ecx)
-	movl	$_C_LABEL(fusufault),PCB_ONFAULT(%ecx)
-	movzbl	(%edx),%eax
-	movl	$0,PCB_ONFAULT(%ecx)
-	ret
-	DEFERRED_SWITCH_CALL
-
-/*
- * Handle faults from [fs]u*().  Clean up and return -1.
- */
-/* LINTSTUB: Ignore */
-NENTRY(fusufault)
-	movl	$0,PCB_ONFAULT(%ecx)
-	movl	$-1,%eax
-	ret
-
-/*
- * Handle faults from [fs]u*().  Clean up and return -1.  This differs from
- * fusufault() in that trap() will recognize it and return immediately rather
- * than trying to page fault.
- */
-/* LINTSTUB: Ignore */
-NENTRY(fusubail)
-	movl	$0,PCB_ONFAULT(%ecx)
-	movl	$-1,%eax
-	ret
-
-/*
- * Handle earlier faults from [fs]u*(), due to our of range addresses.
- */
-/* LINTSTUB: Ignore */
-NENTRY(fusuaddrfault)
-	movl	$-1,%eax
-	ret
-
-/*
- * int suword(void *uaddr, long x);
- * Store an int in the user's address space.
- * see suword(9)
- */
-/* LINTSTUB: Func: int suword(void *base, long c) */
-ENTRY(suword)
-	DEFERRED_SWITCH_CHECK
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-4,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	GET_CURPCB(%ecx)
-	movl	$_C_LABEL(fusufault),PCB_ONFAULT(%ecx)
-	movl	8(%esp),%eax
-	movl	%eax,(%edx)
-	xorl	%eax,%eax
-	movl	%eax,PCB_ONFAULT(%ecx)
-	ret
-	DEFERRED_SWITCH_CALL
-
-/*
- * int suswintr(void *uaddr, short x);
- * Store a short in the user's address space.  Can be called during an
- * interrupt.
- * see suswintr(9)
- */
-/* LINTSTUB: Func: int suswintr(void *base, short c) */
-ENTRY(suswintr)
-	cmpl	$TLBSTATE_VALID, CPUVAR(TLBSTATE)
-	jnz	_C_LABEL(fusuaddrfault)
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-2,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	movl	CPUVAR(CURLWP),%ecx
-	movl	L_PCB(%ecx),%ecx
-	movl	$_C_LABEL(fusubail),PCB_ONFAULT(%ecx)
-	movl	8(%esp),%eax
-	movw	%ax,(%edx)
-	xorl	%eax,%eax
-	movl	%eax,PCB_ONFAULT(%ecx)
-	ret
-
-/*
- * int subyte(void *uaddr, char x);
- * Store a byte in the user's address space.
- * see subyte(9)
- */
-/* LINTSTUB: Func: int subyte(void *base, int c) */
-ENTRY(subyte)
-	DEFERRED_SWITCH_CHECK
-	movl	4(%esp),%edx
-	cmpl	$VM_MAXUSER_ADDRESS-1,%edx
-	ja	_C_LABEL(fusuaddrfault)
-	GET_CURPCB(%ecx)
-	movl	$_C_LABEL(fusufault),PCB_ONFAULT(%ecx)
-	movb	8(%esp),%al
+	movl	8(%esp),%edx
 	movb	%al,(%edx)
 	xorl	%eax,%eax
-	movl	%eax,PCB_ONFAULT(%ecx)
 	ret
 	DEFERRED_SWITCH_CALL
+END(_ufetch_8)
+
+/* LINTSTUB: int _ufetch_16(const uint16_t *uaddr, uint16_t *valp); */
+ENTRY(_ufetch_16)
+	DEFERRED_SWITCH_CHECK
+	UFETCHSTORE_PROLOGUE(2)
+
+	SMAP_DISABLE
+.L_ufetch_16_start:
+	movw	(%edx),%ax
+.L_ufetch_16_end:
+	SMAP_ENABLE
+
+	movl	8(%esp),%edx
+	movw	%ax,(%edx)
+	xorl	%eax,%eax
+	ret
+	DEFERRED_SWITCH_CALL
+END(_ufetch_16)
+
+/* LINTSTUB: int _ufetch_32(const uint32_t *uaddr, uint32_t *valp); */
+ENTRY(_ufetch_32)
+	DEFERRED_SWITCH_CHECK
+	UFETCHSTORE_PROLOGUE(4)
+
+	SMAP_DISABLE
+.L_ufetch_32_start:
+	movl	(%edx),%eax
+.L_ufetch_32_end:
+	SMAP_ENABLE
+
+	movl	8(%esp),%edx
+	movl	%eax,(%edx)
+	xorl	%eax,%eax
+	ret
+	DEFERRED_SWITCH_CALL
+END(_ufetch_32)
+
+/* LINTSTUB: int _ustore_8(uint8_t *uaddr, uint8_t val); */
+ENTRY(_ustore_8)
+	DEFERRED_SWITCH_CHECK
+	UFETCHSTORE_PROLOGUE(1)
+	movb	8(%esp),%al
+
+	SMAP_DISABLE
+.L_ustore_8_start:
+	movb	%al,(%edx)
+.L_ustore_8_end:
+	SMAP_ENABLE
+
+	xorl	%eax,%eax
+	ret
+	DEFERRED_SWITCH_CALL
+END(_ustore_8)
+
+/* LINTSTUB: int _ustore_16(uint16_t *uaddr, uint16_t val); */
+ENTRY(_ustore_16)
+	DEFERRED_SWITCH_CHECK
+	UFETCHSTORE_PROLOGUE(2)
+	movw	8(%esp),%ax
+
+	SMAP_DISABLE
+.L_ustore_16_start:
+	movw	%ax,(%edx)
+.L_ustore_16_end:
+	SMAP_ENABLE
+
+	xorl	%eax,%eax
+	ret
+	DEFERRED_SWITCH_CALL
+END(_ustore_16)
+
+/* LINTSTUB: int _ustore_32(uint32_t *uaddr, uint32_t val); */
+ENTRY(_ustore_32)
+	DEFERRED_SWITCH_CHECK
+	UFETCHSTORE_PROLOGUE(4)
+	movl	8(%esp),%eax
+
+	SMAP_DISABLE
+.L_ustore_32_start:
+	movl	%eax,(%edx)
+.L_ustore_32_end:
+	SMAP_ENABLE
+
+	xorl	%eax,%eax
+	ret
+	DEFERRED_SWITCH_CALL
+END(_ustore_32)
+
+ENTRY(ufetchstore_efault)
+	movl	$EFAULT,%eax
+	ret
+END(ufetchstore_efault)
+
+ENTRY(ufetchstore_fault)
+	SMAP_ENABLE
+	ret
+END(ufetchstore_fault)
+
+/**************************************************************************/
 
 /*
  * Compare-and-swap the 32-bit integer in the user-space.
  *
- * int	ucas_32(volatile int32_t *uptr, int32_t old, int32_t new, int32_t *ret);
+ * int	_ucas_32(volatile uint32_t *uptr, uint32_t old, uint32_t new,
+ *		 uint32_t *ret);
  */
-ENTRY(ucas_32)
+ENTRY(_ucas_32)
 	DEFERRED_SWITCH_CHECK
-	movl	4(%esp), %edx
-	movl	8(%esp), %eax
-	movl	12(%esp), %ecx
+	movl	4(%esp),%edx
+	movl	8(%esp),%eax
+	movl	12(%esp),%ecx
 	/* Fail if kernel-space */
-	cmpl	$VM_MAXUSER_ADDRESS-4, %edx
+	cmpl	$VM_MAXUSER_ADDRESS-4,%edx
 	ja	_C_LABEL(ucas_efault)
-	/* Label for fault handler */
+
+	SMAP_DISABLE
 .Lucas32_start:
 	/* Perform the CAS */
 	lock
-	cmpxchgl %ecx, (%edx)
+	cmpxchgl %ecx,(%edx)
 .Lucas32_end:
+	SMAP_ENABLE
+
 	/*
 	 * Note: %eax is "old" value.
 	 * Set the return values.
 	 */
-	movl	16(%esp), %edx
-	movl	%eax, (%edx)
-	xorl	%eax, %eax
+	movl	16(%esp),%edx
+	movl	%eax,(%edx)
+	xorl	%eax,%eax
 	ret
 	DEFERRED_SWITCH_CALL
+END(_ucas_32)
 
-NENTRY(ucas_efault)
-	mov	$EFAULT, %eax
-NENTRY(ucas_fault)
+ENTRY(ucas_efault)
+	movl	$EFAULT,%eax
 	ret
+END(ucas_efault)
 
-/*
- * int	ucas_int(volatile int *uptr, int old, int new, int *ret);
- * int	ucas_ptr(volatile void **uptr, void *old, void *new, void **ret);
- */
-STRONG_ALIAS(ucas_ptr, ucas_32)
-STRONG_ALIAS(ucas_int, ucas_32)
+ENTRY(ucas_fault)
+	SMAP_ENABLE
+	ret
+END(ucas_fault)
 
 /*
  * copyin() optimised for bringing in syscall arguments.
@@ -687,16 +634,21 @@ ENTRY(x86_copyargs)
 	movl	16(%esp),%ecx
 
 	/*
-	 * We check that the end of the destination buffer is not past the end
-	 * of the user's address space.  If it's not, then we only need to
-	 * check that each page is readable, and the CPU will do that for us.
+	 * In this function, we may copy more than the size given in the third
+	 * argument. In order to make sure the real end of the destination
+	 * buffer is not past the end of the user's address space, we don't
+	 * check the third argument but rather the largest possible size, which
+	 * is:
+	 * 	(2 + SYS_MAXSYSARGS) * 4 = 10 * 4
 	 */
-.Lx86_copyargs_start:
 	movl	%esi,%eax
-	addl	%ecx,%eax
+	addl	$(10 * 4),%eax
 	jc	_C_LABEL(x86_copyargs_efault)
 	cmpl	$VM_MAXUSER_ADDRESS,%eax
 	ja	_C_LABEL(x86_copyargs_efault)
+
+	SMAP_DISABLE
+.Lx86_copyargs_start:
 	/* There are a maximum of 8 args + 2 for syscall indirect */
 	cmp	$16,%ecx
 	movl	(%esi),%eax
@@ -707,12 +659,11 @@ ENTRY(x86_copyargs)
 	movl	12(%esi),%ecx
 	movl	%eax,8(%edx)
 	movl	%ecx,12(%edx)
+
 	ja	2f		/* Optimise since most sycalls have <= 4 args */
-1:
-	popl	%esi
-	xorl	%eax,%eax
-	ret
+	jmp	.Lx86_copyargs_end
 2:
+
 	movl	16(%esi),%eax
 	movl	20(%esi),%ecx
 	movl	%eax,16(%edx)
@@ -726,17 +677,25 @@ ENTRY(x86_copyargs)
 	movl	%eax,32(%edx)
 	movl	%ecx,36(%edx)
 .Lx86_copyargs_end:
-	jmp 1b
+	SMAP_ENABLE
 
-/* LINTSTUB: Ignore */
-NENTRY(x86_copyargs_efault)
-	movl	$EFAULT,%eax
-
-/* LINTSTUB: Ignore */
-NENTRY(x86_copyargs_fault)
 	popl	%esi
+	xorl	%eax,%eax
 	ret
 	DEFERRED_SWITCH_CALL
+END(x86_copyargs)
+
+ENTRY(x86_copyargs_efault)
+	movl	$EFAULT,%eax
+	popl	%esi
+	ret
+END(x86_copyargs_efault)
+
+ENTRY(x86_copyargs_fault)
+	SMAP_ENABLE
+	popl	%esi
+	ret
+END(x86_copyargs_fault)
 
 /*
  * Label must be after all copy functions.
@@ -748,6 +707,7 @@ LABEL(x86_copyfunc_end)
  */
 	.section ".rodata"
 	.globl _C_LABEL(onfault_table)
+
 _C_LABEL(onfault_table):
 	.long .Lcopyin_start
 	.long .Lcopyin_end
@@ -772,6 +732,30 @@ _C_LABEL(onfault_table):
 	.long .Lucas32_start
 	.long .Lucas32_end
 	.long _C_LABEL(ucas_fault)
+
+	.long .L_ufetch_8_start
+	.long .L_ufetch_8_end
+	.long _C_LABEL(ufetchstore_fault)
+
+	.long .L_ufetch_16_start
+	.long .L_ufetch_16_end
+	.long _C_LABEL(ufetchstore_fault)
+
+	.long .L_ufetch_32_start
+	.long .L_ufetch_32_end
+	.long _C_LABEL(ufetchstore_fault)
+
+	.long .L_ustore_8_start
+	.long .L_ustore_8_end
+	.long _C_LABEL(ufetchstore_fault)
+
+	.long .L_ustore_16_start
+	.long .L_ustore_16_end
+	.long _C_LABEL(ufetchstore_fault)
+
+	.long .L_ustore_32_start
+	.long .L_ustore_32_end
+	.long _C_LABEL(ufetchstore_fault)
 
 	.long .Lx86_copyargs_start
 	.long .Lx86_copyargs_end

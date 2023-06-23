@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee80211_ioctl.h,v 1.23 2016/04/08 14:30:47 roy Exp $	*/
+/*	$NetBSD: ieee80211_ioctl.h,v 1.26 2019/08/20 09:28:00 christos Exp $	*/
 /*-
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
@@ -39,6 +39,7 @@
  * IEEE 802.11 ioctls.
  */
 #include <sys/ioccom.h>
+#include <net/if.h>
 #include <net80211/_ieee80211.h>
 #include <net80211/ieee80211.h>
 #include <net80211/ieee80211_crypto.h>
@@ -91,7 +92,6 @@ struct ieee80211_nodestats {
 	u_int32_t	ns_tx_disassoc_code;	/* last disassociation reason */
 };
 
-#ifdef COMPAT_20
 struct ieee80211_ostats {
 	u_int32_t	is_rx_badversion;	/* rx frame with bad version */
 	u_int32_t	is_rx_tooshort;		/* rx frame too short */
@@ -135,7 +135,6 @@ struct ieee80211_ostats {
 	u_int32_t	is_node_timeout;	/* nodes timed out inactivity */
 	u_int32_t	is_crypto_nomem;	/* no memory for crypto ctx */
 };
-#endif /* COMPAT_20 */
 
 /*
  * Summary statistics.
@@ -429,10 +428,8 @@ struct ieee80211req {
 #define	SIOCG80211		_IOWR('i', 245, struct ieee80211req)
 #define	SIOCG80211STATS		_IOWR('i', 246, struct ifreq)
 #define	SIOCG80211ZSTATS	_IOWR('i', 247, struct ifreq)
-#ifdef COMPAT_20
 #define	OSIOCG80211STATS	_IOWR('i', 242, struct ifreq)
 #define	OSIOCG80211ZSTATS	_IOWR('i', 243, struct ifreq)
-#endif /* COMPAT_20 */
 #endif /* __NetBSD__ */
 
 #if defined(__FreeBSD__) || defined(COMPAT_FREEBSD_NET80211)
@@ -579,10 +576,6 @@ struct ieee80211_auth {
 	char		i_name[IFNAMSIZ];	/* if_name, e.g. "wi0" */
 	int		i_authtype;
 };
-
-#define	IEEE80211_AUTH_NONE	0
-#define	IEEE80211_AUTH_OPEN	1
-#define	IEEE80211_AUTH_SHARED	2
 
 #define	SIOCS80211AUTH		 _IOW('i', 236, struct ieee80211_auth)
 #define	SIOCG80211AUTH		_IOWR('i', 237, struct ieee80211_auth)

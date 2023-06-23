@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -133,7 +133,7 @@ OptSearchToRoot (
      * not match, and we cannot use this optimization.
      */
     Path = &(((char *) TargetPath->Pointer)[
-        TargetPath->Length - ACPI_NAME_SIZE]),
+        TargetPath->Length - ACPI_NAMESEG_SIZE]);
     ScopeInfo.Scope.Node = CurrentNode;
 
     /* Lookup the NameSeg using SEARCH_PARENT (search-to-root) */
@@ -167,7 +167,7 @@ OptSearchToRoot (
 
     /* We must allocate a new string for the name (TargetPath gets deleted) */
 
-    *NewPath = UtStringCacheCalloc (ACPI_NAME_SIZE + 1);
+    *NewPath = UtLocalCacheCalloc (ACPI_NAMESEG_SIZE + 1);
     strcpy (*NewPath, Path);
 
     if (strncmp (*NewPath, "_T_", 3))
@@ -235,7 +235,7 @@ OptBuildShortestPath (
      * can possibly have in common. (To optimize, we have to have at least 1)
      *
      * Note: The external NamePath string lengths are always a multiple of 5
-     * (ACPI_NAME_SIZE + separator)
+     * (ACPI_NAMESEG_SIZE + separator)
      */
     MaxCommonSegments = TargetPath->Length / ACPI_PATH_SEGMENT_LENGTH;
     if (CurrentPath->Length < TargetPath->Length)
@@ -255,7 +255,7 @@ OptBuildShortestPath (
 
         Index = (NumCommonSegments * ACPI_PATH_SEGMENT_LENGTH) + 1;
 
-        if (!ACPI_COMPARE_NAME (
+        if (!ACPI_COMPARE_NAMESEG (
             &(ACPI_CAST_PTR (char, TargetPath->Pointer)) [Index],
             &(ACPI_CAST_PTR (char, CurrentPath->Pointer)) [Index]))
         {
@@ -298,7 +298,7 @@ OptBuildShortestPath (
      * Construct a new target string
      */
     NewPathExternal =
-        ACPI_ALLOCATE_ZEROED (TargetPath->Length + NumCarats + 1);
+        UtLocalCacheCalloc (TargetPath->Length + NumCarats + 1);
 
     /* Insert the Carats into the Target string */
 
@@ -414,7 +414,6 @@ OptBuildShortestPath (
 
 Cleanup:
 
-    ACPI_FREE (NewPathExternal);
     return (Status);
 }
 
@@ -571,7 +570,7 @@ OptOptimizeNamePath (
 
     /* This is an optional optimization */
 
-    if (!Gbl_ReferenceOptimizationFlag)
+    if (!AslGbl_ReferenceOptimizationFlag)
     {
         return_VOID;
     }
@@ -591,7 +590,7 @@ OptOptimizeNamePath (
 
     if (!(Flags & (AML_NAMED | AML_CREATE)))
     {
-        if (Op->Asl.CompileFlags & NODE_IS_NAME_DECLARATION)
+        if (Op->Asl.CompileFlags & OP_IS_NAME_DECLARATION)
         {
             /* We don't want to fuss with actual name declaration nodes here */
 
@@ -606,7 +605,7 @@ OptOptimizeNamePath (
      * to be any possibility that it can be optimized to a shorter string
      */
     AmlNameStringLength = strlen (AmlNameString);
-    if (AmlNameStringLength <= ACPI_NAME_SIZE)
+    if (AmlNameStringLength <= ACPI_NAMESEG_SIZE)
     {
         ACPI_DEBUG_PRINT_RAW ((ACPI_DB_OPTIMIZATIONS,
             "NAMESEG %4.4s\n", AmlNameString));
@@ -707,7 +706,7 @@ OptOptimizeNamePath (
     ACPI_FREE (ExternalNameString);
 
     /*
-     * Attempt an optmization depending on the type of namepath
+     * Attempt an optimization depending on the type of namepath
      */
     if (Flags & (AML_NAMED | AML_CREATE))
     {
@@ -785,7 +784,7 @@ OptOptimizeNamePath (
             /* Name must appear as the last parameter */
 
             NextOp = Op->Asl.Child;
-            while (!(NextOp->Asl.CompileFlags & NODE_IS_NAME_DECLARATION))
+            while (!(NextOp->Asl.CompileFlags & OP_IS_NAME_DECLARATION))
             {
                 NextOp = NextOp->Asl.Next;
             }

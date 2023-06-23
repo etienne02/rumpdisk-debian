@@ -1,4 +1,4 @@
-/*	$NetBSD: types.h,v 1.87 2016/02/27 00:09:45 tls Exp $	*/
+/*	$NetBSD: types.h,v 1.93 2021/04/01 04:35:46 simonb Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -88,8 +88,6 @@ typedef unsigned long	vsize_t;
 #define	PRIxVSIZE	"lx"
 #define	PRIuVSIZE	"lu"
 
-typedef int		pmc_evid_t;
-typedef __uint64_t	pmc_ctr_t;
 typedef __register_t	register_t;
 #define	PRIxREGISTER	"x"
 
@@ -101,8 +99,11 @@ typedef __register_t	register_t;
 #define	__SIMPLELOCK_LOCKED	1
 #define	__SIMPLELOCK_UNLOCKED	0
 
+#if !__has_feature(undefined_behavior_sanitizer) && \
+	!defined(__SANITIZE_UNDEFINED__)
 /* The x86 does not have strict alignment requirements. */
 #define	__NO_STRICT_ALIGNMENT
+#endif
 
 #define	__HAVE_NEW_STYLE_BUS_H
 #define	__HAVE_CPU_DATA_FIRST
@@ -122,7 +123,7 @@ typedef __register_t	register_t;
  * other run-in-userspace code defines _KERNEL, but is careful not to
  * build anything using 64bit atomic ops by default.
  */
-#define __HAVE_ATOMIC64_OPS
+#define	__HAVE_ATOMIC64_OPS
 #endif
 #define	__HAVE_ATOMIC_AS_MEMBAR
 #define	__HAVE_CPU_LWP_SETPRIVATE
@@ -131,13 +132,7 @@ typedef __register_t	register_t;
 #define	__HAVE___LWP_GETPRIVATE_FAST
 #define	__HAVE_TLS_VARIANT_II
 #define	__HAVE_COMMON___TLS_GET_ADDR
-
-#if defined(_KERNEL)
+#define	__HAVE_UCAS_FULL
 #define	__HAVE_RAS
-
-#if !defined(XEN) && !defined(NO_PCI_MSI_MSIX)
-#define __HAVE_PCI_MSI_MSIX
-#endif
-#endif
 
 #endif	/* _I386_MACHTYPES_H_ */

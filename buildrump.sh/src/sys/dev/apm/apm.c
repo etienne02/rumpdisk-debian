@@ -1,4 +1,4 @@
-/*	$NetBSD: apm.c,v 1.31 2014/07/25 08:10:36 dholland Exp $ */
+/*	$NetBSD: apm.c,v 1.34 2020/12/19 01:18:58 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: apm.c,v 1.31 2014/07/25 08:10:36 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: apm.c,v 1.34 2020/12/19 01:18:58 thorpej Exp $");
 
 #include "opt_apm.h"
 
@@ -56,6 +56,8 @@ __KERNEL_RCSID(0, "$NetBSD: apm.c,v 1.31 2014/07/25 08:10:36 dholland Exp $");
 #include <sys/conf.h>
 
 #include <dev/apm/apmvar.h>
+
+#include "ioconf.h"
 
 #ifdef APMDEBUG
 #define DPRINTF(f, x)		do { if (apmdebug & (f)) printf x; } while (0)
@@ -104,8 +106,6 @@ static void	apm_set_ver(struct apm_softc *);
 static void	apm_standby(struct apm_softc *);
 static void	apm_suspend(struct apm_softc *);
 static void	apm_resume(struct apm_softc *, u_int, u_int);
-
-extern struct cfdriver apm_cd;
 
 dev_type_open(apmopen);
 dev_type_close(apmclose);
@@ -870,7 +870,7 @@ filt_apmrdetach(struct knote *kn)
 	struct apm_softc *sc = kn->kn_hook;
 
 	APM_LOCK(sc);
-	SLIST_REMOVE(&sc->sc_rsel.sel_klist, kn, knote, kn_selnext);
+	selremove_knote(&sc->sc_rsel, kn);
 	APM_UNLOCK(sc);
 }
 
@@ -883,18 +883,20 @@ filt_apmread(struct knote *kn, long hint)
 	return (kn->kn_data > 0);
 }
 
-static const struct filterops apmread_filtops =
-	{ 1, NULL, filt_apmrdetach, filt_apmread };
+static const struct filterops apmread_filtops = {
+	.f_isfd = 1,
+	.f_attach = NULL,
+	.f_detach = filt_apmrdetach,
+	.f_event = filt_apmread,
+};
 
 int
 apmkqfilter(dev_t dev, struct knote *kn)
 {
 	struct apm_softc *sc = device_lookup_private(&apm_cd, APMUNIT(dev));
-	struct klist *klist;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		klist = &sc->sc_rsel.sel_klist;
 		kn->kn_fop = &apmread_filtops;
 		break;
 
@@ -905,7 +907,7 @@ apmkqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = sc;
 
 	APM_LOCK(sc);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	selrecord_knote(&sc->sc_rsel, kn);
 	APM_UNLOCK(sc);
 
 	return (0);

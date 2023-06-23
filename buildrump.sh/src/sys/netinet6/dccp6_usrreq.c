@@ -1,5 +1,5 @@
 /*	$KAME: dccp6_usrreq.c,v 1.13 2005/07/27 08:42:56 nishida Exp $	*/
-/*	$NetBSD: dccp6_usrreq.c,v 1.8 2016/04/26 08:44:45 ozaki-r Exp $ */
+/*	$NetBSD: dccp6_usrreq.c,v 1.12 2018/09/15 13:33:15 rjs Exp $ */
 
 /*
  * Copyright (C) 2003 WIDE Project.
@@ -31,11 +31,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dccp6_usrreq.c,v 1.8 2016/04/26 08:44:45 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dccp6_usrreq.c,v 1.12 2018/09/15 13:33:15 rjs Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
 #include "opt_dccp.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include <sys/param.h>
@@ -69,7 +70,6 @@ __KERNEL_RCSID(0, "$NetBSD: dccp6_usrreq.c,v 1.8 2016/04/26 08:44:45 ozaki-r Exp
 #include <netinet/ip_var.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
-#include <netinet6/nd6.h>
 #include <netinet/dccp.h>
 #include <netinet/dccp_var.h>
 #include <netinet6/dccp6_var.h>
@@ -96,7 +96,7 @@ dccp6_input(struct mbuf **mp, int *offp, int proto)
 	IP6_EXTHDR_CHECK(m, *offp, sizeof(struct dccphdr), IPPROTO_DONE);
 #endif
 
-	dccp_input(m, *offp);
+	dccp_input(m, *offp, proto);
 	return IPPROTO_DONE;
 }
 
@@ -320,7 +320,13 @@ dccp6_purgeif(struct socket *so, struct ifnet *ifp)
 	s = splsoftnet();
 	mutex_enter(softnet_lock);
 	in6_pcbpurgeif0(&dccpbtable, ifp);
+#ifdef NET_MPSAFE
+	mutex_exit(softnet_lock);
+#endif
 	in6_purgeif(ifp);
+#ifdef NET_MPSAFE
+	mutex_enter(softnet_lock);
+#endif
 	in6_pcbpurgeif(&dccpbtable, ifp);
 	mutex_exit(softnet_lock);
 	splx(s);

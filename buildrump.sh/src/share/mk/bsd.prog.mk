@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.prog.mk,v 1.299 2016/04/04 15:06:16 joerg Exp $
+#	$NetBSD: bsd.prog.mk,v 1.339 2021/08/23 22:13:27 mrg Exp $
 #	@(#)bsd.prog.mk	8.2 (Berkeley) 4/2/94
 
 .ifndef HOSTPROG
@@ -6,6 +6,13 @@
 .include <bsd.init.mk>
 .include <bsd.shlib.mk>
 .include <bsd.gcc.mk>
+.include <bsd.sanitizer.mk>
+
+##### Sanitizer specific flags.
+
+CFLAGS+=	${SANITIZERFLAGS} ${LIBCSANITIZERFLAGS}
+CXXFLAGS+=	${SANITIZERFLAGS} ${LIBCSANITIZERFLAGS}
+LDFLAGS+=	${SANITIZERFLAGS}
 
 #
 # Definitions and targets shared among all programs built by a single
@@ -32,19 +39,15 @@ CLEANFILES+= a.out [Ee]rrs mklog core *.core .gdbinit
 CLEANFILES+=strings
 .c.o:
 	${CC} -E ${CPPFLAGS} ${CFLAGS} ${.IMPSRC} | xstr -c -
-	@${CC} ${CPPFLAGS} ${CFLAGS} -c x.c -o ${.TARGET}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	@${CC} ${CPPFLAGS} ${CFLAGS} -c x.c ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 	@rm -f x.c
 
 .cc.o .cpp.o .cxx.o .C.o:
 	${CXX} -E ${CPPFLAGS} ${CXXFLAGS} ${.IMPSRC} | xstr -c -
-	@mv -f x.c x.cc
-	@${CXX} ${CPPFLAGS} ${CXXFLAGS} -c x.cc -o ${.TARGET}
-.if defined(CTFCONVERT)
-	${CTFCONVERT} ${CTFFLAGS} ${.TARGET}
-.endif
+	@${MV} x.c x.cc
+	@${CXX} ${CPPFLAGS} ${CXXFLAGS} -c x.cc ${OBJECT_TARGET}
+	${CTFCONVERT_RUN}
 	@rm -f x.cc
 .endif
 
@@ -99,37 +102,39 @@ LIBCRTI=	${DESTDIR}/usr/lib/${MLIBDIR:D${MLIBDIR}/}crti.o
 #	etc..
 #	NB:	If you are a library here, add it in bsd.README
 
-.for _lib in \
+_LIBLIST=\
 	archive \
 	asn1 \
 	atf_c \
 	atf_cxx \
 	bind9 \
+	blocklist \
 	bluetooth \
 	bsdmalloc \
 	bz2 \
 	c \
 	c_pic \
+	cbor \
 	com_err \
 	compat \
 	crypt \
 	crypto \
-	crypto_idea \
-	crypto_mdc2 \
-	crypto_rc5 \
 	curses \
-	dbm \
+	cxx \
 	des \
 	dns \
 	edit \
 	event \
-	expat \
+	event_openssl \
+	event_pthreads \
 	execinfo \
+	expat \
 	fetch \
 	fl \
+	fido2 \
 	form \
-	g2c \
 	gcc \
+	gnuctf \
 	gnumalloc \
 	gssapi \
 	hdb \
@@ -151,77 +156,96 @@ LIBCRTI=	${DESTDIR}/usr/lib/${MLIBDIR:D${MLIBDIR}/}crti.o
 	ldap \
 	ldap_r \
 	lua \
-	lwres \
 	m \
 	magic \
 	menu \
+	netpgpverify \
+	ns \
 	objc \
 	ossaudio \
+	panel \
 	pam \
 	pcap \
 	pci \
-	pmc \
 	posix \
 	pthread \
-	pthread_dbg \
 	puffs \
 	quota \
 	radius \
+	refuse \
 	resolv \
 	rmt \
 	roken \
 	rpcsvc \
 	rt \
 	rump \
-	rumpfs_cd9660fs \
+	rumpfs_cd9660 \
 	rumpfs_efs \
 	rumpfs_ext2fs \
 	rumpfs_ffs \
 	rumpfs_hfs \
 	rumpfs_lfs \
-	rumpfs_msdosfs \
+	rumpfs_msdos \
 	rumpfs_nfs \
 	rumpfs_ntfs \
 	rumpfs_syspuffs \
 	rumpfs_tmpfs \
 	rumpfs_udf \
-	rumpfs_ufs \
 	rumpuser \
 	saslc \
 	skey \
 	sl \
 	sqlite3 \
-	ss \
 	ssh \
 	ssl \
-	ssp \
-	stdcxx \
-	supcxx \
+	stdc++ \
+	supc++ \
 	terminfo \
 	tre \
+	unbound \
 	usbhid \
 	util \
 	wind \
 	wrap \
 	y \
 	z 
+
+.for _lib in ${_LIBLIST}
 .ifndef LIB${_lib:tu}
 LIB${_lib:tu}=	${DESTDIR}/usr/lib/lib${_lib:S/xx/++/:S/atf_c/atf-c/}.a
 .MADE:		${LIB${_lib:tu}}	# Note: ${DESTDIR} will be expanded
 .endif
 .endfor
 
+.if (${MKKERBEROS} != "no")
+# Kerberos5 applications
+LIBKRB5_LDADD+= -lkrb5 -lcom_err \
+	-lhx509 -lcrypto -lasn1 \
+	-lwind -lheimbase -lcom_err -lroken \
+	-lsqlite3 -lm -lcrypt -lutil
+LIBKRB5_DPADD+= ${LIBKRB5} ${LIBCOM_ERR} \
+	${LIBHX509} ${LIBCRYPTO} ${LIBASN1} \
+	${LIBWIND} ${LIBHEIMBASE} ${LIBCOM_ERR} ${LIBROKEN} \
+	${LIBSQLITE3} ${LIBM} ${LIBCRYPT} ${LIBUTIL}
+LIBGSSAPI_LDADD+= -lgssapi -lheimntlm ${LIBKRB5_LDADD}
+LIBGSSAPI_DPADD+= ${LIBGSSAPI} ${LIBHEIMNTLM} ${LIBKRB5_DPADD}
+.endif
+
+.if (${MKLDAP} != "no")
+LIBLDAP_LDADD+= -lldap -llber ${LIBGSSAPI_LDADD} -lssl -lcrypto 
+LIBLDAP_DPADD+= ${LIBLDAP} ${LIBLBER} ${LIBGSSAPI_DPADD} ${LIBSSL} ${LIBCRYPTO}
+.endif
+
 # PAM applications, if linked statically, need more libraries
 .if (${MKPIC} == "no")
-.if (${MKCRYPTO} != "no")
 PAM_STATIC_LDADD+= -lssh
 PAM_STATIC_DPADD+= ${LIBSSH}
-.endif
 .if (${MKKERBEROS} != "no")
 PAM_STATIC_LDADD+= -lkafs -lkrb5 -lhx509 -lwind -lasn1 \
-	-lroken -lcom_err -lheimbase -lcrypto
+	-lroken -lcom_err -lheimbase -lcrypto -lsqlite3 -lm
 PAM_STATIC_DPADD+= ${LIBKAFS} ${LIBKRB5} ${LIBHX509} ${LIBWIND} ${LIBASN1} \
-	${LIBROKEN} ${LIBCOM_ERR} ${LIBHEIMBASE} ${LIBCRYPTO}
+	${LIBROKEN} ${LIBCOM_ERR} ${LIBHEIMBASE} ${LIBCRYPTO} ${LIBSQLITE3} \
+	${LIBM}
 .endif
 .if (${MKSKEY} != "no")
 PAM_STATIC_LDADD+= -lskey
@@ -235,51 +259,34 @@ PAM_STATIC_DPADD=
 .endif
 
 #	NB:	If you are a library here, add it in bsd.README
-.for _lib in \
-	FS \
-	GL \
-	GLU \
-	ICE \
-	SM \
-	X11 \
-	XTrap \
-	Xau \
-	Xaw \
-	Xdmcp \
-	Xext \
-	Xfont \
-	Xft \
-	Xi \
-	Xinerama \
-	Xmu \
-	Xmuu \
-	Xpm \
-	Xrandr \
-	Xrender \
-	Xss \
-	Xt \
-	Xtst \
-	Xv \
-	Xxf86dga \
-	Xxf86misc \
-	Xxf86vm \
-	dps \
-	fntstubs \
-	fontcache \
-	fontconfig \
-	fontenc \
-	freetype \
-	lbxutil \
-	xkbfile
+#	This list is sorted with -f so that it matches the order in bsd.README
+_X11LIBLIST= dps fntstubs fontcache fontconfig fontenc freetype FS GL GLU \
+    ICE lbxutil SM X11 X11_xcb Xau Xaw xcb Xdmcp Xext Xfont Xfont2 Xft Xi \
+    Xinerama xkbfile Xmu Xmuu Xpm Xrandr Xrender Xss Xt XTrap Xtst Xv Xxf86dga \
+    Xxf86misc Xxf86vm Xcomposite Xdamage Xfixes
+_XCBLIBLIST= \
+    atom aux composite damage dpms dri2 dri3 event glx icccm image keysyms \
+    present property randr record render_util render reply res screensaver \
+    shape shm sync xf86dri xfixes xinerama xinput xkb xtest xv xvmc
+
+# Ugly one-offs
+LIBX11_XCB=	${DESTDIR}${X11USRLIBDIR}/libX11-xcb.a
+LIBXCB=	${DESTDIR}${X11USRLIBDIR}/libxcb.a
+
+.for _lib in ${_X11LIBLIST}
 .ifndef LIB${_lib:tu}
 LIB${_lib:tu}=	${DESTDIR}${X11USRLIBDIR}/lib${_lib}.a
 .MADE:		${LIB${_lib:tu}}	# Note: ${DESTDIR} will be expanded
 .endif
 .endfor
 
-# Ugly one-offs
-LIBX11_XCB=	${DESTDIR}${X11USRLIBDIR}/libX11-xcb.a
-LIBXCB=	${DESTDIR}${X11USRLIBDIR}/libxcb.a
+# These ones have "_" in the variable name and "-" in the path.
+.for _lib in ${_XCBLIBLIST}
+.ifndef LIBXCB_${_lib:tu}
+LIBXCB_${_lib:tu}=	${DESTDIR}${X11USRLIBDIR}/libxcb-${_lib}.a
+.MADE:		${LIBXCB_${_lib:tu}}	# Note: ${DESTDIR} will be expanded
+.endif
+.endfor
 
 .if defined(RESCUEDIR)
 CPPFLAGS+=	-DRESCUEDIR=\"${RESCUEDIR}\"
@@ -351,8 +358,8 @@ SRCS.rump.${PROG}=	${PROG}.c ${PROG}_rumpops.c ${RUMPSRCS}
 .  endif
 .   if (${MKRUMP} != "no")
 DPSRCS+=		${PROG}_rumpops.c ${RUMPSRCS}
-LDADD.rump.${PROG}+=	-lrumpclient
-DPADD.rump.${PROG}+=	${LIBRUMPCLIENT}
+LDADD.rump.${PROG}+=	${LDADD.rump} -lrumpclient
+DPADD.rump.${PROG}+=	${DPADD.rump} ${LIBRUMPCLIENT}
 MAN.rump.${PROG}=	# defined but feeling empty
 _RUMPINSTALL.rump.${PROG}=# defined
 .   endif
@@ -434,12 +441,21 @@ _CCLINK.${_P}=	${CXX} ${_CCLINKFLAGS}
 BINDIR.${_P}?=		${BINDIR}
 PROGNAME.${_P}?=	${_P}
 
-.if ${MKDEBUG:Uno} != "no" && !defined(NODEBUG) && !commands(${_P})
+.if ${MKDEBUG:Uno} != "no" && !defined(NODEBUG) && !commands(${_P}) && \
+    empty(SRCS.${_P}:M*.sh)
 _PROGDEBUG.${_P}:=	${PROGNAME.${_P}}.debug
 .endif
 
+# paxctl specific arguments
+
 .if defined(PAXCTL_FLAGS)
 PAXCTL_FLAGS.${_P}?= ${PAXCTL_FLAGS}
+.endif
+
+.if ${MKSANITIZER:Uno} == "yes" && \
+	(${USE_SANITIZER} == "address" || ${USE_SANITIZER} == "thread" || \
+	${USE_SANITIZER} == "memory")
+PAXCTL_FLAGS.${_P}= +a
 .endif
 
 ##### PROG specific flags.
@@ -447,7 +463,10 @@ PAXCTL_FLAGS.${_P}?= ${PAXCTL_FLAGS}
 _DPADD.${_P}=		${DPADD}    ${DPADD.${_P}}
 _LDADD.${_P}=		${LDADD}    ${LDADD.${_P}}
 _LDFLAGS.${_P}=		${LDFLAGS}  ${LDFLAGS.${_P}}
+.if ${MKSANITIZER} != "yes"
+# Sanitizers don't support static build.
 _LDSTATIC.${_P}=	${LDSTATIC} ${LDSTATIC.${_P}}
+.endif
 
 ##### Build and install rules
 .if !empty(_APPEND_SRCS:M[Yy][Ee][Ss])

@@ -1,4 +1,4 @@
-/*	$NetBSD: pcf8583.c,v 1.16 2014/11/20 16:34:26 christos Exp $	*/
+/*	$NetBSD: pcf8583.c,v 1.19 2020/01/02 16:53:05 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcf8583.c,v 1.16 2014/11/20 16:34:26 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcf8583.c,v 1.19 2020/01/02 16:53:05 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -60,6 +60,8 @@ __KERNEL_RCSID(0, "$NetBSD: pcf8583.c,v 1.16 2014/11/20 16:34:26 christos Exp $"
 #include <dev/i2c/pcf8583reg.h>
 #include <dev/i2c/pcf8583var.h>
 
+#include "ioconf.h"
+
 struct pcfrtc_softc {
 	device_t sc_dev;
 	i2c_tag_t sc_tag;
@@ -73,7 +75,6 @@ static void pcfrtc_attach(device_t, device_t, void *);
 
 CFATTACH_DECL_NEW(pcfrtc, sizeof(struct pcfrtc_softc),
 	pcfrtc_match, pcfrtc_attach, NULL, NULL);
-extern struct cfdriver pcfrtc_cd;
 
 dev_type_open(pcfrtc_open);
 dev_type_close(pcfrtc_close);
@@ -108,7 +109,7 @@ pcfrtc_match(device_t parent, cfdata_t cf, void *aux)
 	struct i2c_attach_args *ia = aux;
 
 	if ((ia->ia_addr & PCF8583_ADDRMASK) == PCF8583_ADDR)
-		return (1);
+		return (I2C_MATCH_ADDRESS_ONLY);
 
 	return (0);
 }
@@ -326,7 +327,7 @@ pcfrtc_clock_read(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 	u_int8_t bcd[10], cmdbuf[1];
 	int i, err;
 
-	if ((err = iic_acquire_bus(sc->sc_tag, I2C_F_POLL))) {
+	if ((err = iic_acquire_bus(sc->sc_tag, 0))) {
 		aprint_error_dev(sc->sc_dev,
 		    "pcfrtc_clock_read: failed to acquire I2C bus\n");
 		return err;
@@ -338,8 +339,8 @@ pcfrtc_clock_read(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 
 		if ((err = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP,
 			     sc->sc_address, cmdbuf, 1,
-			     &bcd[i], 1, I2C_F_POLL))) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+			     &bcd[i], 1, 0))) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "pcfrtc_clock_read: failed to read rtc "
 			    "at 0x%x\n",
@@ -349,7 +350,7 @@ pcfrtc_clock_read(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 	}
 
 	/* Done with I2C */
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	/*
 	 * Convert the PCF8583's register values into something useable
@@ -404,7 +405,7 @@ pcfrtc_clock_write(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 	bcd[8]                    = dt->dt_year % 100;
 	bcd[9]                    = dt->dt_year / 100;
 
-	if ((err = iic_acquire_bus(sc->sc_tag, I2C_F_POLL))) {
+	if ((err = iic_acquire_bus(sc->sc_tag, 0))) {
 		aprint_error_dev(sc->sc_dev,
 		    "pcfrtc_clock_write: failed to acquire I2C bus\n");
 		return err;
@@ -415,8 +416,8 @@ pcfrtc_clock_write(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 		if ((err = iic_exec(sc->sc_tag,
 			     i != 9 ? I2C_OP_WRITE : I2C_OP_WRITE_WITH_STOP,
 			     sc->sc_address, cmdbuf, 1,
-			     &bcd[i], 1, I2C_F_POLL))) {
-			iic_release_bus(sc->sc_tag, I2C_F_POLL);
+			     &bcd[i], 1, 0))) {
+			iic_release_bus(sc->sc_tag, 0);
 			aprint_error_dev(sc->sc_dev,
 			    "pcfrtc_clock_write: failed to write rtc "
 			    " at 0x%x\n",
@@ -425,7 +426,7 @@ pcfrtc_clock_write(struct pcfrtc_softc *sc, struct clock_ymdhms *dt,
 		}
 	}
 
-	iic_release_bus(sc->sc_tag, I2C_F_POLL);
+	iic_release_bus(sc->sc_tag, 0);
 
 	return 0;
 }
@@ -444,15 +445,15 @@ pcfrtc_bootstrap_read(i2c_tag_t tag, int i2caddr, int offset,
 	if (len == 0)
 		return (0);
 
-	if (iic_acquire_bus(tag, I2C_F_POLL) != 0)
+	if (iic_acquire_bus(tag, 0) != 0)
 		return (-1);
 
 	while (len) {
 		/* Read a single byte. */
 		cmdbuf[0] = offset;
 		if (iic_exec(tag, I2C_OP_READ_WITH_STOP, i2caddr,
-			     cmdbuf, 1, rvp, 1, I2C_F_POLL)) {
-			iic_release_bus(tag, I2C_F_POLL);
+			     cmdbuf, 1, rvp, 1, 0)) {
+			iic_release_bus(tag, 0);
 			return (-1);
 		}
 
@@ -461,7 +462,7 @@ pcfrtc_bootstrap_read(i2c_tag_t tag, int i2caddr, int offset,
 		offset++;
 	}
 
-	iic_release_bus(tag, I2C_F_POLL);
+	iic_release_bus(tag, 0);
 	return (0);
 }
 
@@ -479,15 +480,15 @@ pcfrtc_bootstrap_write(i2c_tag_t tag, int i2caddr, int offset,
 	if (len == 0)
 		return (0);
 
-	if (iic_acquire_bus(tag, I2C_F_POLL) != 0)
+	if (iic_acquire_bus(tag, 0) != 0)
 		return (-1);
 
 	while (len) {
 		/* Write a single byte. */
 		cmdbuf[0] = offset;
 		if (iic_exec(tag, I2C_OP_WRITE_WITH_STOP, i2caddr,
-			     cmdbuf, 1, rvp, 1, I2C_F_POLL)) {
-			iic_release_bus(tag, I2C_F_POLL);
+			     cmdbuf, 1, rvp, 1, 0)) {
+			iic_release_bus(tag, 0);
 			return (-1);
 		}
 
@@ -496,6 +497,6 @@ pcfrtc_bootstrap_write(i2c_tag_t tag, int i2caddr, int offset,
 		offset++;
 	}
 
-	iic_release_bus(tag, I2C_F_POLL);
+	iic_release_bus(tag, 0);
 	return (0);
 }

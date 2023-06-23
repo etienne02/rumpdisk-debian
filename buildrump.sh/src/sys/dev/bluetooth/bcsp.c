@@ -1,4 +1,4 @@
-/*	$NetBSD: bcsp.c,v 1.29 2015/08/20 14:40:17 christos Exp $	*/
+/*	$NetBSD: bcsp.c,v 1.31 2019/01/24 09:33:03 knakahara Exp $	*/
 /*
  * Copyright (c) 2007 KIYOHARA Takashi
  * All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bcsp.c,v 1.29 2015/08/20 14:40:17 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bcsp.c,v 1.31 2019/01/24 09:33:03 knakahara Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -467,6 +467,12 @@ bcspioctl(struct tty *tp, u_long cmd, void *data, int flag __unused,
 	struct bcsp_softc *sc = tp->t_sc;
 	int error;
 
+	/*
+	 * XXX
+	 * This function can be called without KERNEL_LOCK when caller's
+	 * struct cdevsw is set D_MPSAFE. Is KERNEL_LOCK required?
+	 */
+
 	if (sc == NULL || tp != sc->sc_tp)
 		return EPASSTHROUGH;
 
@@ -780,7 +786,7 @@ bcsp_pktintegrity_receive(struct bcsp_softc *sc, struct mbuf *m)
 	u_int pldlen;
 	int discard = 0;
 	uint16_t crc = 0xffff;
-	const char *errstr 
+	const char *errstr;
 
 	DPRINTFN(3, ("%s: pi receive\n", device_xname(sc->sc_dev)));
 #ifdef BCSP_DEBUG

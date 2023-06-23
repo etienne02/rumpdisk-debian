@@ -1,4 +1,4 @@
-/*	$NetBSD: limits.h,v 1.26 2014/04/21 10:53:47 matt Exp $	*/
+/*	$NetBSD: limits.h,v 1.28 2020/07/26 08:08:41 simonb Exp $	*/
 
 /*
  * Copyright (c) 1988, 1993
@@ -70,19 +70,19 @@
 #define	LONG_MIN	(-0x7fffffff-1)	/* min value for a long */
 #endif
 
+#if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) >= 199901L || \
+    defined(_NETBSD_SOURCE)
+#define	ULLONG_MAX	0xffffffffffffffffULL	/* max unsigned long long */
+#define	LLONG_MAX	0x7fffffffffffffffLL	/* max signed long long */
+#define	LLONG_MIN	(-0x7fffffffffffffffLL-1) /* min signed long long */
+#endif
+
 #if defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || \
     defined(_NETBSD_SOURCE)
 #ifdef _LP64
 #define	SSIZE_MAX	LONG_MAX	/* max value for a ssize_t */
 #else
 #define	SSIZE_MAX	INT_MAX		/* max value for a ssize_t */
-#endif
-
-#if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) >= 199901L || \
-    defined(_NETBSD_SOURCE)
-#define	ULLONG_MAX	0xffffffffffffffffULL	/* max unsigned long long */
-#define	LLONG_MAX	0x7fffffffffffffffLL	/* max signed long long */
-#define	LLONG_MIN	(-0x7fffffffffffffffLL-1) /* min signed long long */
 #endif
 
 #if defined(_NETBSD_SOURCE)
@@ -112,19 +112,19 @@
 
 #if defined(_XOPEN_SOURCE) || defined(_NETBSD_SOURCE)
 #ifdef _LP64
-#define LONG_BIT	64
+#define	LONG_BIT	64
 #else
-#define LONG_BIT	32
+#define	LONG_BIT	32
 #endif
-#define WORD_BIT	32
+#define	WORD_BIT	32
 
-#define DBL_DIG		__DBL_DIG__
-#define DBL_MAX		__DBL_MAX__
-#define DBL_MIN		__DBL_MIN__
+#define	DBL_DIG		__DBL_DIG__
+#define	DBL_MAX		__DBL_MAX__
+#define	DBL_MIN		__DBL_MIN__
 
-#define FLT_DIG		__FLT_DIG__
-#define FLT_MAX		__FLT_MAX__
-#define FLT_MIN		__FLT_MIN__
+#define	FLT_DIG		__FLT_DIG__
+#define	FLT_MAX		__FLT_MAX__
+#define	FLT_MIN		__FLT_MIN__
 #endif
 
 #endif /* _MIPS_LIMITS_H_ */

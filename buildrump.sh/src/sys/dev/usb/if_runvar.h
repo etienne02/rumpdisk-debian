@@ -1,4 +1,4 @@
-/*	$NetBSD: if_runvar.h,v 1.2 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: if_runvar.h,v 1.9 2020/06/06 13:53:43 gson Exp $	*/
 /*	$OpenBSD: if_runvar.h,v 1.8 2010/02/08 18:46:47 damien Exp $	*/
 
 /*-
@@ -29,7 +29,7 @@
 /* NB: "11" is the maximum number of padding bytes needed for Tx */
 #define RUN_MAX_TXSZ			\
 	(sizeof(struct rt2870_txd) +	\
-	 sizeof(struct rt2860_rxwi) +	\
+	 sizeof(struct rt2860_txwi) +	\
 	 MCLBYTES + 11)
 
 #define RUN_TX_TIMEOUT	5000	/* ms */
@@ -37,7 +37,7 @@
 #define RUN_RX_RING_COUNT	1
 #define RUN_TX_RING_COUNT	8
 
-#define RT2870_WCID_MAX		253
+#define RT2870_WCID_MAX		64
 #define RUN_AID2WCID(aid)	((aid) & 0xff)
 
 struct run_rx_radiotap_header {
@@ -49,7 +49,7 @@ struct run_rx_radiotap_header {
 	uint8_t		wr_dbm_antsignal;
 	uint8_t		wr_antenna;
 	uint8_t		wr_antsignal;
-} __packed;
+};
 
 #define RUN_RX_RADIOTAP_PRESENT				\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -66,7 +66,7 @@ struct run_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_hwqueue;
-} __packed;
+};
 
 #define RUN_TX_RADIOTAP_PRESENT				\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -93,7 +93,7 @@ struct run_tx_ring {
 	struct run_tx_data	data[RUN_TX_RING_COUNT];
 	struct usbd_pipe *	pipeh;
 	int			cur;
-	int			queued;
+	volatile unsigned	queued;
 	uint8_t			pipe_no;
 };
 
@@ -132,6 +132,8 @@ struct run_node {
 	uint8_t			ctl_ridx[IEEE80211_RATE_MAXSIZE];
 };
 
+#define	RUN_MAXEPOUT	4
+
 struct run_softc {
 	device_t			sc_dev;
 	struct ethercom			sc_ec;
@@ -142,12 +144,14 @@ struct run_softc {
 	int				(*sc_srom_read)(struct run_softc *,
 					    uint16_t, uint16_t *);
 
+	kmutex_t			sc_media_mtx;	/* XXX */
+
 	struct usbd_device *		sc_udev;
 	struct usbd_interface *		sc_iface;
 
 	uint16_t			mac_ver;
 	uint16_t			mac_rev;
-	uint8_t				rf_rev;
+	uint16_t			rf_rev;
 	uint8_t				freq;
 	uint8_t				ntxchains;
 	uint8_t				nrxchains;
@@ -167,6 +171,7 @@ struct run_softc {
 	uint8_t				txmixgain_5ghz;
 	int8_t				txpow1[54];
 	int8_t				txpow2[54];
+	int8_t				txpow3[54];
 	int8_t				rssi_2ghz[3];
 	int8_t				rssi_5ghz[3];
 	uint8_t				lna[4];
@@ -190,14 +195,15 @@ struct run_softc {
 	callout_t			calib_to;
 
 	struct run_rx_ring		rxq;
-	struct run_tx_ring		txq[4];
+	struct run_tx_ring		txq[RUN_MAXEPOUT];
 	struct run_host_cmd_ring	cmdq;
 	uint8_t				qfullmsk;
 	int				sc_tx_timer;
 	struct ieee80211_beacon_offsets	sc_bo;
 	int				sc_flags;
-#define RUN_FWLOADED	(1 << 0)
-#define RUN_DETACHING	(1 << 1)
+#define RUN_FWLOADED		(1 << 0)
+#define RUN_DETACHING		(1 << 1)
+#define RUN_USE_BLOCK_WRITE	(1 << 2)
 
 	struct bpf_if *			sc_drvbpf;
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: mlx.c,v 1.64 2016/07/14 10:19:06 msaitoh Exp $	*/
+/*	$NetBSD: mlx.c,v 1.70 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -67,9 +67,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mlx.c,v 1.64 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mlx.c,v 1.70 2021/08/07 16:19:12 thorpej Exp $");
 
+#if defined(_KERNEL_OPT)
 #include "ld.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -85,7 +87,7 @@ __KERNEL_RCSID(0, "$NetBSD: mlx.c,v 1.64 2016/07/14 10:19:06 msaitoh Exp $");
 #include <sys/kthread.h>
 #include <sys/disk.h>
 #include <sys/kauth.h>
-
+#include <sys/module.h>
 #include <machine/vmparam.h>
 #include <sys/bus.h>
 
@@ -95,6 +97,7 @@ __KERNEL_RCSID(0, "$NetBSD: mlx.c,v 1.64 2016/07/14 10:19:06 msaitoh Exp $");
 #include <dev/ic/mlxio.h>
 #include <dev/ic/mlxvar.h>
 
+#include "ioconf.h"
 #include "locators.h"
 
 #define	MLX_TIMEOUT	60
@@ -108,7 +111,6 @@ __KERNEL_RCSID(0, "$NetBSD: mlx.c,v 1.64 2016/07/14 10:19:06 msaitoh Exp $");
 static void	mlx_adjqparam(struct mlx_softc *, int, int);
 static int	mlx_ccb_submit(struct mlx_softc *, struct mlx_ccb *);
 static int	mlx_check(struct mlx_softc *, int);
-static void	mlx_configure(struct mlx_softc *, int);
 static void	mlx_describe(struct mlx_softc *);
 static void	*mlx_enquire(struct mlx_softc *, int, size_t,
 			     void (*)(struct mlx_ccb *), int);
@@ -145,7 +147,6 @@ const struct cdevsw mlx_cdevsw = {
 	.d_flag = D_OTHER
 };
 
-extern struct	cfdriver mlx_cd;
 static struct	lwp *mlx_periodic_lwp;
 static void	*mlx_sdh;
 
@@ -315,7 +316,7 @@ mlx_init(struct mlx_softc *mlx, const char *intrstr)
 	/*
 	 * Allocate and initialize the CCBs.
 	 */
-	mc = malloc(sizeof(*mc) * MLX_MAX_QUEUECNT, M_DEVBUF, M_NOWAIT);
+	mc = malloc(sizeof(*mc) * MLX_MAX_QUEUECNT, M_DEVBUF, M_WAITOK);
 	mlx->mlx_ccbs = mc;
 
 	for (i = 0; i < MLX_MAX_QUEUECNT; i++, mc++) {
@@ -479,7 +480,7 @@ mlx_init(struct mlx_softc *mlx, const char *intrstr)
 
 	/* Set maximum number of queued commands for `regular' operations. */
 	mlx->mlx_max_queuecnt =
-	    min(ci->ci_max_commands, MLX_MAX_QUEUECNT) -
+	    uimin(ci->ci_max_commands, MLX_MAX_QUEUECNT) -
 	    MLX_NCCBS_CONTROL;
 #ifdef DIAGNOSTIC
 	if (mlx->mlx_max_queuecnt < MLX_NCCBS_CONTROL + MLX_MAX_DRIVES)
@@ -551,7 +552,7 @@ mlx_describe(struct mlx_softc *mlx)
 /*
  * Locate disk resources and attach children to them.
  */
-static void
+int
 mlx_configure(struct mlx_softc *mlx, int waitok)
 {
 	struct mlx_enquiry *me;
@@ -626,8 +627,9 @@ mlx_configure(struct mlx_softc *mlx, int waitok)
 
 		locs[MLXCF_UNIT] = i;
 
-		ms->ms_dv = config_found_sm_loc(mlx->mlx_dv, "mlx", locs,
-				&mlxa, mlx_print, config_stdsubmatch);
+		ms->ms_dv = config_found(mlx->mlx_dv, &mlxa, mlx_print,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
 		nunits += (ms->ms_dv != NULL);
 	}
 
@@ -638,6 +640,8 @@ mlx_configure(struct mlx_softc *mlx, int waitok)
 		    mlx->mlx_max_queuecnt % nunits);
  out:
  	mlx->mlx_flags &= ~MLXF_RESCANNING;
+
+	return 0;
 }
 
 /*
@@ -677,7 +681,6 @@ static void
 mlx_adjqparam(struct mlx_softc *mlx, int mpu, int slop)
 {
 #if NLD > 0
-	extern struct cfdriver ld_cd;
 	struct ld_softc *ld;
 	int i;
 
@@ -1003,7 +1006,7 @@ mlx_periodic(struct mlx_softc *mlx)
 			else
 				etype =  MLX_CMD_ENQUIRY;
 
-			mlx_enquire(mlx, etype, max(sizeof(struct mlx_enquiry),
+			mlx_enquire(mlx, etype, uimax(sizeof(struct mlx_enquiry),
 			    sizeof(struct mlx_enquiry_old)),
 			    mlx_periodic_enquiry, 1);
 		}
@@ -1687,11 +1690,12 @@ mlx_rebuild(struct mlx_softc *mlx, int channel, int target)
 		goto out;
 
 	/* Command completed OK? */
-	aprint_normal_dev(mlx->mlx_dv, "");
 	if (mc->mc_status != 0)
-		printf("REBUILD ASYNC failed - %s\n", mlx_ccb_diagnose(mc));
+		aprint_normal_dev(mlx->mlx_dv, "REBUILD ASYNC failed - %s\n",
+		    mlx_ccb_diagnose(mc));
 	else
-		printf("rebuild started for %d:%d\n", channel, target);
+		aprint_normal_dev(mlx->mlx_dv, "rebuild started for %d:%d\n",
+		    channel, target);
 
 	error = mc->mc_status;
 
@@ -2210,9 +2214,35 @@ mlx_fw_message(struct mlx_softc *mlx, int error, int param1, int param2)
 		return (0);
 	}
 
-	aprint_normal_dev(mlx->mlx_dv, "");
-	aprint_normal(fmt, param2, param1);
+	aprint_normal_dev(mlx->mlx_dv, fmt, param2, param1);
 	aprint_normal("\n");
 
 	return (0);
+}
+
+MODULE(MODULE_CLASS_DRIVER, mlx, NULL);
+                
+#ifdef _MODULE
+CFDRIVER_DECL(cac, DV_DISK, NULL);
+#endif  
+        
+static int
+mlx_modcmd(modcmd_t cmd, void *opaque)
+{       
+	int error = 0;
+                
+#ifdef _MODULE      
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_cfdriver_attach(&mlx_cd);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_cfdriver_detach(&mlx_cd);
+		break;      
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+	return error;
 }

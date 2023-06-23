@@ -1,4 +1,4 @@
-/*	$NetBSD: fvwrite.c,v 1.25 2012/03/27 15:05:42 christos Exp $	*/
+/*	$NetBSD: fvwrite.c,v 1.30 2021/07/22 17:08:15 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)fvwrite.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: fvwrite.c,v 1.25 2012/03/27 15:05:42 christos Exp $");
+__RCSID("$NetBSD: fvwrite.c,v 1.30 2021/07/22 17:08:15 christos Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 

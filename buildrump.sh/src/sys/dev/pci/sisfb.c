@@ -24,7 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sisfb.c,v 1.5 2014/01/26 21:22:49 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sisfb.c,v 1.7 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -332,7 +332,7 @@ sisfb_attach(device_t parent, device_t self, void *aux)
 	waa.accessops = &sisfb_accessops;
 	waa.accesscookie = &sc->vd;
 
-	config_found(sc->sc_dev, &waa, wsemuldisplaydevprint);
+	config_found(sc->sc_dev, &waa, wsemuldisplaydevprint, CFARGS_NONE);
 	return;
 
 fail3:

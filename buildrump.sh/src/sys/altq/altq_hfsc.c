@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_hfsc.c,v 1.26 2016/04/20 08:58:48 knakahara Exp $	*/
+/*	$NetBSD: altq_hfsc.c,v 1.29 2021/08/30 08:40:31 riastradh Exp $	*/
 /*	$KAME: altq_hfsc.c,v 1.26 2005/04/13 03:44:24 suz Exp $	*/
 
 /*
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_hfsc.c,v 1.26 2016/04/20 08:58:48 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_hfsc.c,v 1.29 2021/08/30 08:40:31 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -312,6 +312,7 @@ hfsc_getqstats(struct pf_altq *a, void *ubuf, int *nbytes)
 	if (*nbytes < sizeof(stats))
 		return (EINVAL);
 
+	memset(&stats, 0, sizeof(stats));
 	get_class_stats(&stats, cl);
 
 	if ((error = copyout((void *)&stats, ubuf, sizeof(stats))) != 0)
@@ -682,7 +683,7 @@ hfsc_enqueue(struct ifaltq *ifq, struct mbuf *m)
 		return (ENOBUFS);
 	}
 	cl = NULL;
-	if ((t = m_tag_find(m, PACKET_TAG_ALTQ_QID, NULL)) != NULL)
+	if ((t = m_tag_find(m, PACKET_TAG_ALTQ_QID)) != NULL)
 		cl = clh_to_clp(hif, ((struct altq_tag *)(t+1))->qid);
 #ifdef ALTQ3_COMPAT
 	else if ((ifq->altq_flags & ALTQF_CLASSIFY))
@@ -2181,6 +2182,7 @@ hfsccmd_class_stats(struct hfsc_class_stats *ap)
 	usp = ap->stats;
 	for (n = 0; cl != NULL && n < nclasses; cl = hfsc_nextclass(cl), n++) {
 
+		memset(&stats, 0, sizeof(stats));
 		get_class_stats(&stats, cl);
 
 		if ((error = copyout((void *)&stats, (void *)usp++,

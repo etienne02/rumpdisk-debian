@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_uidinfo.c,v 1.8 2013/03/10 17:55:42 pooka Exp $	*/
+/*	$NetBSD: kern_uidinfo.c,v 1.12 2021/04/01 06:25:45 simonb Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1991, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_uidinfo.c,v 1.8 2013/03/10 17:55:42 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_uidinfo.c,v 1.12 2021/04/01 06:25:45 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,7 +54,7 @@ static u_long 		uihash;
 
 static int
 sysctl_kern_uidinfo_cnt(SYSCTLFN_ARGS)
-{  
+{
 	static const struct {
 		const char *name;
 		u_int value;
@@ -63,6 +63,7 @@ sysctl_kern_uidinfo_cnt(SYSCTLFN_ARGS)
 		_MEM(proccnt),
 		_MEM(lwpcnt),
 		_MEM(lockcnt),
+		_MEM(semcnt),
 		_MEM(sbsize),
 #undef _MEM
 	};
@@ -76,7 +77,7 @@ sysctl_kern_uidinfo_cnt(SYSCTLFN_ARGS)
 			node.sysctl_data = &cnt;
 			uip = uid_find(kauth_cred_geteuid(l->l_cred));
 
-			*(uint64_t *)node.sysctl_data = 
+			*(uint64_t *)node.sysctl_data =
 			    *(u_long *)((char *)uip + nv[i].value);
 
 			return sysctl_lookup(SYSCTLFN_CALL(&node));
@@ -119,10 +120,47 @@ sysctl_kern_uidinfo_setup(void)
 		       CTL_CREATE, CTL_EOL);
 	sysctl_createv(&kern_uidinfo_sysctllog, 0, &rnode, &cnode,
 		       CTLFLAG_PERMANENT,
+		       CTLTYPE_QUAD, "semcnt",
+		       SYSCTL_DESCR("Number of semaphores used for the current user"),
+		       sysctl_kern_uidinfo_cnt, 0, NULL, 0,
+		       CTL_CREATE, CTL_EOL);
+	sysctl_createv(&kern_uidinfo_sysctllog, 0, &rnode, &cnode,
+		       CTLFLAG_PERMANENT,
 		       CTLTYPE_QUAD, "sbsize",
 		       SYSCTL_DESCR("Socket buffers used for the current user"),
 		       sysctl_kern_uidinfo_cnt, 0, NULL, 0,
 		       CTL_CREATE, CTL_EOL);
+}
+
+static int
+uid_stats(struct hashstat_sysctl *hs, bool fill)
+{
+	struct uidinfo *uip;
+	uint64_t chain;
+
+	strlcpy(hs->hash_name, "uihash", sizeof(hs->hash_name));
+	strlcpy(hs->hash_desc, "user info (uid->used proc) hash",
+	    sizeof(hs->hash_desc));
+	if (!fill)
+		return 0;
+
+	hs->hash_size = uihash + 1;
+
+	for (size_t i = 0; i < hs->hash_size; i++) {
+		chain = 0;
+		SLIST_FOREACH(uip, &uihashtbl[i], ui_hash) {
+			membar_datadep_consumer();
+			chain++;
+		}
+		if (chain > 0) {
+			hs->hash_used++;
+			hs->hash_items += chain;
+			if (chain > hs->hash_maxchain)
+				hs->hash_maxchain = chain;
+		}
+	}
+
+	return 0;
 }
 
 void
@@ -144,6 +182,7 @@ uid_init(void)
 	 */
 	(void)uid_find(0);
 	sysctl_kern_uidinfo_setup();
+	hashstat_register("uihash", uid_stats);
 }
 
 struct uidinfo *
@@ -161,6 +200,7 @@ uid_find(uid_t uid)
 	uip_first = uipp->slh_first;
  again:
 	SLIST_FOREACH(uip, uipp, ui_hash) {
+		membar_datadep_consumer();
 		if (uip->ui_uid != uid)
 			continue;
 		if (newuip != NULL)
@@ -216,6 +256,22 @@ chglwpcnt(uid_t uid, int diff)
 	lwpcnt = atomic_add_long_nv(&uip->ui_lwpcnt, diff);
 	KASSERT(lwpcnt >= 0);
 	return lwpcnt;
+}
+
+/*
+ * Change the count associated with number of semaphores
+ * a given user is using.
+ */
+int
+chgsemcnt(uid_t uid, int diff)
+{
+	struct uidinfo *uip;
+	long semcnt;
+
+	uip = uid_find(uid);
+	semcnt = atomic_add_long_nv(&uip->ui_semcnt, diff);
+	KASSERT(semcnt >= 0);
+	return semcnt;
 }
 
 int

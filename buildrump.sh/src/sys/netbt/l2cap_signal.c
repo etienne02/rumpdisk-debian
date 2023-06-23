@@ -1,4 +1,4 @@
-/*	$NetBSD: l2cap_signal.c,v 1.17 2015/11/28 08:57:33 plunky Exp $	*/
+/*	$NetBSD: l2cap_signal.c,v 1.20 2020/02/29 11:40:06 maxv Exp $	*/
 
 /*-
  * Copyright (c) 2005 Iain Hibbert.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: l2cap_signal.c,v 1.17 2015/11/28 08:57:33 plunky Exp $");
+__KERNEL_RCSID(0, "$NetBSD: l2cap_signal.c,v 1.20 2020/02/29 11:40:06 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -58,13 +58,14 @@ static void l2cap_recv_disconnect_req(struct mbuf *, struct hci_link *);
 static void l2cap_recv_disconnect_rsp(struct mbuf *, struct hci_link *);
 static void l2cap_recv_info_req(struct mbuf *, struct hci_link *);
 static int l2cap_send_signal(struct hci_link *, uint8_t, uint8_t, uint16_t, void *);
-static int l2cap_send_command_rej(struct hci_link *, uint8_t, uint16_t, ...);
+static int l2cap_send_command_rej(struct hci_link *, uint8_t, int, ...);
 static void l2cap_qos_btoh(l2cap_qos_t *, void *);
 static void l2cap_qos_htob(void *, l2cap_qos_t *);
 
 /*
  * process incoming signal packets (CID 0x0001). Can contain multiple
- * requests/responses.
+ * requests/responses. The signal hander should clear the command from
+ * the mbuf before returning.
  */
 void
 l2cap_recv_signal(struct mbuf *m, struct hci_link *link)
@@ -72,11 +73,8 @@ l2cap_recv_signal(struct mbuf *m, struct hci_link *link)
 	l2cap_cmd_hdr_t cmd;
 
 	for(;;) {
-		if (m->m_pkthdr.len == 0)
-			goto finish;
-
 		if (m->m_pkthdr.len < sizeof(cmd))
-			goto reject;
+			goto finish;
 
 		m_copydata(m, 0, sizeof(cmd), &cmd);
 		cmd.length = le16toh(cmd.length);
@@ -183,32 +181,42 @@ l2cap_recv_command_rej(struct mbuf *m, struct hci_link *link)
 
 	cmd.length = le16toh(cmd.length);
 
+	/* The length here must contain the reason (2 octets) plus
+	 * any data (0 or more octets) but we already know it is not
+	 * bigger than l2cap_cmd_rej_cp
+	 */
 	m_copydata(m, 0, cmd.length, &cp);
 	m_adj(m, cmd.length);
+
+	if (cmd.length < 2)
+		return;
 
 	req = l2cap_request_lookup(link, cmd.ident);
 	if (req == NULL)
 		return;
 
 	switch (le16toh(cp.reason)) {
-	case L2CAP_REJ_NOT_UNDERSTOOD:
+	case L2CAP_REJ_NOT_UNDERSTOOD:	/* data length = 0 octets */
 		/*
 		 * I dont know what to do, just move up the timeout
 		 */
 		callout_schedule(&req->lr_rtx, 0);
 		break;
 
-	case L2CAP_REJ_MTU_EXCEEDED:
+	case L2CAP_REJ_MTU_EXCEEDED:	/* data length = 2 octets */
 		/*
 		 * I didnt send any commands over L2CAP_MTU_MINIMUM size, but..
 		 *
 		 * XXX maybe we should resend this, instead?
 		 */
+		if (cmd.length != 4)
+			return;
+
 		link->hl_mtu = le16toh(cp.data[0]);
 		callout_schedule(&req->lr_rtx, 0);
 		break;
 
-	case L2CAP_REJ_INVALID_CID:
+	case L2CAP_REJ_INVALID_CID:	/* data length = 4 octets */
 		/*
 		 * Well, if they dont have such a channel then our channel is
 		 * most likely closed. Make it so.
@@ -480,7 +488,7 @@ l2cap_recv_config_req(struct mbuf *m, struct hci_link *link)
 			if (opt.length != L2CAP_OPT_MTU_SIZE)
 				goto reject;
 
-			m_copydata(m, 0, L2CAP_OPT_MTU_SIZE, &val);
+			m_copydata(m, 0, L2CAP_OPT_MTU_SIZE, &val.mtu);
 			val.mtu = le16toh(val.mtu);
 
 			/*
@@ -531,7 +539,7 @@ l2cap_recv_config_req(struct mbuf *m, struct hci_link *link)
 			 * config request is merely advising us of their
 			 * outgoing traffic flow, so be nice.
 			 */
-			m_copydata(m, 0, L2CAP_OPT_QOS_SIZE, &val);
+			m_copydata(m, 0, L2CAP_OPT_QOS_SIZE, &val.qos);
 			switch (val.qos.service_type) {
 			case L2CAP_QOS_NO_TRAFFIC:
 				/*
@@ -721,7 +729,7 @@ l2cap_recv_config_rsp(struct mbuf *m, struct hci_link *link)
 				if (opt.length != L2CAP_OPT_MTU_SIZE)
 					goto discon;
 
-				m_copydata(m, 0, L2CAP_OPT_MTU_SIZE, &val);
+				m_copydata(m, 0, L2CAP_OPT_MTU_SIZE, &val.mtu);
 				chan->lc_imtu = le16toh(val.mtu);
 				if (chan->lc_imtu < L2CAP_MTU_MINIMUM)
 					chan->lc_imtu = L2CAP_MTU_DEFAULT;
@@ -751,7 +759,7 @@ l2cap_recv_config_rsp(struct mbuf *m, struct hci_link *link)
 				 * We don't support anything, but copy in the
 				 * parameters if no action is good enough.
 				 */
-				m_copydata(m, 0, L2CAP_OPT_QOS_SIZE, &val);
+				m_copydata(m, 0, L2CAP_OPT_QOS_SIZE, &val.qos);
 				switch (val.qos.service_type) {
 				case L2CAP_QOS_NO_TRAFFIC:
 				case L2CAP_QOS_BEST_EFFORT:
@@ -1049,7 +1057,7 @@ l2cap_send_signal(struct hci_link *link, uint8_t code, uint8_t ident,
  */
 static int
 l2cap_send_command_rej(struct hci_link *link, uint8_t ident,
-			uint16_t reason, ...)
+			int reason, ...)
 {
 	l2cap_cmd_rej_cp cp;
 	int len = 0;

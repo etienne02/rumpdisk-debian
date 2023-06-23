@@ -1,4 +1,4 @@
-/*	$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $	*/
+/*	$NetBSD: if_cnw.c,v 1.68 2020/01/29 13:54:41 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2004 The NetBSD Foundation, Inc.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.68 2020/01/29 13:54:41 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -129,6 +129,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $");
 
 #include <net/if_dl.h>
 #include <net/if_ether.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -137,9 +138,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_cnw.c,v 1.58 2016/06/10 13:27:15 ozaki-r Exp $");
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 /*
  * Let these be patchable variables, initialized from macros that can
@@ -175,11 +173,11 @@ int cnw_skey = CNW_SCRAMBLEKEY;		/* Scramble key */
  */
 #define MEMORY_MAPPED
 
-int	cnw_match(device_t, cfdata_t, void *);
-void	cnw_attach(device_t, device_t, void *);
-int	cnw_detach(device_t, int);
+static int	cnw_match(device_t, cfdata_t, void *);
+static void	cnw_attach(device_t, device_t, void *);
+static int	cnw_detach(device_t, int);
 
-int	cnw_activate(device_t, enum devact);
+static int	cnw_activate(device_t, enum devact);
 
 struct cnw_softc {
 	device_t sc_dev;		    /* Device glue (must be first) */
@@ -215,18 +213,17 @@ struct cnw_softc {
 CFATTACH_DECL_NEW(cnw, sizeof(struct cnw_softc),
     cnw_match, cnw_attach, cnw_detach, cnw_activate);
 
-void cnw_reset(struct cnw_softc *);
-void cnw_init(struct cnw_softc *);
-int cnw_enable(struct cnw_softc *sc);
-void cnw_disable(struct cnw_softc *sc);
-void cnw_config(struct cnw_softc *sc, u_int8_t *);
-void cnw_start(struct ifnet *);
-void cnw_transmit(struct cnw_softc *, struct mbuf *);
-struct mbuf *cnw_read(struct cnw_softc *);
-void cnw_recv(struct cnw_softc *);
-int cnw_intr(void *arg);
-int cnw_ioctl(struct ifnet *, u_long, void *);
-void cnw_watchdog(struct ifnet *);
+static void cnw_reset(struct cnw_softc *);
+static void cnw_init(struct cnw_softc *);
+static int cnw_enable(struct cnw_softc *sc);
+static void cnw_disable(struct cnw_softc *sc);
+static void cnw_start(struct ifnet *);
+static void cnw_transmit(struct cnw_softc *, struct mbuf *);
+static struct mbuf *cnw_read(struct cnw_softc *);
+static void cnw_recv(struct cnw_softc *);
+static int cnw_intr(void *arg);
+static int cnw_ioctl(struct ifnet *, u_long, void *);
+static void cnw_watchdog(struct ifnet *);
 static int cnw_setdomain(struct cnw_softc *, int);
 static int cnw_setkey(struct cnw_softc *, int);
 
@@ -326,7 +323,7 @@ cnw_cmd(struct cnw_softc *sc, int cmd, int count, int arg1, int arg2)
 /*
  * Reset the hardware.
  */
-void
+static void
 cnw_reset(struct cnw_softc *sc)
 {
 #ifdef CNW_DEBUG
@@ -354,7 +351,7 @@ cnw_reset(struct cnw_softc *sc)
 /*
  * Initialize the card.
  */
-void
+static void
 cnw_init(struct cnw_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -410,7 +407,7 @@ cnw_init(struct cnw_softc *sc)
 /*
  * Enable and initialize the card.
  */
-int
+static int
 cnw_enable(struct cnw_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -438,7 +435,7 @@ cnw_enable(struct cnw_softc *sc)
 /*
  * Stop and disable the card.
  */
-void
+static void
 cnw_disable(struct cnw_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -457,7 +454,7 @@ cnw_disable(struct cnw_softc *sc)
 /*
  * Match the hardware we handle.
  */
-int
+static int
 cnw_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pcmcia_attach_args *pa = aux;
@@ -475,7 +472,7 @@ cnw_match(device_t parent, cfdata_t match, void *aux)
 /*
  * Attach the card.
  */
-void
+static void
 cnw_attach(device_t parent, device_t self, void *aux)
 {
 	struct cnw_softc *sc = device_private(self);
@@ -552,12 +549,12 @@ cnw_attach(device_t parent, device_t self, void *aux)
 	ifp->if_start = cnw_start;
 	ifp->if_ioctl = cnw_ioctl;
 	ifp->if_watchdog = cnw_watchdog;
-	ifp->if_flags = IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX |
-	    IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX;
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Attach the interface */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, macaddr);
 
 	sc->sc_resource |= CNW_RES_NET;
@@ -586,7 +583,7 @@ fail:
 /*
  * Start outputting on the interface.
  */
-void
+static void
 cnw_start(struct ifnet *ifp)
 {
 	struct cnw_softc *sc = ifp->if_softc;
@@ -668,10 +665,10 @@ cnw_start(struct ifnet *ifp)
 		if (m0 == 0)
 			break;
 
-		bpf_mtap(ifp, m0);
+		bpf_mtap(ifp, m0, BPF_D_OUT);
 
 		cnw_transmit(sc, m0);
-		++ifp->if_opackets;
+		if_statinc(ifp, if_opackets);
 		ifp->if_timer = 3; /* start watchdog timer */
 
 		microtime(&sc->sc_txlast);
@@ -684,7 +681,7 @@ cnw_start(struct ifnet *ifp)
 /*
  * Transmit a packet.
  */
-void
+static void
 cnw_transmit(struct cnw_softc *sc, struct mbuf *m0)
 {
 	int buffer, bufsize, bufoffset, bufptr, bufspace, len, mbytes, n;
@@ -728,8 +725,7 @@ cnw_transmit(struct cnw_softc *sc, struct mbuf *m0)
 			mptr += n;
 			mbytes -= n;
 		}
-		MFREE(m, m0);
-		m = m0;
+		m = m0 = m_free(m);
 	}
 
 	/* Issue transmit command */
@@ -740,7 +736,7 @@ cnw_transmit(struct cnw_softc *sc, struct mbuf *m0)
 /*
  * Pull a packet from the card into an mbuf chain.
  */
-struct mbuf *
+static struct mbuf *
 cnw_read(struct cnw_softc *sc)
 {
 	struct mbuf *m, *top, **mp;
@@ -791,7 +787,7 @@ cnw_read(struct cnw_softc *sc)
 			mbytes -= pad;
 		}
 		mptr = mtod(m, u_int8_t *);
-		mbytes = m->m_len = min(totbytes, mbytes);
+		mbytes = m->m_len = uimin(totbytes, mbytes);
 		totbytes -= mbytes;
 		while (mbytes > 0) {
 			if (bufbytes == 0) {
@@ -826,7 +822,7 @@ cnw_read(struct cnw_softc *sc)
 /*
  * Handle received packets.
  */
-void
+static void
 cnw_recv(struct cnw_softc *sc)
 {
 	int rser;
@@ -848,12 +844,9 @@ cnw_recv(struct cnw_softc *sc)
 
 		/* Did we manage to get the packet from the interface? */
 		if (m == 0) {
-			++ifp->if_ierrors;
+			if_statinc(ifp, if_ierrors);
 			return;
 		}
-		++ifp->if_ipackets;
-
-		bpf_mtap(ifp, m);
 
 		/* Pass the packet up. */
 		if_percpuq_enqueue(ifp->if_percpuq, m);
@@ -864,7 +857,7 @@ cnw_recv(struct cnw_softc *sc)
 /*
  * Interrupt handler.
  */
-int
+static int
 cnw_intr(void *arg)
 {
 	struct cnw_softc *sc = arg;
@@ -964,7 +957,7 @@ cnw_intr(void *arg)
 			}
 
 			if (tser & CNW_TSER_ERROR) {
-				++ifp->if_oerrors;
+				if_statinc(ifp, if_oerrors);
 				WAIT_WOC(sc);
 				bus_space_write_1(sc->sc_memt, sc->sc_memh,
 				    sc->sc_memoff + CNW_EREG_TSERW,
@@ -976,7 +969,7 @@ cnw_intr(void *arg)
 			ifp->if_flags &= ~IFF_OACTIVE;
 
 			/* Continue to send packets from the queue */
-			cnw_start(&sc->sc_ethercom.ec_if);
+			if_schedule_deferred_start(&sc->sc_ethercom.ec_if);
 		}
 
 	}
@@ -986,7 +979,7 @@ cnw_intr(void *arg)
 /*
  * Handle device ioctls.
  */
-int
+static int
 cnw_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
 	struct cnw_softc *sc = ifp->if_softc;
@@ -1121,17 +1114,17 @@ cnw_ioctl(struct ifnet *ifp, u_long cmd, void *data)
  * Device timeout/watchdog routine. Entered if the device neglects to
  * generate an interrupt after a transmit has been started on it.
  */
-void
+static void
 cnw_watchdog(struct ifnet *ifp)
 {
 	struct cnw_softc *sc = ifp->if_softc;
 
 	printf("%s: device timeout; card reset\n", device_xname(sc->sc_dev));
-	++ifp->if_oerrors;
+	if_statinc(ifp, if_oerrors);
 	cnw_init(sc);
 }
 
-int
+static int
 cnw_setdomain(struct cnw_softc *sc, int domain)
 {
 	int s;
@@ -1147,7 +1140,7 @@ cnw_setdomain(struct cnw_softc *sc, int domain)
 	return 0;
 }
 
-int
+static int
 cnw_setkey(struct cnw_softc *sc, int key)
 {
 	int s;
@@ -1163,7 +1156,7 @@ cnw_setkey(struct cnw_softc *sc, int key)
 	return 0;
 }
 
-int
+static int
 cnw_activate(device_t self, enum devact act)
 {
 	struct cnw_softc *sc = device_private(self);
@@ -1177,7 +1170,7 @@ cnw_activate(device_t self, enum devact act)
 	}
 }
 
-int
+static int
 cnw_detach(device_t self, int flags)
 {
 	struct cnw_softc *sc = device_private(self);

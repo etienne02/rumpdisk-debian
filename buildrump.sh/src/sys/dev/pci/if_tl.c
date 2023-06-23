@@ -1,4 +1,4 @@
-/*	$NetBSD: if_tl.c,v 1.105 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: if_tl.c,v 1.122 2020/07/07 06:27:37 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1997 Manuel Bouyer.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_tl.c,v 1.105 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_tl.c,v 1.122 2020/07/07 06:27:37 msaitoh Exp $");
 
 #undef TLDEBUG
 #define TL_PRIV_STATS
@@ -54,16 +54,12 @@ __KERNEL_RCSID(0, "$NetBSD: if_tl.c,v 1.105 2016/07/07 06:55:41 msaitoh Exp $");
 #include <sys/device.h>
 
 #include <net/if.h>
-#if defined(SIOCSIFMEDIA)
 #include <net/if_media.h>
-#endif
 #include <net/if_types.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <net/netisr.h>
-
 #include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/rndsource.h>
 
@@ -111,7 +107,6 @@ static void tl_pci_attach(device_t, device_t, void *);
 static int tl_intr(void *);
 
 static int tl_ifioctl(struct ifnet *, ioctl_cmd_t, void *);
-static int tl_mediachange(struct ifnet *);
 static void tl_ifwatchdog(struct ifnet *);
 static bool tl_shutdown(device_t, int);
 
@@ -139,14 +134,12 @@ void	tl_mii_sendbits(struct tl_softc *, uint32_t, int);
 static void ether_printheader(struct ether_header *);
 #endif
 
-int tl_mii_read(device_t, int, int);
-void tl_mii_write(device_t, int, int, int);
+int tl_mii_read(device_t, int, int, uint16_t *);
+int tl_mii_write(device_t, int, int, uint16_t);
 
 void tl_statchg(struct ifnet *);
 
 	/* I2C glue */
-static int tl_i2c_acquire_bus(void *, int);
-static void tl_i2c_release_bus(void *, int);
 static int tl_i2c_send_start(void *, int);
 static int tl_i2c_send_stop(void *, int);
 static int tl_i2c_initiate_xfer(void *, i2c_addr_t, int);
@@ -210,11 +203,11 @@ static const struct tl_product_desc tl_compaq_products[] = {
 	  "Compaq Netelligent 10 T/2 UTP/Coax" },
 	{ PCI_PRODUCT_COMPAQ_IntNF3P, TLPHY_MEDIA_10_2,
 	  "Compaq Integrated NetFlex 3/P" },
-	{ PCI_PRODUCT_COMPAQ_IntPL100TX, TLPHY_MEDIA_10_2|TLPHY_MEDIA_NO_10_T,
+	{ PCI_PRODUCT_COMPAQ_IntPL100TX, TLPHY_MEDIA_10_2 |TLPHY_MEDIA_NO_10_T,
 	  "Compaq ProLiant Integrated Netelligent 10/100 TX" },
-	{ PCI_PRODUCT_COMPAQ_DPNet100TX, TLPHY_MEDIA_10_5|TLPHY_MEDIA_NO_10_T,
+	{ PCI_PRODUCT_COMPAQ_DPNet100TX, TLPHY_MEDIA_10_5 |TLPHY_MEDIA_NO_10_T,
 	  "Compaq Dual Port Netelligent 10/100 TX" },
-	{ PCI_PRODUCT_COMPAQ_DP4000, TLPHY_MEDIA_10_5|TLPHY_MEDIA_NO_10_T,
+	{ PCI_PRODUCT_COMPAQ_DP4000, TLPHY_MEDIA_10_5 | TLPHY_MEDIA_NO_10_T,
 	  "Compaq Deskpro 4000 5233MMX" },
 	{ PCI_PRODUCT_COMPAQ_NF3P_BNC, TLPHY_MEDIA_10_2,
 	  "Compaq NetFlex 3/P w/ BNC" },
@@ -287,6 +280,7 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	struct pci_attach_args * const pa = (struct pci_attach_args *)aux;
 	const struct tl_product_desc *tp;
 	struct ifnet * const ifp = &sc->tl_if;
+	struct mii_data * const mii = &sc->tl_mii;
 	bus_space_tag_t iot, memt;
 	bus_space_handle_t ioh, memh;
 	pci_intr_handle_t intrhandle;
@@ -364,9 +358,8 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	tl_reset(sc);
 
 	/* fill in the i2c tag */
+	iic_tag_init(&sc->sc_i2c);
 	sc->sc_i2c.ic_cookie = sc;
-	sc->sc_i2c.ic_acquire_bus = tl_i2c_acquire_bus;
-	sc->sc_i2c.ic_release_bus = tl_i2c_release_bus;
 	sc->sc_i2c.ic_send_start = tl_i2c_send_start;
 	sc->sc_i2c.ic_send_stop = tl_i2c_send_stop;
 	sc->sc_i2c.ic_initiate_xfer = tl_i2c_initiate_xfer;
@@ -395,8 +388,8 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	intrstr = pci_intr_string(pa->pa_pc, intrhandle, intrbuf,
 	    sizeof(intrbuf));
 	sc->tl_if.if_softc = sc;
-	sc->tl_ih = pci_intr_establish(pa->pa_pc, intrhandle, IPL_NET,
-	    tl_intr, sc);
+	sc->tl_ih = pci_intr_establish_xname(pa->pa_pc, intrhandle, IPL_NET,
+	    tl_intr, sc, device_xname(self));
 	if (sc->tl_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -429,20 +422,19 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	 * 10baseT.  By ignoring the instance, it allows us to not have
 	 * to specify it on the command line when switching media.
 	 */
-	sc->tl_mii.mii_ifp = ifp;
-	sc->tl_mii.mii_readreg = tl_mii_read;
-	sc->tl_mii.mii_writereg = tl_mii_write;
-	sc->tl_mii.mii_statchg = tl_statchg;
-	sc->tl_ec.ec_mii = &sc->tl_mii;
-	ifmedia_init(&sc->tl_mii.mii_media, IFM_IMASK, tl_mediachange,
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = tl_mii_read;
+	mii->mii_writereg = tl_mii_write;
+	mii->mii_statchg = tl_statchg;
+	sc->tl_ec.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
 	    ether_mediastatus);
-	mii_attach(self, &sc->tl_mii, 0xffffffff, MII_PHY_ANY,
-	    MII_OFFSET_ANY, 0);
-	if (LIST_FIRST(&sc->tl_mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->tl_mii.mii_media, IFM_ETHER|IFM_NONE, 0, NULL);
-		ifmedia_set(&sc->tl_mii.mii_media, IFM_ETHER|IFM_NONE);
+	mii_attach(self, mii, 0xffffffff, MII_PHY_ANY, MII_OFFSET_ANY, 0);
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
 	} else
-		ifmedia_set(&sc->tl_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 
 	/*
 	 * We can support 802.1Q VLAN-sized frames.
@@ -450,7 +442,7 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	sc->tl_ec.ec_capabilities |= ETHERCAP_VLAN_MTU;
 
 	strlcpy(ifp->if_xname, device_xname(self), IFNAMSIZ);
-	ifp->if_flags = IFF_BROADCAST|IFF_SIMPLEX|IFF_NOTRAILERS|IFF_MULTICAST;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_ioctl = tl_ifioctl;
 	ifp->if_start = tl_ifstart;
 	ifp->if_watchdog = tl_ifwatchdog;
@@ -459,6 +451,7 @@ tl_pci_attach(device_t parent, device_t self, void *aux)
 	ifp->if_timer = 0;
 	IFQ_SET_READY(&ifp->if_snd);
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(&(sc)->tl_if, (sc)->tl_enaddr);
 
 	/*
@@ -635,9 +628,9 @@ tl_init(struct ifnet *ifp)
 
 	/* Pre-allocate receivers mbuf, make the lists */
 	sc->Rx_list = malloc(sizeof(struct Rx_list) * TL_NBUF, M_DEVBUF,
-	    M_NOWAIT|M_ZERO);
+	    M_NOWAIT | M_ZERO);
 	sc->Tx_list = malloc(sizeof(struct Tx_list) * TL_NBUF, M_DEVBUF,
-	    M_NOWAIT|M_ZERO);
+	    M_NOWAIT | M_ZERO);
 	if (sc->Rx_list == NULL || sc->Tx_list == NULL) {
 		errstring = "out of memory for lists";
 		error = ENOMEM;
@@ -652,7 +645,8 @@ tl_init(struct ifnet *ifp)
 	    "tl-dma-page-boundary");
 	if (prop_boundary != NULL) {
 		KASSERT(prop_object_type(prop_boundary) == PROP_TYPE_NUMBER);
-		boundary = (bus_size_t)prop_number_integer_value(prop_boundary);
+		boundary
+		    = (bus_size_t)prop_number_unsigned_value(prop_boundary);
 	} else {
 		boundary = 0;
 	}
@@ -821,7 +815,7 @@ tl_mii_sendbits(struct tl_softc *sc, uint32_t data, int nbits)
 	int i;
 
 	netsio_set(sc, TL_NETSIO_MTXEN);
-	for (i = 1 << (nbits - 1); i; i = i >>  1) {
+	for (i = 1 << (nbits - 1); i; i = i >>	1) {
 		netsio_clr(sc, TL_NETSIO_MCLK);
 		netsio_read(sc, TL_NETSIO_MCLK);
 		if (data & i)
@@ -834,10 +828,11 @@ tl_mii_sendbits(struct tl_softc *sc, uint32_t data, int nbits)
 }
 
 int
-tl_mii_read(device_t self, int phy, int reg)
+tl_mii_read(device_t self, int phy, int reg, uint16_t *val)
 {
 	struct tl_softc *sc = device_private(self);
-	int val = 0, i, err;
+	uint16_t data = 0;
+	int i, err;
 
 	/*
 	 * Read the PHY register by manually driving the MII control lines.
@@ -859,20 +854,21 @@ tl_mii_read(device_t self, int phy, int reg)
 
 	/* Even if an error occurs, must still clock out the cycle. */
 	for (i = 0; i < 16; i++) {
-		val <<= 1;
+		data <<= 1;
 		netsio_clr(sc, TL_NETSIO_MCLK);
 		if (err == 0 && netsio_read(sc, TL_NETSIO_MDATA))
-			val |= 1;
+			data |= 1;
 		netsio_set(sc, TL_NETSIO_MCLK);
 	}
 	netsio_clr(sc, TL_NETSIO_MCLK);
 	netsio_set(sc, TL_NETSIO_MCLK);
 
-	return err ? 0 : val;
+	*val = data;
+	return err;
 }
 
-void
-tl_mii_write(device_t self, int phy, int reg, int val)
+int
+tl_mii_write(device_t self, int phy, int reg, uint16_t val)
 {
 	struct tl_softc *sc = device_private(self);
 
@@ -890,6 +886,8 @@ tl_mii_write(device_t self, int phy, int reg, int val)
 
 	netsio_clr(sc, TL_NETSIO_MCLK);
 	netsio_set(sc, TL_NETSIO_MCLK);
+
+	return 0;
 }
 
 void
@@ -915,21 +913,6 @@ tl_statchg(struct ifnet *ifp)
 }
 
 /********** I2C glue **********/
-
-static int
-tl_i2c_acquire_bus(void *cookie, int flags)
-{
-
-	/* private bus */
-	return 0;
-}
-
-static void
-tl_i2c_release_bus(void *cookie, int flags)
-{
-
-	/* private bus */
-}
 
 static int
 tl_i2c_send_start(void *cookie, int flags)
@@ -975,7 +958,7 @@ tl_i2cbb_set_bits(void *cookie, uint32_t bits)
 	uint8_t reg;
 
 	reg = tl_intreg_read_byte(sc, TL_INT_NET + TL_INT_NetSio);
-	reg = (reg & ~(TL_NETSIO_EDATA|TL_NETSIO_ECLOCK)) | bits;
+	reg = (reg & ~(TL_NETSIO_EDATA | TL_NETSIO_ECLOCK)) | bits;
 	tl_intreg_write_byte(sc, TL_INT_NET + TL_INT_NetSio, reg);
 }
 
@@ -1021,12 +1004,12 @@ tl_intr(void *v)
 #endif
 	/* disable interrupts */
 	TL_HR_WRITE(sc, TL_HOST_CMD, HOST_CMD_IntOff);
-	switch(int_type & TL_INTR_MASK) {
+	switch (int_type & TL_INTR_MASK) {
 	case TL_INTR_RxEOF:
 		bus_dmamap_sync(sc->tl_dmatag, sc->Rx_dmamap, 0,
 		    sizeof(struct tl_Rx_list) * TL_NBUF,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-		while(le32toh(sc->active_Rx->hw_list->stat) &
+		while (le32toh(sc->active_Rx->hw_list->stat) &
 		    TL_RX_CSTAT_CPLT) {
 			/* dequeue and requeue at end of list */
 			ack++;
@@ -1078,7 +1061,6 @@ tl_intr(void *v)
 					ether_printheader(eh);
 				}
 #endif
-				bpf_mtap(ifp, m);
 				if_percpuq_enqueue(ifp->if_percpuq, m);
 			}
 		}
@@ -1130,7 +1112,8 @@ tl_intr(void *v)
 		    sizeof(struct tl_Tx_list) * TL_NBUF,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		while ((Tx = sc->active_Tx) != NULL) {
-			if((le32toh(Tx->hw_list->stat) & TL_TX_CSTAT_CPLT) == 0)
+			if ((le32toh(Tx->hw_list->stat) & TL_TX_CSTAT_CPLT)
+			    == 0)
 				break;
 			ack++;
 #ifdef TLDEBUG_TX
@@ -1169,8 +1152,7 @@ tl_intr(void *v)
 				TL_HR_WRITE(sc, TL_HOST_CMD, HOST_CMD_GO);
 			}
 			sc->tl_if.if_timer = 0;
-			if (IFQ_IS_EMPTY(&sc->tl_if.if_snd) == 0)
-				tl_ifstart(&sc->tl_if);
+			if_schedule_deferred_start(&sc->tl_if);
 			return 1;
 		}
 #ifdef TLDEBUG
@@ -1179,8 +1161,7 @@ tl_intr(void *v)
 		}
 #endif
 		sc->tl_if.if_timer = 0;
-		if (IFQ_IS_EMPTY(&sc->tl_if.if_snd) == 0)
-			tl_ifstart(&sc->tl_if);
+		if_schedule_deferred_start(&sc->tl_if);
 		break;
 	case TL_INTR_Stat:
 		ack++;
@@ -1257,7 +1238,7 @@ tl_ifstart(struct ifnet *ifp)
 	int segment, size;
 	int again, error;
 
-	if ((sc->tl_if.if_flags & (IFF_RUNNING|IFF_OACTIVE)) != IFF_RUNNING)
+	if ((sc->tl_if.if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
 		return;
 txloop:
 	/* If we don't have more space ... */
@@ -1350,8 +1331,8 @@ tbdinit:
 		}
 #endif
 		/*
-	 	 * add the nullbuf in the seg
-	 	 */
+		 * add the nullbuf in the seg
+		 */
 		Tx->hw_list->seg[segment].data_count =
 		    htole32(ETHER_MIN_TX - size);
 		Tx->hw_list->seg[segment].data_addr =
@@ -1406,7 +1387,7 @@ tbdinit:
 #endif
 	}
 	/* Pass packet to bpf if there is a listener */
-	bpf_mtap(ifp, mb_head);
+	bpf_mtap(ifp, mb_head, BPF_D_OUT);
 	/*
 	 * Set a 5 second timer just in case we don't hear from the card again.
 	 */
@@ -1428,17 +1409,8 @@ tl_ifwatchdog(struct ifnet *ifp)
 	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 	printf("%s: device timeout\n", device_xname(sc->sc_dev));
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 	tl_init(ifp);
-}
-
-static int
-tl_mediachange(struct ifnet *ifp)
-{
-
-	if (ifp->if_flags & IFF_UP)
-		tl_init(ifp);
-	return 0;
 }
 
 static int
@@ -1523,12 +1495,13 @@ tl_read_stats(tl_softc_t *sc)
 	int oerr_carrloss;
 	struct ifnet *ifp = &sc->tl_if;
 
+	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
+
 	reg =  tl_intreg_read(sc, TL_INT_STATS_TX);
-	ifp->if_opackets += reg & 0x00ffffff;
+	if_statadd_ref(nsr, if_opackets, reg & 0x00ffffff);
 	oerr_underr = reg >> 24;
 
 	reg =  tl_intreg_read(sc, TL_INT_STATS_RX);
-	ifp->if_ipackets += reg & 0x00ffffff;
 	ierr_overr = reg >> 24;
 
 	reg =  tl_intreg_read(sc, TL_INT_STATS_FERR);
@@ -1545,11 +1518,11 @@ tl_read_stats(tl_softc_t *sc)
 	oerr_latecoll = (reg & TL_LERR_LCOLL) >> 8;
 	oerr_carrloss = (reg & TL_LERR_CL) >> 16;
 
-
-	ifp->if_oerrors += oerr_underr + oerr_exesscoll + oerr_latecoll +
-	   oerr_carrloss;
-	ifp->if_collisions += oerr_coll + oerr_multicoll;
-	ifp->if_ierrors += ierr_overr + ierr_code + ierr_crc;
+	if_statadd_ref(nsr, if_oerrors,
+	   oerr_underr + oerr_exesscoll + oerr_latecoll + oerr_carrloss);
+	if_statadd_ref(nsr, if_collisions, oerr_coll + oerr_multicoll);
+	if_statadd_ref(nsr, if_ierrors, ierr_overr + ierr_code + ierr_crc);
+	IF_STAT_PUTREF(ifp);
 
 	if (ierr_overr)
 		printf("%s: receiver ring buffer overrun\n",
@@ -1574,13 +1547,15 @@ tl_read_stats(tl_softc_t *sc)
 static void
 tl_addr_filter(tl_softc_t *sc)
 {
+	struct ethercom *ec = &sc->tl_ec;
 	struct ether_multistep step;
 	struct ether_multi *enm;
 	uint32_t hash[2] = {0, 0};
 	int i;
 
 	sc->tl_if.if_flags &= ~IFF_ALLMULTI;
-	ETHER_FIRST_MULTI(step, &sc->tl_ec, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	while (enm != NULL) {
 #ifdef TLDEBUG
 		printf("%s: addrs %s %s\n", __func__,
@@ -1597,6 +1572,7 @@ tl_addr_filter(tl_softc_t *sc)
 		}
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 #ifdef TLDEBUG
 	printf("%s: hash1 %x has2 %x\n", __func__, hash[0], hash[1]);
 #endif
@@ -1609,9 +1585,9 @@ tl_multicast_hash(uint8_t *a)
 {
 	int hash;
 
-#define DA(addr,bit) (addr[5 - (bit / 8)] & (1 << (bit % 8)))
-#define xor8(a,b,c,d,e,f,g,h)						\
-	(((a != 0) + (b != 0) + (c != 0) + (d != 0) + 			\
+#define DA(addr, bit) (addr[5 - (bit / 8)] & (1 << (bit % 8)))
+#define xor8(a, b, c, d, e, f, g, h)					\
+	(((a != 0) + (b != 0) + (c != 0) + (d != 0) +			\
 	  (e != 0) + (f != 0) + (g != 0) + (h != 0)) & 1)
 
 	hash  = xor8(DA(a,0), DA(a, 6), DA(a,12), DA(a,18), DA(a,24), DA(a,30),

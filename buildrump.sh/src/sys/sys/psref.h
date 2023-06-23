@@ -1,4 +1,4 @@
-/*	$NetBSD: psref.h,v 1.1 2016/04/09 06:21:16 riastradh Exp $	*/
+/*	$NetBSD: psref.h,v 1.4 2019/05/17 03:34:27 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 2016 The NetBSD Foundation, Inc.
@@ -31,6 +31,10 @@
 
 #ifndef	_SYS_PSREF_H
 #define	_SYS_PSREF_H
+
+#ifdef _KERNEL_OPT
+#include "opt_psref_debug.h"
+#endif
 
 #include <sys/types.h>
 #include <sys/queue.h>
@@ -69,11 +73,15 @@ struct psref_target {
  *	written only on the local CPU.
  */
 struct psref {
-	LIST_ENTRY(psref)		psref_entry;
+	SLIST_ENTRY(psref)		psref_entry;
+	void				*psref_debug; /* For debugging */
 	const struct psref_target	*psref_target;
 	struct lwp			*psref_lwp;
 	struct cpu_info			*psref_cpu;
 };
+
+#ifdef _KERNEL
+void	psref_init(void);
 
 struct psref_class *
 	psref_class_create(const char *, int);
@@ -91,5 +99,30 @@ void	psref_copy(struct psref *, const struct psref *,
 
 /* For use only in assertions.  */
 bool	psref_held(const struct psref_target *, struct psref_class *);
+
+
+#ifdef PSREF_DEBUG
+void	psref_debug_barrier(void);
+void	psref_debug_init_lwp(struct lwp *);
+
+#define PSREF_DEBUG_BARRIER()		psref_debug_barrier()
+#define PSREF_DEBUG_INIT_LWP(l)		psref_debug_init_lwp((l))
+#define PSREF_DEBUG_FILL_RETURN_ADDRESS0(psref, addr)	do {		\
+	(psref)->psref_debug = (addr);					\
+} while (0)
+#define PSREF_DEBUG_FILL_RETURN_ADDRESS(psref)	do {			\
+	PSREF_DEBUG_FILL_RETURN_ADDRESS0(psref, __builtin_return_address(0));\
+} while (0)
+
+#else
+
+#define PSREF_DEBUG_BARRIER()		__nothing
+#define PSREF_DEBUG_INIT_LWP(l)		__nothing
+#define PSREF_DEBUG_FILL_RETURN_ADDRESS0(psref, addr)	__nothing
+#define PSREF_DEBUG_FILL_RETURN_ADDRESS(psref)		__nothing
+
+#endif /* PSREF_DEBUG */
+
+#endif /* _KERNEL */
 
 #endif	/* _SYS_PSREF_H */

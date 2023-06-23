@@ -1,4 +1,4 @@
-/*	$NetBSD: sata_subr.c,v 1.21 2013/04/03 17:15:07 bouyer Exp $	*/
+/*	$NetBSD: sata_subr.c,v 1.24 2018/06/21 21:52:15 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2004 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
  * Common functions for Serial ATA.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sata_subr.c,v 1.21 2013/04/03 17:15:07 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sata_subr.c,v 1.24 2018/06/21 21:52:15 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -85,6 +85,8 @@ sata_reset_interface(struct ata_channel *chp, bus_space_tag_t sata_t,
 	uint32_t scontrol, sstatus;
 	int i;
 
+	ata_channel_lock_owned(chp);
+
 	/* bring the PHYs online.
 	 * The work-around for errata #1 of the Intel GD31244 says that we must
 	 * write 0 to the port first to be sure of correctly initializing
@@ -92,19 +94,19 @@ sata_reset_interface(struct ata_channel *chp, bus_space_tag_t sata_t,
 	 */
 	bus_space_write_4(sata_t, scontrol_r, 0, 0);
 	scontrol = SControl_IPM_NONE | SControl_SPD_ANY | SControl_DET_INIT;
-	bus_space_write_4 (sata_t, scontrol_r, 0, scontrol);
+	bus_space_write_4(sata_t, scontrol_r, 0, scontrol);
 
-	ata_delay(50, "sataup", flags);
+	ata_delay(chp, 50, "sataup", flags);
 	scontrol &= ~SControl_DET_INIT;
 	bus_space_write_4(sata_t, scontrol_r, 0, scontrol);
 
-	ata_delay(50, "sataup", flags);
+	ata_delay(chp, 50, "sataup", flags);
 	/* wait up to 1s for device to come up */
 	for (i = 0; i < 100; i++) {
 		sstatus = bus_space_read_4(sata_t, sstatus_r, 0);
 		if ((sstatus & SStatus_DET_mask) == SStatus_DET_DEV)
 			break;
-		ata_delay(10, "sataup", flags);
+		ata_delay(chp, 10, "sataup", flags);
 	}
 	/*
 	 * if we have a link up without device, wait a few more seconds
@@ -112,13 +114,21 @@ sata_reset_interface(struct ata_channel *chp, bus_space_tag_t sata_t,
 	 */
 	if ((sstatus & SStatus_DET_mask) == SStatus_DET_DEV_NE) {
 		for (i = 0; i < 500; i++) {
-			ata_delay(10, "sataup", flags);
+			ata_delay(chp, 10, "sataup", flags);
 			sstatus = bus_space_read_4(sata_t, sstatus_r, 0);
 			if ((sstatus & SStatus_DET_mask) == SStatus_DET_DEV)
 				break;
 		}
 	}
 
+	sata_interpret_det(chp, sstatus);
+
+	return (sstatus & SStatus_DET_mask);
+}
+
+void
+sata_interpret_det(struct ata_channel *chp, uint32_t sstatus)
+{ 
 	switch (sstatus & SStatus_DET_mask) {
 	case SStatus_DET_NODEV:
 		/* No Device; be silent.  */
@@ -131,7 +141,7 @@ sata_reset_interface(struct ata_channel *chp, bus_space_tag_t sata_t,
 		break;
 
 	case SStatus_DET_OFFLINE:
-		aprint_error("%s port %d: PHY offline\n",
+		aprint_normal("%s port %d: PHY offline\n",
 		    device_xname(chp->ch_atac->atac_dev), chp->ch_channel);
 		break;
 
@@ -145,14 +155,14 @@ sata_reset_interface(struct ata_channel *chp, bus_space_tag_t sata_t,
 		    device_xname(chp->ch_atac->atac_dev), chp->ch_channel,
 		    sstatus);
 	}
-	return(sstatus & SStatus_DET_mask);
 }
 
 void
 sata_interpret_sig(struct ata_channel *chp, int port, uint32_t sig)
 {
 	int err;
-	int s;
+
+	ata_channel_lock_owned(chp);
 
 	/* some ATAPI devices have bogus lower two bytes, sigh */
 	if ((sig & 0xffff0000) == 0xeb140000) {
@@ -169,7 +179,6 @@ sata_interpret_sig(struct ata_channel *chp, int port, uint32_t sig)
 	}
 	KASSERT(port < chp->ch_ndrives);
 
-	s = splbio();
 	switch(sig) {
 	case 0x96690101:
 		KASSERT(port == 0 || port == PMP_PORT_CTL);
@@ -195,5 +204,4 @@ sata_interpret_sig(struct ata_channel *chp, int port, uint32_t sig)
 		    "Assuming it's a disk.\n", sig, port);
 		break;
 	}
-	splx(s);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_dma_hacks.h,v 1.8 2015/10/17 21:11:06 jmcneill Exp $	*/
+/*	$NetBSD: bus_dma_hacks.h,v 1.20 2020/02/20 09:07:39 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -41,77 +41,51 @@
 #include <uvm/uvm_extern.h>
 
 #if defined(__i386__) || defined(__x86_64__)
-#include <x86/bus_private.h>
-#include <x86/machdep.h>
-#elif defined(__arm__)
-#else
-#error DRM GEM/TTM need new MI bus_dma APIs!  Halp!
-#endif
-
-static inline int
-bus_dmamem_wire_uvm_object(bus_dma_tag_t tag, struct uvm_object *uobj,
-    off_t start, bus_size_t size, struct pglist *pages, bus_size_t alignment,
-    bus_size_t boundary, bus_dma_segment_t *segs, int nsegs, int *rsegs,
-    int flags)
+#  include <x86/bus_private.h>
+#  include <x86/machdep.h>
+#  define	PHYS_TO_BUS_MEM(dmat, paddr)	((bus_addr_t)(paddr))
+#  define	BUS_MEM_TO_PHYS(dmat, baddr)	((paddr_t)(baddr))
+#elif defined(__arm__) || defined(__aarch64__)
+static inline bus_addr_t
+PHYS_TO_BUS_MEM(bus_dma_tag_t dmat, paddr_t pa)
 {
-	struct pglist pageq;
-	struct vm_page *page;
 	unsigned i;
-	int error;
 
-	/*
-	 * XXX `#ifdef __x86_64__' is a horrible way to work around a
-	 * completely stupid GCC warning that encourages unsafe,
-	 * nonportable code and has no obvious way to be selectively
-	 * suppressed.
-	 */
-#if __x86_64__
-	KASSERT(size <= __type_max(off_t));
-#endif
+	if (dmat->_nranges == 0)
+		return (bus_addr_t)pa;
 
-	KASSERT(start <= (__type_max(off_t) - size));
-	KASSERT(alignment == PAGE_SIZE); /* XXX */
-	KASSERT(0 < nsegs);
+	for (i = 0; i < dmat->_nranges; i++) {
+		const struct arm32_dma_range *dr = &dmat->_ranges[i];
 
-	if (pages == NULL) {
-		TAILQ_INIT(&pageq);
-		pages = &pageq;
+		if (dr->dr_sysbase <= pa && pa - dr->dr_sysbase <= dr->dr_len)
+			return pa - dr->dr_sysbase + dr->dr_busbase;
 	}
-
-	error = uvm_obj_wirepages(uobj, start, (start + size), pages);
-	if (error)
-		goto fail0;
-
-	page = TAILQ_FIRST(pages);
-	KASSERT(page != NULL);
-
-	for (i = 0; i < nsegs; i++) {
-		if (page == NULL) {
-			error = EFBIG;
-			goto fail1;
-		}
-		segs[i].ds_addr = VM_PAGE_TO_PHYS(page);
-		segs[i].ds_len = MIN(PAGE_SIZE, size);
-		size -= PAGE_SIZE;
-		page = TAILQ_NEXT(page, pageq.queue);
-	}
-	KASSERT(page == NULL);
-
-	/* Success!  */
-	*rsegs = nsegs;
-	return 0;
-
-fail1:	uvm_obj_unwirepages(uobj, start, (start + size));
-fail0:	return error;
+	panic("paddr has no bus address in dma tag %p: %"PRIxPADDR, dmat, pa);
 }
-
-static inline void
-bus_dmamem_unwire_uvm_object(bus_dma_tag_t tag __unused,
-    struct uvm_object *uobj, off_t start, bus_size_t size,
-    bus_dma_segment_t *segs __unused, int nsegs __unused)
+static inline paddr_t
+BUS_MEM_TO_PHYS(bus_dma_tag_t dmat, bus_addr_t ba)
 {
-	uvm_obj_unwirepages(uobj, start, (start + size));
+	unsigned i;
+
+	if (dmat->_nranges == 0)
+		return (paddr_t)ba;
+
+	for (i = 0; i < dmat->_nranges; i++) {
+		const struct arm32_dma_range *dr = &dmat->_ranges[i];
+
+		if (dr->dr_busbase <= ba && ba - dr->dr_busbase <= dr->dr_len)
+			return ba - dr->dr_busbase + dr->dr_sysbase;
+	}
+	panic("bus addr has no bus address in dma tag %p: %"PRIxPADDR, dmat,
+	    ba);
 }
+#elif defined(__sparc__) || defined(__sparc64__)
+#  define	PHYS_TO_BUS_MEM(dmat, paddr)	((bus_addr_t)(paddr))
+#  define	BUS_MEM_TO_PHYS(dmat, baddr)	((paddr_t)(baddr))
+#elif defined(__powerpc__)
+#else
+#  error DRM GEM/TTM need new MI bus_dma APIs!  Halp!
+#endif
 
 static inline int
 bus_dmamem_pgfl(bus_dma_tag_t tag)
@@ -123,12 +97,36 @@ bus_dmamem_pgfl(bus_dma_tag_t tag)
 #endif
 }
 
+static inline bool
+bus_dmatag_bounces_paddr(bus_dma_tag_t dmat, paddr_t pa)
+{
+#if defined(__i386__) || defined(__x86_64__)
+	return pa < dmat->_bounce_alloc_lo || dmat->_bounce_alloc_hi <= pa;
+#elif defined(__arm__) || defined(__aarch64__)
+	unsigned i;
+
+	for (i = 0; i < dmat->_nranges; i++) {
+		const struct arm32_dma_range *dr = &dmat->_ranges[i];
+		if (dr->dr_sysbase <= pa && pa - dr->dr_sysbase <= dr->dr_len)
+			return false;
+	}
+	return true;
+#elif defined(__powerpc__)
+	return dmat->_bounce_thresh && pa >= dmat->_bounce_thresh;
+#elif defined(__sparc__) || defined(__sparc64__)
+	return false;		/* no bounce buffers ever */
+#endif
+}
+
+#define MAX_STACK_SEGS 32	/* XXXMRG: 512 bytes on 16 byte seg platforms */
+
 static inline int
 bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
     struct pglist *pglist, bus_size_t size, int flags)
 {
 	km_flag_t kmflags;
 	bus_dma_segment_t *segs;
+	bus_dma_segment_t stacksegs[MAX_STACK_SEGS];
 	int nsegs, seg;
 	struct vm_page *page;
 	int error;
@@ -141,18 +139,30 @@ bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
 	}
 
 	KASSERT(nsegs <= (SIZE_MAX / sizeof(segs[0])));
-	switch (flags & (BUS_DMA_WAITOK|BUS_DMA_NOWAIT)) {
-	case BUS_DMA_WAITOK:	kmflags = KM_SLEEP;	break;
-	case BUS_DMA_NOWAIT:	kmflags = KM_NOSLEEP;	break;
-	default:		panic("invalid flags: %d", flags);
+	if (nsegs > MAX_STACK_SEGS) {
+		switch (flags & (BUS_DMA_WAITOK|BUS_DMA_NOWAIT)) {
+		case BUS_DMA_WAITOK:
+			kmflags = KM_SLEEP;
+			break;
+		case BUS_DMA_NOWAIT:
+			kmflags = KM_NOSLEEP;
+			break;
+		default:
+			panic("invalid flags: %d", flags);
+		}
+		segs = kmem_alloc((nsegs * sizeof(segs[0])), kmflags);
+		if (segs == NULL)
+			return ENOMEM;
+	} else {
+		segs = stacksegs;
 	}
-	segs = kmem_alloc((nsegs * sizeof(segs[0])), kmflags);
-	if (segs == NULL)
-		return ENOMEM;
 
 	seg = 0;
 	TAILQ_FOREACH(page, pglist, pageq.queue) {
-		segs[seg].ds_addr = VM_PAGE_TO_PHYS(page);
+		paddr_t paddr = VM_PAGE_TO_PHYS(page);
+		bus_addr_t baddr = PHYS_TO_BUS_MEM(tag, paddr);
+
+		segs[seg].ds_addr = baddr;
 		segs[seg].ds_len = PAGE_SIZE;
 		seg++;
 	}
@@ -168,8 +178,67 @@ bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
 fail1: __unused
 	bus_dmamap_unload(tag, map);
 fail0:	KASSERT(error);
-out:	kmem_free(segs, (nsegs * sizeof(segs[0])));
+out:	if (segs != stacksegs) {
+		KASSERT(nsegs > MAX_STACK_SEGS);
+		kmem_free(segs, (nsegs * sizeof(segs[0])));
+	}
 	return error;
+}
+
+static inline int
+bus_dmamem_export_pages(bus_dma_tag_t dmat, const bus_dma_segment_t *segs,
+    int nsegs, paddr_t *pgs, unsigned npgs)
+{
+	int seg;
+	unsigned i;
+
+	i = 0;
+	for (seg = 0; seg < nsegs; seg++) {
+		bus_addr_t baddr = segs[i].ds_addr;
+		bus_size_t len = segs[i].ds_len;
+
+		while (len >= PAGE_SIZE) {
+			paddr_t paddr = BUS_MEM_TO_PHYS(dmat, baddr);
+
+			KASSERT(i < npgs);
+			pgs[i++] = paddr;
+
+			baddr += PAGE_SIZE;
+			len -= PAGE_SIZE;
+		}
+		KASSERT(len == 0);
+	}
+	KASSERT(i == npgs);
+
+	return 0;
+}
+
+static inline int
+bus_dmamem_import_pages(bus_dma_tag_t dmat, bus_dma_segment_t *segs,
+    int nsegs, int *rsegs, const paddr_t *pgs, unsigned npgs)
+{
+	int seg;
+	unsigned i;
+
+	seg = 0;
+	for (i = 0; i < npgs; i++) {
+		paddr_t paddr = pgs[i];
+		bus_addr_t baddr = PHYS_TO_BUS_MEM(dmat, paddr);
+
+		if (seg > 0 && segs[seg - 1].ds_addr + PAGE_SIZE == baddr) {
+			segs[seg - 1].ds_len += PAGE_SIZE;
+		} else {
+			KASSERT(seg < nsegs);
+			segs[seg].ds_addr = baddr;
+			segs[seg].ds_len = PAGE_SIZE;
+			seg++;
+			KASSERT(seg <= nsegs);
+		}
+	}
+	KASSERT(seg <= nsegs);
+	*rsegs = seg;
+
+	return 0;
 }
 
 #endif	/* _DRM_BUS_DMA_HACKS_H_ */

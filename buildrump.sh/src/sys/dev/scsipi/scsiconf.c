@@ -1,4 +1,4 @@
-/*	$NetBSD: scsiconf.c,v 1.275 2016/06/26 07:31:35 mlelstv Exp $	*/
+/*	$NetBSD: scsiconf.c,v 1.292 2021/08/07 16:19:16 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2004 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.275 2016/06/26 07:31:35 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.292 2021/08/07 16:19:16 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -63,6 +63,7 @@ __KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.275 2016/06/26 07:31:35 mlelstv Exp $
 #include <sys/fcntl.h>
 #include <sys/scsiio.h>
 #include <sys/queue.h>
+#include <sys/atomic.h>
 
 #include <dev/scsipi/scsi_all.h>
 #include <dev/scsipi/scsipi_all.h>
@@ -117,7 +118,7 @@ const struct cdevsw scsibus_cdevsw = {
 	.d_mmap = nommap,
 	.d_kqfilter = nokqfilter,
 	.d_discard = nodiscard,
-	.d_flag = D_OTHER
+	.d_flag = D_OTHER | D_MPSAFE
 };
 
 static int	scsibusprint(void *, const char *);
@@ -125,39 +126,43 @@ static void	scsibus_discover_thread(void *);
 static void	scsibus_config(struct scsibus_softc *);
 
 const struct scsipi_bustype scsi_bustype = {
-	SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI, SCSIPI_BUSTYPE_SCSI_PSCSI),
-	scsi_scsipi_cmd,
-	scsipi_interpret_sense,
-	scsi_print_addr,
-	scsi_kill_pending,
-	scsi_async_event_xfer_mode,
+	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
+	    SCSIPI_BUSTYPE_SCSI_PSCSI),
+	.bustype_cmd = scsi_scsipi_cmd,
+	.bustype_interpret_sense = scsipi_interpret_sense,
+	.bustype_printaddr = scsi_print_addr,
+	.bustype_kill_pending = scsi_kill_pending,
+	.bustype_async_event_xfer_mode = scsi_async_event_xfer_mode,
 };
 
 const struct scsipi_bustype scsi_fc_bustype = {
-	SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI, SCSIPI_BUSTYPE_SCSI_FC),
-	scsi_scsipi_cmd,
-	scsipi_interpret_sense,
-	scsi_print_addr,
-	scsi_kill_pending,
-	scsi_fc_sas_async_event_xfer_mode,
+	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
+	    SCSIPI_BUSTYPE_SCSI_FC),
+	.bustype_cmd = scsi_scsipi_cmd,
+	.bustype_interpret_sense = scsipi_interpret_sense,
+	.bustype_printaddr = scsi_print_addr,
+	.bustype_kill_pending = scsi_kill_pending,
+	.bustype_async_event_xfer_mode = scsi_fc_sas_async_event_xfer_mode,
 };
 
 const struct scsipi_bustype scsi_sas_bustype = {
-	SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI, SCSIPI_BUSTYPE_SCSI_SAS),
-	scsi_scsipi_cmd,
-	scsipi_interpret_sense,
-	scsi_print_addr,
-	scsi_kill_pending,
-	scsi_fc_sas_async_event_xfer_mode,
+	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
+	    SCSIPI_BUSTYPE_SCSI_SAS),
+	.bustype_cmd = scsi_scsipi_cmd,
+	.bustype_interpret_sense = scsipi_interpret_sense,
+	.bustype_printaddr = scsi_print_addr,
+	.bustype_kill_pending = scsi_kill_pending,
+	.bustype_async_event_xfer_mode = scsi_fc_sas_async_event_xfer_mode,
 };
 
 const struct scsipi_bustype scsi_usb_bustype = {
-	SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI, SCSIPI_BUSTYPE_SCSI_USB),
-	scsi_scsipi_cmd,
-	scsipi_interpret_sense,
-	scsi_print_addr,
-	scsi_kill_pending,
-	NULL,
+	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
+	    SCSIPI_BUSTYPE_SCSI_USB),
+	.bustype_cmd = scsi_scsipi_cmd,
+	.bustype_interpret_sense = scsipi_interpret_sense,
+	.bustype_printaddr = scsi_print_addr,
+	.bustype_kill_pending = scsi_kill_pending,
+	.bustype_async_event_xfer_mode = NULL,
 };
 
 static int
@@ -240,6 +245,13 @@ scsibusattach(device_t parent, device_t self, void *aux)
 			chan->chan_adapter->adapt_max_periph = 256;
 	}
 
+	if (atomic_inc_uint_nv(&chan_running(chan)) == 1)
+		mutex_init(chan_mtx(chan), MUTEX_DEFAULT, IPL_BIO);
+
+	cv_init(&chan->chan_cv_thr, "scshut");
+	cv_init(&chan->chan_cv_comp, "sccomp");
+	cv_init(&chan->chan_cv_xs, "xscmd");
+
 	if (scsipi_adapter_addref(chan->chan_adapter))
 		return;
 
@@ -262,7 +274,7 @@ scsibusattach(device_t parent, device_t self, void *aux)
          * Create the discover thread
          */
         if (kthread_create(PRI_NONE, 0, NULL, scsibus_discover_thread, sc,
-            NULL, "%s-d", chan->chan_name)) {
+            &chan->chan_dthread, "%s-d", chan->chan_name)) {
                 aprint_error_dev(sc->sc_dev, "unable to create discovery "
 		    "thread for channel %d\n", chan->chan_channel);
                 return;
@@ -275,6 +287,7 @@ scsibus_discover_thread(void *arg)
 	struct scsibus_softc *sc = arg;
 
 	scsibus_config(sc);
+	sc->sc_channel->chan_dthread = NULL;
 	kthread_exit(0);
 }
 
@@ -293,8 +306,7 @@ scsibus_config(struct scsibus_softc *sc)
 		    "waiting %d seconds for devices to settle...\n",
 		    SCSI_DELAY);
 		/* ...an identifier we know no one will use... */
-		(void) tsleep(scsibus_config, PRIBIO,
-		    "scsidly", SCSI_DELAY * hz);
+		kpause("scsidly", false, SCSI_DELAY * hz, NULL);
 	}
 
 	/* Make sure the devices probe in scsibus order to avoid jitter. */
@@ -326,55 +338,34 @@ scsibusdetach(device_t self, int flags)
 {
 	struct scsibus_softc *sc = device_private(self);
 	struct scsipi_channel *chan = sc->sc_channel;
-	struct scsipi_periph *periph;
-	int ctarget, clun;
-	struct scsipi_xfer *xs;
 	int error;
 
-	/* XXXSMP scsipi */
-	KERNEL_LOCK(1, curlwp);
+	/*
+	 * Defer while discovery thread is running
+	 */
+	while (chan->chan_dthread != NULL)
+		kpause("scsibusdet", false, hz, NULL);
 
 	/*
 	 * Detach all of the periphs.
 	 */
-	if ((error = scsipi_target_detach(chan, -1, -1, flags)) != 0) {
-		/* XXXSMP scsipi */
-		KERNEL_UNLOCK_ONE(curlwp);
-
+	error = scsipi_target_detach(chan, -1, -1, flags);
+	if (error)
 		return error;
-	}
 
 	pmf_device_deregister(self);
 
 	/*
-	 * Process outstanding commands (which will never complete as the
-	 * controller is gone).
-	 *
-	 * XXX Surely this is redundant?  If we get this far, the
-	 * XXX peripherals have all been detached.
-	 */
-	for (ctarget = 0; ctarget < chan->chan_ntargets; ctarget++) {
-		if (ctarget == chan->chan_id)
-			continue;
-		for (clun = 0; clun < chan->chan_nluns; clun++) {
-			periph = scsipi_lookup_periph(chan, ctarget, clun);
-			if (periph == NULL)
-				continue;
-			TAILQ_FOREACH(xs, &periph->periph_xferq, device_q) {
-				callout_stop(&xs->xs_callout);
-				xs->error = XS_DRIVER_STUFFUP;
-				scsipi_done(xs);
-			}
-		}
-	}
-
-	/*
-	 * Now shut down the channel.
+	 * Shut down the channel.
 	 */
 	scsipi_channel_shutdown(chan);
 
-	/* XXXSMP scsipi */
-	KERNEL_UNLOCK_ONE(curlwp);
+	cv_destroy(&chan->chan_cv_xs);
+	cv_destroy(&chan->chan_cv_comp);
+	cv_destroy(&chan->chan_cv_thr);
+
+	if (atomic_dec_uint_nv(&chan_running(chan)) == 0)
+		mutex_destroy(chan_mtx(chan));
 
 	return 0;
 }
@@ -389,9 +380,6 @@ scsi_probe_bus(struct scsibus_softc *sc, int target, int lun)
 	struct scsipi_channel *chan = sc->sc_channel;
 	int maxtarget, mintarget, maxlun, minlun;
 	int error;
-
-	/* XXXSMP scsipi */
-	KERNEL_LOCK(1, curlwp);
 
 	if (target == -1) {
 		maxtarget = chan->chan_ntargets - 1;
@@ -413,11 +401,9 @@ scsi_probe_bus(struct scsibus_softc *sc, int target, int lun)
 
 	/*
 	 * Some HBAs provide an abstracted view of the bus; give them an
-	 * oppertunity to re-scan it before we do.
+	 * opportunity to re-scan it before we do.
 	 */
-	if (chan->chan_adapter->adapt_ioctl != NULL)
-		(*chan->chan_adapter->adapt_ioctl)(chan, SCBUSIOLLSCAN, NULL,
-		    0, curproc);
+	scsipi_adapter_ioctl(chan, SCBUSIOLLSCAN, NULL, 0, curproc);
 
 	if ((error = scsipi_adapter_addref(chan->chan_adapter)) != 0)
 		goto ret;
@@ -440,15 +426,14 @@ scsi_probe_bus(struct scsibus_softc *sc, int target, int lun)
 		 */
 		scsipi_set_xfer_mode(chan, target, 1);
 	}
+
 	scsipi_adapter_delref(chan->chan_adapter);
 ret:
-	KERNEL_UNLOCK_ONE(curlwp);
 	return (error);
 }
 
 static int
-scsibusrescan(device_t sc, const char *ifattr,
-    const int *locators)
+scsibusrescan(device_t sc, const char *ifattr, const int *locators)
 {
 
 	KASSERT(ifattr && !strcmp(ifattr, "scsibus"));
@@ -469,17 +454,15 @@ scsidevdetached(device_t self, device_t child)
 	target = device_locator(child, SCSIBUSCF_TARGET);
 	lun = device_locator(child, SCSIBUSCF_LUN);
 
-	/* XXXSMP scsipi */
-	KERNEL_LOCK(1, curlwp);
+	mutex_enter(chan_mtx(chan));
 
-	periph = scsipi_lookup_periph(chan, target, lun);
-	KASSERT(periph->periph_dev == child);
+	periph = scsipi_lookup_periph_locked(chan, target, lun);
+	KASSERT(periph != NULL && periph->periph_dev == child);
 
 	scsipi_remove_periph(chan, periph);
-	free(periph, M_DEVBUF);
+	scsipi_free_periph(periph);
 
-	/* XXXSMP scsipi */
-	KERNEL_UNLOCK_ONE(curlwp);
+	mutex_exit(chan_mtx(chan));
 }
 
 /*
@@ -520,9 +503,11 @@ scsibusprint(void *aux, const char *pnp)
 	strnvisx(revision, sizeof(revision), inqbuf->revision, 4,
 	    VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 
-	aprint_normal(" target %d lun %d: <%s, %s, %s> %s %s",
-	    target, lun, vendor, product, revision, dtype,
-	    inqbuf->removable ? "removable" : "fixed");
+	aprint_normal(" target %d lun %d: <%s, %s, %s> %s %s%s",
+		      target, lun, vendor, product, revision, dtype,
+		      inqbuf->removable ? "removable" : "fixed",
+		      (sa->sa_periph->periph_opcs != NULL)
+		        ? " timeout-info" : "");
 
 	return (UNCONF);
 }
@@ -651,6 +636,8 @@ static const struct scsi_quirk_inquiry_pattern scsi_quirk_patterns[] = {
 	 ""	   , "DFRSS2F",		 ""},	  PQUIRK_AUTOSAVE},
 	{{T_DIRECT, T_FIXED,
 	 "Initio  ", "",		 ""},	  PQUIRK_NOBIGMODESENSE},
+	{{T_DIRECT, T_FIXED,
+	 "JMicron ", "Generic         ", ""},	  PQUIRK_NOFUA},
 	{{T_DIRECT, T_REMOV,
 	 "MPL     ", "MC-DISK-        ", ""},     PQUIRK_NOLUNS},
 	{{T_DIRECT, T_FIXED,
@@ -701,6 +688,14 @@ static const struct scsi_quirk_inquiry_pattern scsi_quirk_patterns[] = {
 	 "SEAGATE ", "ST296N          ", ""},     PQUIRK_NOLUNS},
 	{{T_DIRECT, T_FIXED,
 	 "SEAGATE ", "ST318404LC      ", ""},     PQUIRK_NOLUNS},
+	{{T_DIRECT, T_FIXED,
+	 "SEAGATE ", "ST336753LC      ", ""},     PQUIRK_NOLUNS},
+	{{T_DIRECT, T_FIXED,
+	 "SEAGATE ", "ST336753LW      ", ""},     PQUIRK_NOLUNS},
+	{{T_DIRECT, T_FIXED,
+	 "SEAGATE ", "ST336754LC      ", ""},     PQUIRK_NOLUNS},
+	{{T_DIRECT, T_FIXED,
+	 "SEAGATE ", "ST39236LC       ", ""},     PQUIRK_NOLUNS},
 	{{T_DIRECT, T_FIXED,
 	 "SEAGATE ", "ST15150N        ", ""},     PQUIRK_NOTAG},
 	{{T_DIRECT, T_FIXED,
@@ -813,10 +808,10 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 	int locs[SCSIBUSCF_NLOCS];
 
 	/*
-	 * Assume no more luns to search after this one.
+	 * Assume no more LUNs to search after this one.
 	 * If we successfully get Inquiry data and after
 	 * merging quirks we find we can probe for more
-	 * luns, we will.
+	 * LUNs, we will.
 	 */
 	docontinue = 0;
 
@@ -824,15 +819,7 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 	if (scsipi_lookup_periph(chan, target, lun) != NULL)
 		return (docontinue);
 
-	periph = scsipi_alloc_periph(M_NOWAIT);
-	if (periph == NULL) {
-#ifdef	DIAGNOSTIC
-		aprint_error_dev(sc->sc_dev,
-		    "cannot allocate periph for target %d lun %d\n",
-		    target, lun);
-#endif
-		return (ENOMEM);
-	}
+	periph = scsipi_alloc_periph(M_WAITOK);
 	periph->periph_channel = chan;
 	periph->periph_switch = &scsi_probe_dev;
 
@@ -903,7 +890,7 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 		break;
 	}
 
-	/* Let the adapter driver handle the device separatley if it wants. */
+	/* Let the adapter driver handle the device separately if it wants. */
 	if (chan->chan_adapter->adapt_accesschk != NULL &&
 	    (*chan->chan_adapter->adapt_accesschk)(periph, &sa.sa_inqbuf))
 		goto bad;
@@ -1025,16 +1012,28 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 	locs[SCSIBUSCF_TARGET] = target;
 	locs[SCSIBUSCF_LUN] = lun;
 
-	if ((cf = config_search_loc(config_stdsubmatch, sc->sc_dev,
-	     "scsibus", locs, &sa)) != NULL) {
+	if ((cf = config_search(sc->sc_dev, &sa,
+				CFARGS(.submatch = config_stdsubmatch,
+				       .locators = locs))) != NULL) {
 		scsipi_insert_periph(chan, periph);
+
+		/*
+		 * Determine supported opcodes and timeouts if available.
+		 * Only do this on peripherals reporting SCSI version 3
+		 * or greater - this command isn't in the SCSI-2 spec. and
+		 * it causes either timeouts or peripherals disappearing
+		 * when sent to some SCSI-1 or SCSI-2 peripherals.
+		 */
+		if (periph->periph_version >= 3)
+			scsipi_get_opcodeinfo(periph);
+
 		/*
 		 * XXX Can't assign periph_dev here, because we'll
 		 * XXX need it before config_attach() returns.  Must
 		 * XXX assign it in periph driver.
 		 */
-		config_attach_loc(sc->sc_dev, cf, locs, &sa,
-					 scsibusprint);
+		config_attach(sc->sc_dev, cf, &sa, scsibusprint,
+		    CFARGS(.locators = locs));
 	} else {
 		scsibusprint(&sa, device_xname(sc->sc_dev));
 		aprint_normal(" not configured\n");
@@ -1044,7 +1043,7 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 	return (docontinue);
 
 bad:
-	free(periph, M_DEVBUF);
+	scsipi_free_periph(periph);
 	return (docontinue);
 }
 
@@ -1132,11 +1131,7 @@ scsibusioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 	case SCBUSIORESET:
 		/* FALLTHROUGH */
 	default:
-		if (chan->chan_adapter->adapt_ioctl == NULL)
-			error = ENOTTY;
-		else
-			error = (*chan->chan_adapter->adapt_ioctl)(chan,
-			    cmd, addr, flag, l->l_proc);
+		error = scsipi_adapter_ioctl(chan, cmd, addr, flag, l->l_proc);
 		break;
 	}
 

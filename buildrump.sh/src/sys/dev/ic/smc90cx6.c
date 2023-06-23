@@ -1,4 +1,4 @@
-/*	$NetBSD: smc90cx6.c,v 1.67 2016/06/10 13:27:14 ozaki-r Exp $ */
+/*	$NetBSD: smc90cx6.c,v 1.75 2020/01/30 04:56:11 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1994, 1995, 1998 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: smc90cx6.c,v 1.67 2016/06/10 13:27:14 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: smc90cx6.c,v 1.75 2020/01/30 04:56:11 thorpej Exp $");
 
 /* #define BAHSOFTCOPY */
 #define BAHRETRANSMIT /**/
@@ -60,6 +60,7 @@ __KERNEL_RCSID(0, "$NetBSD: smc90cx6.c,v 1.67 2016/06/10 13:27:14 ozaki-r Exp $"
 #include <net/if_ether.h>
 #include <net/if_types.h>
 #include <net/if_arc.h>
+#include <net/bpf.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -68,9 +69,6 @@ __KERNEL_RCSID(0, "$NetBSD: smc90cx6.c,v 1.67 2016/06/10 13:27:14 ozaki-r Exp $"
 #include <netinet/ip.h>
 #include <netinet/if_inarp.h>
 #endif
-
-#include <net/bpf.h>
-#include <net/bpfdesc.h>
 
 #include <sys/bus.h>
 #include <sys/cpu.h>
@@ -140,11 +138,11 @@ void	bah_reconwatch(void *);
 #define GETMEM(off)	bus_space_read_1(bst_m, mem, (off))
 #define PUTMEM(off, v)	bus_space_write_1(bst_m, mem, (off), (v))
 
-void
+int
 bah_attach_subr(struct bah_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_arccom.ac_if;
-	int s;
+	int s, rv;
 	u_int8_t linkaddress;
 
 	bus_space_tag_t bst_r = sc->sc_bst_r;
@@ -193,11 +191,14 @@ bah_attach_subr(struct bah_softc *sc)
 	ifp->if_watchdog  = bah_watchdog;
 	IFQ_SET_READY(&ifp->if_snd);
 
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_NOTRAILERS;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX;
 
 	ifp->if_mtu = ARCMTU;
 
-	arc_ifattach(ifp, linkaddress);
+	rv = arc_ifattach(ifp, linkaddress);
+	if (rv != 0)
+		return rv;
+	if_deferred_start_init(ifp, NULL);
 
 #ifdef BAHSOFTCOPY
 	sc->sc_rxcookie = softint_establish(SOFTINT_NET, bah_srint, sc);
@@ -206,6 +207,7 @@ bah_attach_subr(struct bah_softc *sc)
 #endif
 
 	callout_init(&sc->sc_recon_ch, 0);
+	return 0;
 }
 
 /*
@@ -384,7 +386,7 @@ bah_start(struct ifnet *ifp)
 	 * (can't give the copy in A2060 card RAM to bpf, because
 	 * that RAM is just accessed as on every other byte)
 	 */
-	bpf_mtap(ifp, m);
+	bpf_mtap(ifp, m, BPF_D_OUT);
 
 #ifdef BAH_DEBUG
 	if (m->m_len < ARC_HDRLEN)
@@ -521,7 +523,7 @@ bah_srint(void *vsc)
 		 * count it as input error (we dont have any other
 		 * detectable)
 	 	 */
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto cleanup;
 	}
 
@@ -546,7 +548,7 @@ bah_srint(void *vsc)
 		MCLGET(m, M_DONTWAIT);
 
 	if (m == 0) {
-		ifp->if_ierrors++;
+		if_statinc(ifp, if_ierrors);
 		goto cleanup;
 	}
 
@@ -573,7 +575,7 @@ bah_srint(void *vsc)
 			MGET(m, M_DONTWAIT, MT_DATA);
 
 			if (m == 0) {
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				goto cleanup;
 			}
 
@@ -596,12 +598,9 @@ bah_srint(void *vsc)
 		len -= len1;
 	}
 
-	bpf_mtap(ifp, head);
-
 	if_percpuq_enqueue((&sc->sc_arccom.ac_if)->if_percpuq, head);
 
 	head = NULL;
-	ifp->if_ipackets++;
 
 cleanup:
 
@@ -655,7 +654,7 @@ bah_tint(struct bah_softc *sc, int isr)
 	 */
 
 	if (isr & BAH_TMA || sc->sc_broadcast[buffer])
-		sc->sc_arccom.ac_if.if_opackets++;
+		if_statinc(ifp, if_opackets);
 #ifdef BAHRETRANSMIT
 	else if (ifp->if_flags & IFF_LINK2 && ifp->if_timer > 0
 	    && --sc->sc_retransmits[buffer] > 0) {
@@ -665,7 +664,7 @@ bah_tint(struct bah_softc *sc, int isr)
 	}
 #endif
 	else
-		ifp->if_oerrors++;
+		if_statinc(ifp, if_oerrors);
 
 
 	/* We know we can accept another buffer at this point. */
@@ -711,8 +710,7 @@ bah_tint(struct bah_softc *sc, int isr)
 	/* schedule soft int to fill a new buffer for us */
 	softint_schedule(sc->sc_txcookie);
 #else
-	/* call it directly */
-	bah_start(ifp);
+	if_schedule_deferred_start(ifp);
 #endif
 }
 
@@ -762,7 +760,7 @@ bahintr(void *arg)
 			 * PUTREG(BAHCMD, BAH_CONF(CONF_LONG));
 			 */
 			PUTREG(BAHCMD, BAH_CLR(CLR_RECONFIG));
-			sc->sc_arccom.ac_if.if_collisions++;
+			if_statinc(&sc->sc_arccom.ac_if, if_collisions);
 
 			/*
 			 * If less than 2 seconds per reconfig:

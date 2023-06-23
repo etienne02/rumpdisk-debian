@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.169 2015/06/15 14:24:01 christos Exp $
+#	$NetBSD: Makefile,v 1.173 2020/05/16 18:31:47 christos Exp $
 #	@(#)Makefile	8.2 (Berkeley) 2/3/94
 #
 # All library objects contain sccsid strings by default; they may be
@@ -16,6 +16,10 @@
 #
 # The Hesiod functions are always in libc. To choose that getpwent() and friends
 # actually call the Hesiod functions, put -DHESIOD on the CPPFLAGS line below.
+
+
+# generated code depends on RTTI
+LIBCSANITIZERFLAGS+=	${${ACTIVE_CC} == "clang":? -fno-sanitize=function :}
 
 .include "Makefile.inc"
 
@@ -76,11 +80,8 @@ CPPFLAGS+=	-D__BUILD_LEGACY
 .include "${.CURDIR}/net/Makefile.inc"
 .include "${.CURDIR}/nameser/Makefile.inc"
 .include "${.CURDIR}/nls/Makefile.inc"
-.if (${USE_LIBTRE} == "yes")
-.include "${NETBSDSRCDIR}/external/bsd/tre/Makefile.inc"
-.else
+.include "${.CURDIR}/posix1e/Makefile.inc"
 .include "${.CURDIR}/regex/Makefile.inc"
-.endif
 .include "${.CURDIR}/resolv/Makefile.inc"
 .include "${.CURDIR}/rpc/Makefile.inc"
 .include "${.CURDIR}/ssp/Makefile.inc"

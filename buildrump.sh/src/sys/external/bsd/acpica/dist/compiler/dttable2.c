@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -44,7 +44,6 @@
 /* Compile all complex data tables, signatures starting with L-Z */
 
 #include "aslcompiler.h"
-#include "dtcompiler.h"
 
 #define _COMPONENT          DT_COMPILER
         ACPI_MODULE_NAME    ("dttable2")
@@ -84,7 +83,7 @@ DtCompileLpit (
         /* LPIT Subtable header */
 
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoLpitHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -111,7 +110,7 @@ DtCompileLpit (
 
         /* LPIT Subtable */
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -152,7 +151,7 @@ DtCompileMadt (
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoMadt,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -165,7 +164,7 @@ DtCompileMadt (
     {
         SubtableStart = *PFieldList;
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoMadtHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -259,13 +258,18 @@ DtCompileMadt (
             InfoTable = AcpiDmTableInfoMadt15;
             break;
 
+        case ACPI_MADT_TYPE_MULTIPROC_WAKEUP:
+
+            InfoTable = AcpiDmTableInfoMadt16;
+            break;
+
         default:
 
             DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "MADT");
             return (AE_ERROR);
         }
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -335,7 +339,7 @@ DtCompileMpst (
 
     /* Main table */
 
-    Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst, &Subtable, TRUE);
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst, &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -353,7 +357,7 @@ DtCompileMpst (
         /* Subtable: Memory Power Node(s) */
 
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst0,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -374,7 +378,7 @@ DtCompileMpst (
         while (*PFieldList && PowerStateCount)
         {
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst0A,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
@@ -389,7 +393,7 @@ DtCompileMpst (
         while (*PFieldList && ComponentCount)
         {
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst0B,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
@@ -407,7 +411,7 @@ DtCompileMpst (
 
     DtPopSubtable ();
 
-    Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst1, &Subtable, TRUE);
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst1, &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -427,7 +431,7 @@ DtCompileMpst (
     while (*PFieldList && SubtableCount)
     {
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoMpst2,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -469,31 +473,6 @@ DtCompileMsct (
 
 /******************************************************************************
  *
- * FUNCTION:    DtCompileMtmr
- *
- * PARAMETERS:  List                - Current field list pointer
- *
- * RETURN:      Status
- *
- * DESCRIPTION: Compile MTMR.
- *
- *****************************************************************************/
-
-ACPI_STATUS
-DtCompileMtmr (
-    void                    **List)
-{
-    ACPI_STATUS             Status;
-
-
-    Status = DtCompileTwoSubtables (List,
-        AcpiDmTableInfoMtmr, AcpiDmTableInfoMtmr0);
-    return (Status);
-}
-
-
-/******************************************************************************
- *
  * FUNCTION:    DtCompileNfit
  *
  * PARAMETERS:  List                - Current field list pointer
@@ -523,7 +502,7 @@ DtCompileNfit (
     /* Main table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoNfit,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -539,7 +518,7 @@ DtCompileNfit (
     {
         SubtableStart = *PFieldList;
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoNfitHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -590,13 +569,18 @@ DtCompileNfit (
             InfoTable = AcpiDmTableInfoNfit6;
             break;
 
+        case ACPI_NFIT_TYPE_CAPABILITIES:
+
+            InfoTable = AcpiDmTableInfoNfit7;
+            break;
+
         default:
 
             DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "NFIT");
             return (AE_ERROR);
         }
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -615,7 +599,7 @@ DtCompileNfit (
             while (*PFieldList)
             {
                 Status = DtCompileTable (PFieldList, AcpiDmTableInfoNfit2a,
-                    &Subtable, FALSE);
+                    &Subtable);
                 if (ACPI_FAILURE (Status))
                 {
                     return (Status);
@@ -633,7 +617,6 @@ DtCompileNfit (
             }
 
             Interleave->LineCount = Count;
-            DtPopSubtable ();
             break;
 
         case ACPI_NFIT_TYPE_SMBIOS:
@@ -641,7 +624,7 @@ DtCompileNfit (
             if (*PFieldList)
             {
                 Status = DtCompileTable (PFieldList, AcpiDmTableInfoNfit3a,
-                    &Subtable, TRUE);
+                    &Subtable);
                 if (ACPI_FAILURE (Status))
                 {
                     return (Status);
@@ -661,7 +644,7 @@ DtCompileNfit (
             while (*PFieldList)
             {
                 Status = DtCompileTable (PFieldList, AcpiDmTableInfoNfit6a,
-                    &Subtable, FALSE);
+                    &Subtable);
                 if (ACPI_FAILURE (Status))
                 {
                     return (Status);
@@ -679,7 +662,6 @@ DtCompileNfit (
             }
 
             Hint->HintCount = (UINT16) Count;
-            DtPopSubtable ();
             break;
 
         default:
@@ -719,7 +701,7 @@ DtCompilePcct (
     /* Main table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoPcct,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -734,7 +716,7 @@ DtCompilePcct (
     {
         SubtableStart = *PFieldList;
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoPcctHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -763,13 +745,28 @@ DtCompilePcct (
             InfoTable = AcpiDmTableInfoPcct2;
             break;
 
+        case ACPI_PCCT_TYPE_EXT_PCC_MASTER_SUBSPACE:
+
+            InfoTable = AcpiDmTableInfoPcct3;
+            break;
+
+        case ACPI_PCCT_TYPE_EXT_PCC_SLAVE_SUBSPACE:
+
+            InfoTable = AcpiDmTableInfoPcct4;
+            break;
+
+        case ACPI_PCCT_TYPE_HW_REG_COMM_SUBSPACE:
+
+            InfoTable = AcpiDmTableInfoPcct5;
+            break;
+
         default:
 
             DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "PCCT");
             return (AE_ERROR);
         }
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -781,6 +778,202 @@ DtCompilePcct (
     }
 
     return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompilePdtt
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile PDTT.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompilePdtt (
+    void                    **List)
+{
+    ACPI_STATUS             Status;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    ACPI_TABLE_PDTT         *PdttHeader;
+    UINT32                  Count = 0;
+
+
+    /* Main table */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoPdtt, &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+
+    PdttHeader = ACPI_CAST_PTR (ACPI_TABLE_PDTT, ParentTable->Buffer);
+    PdttHeader->ArrayOffset = sizeof (ACPI_TABLE_PDTT);
+
+    /* There is only one type of subtable at this time, no need to decode */
+
+    while (*PFieldList)
+    {
+        /* List of subchannel IDs, each 2 bytes */
+
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoPdtt0,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        DtInsertSubtable (ParentTable, Subtable);
+        Count++;
+    }
+
+    PdttHeader->TriggerCount = (UINT8) Count;
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompilePhat
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile Phat.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompilePhat (
+    void                    **List)
+{
+    ACPI_STATUS             Status = AE_OK;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    ACPI_PHAT_HEADER        *PhatHeader;
+    ACPI_DMTABLE_INFO       *Info;
+    ACPI_PHAT_VERSION_DATA  *VersionData;
+    UINT32                  RecordCount;
+
+
+    /* The table consist of subtables */
+
+    while (*PFieldList)
+    {
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoPhatHdr, &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        DtPushSubtable (Subtable);
+
+        PhatHeader = ACPI_CAST_PTR (ACPI_PHAT_HEADER, Subtable->Buffer);
+
+        switch (PhatHeader->Type)
+        {
+        case ACPI_PHAT_TYPE_FW_VERSION_DATA:
+
+            Info = AcpiDmTableInfoPhat0;
+            PhatHeader->Length = sizeof (ACPI_PHAT_VERSION_DATA);
+            break;
+
+        case ACPI_PHAT_TYPE_FW_HEALTH_DATA:
+
+            Info = AcpiDmTableInfoPhat1;
+            PhatHeader->Length = sizeof (ACPI_PHAT_HEALTH_DATA);
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, *PFieldList, "PHAT");
+            return (AE_ERROR);
+
+            break;
+        }
+
+        Status = DtCompileTable (PFieldList, Info, &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+
+        switch (PhatHeader->Type)
+        {
+        case ACPI_PHAT_TYPE_FW_VERSION_DATA:
+
+            VersionData = ACPI_CAST_PTR (ACPI_PHAT_VERSION_DATA,
+                (Subtable->Buffer - sizeof (ACPI_PHAT_HEADER)));
+            RecordCount = VersionData->ElementCount;
+
+            while (RecordCount)
+            {
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoPhat0a,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+                ParentTable = DtPeekSubtable ();
+                DtInsertSubtable (ParentTable, Subtable);
+
+                RecordCount--;
+                PhatHeader->Length += sizeof (ACPI_PHAT_VERSION_ELEMENT);
+            }
+            break;
+
+        case ACPI_PHAT_TYPE_FW_HEALTH_DATA:
+
+            /* Compile device path */
+
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoPhat1a, &Subtable);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
+            ParentTable = DtPeekSubtable ();
+            DtInsertSubtable (ParentTable, Subtable);
+
+            PhatHeader->Length += (UINT16) Subtable->Length;
+
+            /* Compile vendor specific data */
+
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoPhat1b, &Subtable);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
+            ParentTable = DtPeekSubtable ();
+            DtInsertSubtable (ParentTable, Subtable);
+
+            PhatHeader->Length += (UINT16) Subtable->Length;
+
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, *PFieldList, "PHAT");
+            return (AE_ERROR);
+        }
+    }
+
+    return (Status);
 }
 
 
@@ -805,15 +998,12 @@ DtCompilePmtt (
     DT_SUBTABLE             *ParentTable;
     DT_FIELD                **PFieldList = (DT_FIELD **) List;
     DT_FIELD                *SubtableStart;
-    ACPI_PMTT_HEADER        *PmttHeader;
-    ACPI_PMTT_CONTROLLER    *PmttController;
-    UINT16                  DomainCount;
-    UINT8                   PrevType = ACPI_PMTT_TYPE_SOCKET;
+    UINT16                  Type;
 
 
     /* Main table */
 
-    Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt, &Subtable, TRUE);
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt, &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -823,97 +1013,71 @@ DtCompilePmtt (
     DtInsertSubtable (ParentTable, Subtable);
     DtPushSubtable (Subtable);
 
+    /* Subtables */
+
     while (*PFieldList)
     {
         SubtableStart = *PFieldList;
-        Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmttHdr,
-            &Subtable, TRUE);
-        if (ACPI_FAILURE (Status))
-        {
-            return (Status);
-        }
+        DtCompileInteger ((UINT8 *) &Type, *PFieldList, 2, 0);
 
-        PmttHeader = ACPI_CAST_PTR (ACPI_PMTT_HEADER, Subtable->Buffer);
-        while (PrevType >= PmttHeader->Type)
-        {
-            DtPopSubtable ();
-
-            if (PrevType == ACPI_PMTT_TYPE_SOCKET)
-            {
-                break;
-            }
-
-            PrevType--;
-        }
-
-        PrevType = PmttHeader->Type;
-
-        ParentTable = DtPeekSubtable ();
-        DtInsertSubtable (ParentTable, Subtable);
-        DtPushSubtable (Subtable);
-
-        switch (PmttHeader->Type)
+        switch (Type)
         {
         case ACPI_PMTT_TYPE_SOCKET:
 
             /* Subtable: Socket Structure */
 
+            DbgPrint (ASL_DEBUG_OUTPUT, "Compile PMTT_TYPE_SOCKET (0)\n");
+
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt0,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
             }
 
-            ParentTable = DtPeekSubtable ();
-            DtInsertSubtable (ParentTable, Subtable);
             break;
 
         case ACPI_PMTT_TYPE_CONTROLLER:
 
             /* Subtable: Memory Controller Structure */
 
+            DbgPrint (ASL_DEBUG_OUTPUT, "Compile PMTT_TYPE_CONTROLLER (1)\n");
+
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt1,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
             }
 
-            ParentTable = DtPeekSubtable ();
-            DtInsertSubtable (ParentTable, Subtable);
-
-            PmttController = ACPI_CAST_PTR (ACPI_PMTT_CONTROLLER,
-                (Subtable->Buffer - sizeof (ACPI_PMTT_HEADER)));
-            DomainCount = PmttController->DomainCount;
-
-            while (DomainCount)
-            {
-                Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt1a,
-                    &Subtable, TRUE);
-                if (ACPI_FAILURE (Status))
-                {
-                    return (Status);
-                }
-
-                DtInsertSubtable (ParentTable, Subtable);
-                DomainCount--;
-            }
             break;
 
         case ACPI_PMTT_TYPE_DIMM:
 
-            /* Subtable: Physical Component Structure */
+            /* Subtable: Physical Component (DIMM) Structure */
 
+            DbgPrint (ASL_DEBUG_OUTPUT, "Compile PMTT_TYPE_DIMM (2)\n");
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmtt2,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
             }
 
-            ParentTable = DtPeekSubtable ();
-            DtInsertSubtable (ParentTable, Subtable);
+            break;
+
+        case ACPI_PMTT_TYPE_VENDOR:
+
+            /* Subtable: Vendor-specific Structure */
+
+            DbgPrint (ASL_DEBUG_OUTPUT, "Compile PMTT_TYPE_VENDOR(FF)\n");
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoPmttVendor,
+                &Subtable);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
+
             break;
 
         default:
@@ -921,9 +1085,257 @@ DtCompilePmtt (
             DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "PMTT");
             return (AE_ERROR);
         }
+
+        DtInsertSubtable (ParentTable, Subtable);
     }
 
     return (Status);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompilePptt
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile PPTT.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompilePptt (
+    void                    **List)
+{
+    ACPI_STATUS             Status;
+    ACPI_SUBTABLE_HEADER    *PpttHeader;
+    ACPI_PPTT_PROCESSOR     *PpttProcessor = NULL;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    ACPI_DMTABLE_INFO       *InfoTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    DT_FIELD                *SubtableStart;
+    ACPI_TABLE_HEADER       *PpttAcpiHeader;
+
+
+    ParentTable = DtPeekSubtable ();
+    while (*PFieldList)
+    {
+        SubtableStart = *PFieldList;
+
+        /* Compile PPTT subtable header */
+
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoPpttHdr,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+        DtInsertSubtable (ParentTable, Subtable);
+        PpttHeader = ACPI_CAST_PTR (ACPI_SUBTABLE_HEADER, Subtable->Buffer);
+        PpttHeader->Length = (UINT8)(Subtable->Length);
+
+        switch (PpttHeader->Type)
+        {
+        case ACPI_PPTT_TYPE_PROCESSOR:
+
+            InfoTable = AcpiDmTableInfoPptt0;
+            break;
+
+        case ACPI_PPTT_TYPE_CACHE:
+
+            InfoTable = AcpiDmTableInfoPptt1;
+            break;
+
+        case ACPI_PPTT_TYPE_ID:
+
+            InfoTable = AcpiDmTableInfoPptt2;
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "PPTT");
+            return (AE_ERROR);
+        }
+
+        /* Compile PPTT subtable body */
+
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+        DtInsertSubtable (ParentTable, Subtable);
+        PpttHeader->Length += (UINT8)(Subtable->Length);
+
+        /* Compile PPTT subtable additionals */
+
+        switch (PpttHeader->Type)
+        {
+        case ACPI_PPTT_TYPE_PROCESSOR:
+
+            PpttProcessor = ACPI_SUB_PTR (ACPI_PPTT_PROCESSOR,
+                Subtable->Buffer, sizeof (ACPI_SUBTABLE_HEADER));
+            if (PpttProcessor)
+            {
+                /* Compile initiator proximity domain list */
+
+                PpttProcessor->NumberOfPrivResources = 0;
+                while (*PFieldList)
+                {
+                    Status = DtCompileTable (PFieldList,
+                        AcpiDmTableInfoPptt0a, &Subtable);
+                    if (ACPI_FAILURE (Status))
+                    {
+                        return (Status);
+                    }
+                    if (!Subtable)
+                    {
+                        break;
+                    }
+
+                    DtInsertSubtable (ParentTable, Subtable);
+                    PpttHeader->Length += (UINT8)(Subtable->Length);
+                    PpttProcessor->NumberOfPrivResources++;
+                }
+            }
+            break;
+
+        case ACPI_PPTT_TYPE_CACHE:
+
+            PpttAcpiHeader = ACPI_CAST_PTR (ACPI_TABLE_HEADER,
+                AslGbl_RootTable->Buffer);
+            if (PpttAcpiHeader->Revision < 3)
+            {
+                break;
+            }
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoPptt1a,
+                &Subtable);
+            DtInsertSubtable (ParentTable, Subtable);
+            PpttHeader->Length += (UINT8)(Subtable->Length);
+            break;
+
+        default:
+
+            break;
+        }
+    }
+
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompilePrmt
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile PRMT.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompilePrmt (
+    void                    **List)
+{
+    ACPI_STATUS             Status;
+    ACPI_TABLE_PRMT_HEADER  *PrmtHeader;
+    ACPI_PRMT_MODULE_INFO   *PrmtModuleInfo;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    UINT32                  i, j;
+
+    ParentTable = DtPeekSubtable ();
+
+    /* Compile PRMT subtable header */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoPrmtHdr,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+    DtInsertSubtable (ParentTable, Subtable);
+    PrmtHeader = ACPI_CAST_PTR (ACPI_TABLE_PRMT_HEADER, Subtable->Buffer);
+
+    for (i = 0; i < PrmtHeader->ModuleInfoCount; i++)
+    {
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoPrmtModule,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+        DtInsertSubtable (ParentTable, Subtable);
+        PrmtModuleInfo = ACPI_CAST_PTR (ACPI_PRMT_MODULE_INFO, Subtable->Buffer);
+
+        for (j = 0; j < PrmtModuleInfo->HandlerInfoCount; j++)
+        {
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoPrmtHandler,
+                &Subtable);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
+            DtInsertSubtable (ParentTable, Subtable);
+        }
+    }
+
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompileRgrt
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile RGRT.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompileRgrt (
+    void                    **List)
+{
+    ACPI_STATUS             Status;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+
+
+    /* Compile the main table */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoRgrt,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+
+    /* Compile the "Subtable" -- actually just the binary (PNG) image */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoRgrt0,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    DtInsertSubtable (ParentTable, Subtable);
+    return (AE_OK);
 }
 
 
@@ -989,19 +1401,19 @@ DtCompileS3pt (
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoS3pt,
-        &Gbl_RootTable, TRUE);
+        &AslGbl_RootTable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
     }
 
-    DtPushSubtable (Gbl_RootTable);
+    DtPushSubtable (AslGbl_RootTable);
 
     while (*PFieldList)
     {
         SubtableStart = *PFieldList;
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoS3ptHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1031,7 +1443,7 @@ DtCompileS3pt (
             return (AE_ERROR);
         }
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1039,6 +1451,307 @@ DtCompileS3pt (
 
         ParentTable = DtPeekSubtable ();
         DtInsertSubtable (ParentTable, Subtable);
+        DtPopSubtable ();
+    }
+
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompileSdev
+ *
+ * PARAMETERS:  List                - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile SDEV.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompileSdev (
+    void                    **List)
+{
+    ACPI_STATUS                 Status;
+    ACPI_SDEV_HEADER            *SdevHeader;
+    ACPI_SDEV_HEADER            *SecureComponentHeader;
+    DT_SUBTABLE                 *Subtable;
+    DT_SUBTABLE                 *ParentTable;
+    ACPI_DMTABLE_INFO           *InfoTable;
+    ACPI_DMTABLE_INFO           *SecureComponentInfoTable = NULL;
+    DT_FIELD                    **PFieldList = (DT_FIELD **) List;
+    DT_FIELD                    *SubtableStart;
+    ACPI_SDEV_PCIE              *Pcie = NULL;
+    ACPI_SDEV_NAMESPACE         *Namesp = NULL;
+    UINT32                      EntryCount;
+    ACPI_SDEV_SECURE_COMPONENT  *SecureComponent = NULL;
+    UINT16                      ComponentLength = 0;
+
+
+    /* Subtables */
+
+    while (*PFieldList)
+    {
+        /* Compile common SDEV subtable header */
+
+        SubtableStart = *PFieldList;
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdevHdr,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        DtPushSubtable (Subtable);
+
+        SdevHeader = ACPI_CAST_PTR (ACPI_SDEV_HEADER, Subtable->Buffer);
+        SdevHeader->Length = (UINT8)(sizeof (ACPI_SDEV_HEADER));
+
+        switch (SdevHeader->Type)
+        {
+        case ACPI_SDEV_TYPE_NAMESPACE_DEVICE:
+
+            InfoTable = AcpiDmTableInfoSdev0;
+            Namesp = ACPI_CAST_PTR (ACPI_SDEV_NAMESPACE, Subtable->Buffer);
+            SecureComponent = ACPI_CAST_PTR (ACPI_SDEV_SECURE_COMPONENT,
+                ACPI_ADD_PTR (UINT8, Subtable->Buffer, sizeof(ACPI_SDEV_NAMESPACE)));
+            break;
+
+        case ACPI_SDEV_TYPE_PCIE_ENDPOINT_DEVICE:
+
+            InfoTable = AcpiDmTableInfoSdev1;
+            Pcie = ACPI_CAST_PTR (ACPI_SDEV_PCIE, Subtable->Buffer);
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "SDEV");
+            return (AE_ERROR);
+        }
+
+        /* Compile SDEV subtable body */
+
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+
+        /* Optional data fields are appended to the main subtable body */
+
+        switch (SdevHeader->Type)
+        {
+        case ACPI_SDEV_TYPE_NAMESPACE_DEVICE:
+
+            /*
+             * Device Id Offset will be be calculated differently depending on
+             * the presence of secure access components.
+             */
+            Namesp->DeviceIdOffset = 0;
+            ComponentLength = 0;
+
+            /* If the secure access component exists, get the structures */
+
+            if (SdevHeader->Flags & ACPI_SDEV_SECURE_COMPONENTS_PRESENT)
+            {
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdev0b,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+                ParentTable = DtPeekSubtable ();
+                DtInsertSubtable (ParentTable, Subtable);
+
+                Namesp->DeviceIdOffset += sizeof (ACPI_SDEV_SECURE_COMPONENT);
+
+                /* Compile a secure access component header */
+
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdevSecCompHdr,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+                ParentTable = DtPeekSubtable ();
+                DtInsertSubtable (ParentTable, Subtable);
+
+                /* Compile the secure access component */
+
+                SecureComponentHeader = ACPI_CAST_PTR (ACPI_SDEV_HEADER, Subtable->Buffer);
+                switch (SecureComponentHeader->Type)
+                {
+                case ACPI_SDEV_TYPE_ID_COMPONENT:
+
+                    SecureComponentInfoTable = AcpiDmTableInfoSdevSecCompId;
+                    Namesp->DeviceIdOffset += sizeof (ACPI_SDEV_ID_COMPONENT);
+                    ComponentLength = sizeof (ACPI_SDEV_ID_COMPONENT);
+                    break;
+
+                case ACPI_SDEV_TYPE_MEM_COMPONENT:
+
+                    SecureComponentInfoTable = AcpiDmTableInfoSdevSecCompMem;
+                    Namesp->DeviceIdOffset += sizeof (ACPI_SDEV_MEM_COMPONENT);
+                    ComponentLength = sizeof (ACPI_SDEV_MEM_COMPONENT);
+                    break;
+
+                default:
+
+                    /* Any other secure component types are undefined */
+
+                    return (AE_ERROR);
+                }
+
+                Status = DtCompileTable (PFieldList, SecureComponentInfoTable,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+                ParentTable = DtPeekSubtable ();
+                DtInsertSubtable (ParentTable, Subtable);
+
+                SecureComponent->SecureComponentOffset =
+                    sizeof (ACPI_SDEV_NAMESPACE) + sizeof (ACPI_SDEV_SECURE_COMPONENT);
+                SecureComponent->SecureComponentLength = ComponentLength;
+
+
+                /*
+                 * Add the secure component to the subtable to be added for the
+                 * the namespace subtable's length
+                 */
+                ComponentLength += sizeof (ACPI_SDEV_SECURE_COMPONENT);
+            }
+
+            /* Append DeviceId namespace string */
+
+            Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdev0a,
+                &Subtable);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
+
+            if (!Subtable)
+            {
+                break;
+            }
+
+            ParentTable = DtPeekSubtable ();
+            DtInsertSubtable (ParentTable, Subtable);
+
+            Namesp->DeviceIdOffset += sizeof (ACPI_SDEV_NAMESPACE);
+
+            Namesp->DeviceIdLength = (UINT16) Subtable->Length;
+
+            /* Append Vendor data */
+
+            Namesp->VendorDataLength = 0;
+            Namesp->VendorDataOffset = 0;
+
+            if (*PFieldList)
+            {
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdev1b,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+
+                if (Subtable)
+                {
+                    ParentTable = DtPeekSubtable ();
+                    DtInsertSubtable (ParentTable, Subtable);
+
+                    Namesp->VendorDataOffset =
+                        Namesp->DeviceIdOffset + Namesp->DeviceIdLength;
+                    Namesp->VendorDataLength =
+                        (UINT16) Subtable->Length;
+
+                    /* Final size of entire namespace structure */
+
+                    SdevHeader->Length = (UINT16)(sizeof(ACPI_SDEV_NAMESPACE) +
+                        Subtable->Length + Namesp->DeviceIdLength) + ComponentLength;
+                }
+            }
+
+            break;
+
+        case ACPI_SDEV_TYPE_PCIE_ENDPOINT_DEVICE:
+
+            /* Append the PCIe path info first */
+
+            EntryCount = 0;
+            while (*PFieldList && !strcmp ((*PFieldList)->Name, "Device"))
+            {
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdev1a,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+
+                if (!Subtable)
+                {
+                    DtPopSubtable ();
+                    break;
+                }
+
+                ParentTable = DtPeekSubtable ();
+                DtInsertSubtable (ParentTable, Subtable);
+                EntryCount++;
+            }
+
+            /* Path offset will point immediately after the main subtable */
+
+            Pcie->PathOffset = sizeof (ACPI_SDEV_PCIE);
+            Pcie->PathLength = (UINT16)
+                (EntryCount * sizeof (ACPI_SDEV_PCIE_PATH));
+
+            /* Append the Vendor Data last */
+
+            Pcie->VendorDataLength = 0;
+            Pcie->VendorDataOffset = 0;
+
+            if (*PFieldList)
+            {
+                Status = DtCompileTable (PFieldList, AcpiDmTableInfoSdev1b,
+                    &Subtable);
+                if (ACPI_FAILURE (Status))
+                {
+                    return (Status);
+                }
+
+                if (Subtable)
+                {
+                    ParentTable = DtPeekSubtable ();
+                    DtInsertSubtable (ParentTable, Subtable);
+
+                    Pcie->VendorDataOffset =
+                        Pcie->PathOffset + Pcie->PathLength;
+                    Pcie->VendorDataLength = (UINT16)
+                        Subtable->Length;
+                }
+            }
+
+            SdevHeader->Length =
+                sizeof (ACPI_SDEV_PCIE) +
+                Pcie->PathLength + Pcie->VendorDataLength;
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "SDEV");
+            return (AE_ERROR);
+        }
+
         DtPopSubtable ();
     }
 
@@ -1071,7 +1784,7 @@ DtCompileSlic (
     while (*PFieldList)
     {
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoSlic,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1108,12 +1821,14 @@ DtCompileSlit (
     DT_SUBTABLE             *ParentTable;
     DT_FIELD                **PFieldList = (DT_FIELD **) List;
     DT_FIELD                *FieldList;
+    DT_FIELD                *EndOfFieldList = NULL;
     UINT32                  Localities;
+    UINT32                  LocalityListLength;
     UINT8                   *LocalityBuffer;
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoSlit,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1124,6 +1839,7 @@ DtCompileSlit (
 
     Localities = *ACPI_CAST_PTR (UINT32, Subtable->Buffer);
     LocalityBuffer = UtLocalCalloc (Localities);
+    LocalityListLength = 0;
 
     /* Compile each locality buffer */
 
@@ -1133,9 +1849,21 @@ DtCompileSlit (
         DtCompileBuffer (LocalityBuffer,
             FieldList->Value, FieldList, Localities);
 
+        LocalityListLength++;
         DtCreateSubtable (LocalityBuffer, Localities, &Subtable);
         DtInsertSubtable (ParentTable, Subtable);
+        EndOfFieldList = FieldList;
         FieldList = FieldList->Next;
+    }
+
+    if (LocalityListLength != Localities)
+    {
+        sprintf(AslGbl_MsgBuffer,
+            "Found %u entries, must match LocalityCount: %u",
+            LocalityListLength, Localities);
+        DtError (ASL_ERROR, ASL_MSG_ENTRY_LIST, EndOfFieldList, AslGbl_MsgBuffer);
+        ACPI_FREE (LocalityBuffer);
+        return (AE_LIMIT);
     }
 
     ACPI_FREE (LocalityBuffer);
@@ -1169,7 +1897,7 @@ DtCompileSrat (
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoSrat,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1182,7 +1910,7 @@ DtCompileSrat (
     {
         SubtableStart = *PFieldList;
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoSratHdr,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1216,13 +1944,23 @@ DtCompileSrat (
             InfoTable = AcpiDmTableInfoSrat3;
             break;
 
+        case ACPI_SRAT_TYPE_GIC_ITS_AFFINITY:
+
+            InfoTable = AcpiDmTableInfoSrat4;
+            break;
+
+        case ACPI_SRAT_TYPE_GENERIC_AFFINITY:
+
+            InfoTable = AcpiDmTableInfoSrat5;
+            break;
+
         default:
 
             DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "SRAT");
             return (AE_ERROR);
         }
 
-        Status = DtCompileTable (PFieldList, InfoTable, &Subtable, TRUE);
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1262,7 +2000,7 @@ DtCompileStao (
     /* Compile the main table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoStao,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1276,7 +2014,64 @@ DtCompileStao (
     while (*PFieldList)
     {
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoStaoStr,
-            &Subtable, TRUE);
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+    }
+
+    return (AE_OK);
+}
+
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompileSvkl
+ *
+ * PARAMETERS:  PFieldList          - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile SVKL.
+ *
+ * NOTES: SVKL is essentially a flat table, with a small main table and
+ *          a variable number of a single type of subtable.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompileSvkl (
+    void                    **List)
+{
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    ACPI_STATUS             Status;
+
+
+    /* Compile the main table */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoSvkl,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+
+    /* Compile each subtable */
+
+    while (*PFieldList)
+    {
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoSvkl0,
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -1316,7 +2111,7 @@ DtCompileTcpa (
     /* Compile the main table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoTcpaHdr,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1336,13 +2131,13 @@ DtCompileTcpa (
     case ACPI_TCPA_CLIENT_TABLE:
 
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoTcpaClient,
-            &Subtable, TRUE);
+            &Subtable);
         break;
 
     case ACPI_TCPA_SERVER_TABLE:
 
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoTcpaServer,
-            &Subtable, TRUE);
+            &Subtable);
         break;
 
     default:
@@ -1355,6 +2150,175 @@ DtCompileTcpa (
 
     ParentTable = DtPeekSubtable ();
     DtInsertSubtable (ParentTable, Subtable);
+    return (Status);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompileTpm2Rev3
+ *
+ * PARAMETERS:  PFieldList          - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile TPM2 revision 3
+ *
+ *****************************************************************************/
+static ACPI_STATUS
+DtCompileTpm2Rev3 (
+    void                    **List)
+{
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    DT_SUBTABLE             *Subtable;
+    ACPI_TABLE_TPM23        *Tpm23Header;
+    DT_SUBTABLE             *ParentTable;
+    ACPI_STATUS             Status = AE_OK;
+
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoTpm23,
+        &Subtable);
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+    Tpm23Header = ACPI_CAST_PTR (ACPI_TABLE_TPM23, ParentTable->Buffer);
+
+    /* Subtable type depends on the StartMethod */
+
+    switch (Tpm23Header->StartMethod)
+    {
+    case ACPI_TPM23_ACPI_START_METHOD:
+
+        /* Subtable specific to to ARM_SMC */
+
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoTpm23a,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        break;
+
+    default:
+        break;
+    }
+
+    return (Status);
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    DtCompileTpm2
+ *
+ * PARAMETERS:  PFieldList          - Current field list pointer
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Compile TPM2.
+ *
+ *****************************************************************************/
+
+ACPI_STATUS
+DtCompileTpm2 (
+    void                    **List)
+{
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    DT_SUBTABLE             *Subtable;
+    ACPI_TABLE_TPM2         *Tpm2Header;
+    DT_SUBTABLE             *ParentTable;
+    ACPI_STATUS             Status = AE_OK;
+    ACPI_TABLE_HEADER       *Header;
+
+
+    ParentTable = DtPeekSubtable ();
+
+    Header = ACPI_CAST_PTR (ACPI_TABLE_HEADER, ParentTable->Buffer);
+
+    if (Header->Revision == 3)
+    {
+        return (DtCompileTpm2Rev3 (List));
+    }
+
+    /* Compile the main table */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoTpm2,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+
+    Tpm2Header = ACPI_CAST_PTR (ACPI_TABLE_TPM2, ParentTable->Buffer);
+
+    /* Method parameters */
+    /* Optional: Log area minimum length */
+    /* Optional: Log area start address */
+    /* TBD: Optional fields above not fully implemented (not optional at this time) */
+
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoTpm2a,
+        &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    ParentTable = DtPeekSubtable ();
+    DtInsertSubtable (ParentTable, Subtable);
+
+
+    /* Subtable type depends on the StartMethod */
+
+    switch (Tpm2Header->StartMethod)
+    {
+    case ACPI_TPM2_COMMAND_BUFFER_WITH_ARM_SMC:
+
+        /* Subtable specific to to ARM_SMC */
+
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoTpm211,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        break;
+
+    case ACPI_TPM2_START_METHOD:
+    case ACPI_TPM2_MEMORY_MAPPED:
+    case ACPI_TPM2_COMMAND_BUFFER:
+    case ACPI_TPM2_COMMAND_BUFFER_WITH_START_METHOD:
+        break;
+
+    case ACPI_TPM2_RESERVED1:
+    case ACPI_TPM2_RESERVED3:
+    case ACPI_TPM2_RESERVED4:
+    case ACPI_TPM2_RESERVED5:
+    case ACPI_TPM2_RESERVED9:
+    case ACPI_TPM2_RESERVED10:
+
+        AcpiOsPrintf ("\n**** Reserved TPM2 Start Method type 0x%X\n",
+            Tpm2Header->StartMethod);
+        Status = AE_ERROR;
+        break;
+
+    case ACPI_TPM2_NOT_ALLOWED:
+    default:
+
+        AcpiOsPrintf ("\n**** Unknown TPM2 Start Method type 0x%X\n",
+            Tpm2Header->StartMethod);
+        Status = AE_ERROR;
+        break;
+    }
+
     return (Status);
 }
 
@@ -1433,7 +2397,7 @@ DtCompileUefi (
     /* Compile the predefined portion of the UEFI table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoUefi,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1457,26 +2421,106 @@ DtCompileUefi (
 
 /******************************************************************************
  *
- * FUNCTION:    DtCompileVrtc
+ * FUNCTION:    DtCompileViot
  *
  * PARAMETERS:  List                - Current field list pointer
  *
  * RETURN:      Status
  *
- * DESCRIPTION: Compile VRTC.
+ * DESCRIPTION: Compile VIOT.
  *
  *****************************************************************************/
 
 ACPI_STATUS
-DtCompileVrtc (
+DtCompileViot (
     void                    **List)
 {
     ACPI_STATUS             Status;
+    DT_SUBTABLE             *Subtable;
+    DT_SUBTABLE             *ParentTable;
+    DT_FIELD                **PFieldList = (DT_FIELD **) List;
+    DT_FIELD                *SubtableStart;
+    ACPI_TABLE_VIOT         *Viot;
+    ACPI_VIOT_HEADER        *ViotHeader;
+    ACPI_DMTABLE_INFO       *InfoTable;
+    UINT16                  NodeCount;
 
+    ParentTable = DtPeekSubtable ();
 
-    Status = DtCompileTwoSubtables (List,
-        AcpiDmTableInfoVrtc, AcpiDmTableInfoVrtc0);
-    return (Status);
+    Status = DtCompileTable (PFieldList, AcpiDmTableInfoViot, &Subtable);
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+    DtInsertSubtable (ParentTable, Subtable);
+
+    /*
+     * Using ACPI_SUB_PTR, We needn't define a separate structure. Care
+     * should be taken to avoid accessing ACPI_TABLE_HEADER fields.
+     */
+    Viot = ACPI_SUB_PTR (ACPI_TABLE_VIOT, Subtable->Buffer,
+        sizeof (ACPI_TABLE_HEADER));
+
+    Viot->NodeOffset = sizeof (ACPI_TABLE_VIOT);
+
+    NodeCount = 0;
+    while (*PFieldList) {
+        SubtableStart = *PFieldList;
+        Status = DtCompileTable (PFieldList, AcpiDmTableInfoViotHeader,
+            &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        DtPushSubtable (Subtable);
+
+        ViotHeader = ACPI_CAST_PTR (ACPI_VIOT_HEADER, Subtable->Buffer);
+
+        switch (ViotHeader->Type)
+        {
+        case ACPI_VIOT_NODE_PCI_RANGE:
+
+            InfoTable = AcpiDmTableInfoViot1;
+            break;
+
+        case ACPI_VIOT_NODE_MMIO:
+
+            InfoTable = AcpiDmTableInfoViot2;
+            break;
+
+        case ACPI_VIOT_NODE_VIRTIO_IOMMU_PCI:
+
+            InfoTable = AcpiDmTableInfoViot3;
+            break;
+
+        case ACPI_VIOT_NODE_VIRTIO_IOMMU_MMIO:
+
+            InfoTable = AcpiDmTableInfoViot4;
+            break;
+
+        default:
+
+            DtFatal (ASL_MSG_UNKNOWN_SUBTABLE, SubtableStart, "VIOT");
+            return (AE_ERROR);
+        }
+
+        Status = DtCompileTable (PFieldList, InfoTable, &Subtable);
+        if (ACPI_FAILURE (Status))
+        {
+            return (Status);
+        }
+
+        ParentTable = DtPeekSubtable ();
+        DtInsertSubtable (ParentTable, Subtable);
+        DtPopSubtable ();
+        NodeCount++;
+    }
+
+    Viot->NodeCount = NodeCount;
+    return (AE_OK);
 }
 
 
@@ -1532,7 +2576,7 @@ DtCompileWpbt (
     /* Compile the main table */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoWpbt,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1544,7 +2588,7 @@ DtCompileWpbt (
     /* Compile the argument list subtable */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoWpbt0,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -1654,17 +2698,17 @@ DtCompileGeneric (
         Info = DtGetGenericTableInfo ((*PFieldList)->Name);
         if (!Info)
         {
-            sprintf (MsgBuffer, "Generic data type \"%s\" not found",
+            sprintf (AslGbl_MsgBuffer, "Generic data type \"%s\" not found",
                 (*PFieldList)->Name);
             DtNameError (ASL_ERROR, ASL_MSG_INVALID_FIELD_NAME,
-                (*PFieldList), MsgBuffer);
+                (*PFieldList), AslGbl_MsgBuffer);
 
             *PFieldList = (*PFieldList)->Next;
             continue;
         }
 
         Status = DtCompileTable (PFieldList, Info,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_SUCCESS (Status))
         {
             DtInsertSubtable (ParentTable, Subtable);
@@ -1679,10 +2723,10 @@ DtCompileGeneric (
 
             if (Status == AE_NOT_FOUND)
             {
-                sprintf (MsgBuffer, "Generic data type \"%s\" not found",
+                sprintf (AslGbl_MsgBuffer, "Generic data type \"%s\" not found",
                     (*PFieldList)->Name);
                 DtNameError (ASL_ERROR, ASL_MSG_INVALID_FIELD_NAME,
-                    (*PFieldList), MsgBuffer);
+                    (*PFieldList), AslGbl_MsgBuffer);
             }
         }
     }

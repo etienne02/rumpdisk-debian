@@ -1,4 +1,4 @@
-/*	$NetBSD: pcb.h,v 1.24 2011/08/16 06:58:15 matt Exp $	*/
+/*	$NetBSD: pcb.h,v 1.28 2021/03/13 17:14:11 skrll Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -45,7 +45,7 @@
 #include <mips/reg.h>
 
 struct pcb_faultinfo {
-	void *pfi_faultpte;
+	void *pfi_faultptep;
 	vaddr_t pfi_faultaddr;
 	u_int pfi_repeats;
 	pid_t pfi_lastpid;
@@ -56,8 +56,8 @@ struct pcb_faultinfo {
  * MIPS process control block
  */
 struct pcb {
-	label_t pcb_context;		/* kernel context for resume */
-	void *	pcb_onfault;		/* for copyin/copyout faults */
+	mips_label_t pcb_context;	/* kernel context for resume */
+	void *pcb_onfault;		/* for copyin/copyout faults */
 	uint32_t pcb_ppl;		/* previous priority level */
 	struct fpreg pcb_fpregs;	/* saved floating point registers */
 	struct dspreg pcb_dspregs;	/* saved DSP registers */
@@ -76,4 +76,10 @@ struct md_coredump {
 #ifdef _KERNEL
 #define	PCB_FSR(pcb)	((pcb)->pcb_fpregs.r_regs[_R_FSR - _FPBASE])
 #endif
+
+#ifndef _KERNEL
+/* Connect the dots for crash(8). */
+vaddr_t db_mach_addr_cpuswitch(void);
+#endif
+
 #endif /*_MIPS_PCB_H_*/

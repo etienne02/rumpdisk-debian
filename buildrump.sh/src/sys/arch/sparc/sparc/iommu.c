@@ -1,4 +1,4 @@
-/*	$NetBSD: iommu.c,v 1.95 2012/01/27 18:53:02 para Exp $ */
+/*	$NetBSD: iommu.c,v 1.100 2021/08/09 21:08:06 andvar Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: iommu.c,v 1.95 2012/01/27 18:53:02 para Exp $");
+__KERNEL_RCSID(0, "$NetBSD: iommu.c,v 1.100 2021/08/09 21:08:06 andvar Exp $");
 
 #include "opt_sparc_arch.h"
 
@@ -276,9 +276,7 @@ iommu_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dvmamap = extent_create("iommudvma",
 					IOMMU_DVMA_BASE, IOMMU_DVMA_END,
-					0, 0, EX_NOWAIT);
-	if (sc->sc_dvmamap == NULL)
-		panic("iommu: unable to allocate DVMA map");
+					0, 0, EX_WAITOK);
 
 	/*
 	 * If we are attaching implicit iommu on JS1/OF we do not have
@@ -300,7 +298,8 @@ iommu_attach(device_t parent, device_t self, void *aux)
 		ia.iom_reg = &sbus_iommu_reg;
 		ia.iom_nreg = 1;
 
-		(void) config_found(self, (void *)&ia, iommu_print);
+		config_found(self, (void *)&ia, iommu_print,
+		    CFARGS(.devhandle = prom_node_to_devhandle(node)));
 		return;
 	}
 
@@ -323,7 +322,8 @@ iommu_attach(device_t parent, device_t self, void *aux)
 		prom_getprop(node, "reg", sizeof(struct openprom_addr),
 			&ia.iom_nreg, &ia.iom_reg);
 
-		(void) config_found(self, (void *)&ia, iommu_print);
+		config_found(self, (void *)&ia, iommu_print,
+		    CFARGS(.devhandle = prom_node_to_devhandle(node)));
 		if (ia.iom_reg != NULL)
 			free(ia.iom_reg, M_DEVBUF);
 	}
@@ -763,7 +763,7 @@ iommu_dmamem_map(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 	/*
 	 * In case the segment has already been loaded by
 	 * iommu_dmamap_load_raw(), find a region of kernel virtual
-	 * addresses that can accommodate our aligment requirements.
+	 * addresses that can accommodate our alignment requirements.
 	 */
 	va = _bus_dma_valloc_skewed(size, 0, align,
 				    segs[0].ds_addr & (align - 1));

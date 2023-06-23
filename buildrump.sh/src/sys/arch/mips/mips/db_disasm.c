@@ -1,4 +1,4 @@
-/*	$NetBSD: db_disasm.c,v 1.30 2015/06/27 03:31:29 matt Exp $	*/
+/*	$NetBSD: db_disasm.c,v 1.43 2021/05/23 23:22:55 dholland Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.30 2015/06/27 03:31:29 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.43 2021/05/23 23:22:55 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -47,6 +47,8 @@ __KERNEL_RCSID(0, "$NetBSD: db_disasm.c,v 1.30 2015/06/27 03:31:29 matt Exp $");
 
 #include <machine/db_machdep.h>
 
+#include <ddb/db_access.h>
+#include <ddb/db_user.h>
 #include <ddb/db_interface.h>
 #include <ddb/db_output.h>
 #include <ddb/db_extern.h>
@@ -79,12 +81,12 @@ static const char * const spec_name[64] = {
 /*56 */ "dsll","spec71","dsrl","dsra","dsll32","spec75","dsrl32","dsra32"
 };
 
-static const char * const spec2_name[64] = {	/* QED RM4650, R5000, etc. */
+static const char * const spec2_name[64] = {	/* QED, MIPS32/64, etc. */
 	[OP_MADD] = "madd",
 	[OP_MADDU] = "maddu",
 	[OP_MUL] = "mul",
 #ifdef __OCTEON__
-	[OP_CVM_DMUL] = "baddu",
+	[OP_CVM_DMUL] = "dmul",
 #endif
 	[OP_MSUB] = "msub",
 	[OP_MSUBU] = "msubu",
@@ -131,6 +133,7 @@ static const char * const spec3_name[64] = {
 	[OP_SWRE] = "swre",
 	[OP_PREFE] = "prefe",
 	[OP_DBSHFL] = "dbshfl",
+	[OP_CACHE_R6] = "cache",
 	[OP_LBUE] = "lbue",
 	[OP_LHUE] = "lhue",
 	[OP_LBE] = "lbe",
@@ -223,19 +226,16 @@ db_disasm(db_addr_t loc, bool altfmt)
 
 	/*
 	 * Take some care with addresses to not UTLB here as it
-	 * loses the current debugging context.  KSEG2 not checked.
+	 * loses the current debugging context.  KSEG2 and XKSEG
+	 * are not checked.
+	 * Update: db_read_bytes is supposed to do that, and now
+	 * does, so we can use that.
+	 *
+	 * XXX db_read_bytes_can't return failure but instead zeros
+	 * the output. That's ok here, but if ever improved the
+	 * proper thing here on error is to return the original loc.
 	 */
-	if (loc < MIPS_KSEG0_START) {
-		instr = ufetch_uint32((void *)loc);
-		if (instr == 0xffffffff) {
-			/* "sd ra, -1(ra)" is unlikely */
-			db_printf("invalid address.\n");
-			return loc;
-		}
-	}
-	else {
-		instr =  *(uint32_t *)loc;
-	}
+	db_read_bytes(loc, sizeof(instr), (void *)&instr);
 
 	return (db_disasm_insn(instr, loc, altfmt));
 }
@@ -256,34 +256,52 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 	switch (i.JType.op) {
 	case OP_SPECIAL: {
 		const char *name = spec_name[i.RType.func];
-		if (i.word == 0) {
-			db_printf("nop");
+
+		/* Handle varations of NOPs */
+		if ((i.RType.func == OP_SLL) &&
+		    (i.RType.rs == 0) &&
+		    (i.RType.rt == 0) &&
+		    (i.RType.rd == 0)) {
+			switch (i.RType.shamt) {
+			case OP_SLL_NOP:
+				db_printf("nop");
+				break;
+			case OP_SLL_SSNOP:
+				db_printf("ssnop");
+				break;
+			case OP_SLL_EHB:
+				db_printf("ehb");
+				break;
+			case OP_SLL_PAUSE:
+				db_printf("pause");
+				break;
+			default:
+				db_printf("nop *");	/* "undefined" NOP */
+				break;
+			}
 			break;
 		}
-		if (i.word == (1 << 6)) {
-			db_printf("ssnop");
-			break;
-		}
-		if (i.word == (3 << 6)) {
-			db_printf("ehb");
-			break;
-		}
-		/* XXX
-		 * "addu" is a "move" only in 32-bit mode.  What's the correct
-		 * answer - never decode addu/daddu as "move"?
+
+		/*
+		 * The following are equivalents of a "move dst,src":
+		 *	addu	dst,src,zero	(in 32-bit mode)
+		 *	daddu	dst,src,zero	(in 64-bit mode)
+		 *	or	dst,src,zero	(in 32- and 64-bit modes)
 		 */
-		if (true
 #ifdef __mips_o32
-		    && i.RType.func == OP_ADDU
+#define	OP_MOVE_ADDU	OP_ADDU
 #else
-		    && i.RType.func == OP_DADDU
+#define	OP_MOVE_ADDU	OP_DADDU
 #endif
+		if (true &&
+		    ((i.RType.func == OP_OR) || (i.RType.func == OP_MOVE_ADDU))
 		    && i.RType.rt == 0) {
 			db_printf("move\t%s,%s",
 			    reg_name[i.RType.rd],
 			    reg_name[i.RType.rs]);
 			break;
 		}
+
 		if ((i.RType.func == OP_SRL || i.RType.func == OP_SRLV)
 		    && i.RType.rs == 1) {
 			name = (i.RType.func == OP_SRL) ? "rotr" : "rotrv";
@@ -360,6 +378,13 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 
 		case OP_BREAK:
 			db_printf("\t%d", (i.RType.rs << 5) | i.RType.rt);
+			break;
+
+		case OP_TEQ:
+			db_printf("\t%s,%s,%#x",
+			    reg_name[i.RType.rs],
+			    reg_name[i.RType.rt],
+			    (i.RType.rd << 5) | i.RType.shamt);
 			break;
 
 		default:
@@ -510,10 +535,37 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 			}
 			break;
 		}
-		db_printf("%s\t%s,%s",
-			spec3_name[i.RType.func],
-	    		reg_name[i.RType.rs],
-	    		reg_name[i.RType.rt]);
+		switch (i.RType.func) {
+		case OP_LWLE:
+		case OP_LWRE:
+		case OP_CACHEE:
+		case OP_SBE:
+		case OP_SHE:
+		case OP_SCE:
+		case OP_SWE:
+		case OP_SWLE:
+		case OP_SWRE:
+		case OP_PREFE:
+		case OP_CACHE_R6:
+		case OP_LBUE:
+		case OP_LHUE:
+		case OP_LBE:
+		case OP_LHE:
+		case OP_LLE:
+		case OP_LWE:
+			db_printf("%s\t%s,%d(%s)",
+				spec3_name[i.RType.func],
+				reg_name[i.RType.rs],
+				i.S3OType.offset > 255 ?
+				  -i.S3OType.offset : i.S3OType.offset,
+				reg_name[i.RType.rt]);
+			break;
+		default:
+			db_printf("%s\t%s,%s",
+				spec3_name[i.RType.func],
+				reg_name[i.RType.rs],
+				reg_name[i.RType.rt]);
+		}
 		break;
 
 	case OP_REGIMM:
@@ -556,7 +608,7 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 		case OP_BCy:
 
 			db_printf("bc0%c\t",
-			    "ft"[i.RType.rt & COPz_BC_TF_MASK]);
+			    "ft"[i.RType.rt & COPz_BC_TRUE]);
 			goto pr_displ;
 
 		case OP_MT:
@@ -607,7 +659,7 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 		case OP_BCx:
 		case OP_BCy:
 			db_printf("bc1%c\t",
-			    "ft"[i.RType.rt & COPz_BC_TF_MASK]);
+			    "ft"[i.RType.rt & COPz_BC_TRUE]);
 			goto pr_displ;
 
 		case OP_MT:
@@ -623,13 +675,13 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 			break;
 
 		case OP_CT:
-			db_printf("ctc1\t%s,f%d",
+			db_printf("ctc1\t%s,%d",
 			    reg_name[i.RType.rt],
 			    i.RType.rd);
 			break;
 
 		case OP_CF:
-			db_printf("cfc1\t%s,f%d",
+			db_printf("cfc1\t%s,%d",
 			    reg_name[i.RType.rt],
 			    i.RType.rd);
 			break;
@@ -671,7 +723,7 @@ db_disasm_insn(int insn, db_addr_t loc, bool altfmt)
 		case OP_BCx:
 		case OP_BCy:
 			db_printf("bc2%c\t",
-			    "ft"[i.RType.rt & COPz_BC_TF_MASK]);
+			    "ft"[i.RType.rt & COPz_BC_TRUE]);
 			goto pr_displ;
 
 		case OP_MT:
@@ -849,13 +901,11 @@ print_addr(db_addr_t loc)
 	sym = db_search_symbol(loc, DB_STGY_ANY, &diff);
 	db_symbol_values(sym, &symname, 0);
 
+	db_printf("%#"PRIxVADDR, loc);
 	if (symname) {
-		if (diff == 0)
-			db_printf("%s", symname);
-		else
-			db_printf("<%s+%"DDB_EXPR_FMT"x>", symname, diff);
-		db_printf("\t[addr:%#"PRIxVADDR"]", loc);
-	} else {
-		db_printf("%#"PRIxVADDR, loc);
+		db_printf(" <%s", symname);
+		if (diff != 0)
+			db_printf("+%#"DDB_EXPR_FMT"x", diff);
+		db_printf(">");
 	}
 }

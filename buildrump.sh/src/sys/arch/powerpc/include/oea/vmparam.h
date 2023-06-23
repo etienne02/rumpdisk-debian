@@ -47,54 +47,54 @@
 #define	PAGE_MASK	(PAGE_SIZE - 1)
 
 #ifndef	USRSTACK
-#define	USRSTACK		VM_MAXUSER_ADDRESS
+#define	USRSTACK	VM_MAXUSER_ADDRESS
 #endif
 
 #ifndef	USRSTACK32
-#define	USRSTACK32		VM_MAXUSER_ADDRESS32
+#define	USRSTACK32	VM_MAXUSER_ADDRESS32
 #endif
 
 #ifndef	MAXTSIZ
-#define	MAXTSIZ			(64*1024*1024)		/* maximum text size */
+#define	MAXTSIZ		(128*1024*1024)		/* maximum text size */
 #endif
 
 #ifndef	MAXDSIZ
-#define	MAXDSIZ			(1024*1024*1024)	/* maximum data size */
+#define	MAXDSIZ		(1024*1024*1024)	/* maximum data size */
 #endif
 
 #ifndef	MAXDSIZ32
-#define	MAXDSIZ32		(1024*1024*1024)	/* maximum data size */
+#define	MAXDSIZ32	(1024*1024*1024)	/* maximum data size */
 #endif
 
 #ifndef	MAXSSIZ
-#define	MAXSSIZ			(32*1024*1024)		/* maximum stack size */
+#define	MAXSSIZ		(32*1024*1024)		/* maximum stack size */
 #endif
 
 #ifndef	MAXSSIZ32
-#define	MAXSSIZ32		(32*1024*1024)		/* maximum stack size */
+#define	MAXSSIZ32	(32*1024*1024)		/* maximum stack size */
 #endif
 
 #ifndef	DFLDSIZ
-#define	DFLDSIZ			(256*1024*1024)		/* default data size */
+#define	DFLDSIZ		(256*1024*1024)		/* default data size */
 #endif
 
 #ifndef	DFLDSIZ32
-#define	DFLSSIZ32		(256*1024*1024)
+#define	DFLSSIZ32	(256*1024*1024)
 #endif
 
 #ifndef	DFLSSIZ
-#define	DFLSSIZ			(2*1024*1024)		/* default stack size */
+#define	DFLSSIZ		(2*1024*1024)		/* default stack size */
 #endif
 
 #ifndef	DFLSSIZ32
-#define	DFLSSIZ32		(2*1024*1024)		/* default stack size */
+#define	DFLSSIZ32	(2*1024*1024)		/* default stack size */
 #endif
 
 /*
  * Default number of pages in the user raw I/O map.
  */
 #ifndef USRIOSIZE
-#define	USRIOSIZE		1024
+#define	USRIOSIZE	1024
 #endif
 
 /*
@@ -102,7 +102,7 @@
  * considered very swappable.
  */
 #ifndef MAXSLP
-#define	MAXSLP			20
+#define	MAXSLP		20
 #endif
 
 /*
@@ -195,10 +195,6 @@
 
 #ifndef VM_PHYS_SIZE
 #define	VM_PHYS_SIZE		(USRIOSIZE * PAGE_SIZE)
-#endif
-
-#ifndef VM_MAX_KERNEL_BUF
-#define	VM_MAX_KERNEL_BUF	(SEGMENT_LENGTH * 3 / 4)
 #endif
 
 #endif /* _POWERPC_OEA_VMPARAM_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_misc.c,v 1.231 2015/03/14 08:32:08 njoly Exp $	*/
+/*	$NetBSD: linux_misc.c,v 1.251 2020/06/11 22:21:05 ad Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998, 1999, 2008 The NetBSD Foundation, Inc.
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_misc.c,v 1.231 2015/03/14 08:32:08 njoly Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_misc.c,v 1.251 2020/06/11 22:21:05 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -93,6 +93,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux_misc.c,v 1.231 2015/03/14 08:32:08 njoly Exp $
 #include <sys/swap.h>		/* for SWAP_ON */
 #include <sys/sysctl.h>		/* for KERN_DOMAINNAME */
 #include <sys/kauth.h>
+#include <sys/futex.h>
 
 #include <sys/ptrace.h>
 #include <machine/ptrace.h>
@@ -223,14 +224,16 @@ linux_sys_wait4(struct lwp *l, const struct linux_sys_wait4_args *uap, register_
 	proc_t *p;
 
 	linux_options = SCARG(uap, options);
-	options = WOPTSCHECKED;
 	if (linux_options & ~(LINUX_WAIT4_KNOWNFLAGS))
 		return (EINVAL);
 
+	options = 0;
 	if (linux_options & LINUX_WAIT4_WNOHANG)
 		options |= WNOHANG;
 	if (linux_options & LINUX_WAIT4_WUNTRACED)
 		options |= WUNTRACED;
+	if (linux_options & LINUX_WAIT4_WCONTINUED)
+		options |= WCONTINUED;
 	if (linux_options & LINUX_WAIT4_WALL)
 		options |= WALLSIG;
 	if (linux_options & LINUX_WAIT4_WCLONE)
@@ -238,7 +241,7 @@ linux_sys_wait4(struct lwp *l, const struct linux_sys_wait4_args *uap, register_
 # ifdef DIAGNOSTIC
 	if (linux_options & LINUX_WAIT4_WNOTHREAD)
 		printf("WARNING: %s: linux process %d.%d called "
-		       "waitpid with __WNOTHREAD set!",
+		       "waitpid with __WNOTHREAD set!\n",
 		       __FILE__, l->l_proc->p_pid, l->l_lid);
 
 # endif
@@ -349,6 +352,7 @@ linux_sys_uname(struct lwp *l, const struct linux_sys_uname_args *uap, register_
 	} */
 	struct linux_utsname luts;
 
+	memset(&luts, 0, sizeof(luts));
 	strlcpy(luts.l_sysname, linux_sysname, sizeof(luts.l_sysname));
 	strlcpy(luts.l_nodename, hostname, sizeof(luts.l_nodename));
 	strlcpy(luts.l_release, linux_release, sizeof(luts.l_release));
@@ -601,7 +605,7 @@ linux_sys_mprotect(struct lwp *l, const struct linux_sys_mprotect_args *uap, reg
 		}
 	}
 	vm_map_unlock(map);
-	return uvm_map_protect(map, start, end, prot, FALSE);
+	return uvm_map_protect_user(l, start, end, prot);
 }
 #endif /* USRSTACK */
 
@@ -707,10 +711,10 @@ linux_sys_getdents(struct lwp *l, const struct linux_sys_getdents_args *uap, reg
 	nbytes = SCARG(uap, count);
 	if (nbytes == 1) {	/* emulating old, broken behaviour */
 		nbytes = sizeof (idb);
-		buflen = max(va.va_blocksize, nbytes);
+		buflen = uimax(va.va_blocksize, nbytes);
 		oldcall = 1;
 	} else {
-		buflen = min(MAXBSIZE, nbytes);
+		buflen = uimin(MAXBSIZE, nbytes);
 		if (buflen < va.va_blocksize)
 			buflen = va.va_blocksize;
 		oldcall = 0;
@@ -746,8 +750,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic("linux_readdir");
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if (bdp->d_fileno == 0) {
 			inp += reclen;	/* it is a hole; squish it out */
 			if (cookie)
@@ -767,6 +773,7 @@ again:
 		 * we have to worry about touching user memory outside of
 		 * the copyout() call).
 		 */
+		memset(&idb, 0, sizeof(idb));
 		idb.d_ino = bdp->d_fileno;
 		/*
 		 * The old readdir() call misuses the offset and reclen fields.
@@ -785,7 +792,8 @@ again:
 			/* Linux puts d_type at the end of each record */
 			*((char *)&idb + idb.d_reclen - 1) = bdp->d_type;
 		}
-		strcpy(idb.d_name, bdp->d_name);
+		memcpy(idb.d_name, bdp->d_name,
+		    MIN(sizeof(idb.d_name), bdp->d_namlen + 1));
 		if ((error = copyout((void *)&idb, outp, linux_reclen)))
 			goto out;
 		/* advance past this real entry */
@@ -868,7 +876,7 @@ linux_select1(struct lwp *l, register_t *retval, int nfds, fd_set *readfds,
 		if ((error = copyin(timeout, &ltv, sizeof(ltv))))
 			return error;
 		uts.tv_sec = ltv.tv_sec;
-		uts.tv_nsec = ltv.tv_usec * 1000;
+		uts.tv_nsec = (long)((unsigned long)ltv.tv_usec * 1000);
 		if (itimespecfix(&uts)) {
 			/*
 			 * The timeval was invalid.  Convert it to something
@@ -921,6 +929,87 @@ linux_select1(struct lwp *l, register_t *retval, int nfds, fd_set *readfds,
 	}
 
 	return 0;
+}
+
+/*
+ * Derived from FreeBSD's sys/compat/linux/linux_misc.c:linux_pselect6()
+ * which was contributed by Dmitry Chagin
+ * https://svnweb.freebsd.org/base?view=revision&revision=283403
+ */
+int
+linux_sys_pselect6(struct lwp *l,
+	const struct linux_sys_pselect6_args *uap, register_t *retval)
+{
+	/* {
+		syscallarg(int) nfds;
+		syscallarg(fd_set *) readfds;
+		syscallarg(fd_set *) writefds;
+		syscallarg(fd_set *) exceptfds;
+		syscallarg(struct timespec *) timeout;
+		syscallarg(linux_sized_sigset_t *) ss;
+	} */
+	struct timespec uts, ts0, ts1, *tsp;
+	linux_sized_sigset_t lsss;
+	struct linux_timespec lts;
+	linux_sigset_t lss;
+	sigset_t *ssp;
+	sigset_t ss;
+	int error;
+
+	ssp = NULL;
+	if (SCARG(uap, ss) != NULL) {
+		if ((error = copyin(SCARG(uap, ss), &lsss, sizeof(lsss))) != 0)
+			return (error);
+		if (lsss.ss_len != sizeof(lss))
+			return (EINVAL);
+		if (lsss.ss != NULL) {
+			if ((error = copyin(lsss.ss, &lss, sizeof(lss))) != 0)
+				return (error);
+			linux_to_native_sigset(&ss, &lss);
+			ssp = &ss;
+		}
+	}
+
+	if (SCARG(uap, timeout) != NULL) {
+		error = copyin(SCARG(uap, timeout), &lts, sizeof(lts));
+		if (error != 0)
+			return (error);
+		linux_to_native_timespec(&uts, &lts);
+
+		if (itimespecfix(&uts))
+			return (EINVAL);
+
+		nanotime(&ts0);
+		tsp = &uts;
+	} else {
+		tsp = NULL;
+	}
+
+	error = selcommon(retval, SCARG(uap, nfds), SCARG(uap, readfds),
+	    SCARG(uap, writefds), SCARG(uap, exceptfds), tsp, ssp);
+
+	if (error == 0 && tsp != NULL) {
+		if (retval != 0) {
+			/*
+			 * Compute how much time was left of the timeout,
+			 * by subtracting the current time and the time
+			 * before we started the call, and subtracting
+			 * that result from the user-supplied value.
+			 */
+			nanotime(&ts1);
+			timespecsub(&ts1, &ts0, &ts1);
+			timespecsub(&uts, &ts1, &uts);
+			if (uts.tv_sec < 0)
+				timespecclear(&uts);
+		} else {
+			timespecclear(&uts);
+		}
+
+		native_to_linux_timespec(&lts, &uts);
+		error = copyout(&lts, SCARG(uap, timeout), sizeof(lts));
+	}
+
+	return (error);
 }
 
 int
@@ -1258,20 +1347,27 @@ linux_sys_sysinfo(struct lwp *l, const struct linux_sys_sysinfo_args *uap, regis
 	} */
 	struct linux_sysinfo si;
 	struct loadavg *la;
+	int64_t filepg;
 
+	memset(&si, 0, sizeof(si));
 	si.uptime = time_uptime;
 	la = &averunnable;
 	si.loads[0] = la->ldavg[0] * LINUX_SYSINFO_LOADS_SCALE / la->fscale;
 	si.loads[1] = la->ldavg[1] * LINUX_SYSINFO_LOADS_SCALE / la->fscale;
 	si.loads[2] = la->ldavg[2] * LINUX_SYSINFO_LOADS_SCALE / la->fscale;
 	si.totalram = ctob((u_long)physmem);
-	si.freeram = (u_long)uvmexp.free * uvmexp.pagesize;
+	/* uvm_availmem() may sync the counters. */
+	si.freeram = (u_long)uvm_availmem(true) * uvmexp.pagesize;
+	filepg = cpu_count_get(CPU_COUNT_FILECLEAN) +
+	    cpu_count_get(CPU_COUNT_FILEDIRTY) +
+	    cpu_count_get(CPU_COUNT_FILEUNKNOWN) -
+	    cpu_count_get(CPU_COUNT_EXECPAGES);
 	si.sharedram = 0;	/* XXX */
-	si.bufferram = (u_long)uvmexp.filepages * uvmexp.pagesize;
+	si.bufferram = (u_long)(filepg * uvmexp.pagesize);
 	si.totalswap = (u_long)uvmexp.swpages * uvmexp.pagesize;
 	si.freeswap = 
 	    (u_long)(uvmexp.swpages - uvmexp.swpginuse) * uvmexp.pagesize;
-	si.procs = nprocs;
+	si.procs = atomic_load_relaxed(&nprocs);
 
 	/* The following are only present in newer Linux kernels. */
 	si.totalbig = 0;
@@ -1427,4 +1523,60 @@ linux_sys_utimensat(struct lwp *l, const struct linux_sys_utimensat_args *uap,
 
 	return linux_do_sys_utimensat(l, SCARG(uap, fd), SCARG(uap, path),
 	    tsp, SCARG(uap, flag), retval);
+}
+
+int
+linux_sys_futex(struct lwp *l, const struct linux_sys_futex_args *uap,
+	register_t *retval)
+{
+	/* {
+		syscallarg(int *) uaddr;
+		syscallarg(int) op;
+		syscallarg(int) val;
+		syscallarg(const struct linux_timespec *) timeout;
+		syscallarg(int *) uaddr2;
+		syscallarg(int) val3;
+	} */
+	struct linux_timespec lts;
+	struct timespec ts, *tsp = NULL;
+	int val2 = 0;
+	int error;
+
+	/*
+	 * Linux overlays the "timeout" field and the "val2" field.
+	 * "timeout" is only valid for FUTEX_WAIT and FUTEX_WAIT_BITSET
+	 * on Linux.
+	 */
+	const int op = (SCARG(uap, op) & FUTEX_CMD_MASK);
+	if ((op == FUTEX_WAIT || op == FUTEX_WAIT_BITSET) &&
+	    SCARG(uap, timeout) != NULL) {
+		if ((error = copyin(SCARG(uap, timeout), 
+		    &lts, sizeof(lts))) != 0) {
+			return error;
+		}
+		linux_to_native_timespec(&ts, &lts);
+		tsp = &ts;
+	} else {
+		val2 = (int)(uintptr_t)SCARG(uap, timeout);
+	}
+
+	return linux_do_futex(SCARG(uap, uaddr), SCARG(uap, op),
+	    SCARG(uap, val), tsp, SCARG(uap, uaddr2), val2,
+	    SCARG(uap, val3), retval);
+}
+
+int
+linux_do_futex(int *uaddr, int op, int val, struct timespec *timeout,
+    int *uaddr2, int val2, int val3, register_t *retval)
+{
+	/*
+	 * Always clear FUTEX_PRIVATE_FLAG for Linux processes.
+	 * NetBSD-native futexes exist in different namespace
+	 * depending on FUTEX_PRIVATE_FLAG.  This appears not
+	 * to be the case in Linux, and some futex users will
+	 * mix private and non-private ops on the same futex
+	 * object.
+	 */
+	return do_futex(uaddr, op & ~FUTEX_PRIVATE_FLAG,
+			val, timeout, uaddr2, val2, val3, retval);
 }

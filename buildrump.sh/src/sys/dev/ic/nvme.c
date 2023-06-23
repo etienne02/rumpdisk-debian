@@ -1,4 +1,4 @@
-/*	$NetBSD: nvme.c,v 1.3 2016/06/04 16:11:51 nonaka Exp $	*/
+/*	$NetBSD: nvme.c,v 1.58 2021/08/07 16:19:12 thorpej Exp $	*/
 /*	$OpenBSD: nvme.c,v 1.49 2016/04/18 05:59:50 dlg Exp $ */
 
 /*
@@ -18,7 +18,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nvme.c,v 1.3 2016/06/04 16:11:51 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nvme.c,v 1.58 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -40,8 +40,13 @@ __KERNEL_RCSID(0, "$NetBSD: nvme.c,v 1.3 2016/06/04 16:11:51 nonaka Exp $");
 #include <dev/ic/nvmevar.h>
 #include <dev/ic/nvmeio.h>
 
-int nvme_adminq_size = 128;
-int nvme_ioq_size = 128;
+#include "ioconf.h"
+#include "locators.h"
+
+#define	B4_CHK_RDY_DELAY_MS	2300	/* workaround controller bug */
+
+int nvme_adminq_size = 32;
+int nvme_ioq_size = 1024;
 
 static int	nvme_print(void *, const char *);
 
@@ -50,7 +55,6 @@ static int	nvme_enable(struct nvme_softc *, u_int);
 static int	nvme_disable(struct nvme_softc *);
 static int	nvme_shutdown(struct nvme_softc *);
 
-static void	nvme_version(struct nvme_softc *, uint32_t);
 #ifdef NVME_DEBUG
 static void	nvme_dumpregs(struct nvme_softc *);
 #endif
@@ -58,16 +62,16 @@ static int	nvme_identify(struct nvme_softc *, u_int);
 static void	nvme_fill_identify(struct nvme_queue *, struct nvme_ccb *,
 		    void *);
 
-static int	nvme_ccbs_alloc(struct nvme_queue *, u_int);
+static int	nvme_ccbs_alloc(struct nvme_queue *, uint16_t);
 static void	nvme_ccbs_free(struct nvme_queue *);
 
 static struct nvme_ccb *
-		nvme_ccb_get(struct nvme_queue *);
+		nvme_ccb_get(struct nvme_queue *, bool);
 static void	nvme_ccb_put(struct nvme_queue *, struct nvme_ccb *);
 
 static int	nvme_poll(struct nvme_softc *, struct nvme_queue *,
 		    struct nvme_ccb *, void (*)(struct nvme_queue *,
-		    struct nvme_ccb *, void *));
+		    struct nvme_ccb *, void *), int);
 static void	nvme_poll_fill(struct nvme_queue *, struct nvme_ccb *, void *);
 static void	nvme_poll_done(struct nvme_queue *, struct nvme_ccb *,
 		    struct nvme_cqe *);
@@ -78,12 +82,15 @@ static void	nvme_empty_done(struct nvme_queue *, struct nvme_ccb *,
 static struct nvme_queue *
 		nvme_q_alloc(struct nvme_softc *, uint16_t, u_int, u_int);
 static int	nvme_q_create(struct nvme_softc *, struct nvme_queue *);
+static void	nvme_q_reset(struct nvme_softc *, struct nvme_queue *);
 static int	nvme_q_delete(struct nvme_softc *, struct nvme_queue *);
 static void	nvme_q_submit(struct nvme_softc *, struct nvme_queue *,
 		    struct nvme_ccb *, void (*)(struct nvme_queue *,
 		    struct nvme_ccb *, void *));
 static int	nvme_q_complete(struct nvme_softc *, struct nvme_queue *q);
 static void	nvme_q_free(struct nvme_softc *, struct nvme_queue *);
+static void	nvme_q_wait_complete(struct nvme_softc *, struct nvme_queue *,
+		    bool (*)(void *), void *);
 
 static struct nvme_dmamem *
 		nvme_dmamem_alloc(struct nvme_softc *, size_t);
@@ -99,6 +106,10 @@ static void	nvme_ns_sync_fill(struct nvme_queue *, struct nvme_ccb *,
 		    void *);
 static void	nvme_ns_sync_done(struct nvme_queue *, struct nvme_ccb *,
 		    struct nvme_cqe *);
+static void	nvme_getcache_fill(struct nvme_queue *, struct nvme_ccb *,
+		    void *);
+static void	nvme_getcache_done(struct nvme_queue *, struct nvme_ccb *,
+		    struct nvme_cqe *);
 
 static void	nvme_pt_fill(struct nvme_queue *, struct nvme_ccb *,
 		    void *);
@@ -107,16 +118,22 @@ static void	nvme_pt_done(struct nvme_queue *, struct nvme_ccb *,
 static int	nvme_command_passthrough(struct nvme_softc *,
 		    struct nvme_pt_command *, uint16_t, struct lwp *, bool);
 
+static int	nvme_set_number_of_queues(struct nvme_softc *, u_int, u_int *,
+		    u_int *);
+
+#define NVME_TIMO_QOP		5	/* queue create and delete timeout */
+#define NVME_TIMO_IDENT		10	/* probe identify timeout */
+#define NVME_TIMO_PT		-1	/* passthrough cmd timeout */
+#define NVME_TIMO_SY		60	/* sync cache timeout */
+
 #define nvme_read4(_s, _r) \
 	bus_space_read_4((_s)->sc_iot, (_s)->sc_ioh, (_r))
 #define nvme_write4(_s, _r, _v) \
 	bus_space_write_4((_s)->sc_iot, (_s)->sc_ioh, (_r), (_v))
-#ifdef __LP64__
-#define nvme_read8(_s, _r) \
-	bus_space_read_8((_s)->sc_iot, (_s)->sc_ioh, (_r))
-#define nvme_write8(_s, _r, _v) \
-	bus_space_write_8((_s)->sc_iot, (_s)->sc_ioh, (_r), (_v))
-#else /* __LP64__ */
+/*
+ * Some controllers, at least Apple NVMe, always require split
+ * transfers, so don't use bus_space_{read,write}_8() on LP64.
+ */
 static inline uint64_t
 nvme_read8(struct nvme_softc *sc, bus_size_t r)
 {
@@ -147,47 +164,11 @@ nvme_write8(struct nvme_softc *sc, bus_size_t r, uint64_t v)
 	nvme_write4(sc, r + 4, a[0]);
 #endif
 }
-#endif /* __LP64__ */
 #define nvme_barrier(_s, _r, _l, _f) \
 	bus_space_barrier((_s)->sc_iot, (_s)->sc_ioh, (_r), (_l), (_f))
 
-pool_cache_t nvme_ns_ctx_cache;
-ONCE_DECL(nvme_init_once);
-
-static int
-nvme_init(void)
-{
-	nvme_ns_ctx_cache = pool_cache_init(sizeof(struct nvme_ns_context),
-	    0, 0, 0, "nvme_ns_ctx", NULL, IPL_BIO, NULL, NULL, NULL);
-	KASSERT(nvme_ns_ctx_cache != NULL);
-	return 0;
-}
-
-static void
-nvme_version(struct nvme_softc *sc, uint32_t ver)
-{
-	const char *v = NULL;
-
-	switch (ver) {
-	case NVME_VS_1_0:
-		v = "1.0";
-		break;
-	case NVME_VS_1_1:
-		v = "1.1";
-		break;
-	case NVME_VS_1_2:
-		v = "1.2";
-		break;
-	default:
-		aprint_error_dev(sc->sc_dev, "unknown version 0x%08x\n", ver);
-		return;
-	}
-
-	aprint_normal_dev(sc->sc_dev, "NVMe %s\n", v);
-}
-
 #ifdef NVME_DEBUG
-static void
+static __used void
 nvme_dumpregs(struct nvme_softc *sc)
 {
 	uint64_t r8;
@@ -195,35 +176,47 @@ nvme_dumpregs(struct nvme_softc *sc)
 
 #define	DEVNAME(_sc) device_xname((_sc)->sc_dev)
 	r8 = nvme_read8(sc, NVME_CAP);
-	printf("%s: cap  0x%016llx\n", DEVNAME(sc), nvme_read8(sc, NVME_CAP));
+	printf("%s: cap  0x%016"PRIx64"\n", DEVNAME(sc), nvme_read8(sc, NVME_CAP));
 	printf("%s:  mpsmax %u (%u)\n", DEVNAME(sc),
 	    (u_int)NVME_CAP_MPSMAX(r8), (1 << NVME_CAP_MPSMAX(r8)));
 	printf("%s:  mpsmin %u (%u)\n", DEVNAME(sc),
 	    (u_int)NVME_CAP_MPSMIN(r8), (1 << NVME_CAP_MPSMIN(r8)));
-	printf("%s:  css %llu\n", DEVNAME(sc), NVME_CAP_CSS(r8));
-	printf("%s:  nssrs %llu\n", DEVNAME(sc), NVME_CAP_NSSRS(r8));
-	printf("%s:  dstrd %u\n", DEVNAME(sc), NVME_CAP_DSTRD(r8));
-	printf("%s:  to %llu msec\n", DEVNAME(sc), NVME_CAP_TO(r8));
-	printf("%s:  ams %llu\n", DEVNAME(sc), NVME_CAP_AMS(r8));
-	printf("%s:  cqr %llu\n", DEVNAME(sc), NVME_CAP_CQR(r8));
-	printf("%s:  mqes %llu\n", DEVNAME(sc), NVME_CAP_MQES(r8));
+	printf("%s:  css %"PRIu64"\n", DEVNAME(sc), NVME_CAP_CSS(r8));
+	printf("%s:  nssrs %"PRIu64"\n", DEVNAME(sc), NVME_CAP_NSSRS(r8));
+	printf("%s:  dstrd %"PRIu64"\n", DEVNAME(sc), NVME_CAP_DSTRD(r8));
+	printf("%s:  to %"PRIu64" msec\n", DEVNAME(sc), NVME_CAP_TO(r8));
+	printf("%s:  ams %"PRIu64"\n", DEVNAME(sc), NVME_CAP_AMS(r8));
+	printf("%s:  cqr %"PRIu64"\n", DEVNAME(sc), NVME_CAP_CQR(r8));
+	printf("%s:  mqes %"PRIu64"\n", DEVNAME(sc), NVME_CAP_MQES(r8));
 
 	printf("%s: vs   0x%04x\n", DEVNAME(sc), nvme_read4(sc, NVME_VS));
 
 	r4 = nvme_read4(sc, NVME_CC);
 	printf("%s: cc   0x%04x\n", DEVNAME(sc), r4);
-	printf("%s:  iocqes %u\n", DEVNAME(sc), NVME_CC_IOCQES_R(r4));
-	printf("%s:  iosqes %u\n", DEVNAME(sc), NVME_CC_IOSQES_R(r4));
+	printf("%s:  iocqes %u (%u)\n", DEVNAME(sc), NVME_CC_IOCQES_R(r4),
+	    (1 << NVME_CC_IOCQES_R(r4)));
+	printf("%s:  iosqes %u (%u)\n", DEVNAME(sc), NVME_CC_IOSQES_R(r4),
+	    (1 << NVME_CC_IOSQES_R(r4)));
 	printf("%s:  shn %u\n", DEVNAME(sc), NVME_CC_SHN_R(r4));
 	printf("%s:  ams %u\n", DEVNAME(sc), NVME_CC_AMS_R(r4));
-	printf("%s:  mps %u\n", DEVNAME(sc), NVME_CC_MPS_R(r4));
+	printf("%s:  mps %u (%u)\n", DEVNAME(sc), NVME_CC_MPS_R(r4),
+	    (1 << NVME_CC_MPS_R(r4)));
 	printf("%s:  css %u\n", DEVNAME(sc), NVME_CC_CSS_R(r4));
-	printf("%s:  en %u\n", DEVNAME(sc), ISSET(r4, NVME_CC_EN));
+	printf("%s:  en %u\n", DEVNAME(sc), ISSET(r4, NVME_CC_EN) ? 1 : 0);
 
-	printf("%s: csts 0x%08x\n", DEVNAME(sc), nvme_read4(sc, NVME_CSTS));
-	printf("%s: aqa  0x%08x\n", DEVNAME(sc), nvme_read4(sc, NVME_AQA));
-	printf("%s: asq  0x%016llx\n", DEVNAME(sc), nvme_read8(sc, NVME_ASQ));
-	printf("%s: acq  0x%016llx\n", DEVNAME(sc), nvme_read8(sc, NVME_ACQ));
+	r4 = nvme_read4(sc, NVME_CSTS);
+	printf("%s: csts 0x%08x\n", DEVNAME(sc), r4);
+	printf("%s:  rdy %u\n", DEVNAME(sc), r4 & NVME_CSTS_RDY);
+	printf("%s:  cfs %u\n", DEVNAME(sc), r4 & NVME_CSTS_CFS);
+	printf("%s:  shst %x\n", DEVNAME(sc), r4 & NVME_CSTS_SHST_MASK);
+
+	r4 = nvme_read4(sc, NVME_AQA);
+	printf("%s: aqa  0x%08x\n", DEVNAME(sc), r4);
+	printf("%s:  acqs %u\n", DEVNAME(sc), NVME_AQA_ACQS_R(r4));
+	printf("%s:  asqs %u\n", DEVNAME(sc), NVME_AQA_ASQS_R(r4));
+
+	printf("%s: asq  0x%016"PRIx64"\n", DEVNAME(sc), nvme_read8(sc, NVME_ASQ));
+	printf("%s: acq  0x%016"PRIx64"\n", DEVNAME(sc), nvme_read8(sc, NVME_ACQ));
 #undef	DEVNAME
 }
 #endif	/* NVME_DEBUG */
@@ -235,7 +228,7 @@ nvme_ready(struct nvme_softc *sc, uint32_t rdy)
 
 	while ((nvme_read4(sc, NVME_CSTS) & NVME_CSTS_RDY) != rdy) {
 		if (i++ > sc->sc_rdy_to)
-			return 1;
+			return ENXIO;
 
 		delay(1000);
 		nvme_barrier(sc, NVME_CSTS, 4, BUS_SPACE_BARRIER_READ);
@@ -247,20 +240,38 @@ nvme_ready(struct nvme_softc *sc, uint32_t rdy)
 static int
 nvme_enable(struct nvme_softc *sc, u_int mps)
 {
-	uint32_t cc;
+	uint32_t cc, csts;
+	int error;
 
 	cc = nvme_read4(sc, NVME_CC);
-	if (ISSET(cc, NVME_CC_EN))
-		return nvme_ready(sc, NVME_CSTS_RDY);
+	csts = nvme_read4(sc, NVME_CSTS);
+
+	/*
+	 * See note in nvme_disable. Short circuit if we're already enabled.
+	 */
+	if (ISSET(cc, NVME_CC_EN)) {
+		if (ISSET(csts, NVME_CSTS_RDY))
+			return 0;
+
+		goto waitready;
+	} else {
+		/* EN == 0 already wait for RDY == 0 or fail */
+		error = nvme_ready(sc, 0);
+		if (error)
+			return error;
+	}
+
+	nvme_write8(sc, NVME_ASQ, NVME_DMA_DVA(sc->sc_admin_q->q_sq_dmamem));
+	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_WRITE);
+	delay(5000);
+	nvme_write8(sc, NVME_ACQ, NVME_DMA_DVA(sc->sc_admin_q->q_cq_dmamem));
+	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_WRITE);
+	delay(5000);
 
 	nvme_write4(sc, NVME_AQA, NVME_AQA_ACQS(sc->sc_admin_q->q_entries) |
 	    NVME_AQA_ASQS(sc->sc_admin_q->q_entries));
 	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_WRITE);
-
-	nvme_write8(sc, NVME_ASQ, NVME_DMA_DVA(sc->sc_admin_q->q_sq_dmamem));
-	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_WRITE);
-	nvme_write8(sc, NVME_ACQ, NVME_DMA_DVA(sc->sc_admin_q->q_cq_dmamem));
-	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_WRITE);
+	delay(5000);
 
 	CLR(cc, NVME_CC_IOCQES_MASK | NVME_CC_IOSQES_MASK | NVME_CC_SHN_MASK |
 	    NVME_CC_AMS_MASK | NVME_CC_MPS_MASK | NVME_CC_CSS_MASK);
@@ -275,6 +286,7 @@ nvme_enable(struct nvme_softc *sc, u_int mps)
 	nvme_barrier(sc, 0, sc->sc_ios,
 	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE);
 
+    waitready:
 	return nvme_ready(sc, NVME_CSTS_RDY);
 }
 
@@ -282,37 +294,57 @@ static int
 nvme_disable(struct nvme_softc *sc)
 {
 	uint32_t cc, csts;
+	int error;
 
 	cc = nvme_read4(sc, NVME_CC);
+	csts = nvme_read4(sc, NVME_CSTS);
+
+	/*
+	 * Per 3.1.5 in NVME 1.3 spec, transitioning CC.EN from 0 to 1
+	 * when CSTS.RDY is 1 or transitioning CC.EN from 1 to 0 when
+	 * CSTS.RDY is 0 "has undefined results" So make sure that CSTS.RDY
+	 * isn't the desired value. Short circuit if we're already disabled.
+	 */
 	if (ISSET(cc, NVME_CC_EN)) {
-		csts = nvme_read4(sc, NVME_CSTS);
-		if (!ISSET(csts, NVME_CSTS_CFS) &&
-		    nvme_ready(sc, NVME_CSTS_RDY) != 0)
-			return 1;
+		if (!ISSET(csts, NVME_CSTS_RDY)) {
+			/* EN == 1, wait for RDY == 1 or fail */
+			error = nvme_ready(sc, NVME_CSTS_RDY);
+			if (error)
+				return error;
+		}
+	} else {
+		/* EN == 0 already wait for RDY == 0 */
+		if (!ISSET(csts, NVME_CSTS_RDY))
+			return 0;
+
+		goto waitready;
 	}
 
 	CLR(cc, NVME_CC_EN);
-
 	nvme_write4(sc, NVME_CC, cc);
-	nvme_barrier(sc, 0, sc->sc_ios,
-	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE);
+	nvme_barrier(sc, 0, sc->sc_ios, BUS_SPACE_BARRIER_READ);
 
+	/*
+	 * Some drives have issues with accessing the mmio after we disable,
+	 * so delay for a bit after we write the bit to cope with these issues.
+	 */
+	if (ISSET(sc->sc_quirks, NVME_QUIRK_DELAY_B4_CHK_RDY))
+		delay(B4_CHK_RDY_DELAY_MS);
+
+    waitready:
 	return nvme_ready(sc, 0);
 }
 
 int
 nvme_attach(struct nvme_softc *sc)
 {
-	struct nvme_attach_args naa;
 	uint64_t cap;
 	uint32_t reg;
-	u_int dstrd;
 	u_int mps = PAGE_SHIFT;
-	int adminq_entries = nvme_adminq_size;
-	int ioq_entries = nvme_ioq_size;
+	u_int ncq, nsq;
+	uint16_t adminq_entries = nvme_adminq_size;
+	uint16_t ioq_entries = nvme_ioq_size;
 	int i;
-
-	RUN_ONCE(&nvme_init_once, nvme_init);
 
 	reg = nvme_read4(sc, NVME_VS);
 	if (reg == 0xffffffff) {
@@ -320,10 +352,15 @@ nvme_attach(struct nvme_softc *sc)
 		return 1;
 	}
 
-	nvme_version(sc, reg);
+	if (NVME_VS_TER(reg) == 0)
+		aprint_normal_dev(sc->sc_dev, "NVMe %d.%d\n", NVME_VS_MJR(reg),
+		    NVME_VS_MNR(reg));
+	else
+		aprint_normal_dev(sc->sc_dev, "NVMe %d.%d.%d\n", NVME_VS_MJR(reg),
+		    NVME_VS_MNR(reg), NVME_VS_TER(reg));
 
 	cap = nvme_read8(sc, NVME_CAP);
-	dstrd = NVME_CAP_DSTRD(cap);
+	sc->sc_dstrd = NVME_CAP_DSTRD(cap);
 	if (NVME_CAP_MPSMIN(cap) > PAGE_SHIFT) {
 		aprint_error_dev(sc->sc_dev, "NVMe minimum page size %u "
 		    "is greater than CPU page size %u\n",
@@ -332,18 +369,22 @@ nvme_attach(struct nvme_softc *sc)
 	}
 	if (NVME_CAP_MPSMAX(cap) < mps)
 		mps = NVME_CAP_MPSMAX(cap);
+	if (ioq_entries > NVME_CAP_MQES(cap))
+		ioq_entries = NVME_CAP_MQES(cap);
 
+	/* set initial values to be used for admin queue during probe */
 	sc->sc_rdy_to = NVME_CAP_TO(cap);
 	sc->sc_mps = 1 << mps;
 	sc->sc_mdts = MAXPHYS;
-	sc->sc_max_sgl = 2;
+	sc->sc_max_sgl = btoc(round_page(sc->sc_mdts));
 
 	if (nvme_disable(sc) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to disable controller\n");
 		return 1;
 	}
 
-	sc->sc_admin_q = nvme_q_alloc(sc, NVME_ADMIN_Q, adminq_entries, dstrd);
+	sc->sc_admin_q = nvme_q_alloc(sc, NVME_ADMIN_Q, adminq_entries,
+	    sc->sc_dstrd);
 	if (sc->sc_admin_q == NULL) {
 		aprint_error_dev(sc->sc_dev,
 		    "unable to allocate admin queue\n");
@@ -361,6 +402,10 @@ nvme_attach(struct nvme_softc *sc)
 		aprint_error_dev(sc->sc_dev, "unable to identify controller\n");
 		goto disable;
 	}
+	if (sc->sc_nn == 0) {
+		aprint_error_dev(sc->sc_dev, "namespace not found\n");
+		goto disable;
+	}
 
 	/* we know how big things are now */
 	sc->sc_max_sgl = sc->sc_mdts / sc->sc_mps;
@@ -369,13 +414,23 @@ nvme_attach(struct nvme_softc *sc)
 	nvme_ccbs_free(sc->sc_admin_q);
 	nvme_ccbs_alloc(sc->sc_admin_q, sc->sc_admin_q->q_entries);
 
-	sc->sc_q = kmem_zalloc(sizeof(*sc->sc_q) * sc->sc_nq, KM_SLEEP);
-	if (sc->sc_q == NULL) {
-		aprint_error_dev(sc->sc_dev, "unable to allocate io queue\n");
-		goto disable;
+	if (sc->sc_use_mq) {
+		/* Limit the number of queues to the number allocated in HW */
+		if (nvme_set_number_of_queues(sc, sc->sc_nq, &ncq, &nsq) != 0) {
+			aprint_error_dev(sc->sc_dev,
+			    "unable to get number of queues\n");
+			goto disable;
+		}
+		if (sc->sc_nq > ncq)
+			sc->sc_nq = ncq;
+		if (sc->sc_nq > nsq)
+			sc->sc_nq = nsq;
 	}
+
+	sc->sc_q = kmem_zalloc(sizeof(*sc->sc_q) * sc->sc_nq, KM_SLEEP);
 	for (i = 0; i < sc->sc_nq; i++) {
-		sc->sc_q[i] = nvme_q_alloc(sc, i + 1, ioq_entries, dstrd);
+		sc->sc_q[i] = nvme_q_alloc(sc, i + 1, ioq_entries,
+		    sc->sc_dstrd);
 		if (sc->sc_q[i] == NULL) {
 			aprint_error_dev(sc->sc_dev,
 			    "unable to allocate io queue\n");
@@ -392,15 +447,10 @@ nvme_attach(struct nvme_softc *sc)
 	if (!sc->sc_use_mq)
 		nvme_write4(sc, NVME_INTMC, 1);
 
+	/* probe subdevices */
 	sc->sc_namespaces = kmem_zalloc(sizeof(*sc->sc_namespaces) * sc->sc_nn,
 	    KM_SLEEP);
-	for (i = 0; i < sc->sc_nn; i++) {
-		memset(&naa, 0, sizeof(naa));
-		naa.naa_nsid = i + 1;
-		naa.naa_qentries = ioq_entries;
-		sc->sc_namespaces[i].dev = config_found(sc->sc_dev, &naa,
-		    nvme_print);
-	}
+	nvme_rescan(sc->sc_dev, NULL, NULL);
 
 	return 0;
 
@@ -419,13 +469,73 @@ free_admin_q:
 	return 1;
 }
 
+int
+nvme_rescan(device_t self, const char *ifattr, const int *locs)
+{
+	struct nvme_softc *sc = device_private(self);
+	struct nvme_attach_args naa;
+	struct nvm_namespace_format *f;
+	struct nvme_namespace *ns;
+	uint64_t cap;
+	int ioq_entries = nvme_ioq_size;
+	int i, mlocs[NVMECF_NLOCS];
+	int error;
+
+	cap = nvme_read8(sc, NVME_CAP);
+	if (ioq_entries > NVME_CAP_MQES(cap))
+		ioq_entries = NVME_CAP_MQES(cap);
+
+	for (i = 1; i <= sc->sc_nn; i++) {
+		if (sc->sc_namespaces[i - 1].dev)
+			continue;
+
+		/* identify to check for availability */
+		error = nvme_ns_identify(sc, i);
+		if (error) {
+			aprint_error_dev(self, "couldn't identify namespace #%d\n", i);
+			continue;
+		}
+
+		ns = nvme_ns_get(sc, i);
+		KASSERT(ns);
+
+		f = &ns->ident->lbaf[NVME_ID_NS_FLBAS(ns->ident->flbas)];
+
+		/*
+		 * NVME1.0e 6.11 Identify command
+		 *
+		 * LBADS values smaller than 9 are not supported, a value
+		 * of zero means that the format is not used.
+		 */
+		if (f->lbads < 9) {
+			if (f->lbads > 0)
+				aprint_error_dev(self,
+						 "unsupported logical data size %u\n", f->lbads);
+			continue;
+		}
+
+		mlocs[NVMECF_NSID] = i;
+
+		memset(&naa, 0, sizeof(naa));
+		naa.naa_nsid = i;
+		naa.naa_qentries = (ioq_entries - 1) * sc->sc_nq;
+		naa.naa_maxphys = sc->sc_mdts;
+		naa.naa_typename = sc->sc_modelname;
+		sc->sc_namespaces[i - 1].dev =
+		    config_found(sc->sc_dev, &naa, nvme_print,
+				 CFARGS(.submatch = config_stdsubmatch,
+					.locators = mlocs));
+	}
+	return 0;
+}
+
 static int
 nvme_print(void *aux, const char *pnp)
 {
 	struct nvme_attach_args *naa = aux;
 
 	if (pnp)
-		aprint_normal("at %s", pnp);
+		aprint_normal("ld at %s", pnp);
 
 	if (naa->naa_nsid > 0)
 		aprint_normal(" nsid %d", naa->naa_nsid);
@@ -446,12 +556,76 @@ nvme_detach(struct nvme_softc *sc, int flags)
 	if (error)
 		return error;
 
+	/* from now on we are committed to detach, following will never fail */
+	sc->sc_intr_disestablish(sc, NVME_ADMIN_Q);
 	for (i = 0; i < sc->sc_nq; i++)
 		nvme_q_free(sc, sc->sc_q[i]);
 	kmem_free(sc->sc_q, sizeof(*sc->sc_q) * sc->sc_nq);
 	nvme_q_free(sc, sc->sc_admin_q);
 
 	return 0;
+}
+
+int
+nvme_suspend(struct nvme_softc *sc)
+{
+
+	return nvme_shutdown(sc);
+}
+
+int
+nvme_resume(struct nvme_softc *sc)
+{
+	int ioq_entries = nvme_ioq_size;
+	uint64_t cap;
+	int i, error;
+
+	error = nvme_disable(sc);
+	if (error) {
+		device_printf(sc->sc_dev, "unable to disable controller\n");
+		return error;
+	}
+
+	nvme_q_reset(sc, sc->sc_admin_q);
+
+	error = nvme_enable(sc, ffs(sc->sc_mps) - 1);
+	if (error) {
+		device_printf(sc->sc_dev, "unable to enable controller\n");
+		return error;
+	}
+
+	for (i = 0; i < sc->sc_nq; i++) {
+		cap = nvme_read8(sc, NVME_CAP);
+		if (ioq_entries > NVME_CAP_MQES(cap))
+			ioq_entries = NVME_CAP_MQES(cap);
+		sc->sc_q[i] = nvme_q_alloc(sc, i + 1, ioq_entries,
+		    sc->sc_dstrd);
+		if (sc->sc_q[i] == NULL) {
+			error = ENOMEM;
+			device_printf(sc->sc_dev, "unable to allocate io q %d"
+			    "\n", i);
+			goto disable;
+		}
+		if (nvme_q_create(sc, sc->sc_q[i]) != 0) {
+			error = EIO;
+			device_printf(sc->sc_dev, "unable to create io q %d"
+			    "\n", i);
+			nvme_q_free(sc, sc->sc_q[i]);
+			goto free_q;
+		}
+	}
+
+	nvme_write4(sc, NVME_INTMC, 1);
+
+	return 0;
+
+free_q:
+	while (i --> 0)
+		nvme_q_free(sc, sc->sc_q[i]);
+disable:
+	(void)nvme_disable(sc);
+
+	return error;
 }
 
 static int
@@ -471,7 +645,6 @@ nvme_shutdown(struct nvme_softc *sc)
 			disabled = true;
 		}
 	}
-	sc->sc_intr_disestablish(sc, NVME_ADMIN_Q);
 	if (disabled)
 		goto disable;
 
@@ -524,12 +697,20 @@ nvme_ns_identify(struct nvme_softc *sc, uint16_t nsid)
 
 	KASSERT(nsid > 0);
 
-	ccb = nvme_ccb_get(sc->sc_admin_q);
-	KASSERT(ccb != NULL);
+	ns = nvme_ns_get(sc, nsid);
+	KASSERT(ns);
+
+	if (ns->ident != NULL)
+		return 0;
+
+	ccb = nvme_ccb_get(sc->sc_admin_q, false);
+	KASSERT(ccb != NULL); /* it's a bug if we don't have spare ccb here */
 
 	mem = nvme_dmamem_alloc(sc, sizeof(*identify));
-	if (mem == NULL)
+	if (mem == NULL) {
+		nvme_ccb_put(sc->sc_admin_q, ccb);
 		return ENOMEM;
+	}
 
 	memset(&sqe, 0, sizeof(sqe));
 	sqe.opcode = NVM_ADMIN_IDENTIFY;
@@ -541,7 +722,7 @@ nvme_ns_identify(struct nvme_softc *sc, uint16_t nsid)
 	ccb->ccb_cookie = &sqe;
 
 	nvme_dmamem_sync(sc, mem, BUS_DMASYNC_PREREAD);
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill, NVME_TIMO_IDENT);
 	nvme_dmamem_sync(sc, mem, BUS_DMASYNC_POSTREAD);
 
 	nvme_ccb_put(sc->sc_admin_q, ccb);
@@ -554,10 +735,11 @@ nvme_ns_identify(struct nvme_softc *sc, uint16_t nsid)
 	/* commit */
 
 	identify = kmem_zalloc(sizeof(*identify), KM_SLEEP);
-	memcpy(identify, NVME_DMA_KVA(mem), sizeof(*identify));
+	*identify = *((volatile struct nvm_identify_namespace *)NVME_DMA_KVA(mem));
 
-	ns = nvme_ns_get(sc, nsid);
-	KASSERT(ns);
+	/* Convert data to host endian */
+	nvme_identify_namespace_swapbytes(identify);
+
 	ns->ident = identify;
 
 done:
@@ -567,26 +749,37 @@ done:
 }
 
 int
-nvme_ns_dobio(struct nvme_softc *sc, struct nvme_ns_context *ctx)
+nvme_ns_dobio(struct nvme_softc *sc, uint16_t nsid, void *cookie,
+    struct buf *bp, void *data, size_t datasize,
+    int secsize, daddr_t blkno, int flags, nvme_nnc_done nnc_done)
 {
-	struct nvme_queue *q = nvme_get_q(sc);
+	struct nvme_queue *q = nvme_get_q(sc, bp, false);
 	struct nvme_ccb *ccb;
 	bus_dmamap_t dmap;
 	int i, error;
 
-	ccb = nvme_ccb_get(q);
+	ccb = nvme_ccb_get(q, false);
 	if (ccb == NULL)
 		return EAGAIN;
 
 	ccb->ccb_done = nvme_ns_io_done;
-	ccb->ccb_cookie = ctx;
+	ccb->ccb_cookie = cookie;
+
+	/* namespace context */
+	ccb->nnc_nsid = nsid;
+	ccb->nnc_flags = flags;
+	ccb->nnc_buf = bp;
+	ccb->nnc_datasize = datasize;
+	ccb->nnc_secsize = secsize;
+	ccb->nnc_blkno = blkno;
+	ccb->nnc_done = nnc_done;
 
 	dmap = ccb->ccb_dmamap;
-	error = bus_dmamap_load(sc->sc_dmat, dmap, ctx->nnc_data,
-	    ctx->nnc_datasize, NULL,
-	    (ISSET(ctx->nnc_flags, NVME_NS_CTX_F_POLL) ?
+	error = bus_dmamap_load(sc->sc_dmat, dmap, data,
+	    datasize, NULL,
+	    (ISSET(flags, NVME_NS_CTX_F_POLL) ?
 	      BUS_DMA_NOWAIT : BUS_DMA_WAITOK) |
-	    (ISSET(ctx->nnc_flags, NVME_NS_CTX_F_READ) ?
+	    (ISSET(flags, NVME_NS_CTX_F_READ) ?
 	      BUS_DMA_READ : BUS_DMA_WRITE));
 	if (error) {
 		nvme_ccb_put(q, ccb);
@@ -594,7 +787,7 @@ nvme_ns_dobio(struct nvme_softc *sc, struct nvme_ns_context *ctx)
 	}
 
 	bus_dmamap_sync(sc->sc_dmat, dmap, 0, dmap->dm_mapsize,
-	    ISSET(ctx->nnc_flags, NVME_NS_CTX_F_READ) ?
+	    ISSET(flags, NVME_NS_CTX_F_READ) ?
 	    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
 
 	if (dmap->dm_nsegs > 2) {
@@ -605,12 +798,12 @@ nvme_ns_dobio(struct nvme_softc *sc, struct nvme_ns_context *ctx)
 		bus_dmamap_sync(sc->sc_dmat,
 		    NVME_DMA_MAP(q->q_ccb_prpls),
 		    ccb->ccb_prpl_off,
-		    sizeof(*ccb->ccb_prpl) * dmap->dm_nsegs - 1,
+		    sizeof(*ccb->ccb_prpl) * (dmap->dm_nsegs - 1),
 		    BUS_DMASYNC_PREWRITE);
 	}
 
-	if (ISSET(ctx->nnc_flags, NVME_NS_CTX_F_POLL)) {
-		if (nvme_poll(sc, q, ccb, nvme_ns_io_fill) != 0)
+	if (ISSET(flags, NVME_NS_CTX_F_POLL)) {
+		if (nvme_poll(sc, q, ccb, nvme_ns_io_fill, NVME_TIMO_PT) != 0)
 			return EIO;
 		return 0;
 	}
@@ -623,12 +816,11 @@ static void
 nvme_ns_io_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 {
 	struct nvme_sqe_io *sqe = slot;
-	struct nvme_ns_context *ctx = ccb->ccb_cookie;
 	bus_dmamap_t dmap = ccb->ccb_dmamap;
 
-	sqe->opcode = ISSET(ctx->nnc_flags, NVME_NS_CTX_F_READ) ?
+	sqe->opcode = ISSET(ccb->nnc_flags, NVME_NS_CTX_F_READ) ?
 	    NVM_CMD_READ : NVM_CMD_WRITE;
-	htolem32(&sqe->nsid, ctx->nnc_nsid);
+	htolem32(&sqe->nsid, ccb->nnc_nsid);
 
 	htolem64(&sqe->entry.prp[0], dmap->dm_segs[0].ds_addr);
 	switch (dmap->dm_nsegs) {
@@ -643,8 +835,14 @@ nvme_ns_io_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 		break;
 	}
 
-	htolem64(&sqe->slba, ctx->nnc_blkno);
-	htolem16(&sqe->nlb, (ctx->nnc_datasize / ctx->nnc_secsize) - 1);
+	htolem64(&sqe->slba, ccb->nnc_blkno);
+
+	if (ISSET(ccb->nnc_flags, NVME_NS_CTX_F_FUA))
+		htolem16(&sqe->ioflags, NVM_SQE_IO_FUA);
+
+	/* guaranteed by upper layers, but check just in case */
+	KASSERT((ccb->nnc_datasize % ccb->nnc_secsize) == 0);
+	htolem16(&sqe->nlb, (ccb->nnc_datasize / ccb->nnc_secsize) - 1);
 }
 
 static void
@@ -652,77 +850,299 @@ nvme_ns_io_done(struct nvme_queue *q, struct nvme_ccb *ccb,
     struct nvme_cqe *cqe)
 {
 	struct nvme_softc *sc = q->q_sc;
-	struct nvme_ns_context *ctx = ccb->ccb_cookie;
 	bus_dmamap_t dmap = ccb->ccb_dmamap;
-	uint16_t flags;
+	void *nnc_cookie = ccb->ccb_cookie;
+	nvme_nnc_done nnc_done = ccb->nnc_done;
+	struct buf *bp = ccb->nnc_buf;
 
 	if (dmap->dm_nsegs > 2) {
 		bus_dmamap_sync(sc->sc_dmat,
 		    NVME_DMA_MAP(q->q_ccb_prpls),
 		    ccb->ccb_prpl_off,
-		    sizeof(*ccb->ccb_prpl) * dmap->dm_nsegs - 1,
+		    sizeof(*ccb->ccb_prpl) * (dmap->dm_nsegs - 1),
 		    BUS_DMASYNC_POSTWRITE);
 	}
 
 	bus_dmamap_sync(sc->sc_dmat, dmap, 0, dmap->dm_mapsize,
-	    ISSET(ctx->nnc_flags, NVME_NS_CTX_F_READ) ?
+	    ISSET(ccb->nnc_flags, NVME_NS_CTX_F_READ) ?
 	    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 
 	bus_dmamap_unload(sc->sc_dmat, dmap);
 	nvme_ccb_put(q, ccb);
 
-	flags = lemtoh16(&cqe->flags);
+	nnc_done(nnc_cookie, bp, lemtoh16(&cqe->flags), lemtoh32(&cqe->cdw0));
+}
 
-	ctx->nnc_status = flags;
-	(*ctx->nnc_done)(ctx);
+/*
+ * If there is no volatile write cache, it makes no sense to issue
+ * flush commands or query for the status.
+ */
+static bool
+nvme_has_volatile_write_cache(struct nvme_softc *sc)
+{
+	/* sc_identify is filled during attachment */
+	return  ((sc->sc_identify.vwc & NVME_ID_CTRLR_VWC_PRESENT) != 0);
+}
+
+static bool
+nvme_ns_sync_finished(void *cookie)
+{
+	int *result = cookie;
+
+	return (*result != 0);
 }
 
 int
-nvme_ns_sync(struct nvme_softc *sc, struct nvme_ns_context *ctx)
+nvme_ns_sync(struct nvme_softc *sc, uint16_t nsid, int flags)
 {
-	struct nvme_queue *q = nvme_get_q(sc);
+	struct nvme_queue *q = nvme_get_q(sc, NULL, true);
 	struct nvme_ccb *ccb;
+	int result = 0;
 
-	ccb = nvme_ccb_get(q);
-	if (ccb == NULL)
-		return EAGAIN;
+	if (!nvme_has_volatile_write_cache(sc)) {
+		/* cache not present, no value in trying to flush it */
+		return 0;
+	}
+
+	ccb = nvme_ccb_get(q, true);
+	KASSERT(ccb != NULL);
 
 	ccb->ccb_done = nvme_ns_sync_done;
-	ccb->ccb_cookie = ctx;
+	ccb->ccb_cookie = &result;
 
-	if (ISSET(ctx->nnc_flags, NVME_NS_CTX_F_POLL)) {
-		if (nvme_poll(sc, q, ccb, nvme_ns_sync_fill) != 0)
+	/* namespace context */
+	ccb->nnc_nsid = nsid;
+	ccb->nnc_flags = flags;
+	ccb->nnc_done = NULL;
+
+	if (ISSET(flags, NVME_NS_CTX_F_POLL)) {
+		if (nvme_poll(sc, q, ccb, nvme_ns_sync_fill, NVME_TIMO_SY) != 0)
 			return EIO;
 		return 0;
 	}
 
 	nvme_q_submit(sc, q, ccb, nvme_ns_sync_fill);
-	return 0;
+
+	/* wait for completion */
+	nvme_q_wait_complete(sc, q, nvme_ns_sync_finished, &result);
+	KASSERT(result != 0);
+
+	return (result > 0) ? 0 : EIO;
 }
 
 static void
 nvme_ns_sync_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 {
 	struct nvme_sqe *sqe = slot;
-	struct nvme_ns_context *ctx = ccb->ccb_cookie;
 
 	sqe->opcode = NVM_CMD_FLUSH;
-	htolem32(&sqe->nsid, ctx->nnc_nsid);
+	htolem32(&sqe->nsid, ccb->nnc_nsid);
 }
 
 static void
 nvme_ns_sync_done(struct nvme_queue *q, struct nvme_ccb *ccb,
     struct nvme_cqe *cqe)
 {
-	struct nvme_ns_context *ctx = ccb->ccb_cookie;
-	uint16_t flags;
+	int *result = ccb->ccb_cookie;
+	uint16_t status = NVME_CQE_SC(lemtoh16(&cqe->flags));
+
+	if (status == NVME_CQE_SC_SUCCESS)
+		*result = 1;
+	else
+		*result = -1;
 
 	nvme_ccb_put(q, ccb);
+}
 
-	flags = lemtoh16(&cqe->flags);
+static bool
+nvme_getcache_finished(void *xc)
+{
+	int *addr = xc;
 
-	ctx->nnc_status = flags;
-	(*ctx->nnc_done)(ctx);
+	return (*addr != 0);
+}
+
+/*
+ * Get status of volatile write cache. Always asynchronous.
+ */
+int
+nvme_admin_getcache(struct nvme_softc *sc, int *addr)
+{
+	struct nvme_ccb *ccb;
+	struct nvme_queue *q = sc->sc_admin_q;
+	int result = 0, error;
+
+	if (!nvme_has_volatile_write_cache(sc)) {
+		/* cache simply not present */
+		*addr = 0;
+		return 0;
+	}
+
+	ccb = nvme_ccb_get(q, true);
+	KASSERT(ccb != NULL);
+
+	ccb->ccb_done = nvme_getcache_done;
+	ccb->ccb_cookie = &result;
+
+	/* namespace context */
+	ccb->nnc_flags = 0;
+	ccb->nnc_done = NULL;
+
+	nvme_q_submit(sc, q, ccb, nvme_getcache_fill);
+
+	/* wait for completion */
+	nvme_q_wait_complete(sc, q, nvme_getcache_finished, &result);
+	KASSERT(result != 0);
+
+	if (result > 0) {
+		*addr = result;
+		error = 0;
+	} else
+		error = EINVAL;
+
+	return error;
+}
+
+static void
+nvme_getcache_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
+{
+	struct nvme_sqe *sqe = slot;
+
+	sqe->opcode = NVM_ADMIN_GET_FEATURES;
+	htolem32(&sqe->cdw10, NVM_FEATURE_VOLATILE_WRITE_CACHE);
+	htolem32(&sqe->cdw11, NVM_VOLATILE_WRITE_CACHE_WCE);
+}
+
+static void
+nvme_getcache_done(struct nvme_queue *q, struct nvme_ccb *ccb,
+    struct nvme_cqe *cqe)
+{
+	int *addr = ccb->ccb_cookie;
+	uint16_t status = NVME_CQE_SC(lemtoh16(&cqe->flags));
+	uint32_t cdw0 = lemtoh32(&cqe->cdw0);
+	int result;
+
+	if (status == NVME_CQE_SC_SUCCESS) {
+		result = 0;
+
+		/*
+		 * DPO not supported, Dataset Management (DSM) field doesn't
+		 * specify the same semantics. FUA is always supported.
+		 */ 
+		result = DKCACHE_FUA;
+
+		if (cdw0 & NVM_VOLATILE_WRITE_CACHE_WCE)
+			result |= DKCACHE_WRITE;
+
+		/*
+		 * If volatile write cache is present, the flag shall also be
+		 * settable.
+		 */
+		result |= DKCACHE_WCHANGE;
+
+		/*
+		 * ONCS field indicates whether the optional SAVE is also
+		 * supported for Set Features. According to spec v1.3,
+		 * Volatile Write Cache however doesn't support persistency
+		 * across power cycle/reset.
+		 */
+
+	} else {
+		result = -1;
+	}
+
+	*addr = result;
+
+	nvme_ccb_put(q, ccb);
+}
+
+struct nvme_setcache_state {
+	int dkcache;
+	int result;
+};
+
+static bool
+nvme_setcache_finished(void *xc)
+{
+	struct nvme_setcache_state *st = xc;
+
+	return (st->result != 0);
+}
+
+static void
+nvme_setcache_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
+{
+	struct nvme_sqe *sqe = slot;
+	struct nvme_setcache_state *st = ccb->ccb_cookie;
+
+	sqe->opcode = NVM_ADMIN_SET_FEATURES;
+	htolem32(&sqe->cdw10, NVM_FEATURE_VOLATILE_WRITE_CACHE);
+	if (st->dkcache & DKCACHE_WRITE)
+		htolem32(&sqe->cdw11, NVM_VOLATILE_WRITE_CACHE_WCE);
+}
+
+static void
+nvme_setcache_done(struct nvme_queue *q, struct nvme_ccb *ccb,
+    struct nvme_cqe *cqe)
+{
+	struct nvme_setcache_state *st = ccb->ccb_cookie;
+	uint16_t status = NVME_CQE_SC(lemtoh16(&cqe->flags));
+
+	if (status == NVME_CQE_SC_SUCCESS) {
+		st->result = 1;
+	} else {
+		st->result = -1;
+	}
+
+	nvme_ccb_put(q, ccb);
+}
+
+/*
+ * Set status of volatile write cache. Always asynchronous.
+ */
+int
+nvme_admin_setcache(struct nvme_softc *sc, int dkcache)
+{
+	struct nvme_ccb *ccb;
+	struct nvme_queue *q = sc->sc_admin_q;
+	int error;
+	struct nvme_setcache_state st;
+
+	if (!nvme_has_volatile_write_cache(sc)) {
+		/* cache simply not present */
+		return EOPNOTSUPP;
+	}
+
+	if (dkcache & ~(DKCACHE_WRITE)) {
+		/* unsupported parameters */
+		return EOPNOTSUPP;
+	}
+
+	ccb = nvme_ccb_get(q, true);
+	KASSERT(ccb != NULL);
+
+	memset(&st, 0, sizeof(st));
+	st.dkcache = dkcache;
+
+	ccb->ccb_done = nvme_setcache_done;
+	ccb->ccb_cookie = &st;
+
+	/* namespace context */
+	ccb->nnc_flags = 0;
+	ccb->nnc_done = NULL;
+
+	nvme_q_submit(sc, q, ccb, nvme_setcache_fill);
+
+	/* wait for completion */
+	nvme_q_wait_complete(sc, q, nvme_setcache_finished, &st);
+	KASSERT(st.result != 0);
+
+	if (st.result > 0)
+		error = 0;
+	else
+		error = EINVAL;
+
+	return error;
 }
 
 void
@@ -740,12 +1160,18 @@ nvme_ns_free(struct nvme_softc *sc, uint16_t nsid)
 		kmem_free(identify, sizeof(*identify));
 }
 
+struct nvme_pt_state {
+	struct nvme_pt_command *pt;
+	bool finished;
+};
+
 static void
 nvme_pt_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 {
 	struct nvme_softc *sc = q->q_sc;
 	struct nvme_sqe *sqe = slot;
-	struct nvme_pt_command *pt = ccb->ccb_cookie;
+	struct nvme_pt_state *state = ccb->ccb_cookie;
+	struct nvme_pt_command *pt = state->pt;
 	bus_dmamap_t dmap = ccb->ccb_dmamap;
 	int i;
 
@@ -768,7 +1194,7 @@ nvme_pt_fill(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 			bus_dmamap_sync(sc->sc_dmat,
 			    NVME_DMA_MAP(q->q_ccb_prpls),
 			    ccb->ccb_prpl_off,
-			    sizeof(*ccb->ccb_prpl) * dmap->dm_nsegs - 1,
+			    sizeof(*ccb->ccb_prpl) * (dmap->dm_nsegs - 1),
 			    BUS_DMASYNC_PREWRITE);
 			htolem64(&sqe->entry.prp[1], ccb->ccb_prpl_dva);
 			break;
@@ -787,7 +1213,8 @@ static void
 nvme_pt_done(struct nvme_queue *q, struct nvme_ccb *ccb, struct nvme_cqe *cqe)
 {
 	struct nvme_softc *sc = q->q_sc;
-	struct nvme_pt_command *pt = ccb->ccb_cookie;
+	struct nvme_pt_state *state = ccb->ccb_cookie;
+	struct nvme_pt_command *pt = state->pt;
 	bus_dmamap_t dmap = ccb->ccb_dmamap;
 
 	if (pt->buf != NULL && pt->len > 0) {
@@ -795,7 +1222,7 @@ nvme_pt_done(struct nvme_queue *q, struct nvme_ccb *ccb, struct nvme_cqe *cqe)
 			bus_dmamap_sync(sc->sc_dmat,
 			    NVME_DMA_MAP(q->q_ccb_prpls),
 			    ccb->ccb_prpl_off,
-			    sizeof(*ccb->ccb_prpl) * dmap->dm_nsegs - 1,
+			    sizeof(*ccb->ccb_prpl) * (dmap->dm_nsegs - 1),
 			    BUS_DMASYNC_POSTWRITE);
 		}
 
@@ -804,8 +1231,20 @@ nvme_pt_done(struct nvme_queue *q, struct nvme_ccb *ccb, struct nvme_cqe *cqe)
 		bus_dmamap_unload(sc->sc_dmat, dmap);
 	}
 
-	pt->cpl.cdw0 = cqe->cdw0;
-	pt->cpl.flags = cqe->flags & ~NVME_CQE_PHASE;
+	pt->cpl.cdw0 = lemtoh32(&cqe->cdw0);
+	pt->cpl.flags = lemtoh16(&cqe->flags) & ~NVME_CQE_PHASE;
+
+	state->finished = true;
+
+	nvme_ccb_put(q, ccb);
+}
+
+static bool
+nvme_pt_finished(void *cookie)
+{
+	struct nvme_pt_state *state = cookie;
+
+	return state->finished;
 }
 
 static int
@@ -815,23 +1254,21 @@ nvme_command_passthrough(struct nvme_softc *sc, struct nvme_pt_command *pt,
 	struct nvme_queue *q;
 	struct nvme_ccb *ccb;
 	void *buf = NULL;
+	struct nvme_pt_state state;
 	int error;
 
+	/* limit command size to maximum data transfer size */
 	if ((pt->buf == NULL && pt->len > 0) ||
-	    (pt->buf != NULL && pt->len == 0))
+	    (pt->buf != NULL && (pt->len == 0 || pt->len > sc->sc_mdts)))
 		return EINVAL;
 
-	q = is_adminq ? sc->sc_admin_q : nvme_get_q(sc);
-	ccb = nvme_ccb_get(q);
-	if (ccb == NULL)
-		return EBUSY;
+	q = is_adminq ? sc->sc_admin_q : nvme_get_q(sc, NULL, true);
+	ccb = nvme_ccb_get(q, true);
+	KASSERT(ccb != NULL);
 
-	if (pt->buf != NULL && pt->len > 0) {
+	if (pt->buf != NULL) {
+		KASSERT(pt->len > 0);
 		buf = kmem_alloc(pt->len, KM_SLEEP);
-		if (buf == NULL) {
-			error = ENOMEM;
-			goto ccb_put;
-		}
 		if (!pt->is_read) {
 			error = copyin(pt->buf, buf, pt->len);
 			if (error)
@@ -848,25 +1285,30 @@ nvme_command_passthrough(struct nvme_softc *sc, struct nvme_pt_command *pt,
 		    pt->is_read ? BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
 	}
 
+	memset(&state, 0, sizeof(state));
+	state.pt = pt;
+	state.finished = false;
+
 	ccb->ccb_done = nvme_pt_done;
-	ccb->ccb_cookie = pt;
+	ccb->ccb_cookie = &state;
 
 	pt->cmd.nsid = nsid;
-	if (nvme_poll(sc, q, ccb, nvme_pt_fill)) {
-		error = EIO;
-		goto out;
-	}
+
+	nvme_q_submit(sc, q, ccb, nvme_pt_fill);
+
+	/* wait for completion */
+	nvme_q_wait_complete(sc, q, nvme_pt_finished, &state);
+	KASSERT(state.finished);
 
 	error = 0;
-out:
+
 	if (buf != NULL) {
 		if (error == 0 && pt->is_read)
 			error = copyout(buf, pt->buf, pt->len);
 kmem_free:
 		kmem_free(buf, pt->len);
 	}
-ccb_put:
-	nvme_ccb_put(q, ccb);
+
 	return error;
 }
 
@@ -888,7 +1330,7 @@ nvme_q_submit(struct nvme_softc *sc, struct nvme_queue *q, struct nvme_ccb *ccb,
 	    sizeof(*sqe) * tail, sizeof(*sqe), BUS_DMASYNC_POSTWRITE);
 	memset(sqe, 0, sizeof(*sqe));
 	(*fill)(q, ccb, sqe);
-	sqe->cid = ccb->ccb_id;
+	htolem16(&sqe->cid, ccb->ccb_id);
 	bus_dmamap_sync(sc->sc_dmat, NVME_DMA_MAP(q->q_sq_dmamem),
 	    sizeof(*sqe) * tail, sizeof(*sqe), BUS_DMASYNC_PREWRITE);
 
@@ -899,22 +1341,25 @@ nvme_q_submit(struct nvme_softc *sc, struct nvme_queue *q, struct nvme_ccb *ccb,
 struct nvme_poll_state {
 	struct nvme_sqe s;
 	struct nvme_cqe c;
+	void *cookie;
+	void (*done)(struct nvme_queue *, struct nvme_ccb *, struct nvme_cqe *);
 };
 
 static int
 nvme_poll(struct nvme_softc *sc, struct nvme_queue *q, struct nvme_ccb *ccb,
-    void (*fill)(struct nvme_queue *, struct nvme_ccb *, void *))
+    void (*fill)(struct nvme_queue *, struct nvme_ccb *, void *), int timo_sec)
 {
 	struct nvme_poll_state state;
-	void (*done)(struct nvme_queue *, struct nvme_ccb *, struct nvme_cqe *);
-	void *cookie;
 	uint16_t flags;
+	int step = 10;
+	int maxloop = timo_sec * 1000000 / step;
+	int error = 0;
 
 	memset(&state, 0, sizeof(state));
 	(*fill)(q, ccb, &state.s);
 
-	done = ccb->ccb_done;
-	cookie = ccb->ccb_cookie;
+	state.done = ccb->ccb_done;
+	state.cookie = ccb->ccb_cookie;
 
 	ccb->ccb_done = nvme_poll_done;
 	ccb->ccb_cookie = &state;
@@ -922,17 +1367,32 @@ nvme_poll(struct nvme_softc *sc, struct nvme_queue *q, struct nvme_ccb *ccb,
 	nvme_q_submit(sc, q, ccb, nvme_poll_fill);
 	while (!ISSET(state.c.flags, htole16(NVME_CQE_PHASE))) {
 		if (nvme_q_complete(sc, q) == 0)
-			delay(10);
+			delay(step);
 
-		/* XXX no timeout? */
+		if (timo_sec >= 0 && --maxloop <= 0) {
+			error = ETIMEDOUT;
+			break;
+		}
 	}
 
-	ccb->ccb_cookie = cookie;
-	done(q, ccb, &state.c);
+	if (error == 0) {
+		flags = lemtoh16(&state.c.flags);
+		return flags & ~NVME_CQE_PHASE;
+	} else {
+		/*
+		 * If it succeds later, it would hit ccb which will have been
+		 * already reused for something else. Not good. Cross
+		 * fingers and hope for best. XXX do controller reset?
+		 */
+		aprint_error_dev(sc->sc_dev, "polled command timed out\n");
 
-	flags = lemtoh16(&state.c.flags);
+		/* Invoke the callback to clean state anyway */
+		struct nvme_cqe cqe;
+		memset(&cqe, 0, sizeof(cqe));
+		ccb->ccb_done(q, ccb, &cqe);
 
-	return flags & ~NVME_CQE_PHASE;
+		return 1;
+	}
 }
 
 static void
@@ -950,8 +1410,11 @@ nvme_poll_done(struct nvme_queue *q, struct nvme_ccb *ccb,
 {
 	struct nvme_poll_state *state = ccb->ccb_cookie;
 
-	SET(cqe->flags, htole16(NVME_CQE_PHASE));
 	state->c = *cqe;
+	SET(state->c.flags, htole16(NVME_CQE_PHASE));
+
+	ccb->ccb_cookie = state->cookie;
+	state->done(q, ccb, &state->c);
 }
 
 static void
@@ -974,38 +1437,78 @@ nvme_q_complete(struct nvme_softc *sc, struct nvme_queue *q)
 {
 	struct nvme_ccb *ccb;
 	struct nvme_cqe *ring = NVME_DMA_KVA(q->q_cq_dmamem), *cqe;
-	uint32_t head;
 	uint16_t flags;
 	int rv = 0;
 
-	if (!mutex_tryenter(&q->q_cq_mtx))
-		return -1;
+	mutex_enter(&q->q_cq_mtx);
 
 	nvme_dmamem_sync(sc, q->q_cq_dmamem, BUS_DMASYNC_POSTREAD);
-	head = q->q_cq_head;
 	for (;;) {
-		cqe = &ring[head];
+		cqe = &ring[q->q_cq_head];
 		flags = lemtoh16(&cqe->flags);
 		if ((flags & NVME_CQE_PHASE) != q->q_cq_phase)
 			break;
 
-		ccb = &q->q_ccbs[cqe->cid];
-		ccb->ccb_done(q, ccb, cqe);
+		ccb = &q->q_ccbs[lemtoh16(&cqe->cid)];
 
-		if (++head >= q->q_entries) {
-			head = 0;
+		if (++q->q_cq_head >= q->q_entries) {
+			q->q_cq_head = 0;
 			q->q_cq_phase ^= NVME_CQE_PHASE;
 		}
 
-		rv = 1;
+#ifdef DEBUG
+		/*
+		 * If we get spurious completion notification, something
+		 * is seriously hosed up. Very likely DMA to some random
+		 * memory place happened, so just bail out.
+		 */
+		if ((intptr_t)ccb->ccb_cookie == NVME_CCB_FREE) {
+			panic("%s: invalid ccb detected",
+			    device_xname(sc->sc_dev));
+			/* NOTREACHED */
+		}
+#endif
+
+		rv++;
+
+		/*
+		 * Unlock the mutex before calling the ccb_done callback
+		 * and re-lock afterwards. The callback triggers lddone()
+		 * which schedules another i/o, and also calls nvme_ccb_put().
+		 * Unlock/relock avoids possibility of deadlock.
+		 */
+		mutex_exit(&q->q_cq_mtx);
+		ccb->ccb_done(q, ccb, cqe);
+		mutex_enter(&q->q_cq_mtx);
 	}
 	nvme_dmamem_sync(sc, q->q_cq_dmamem, BUS_DMASYNC_PREREAD);
 
 	if (rv)
-		nvme_write4(sc, q->q_cqhdbl, q->q_cq_head = head);
+		nvme_write4(sc, q->q_cqhdbl, q->q_cq_head);
+
 	mutex_exit(&q->q_cq_mtx);
 
 	return rv;
+}
+
+static void
+nvme_q_wait_complete(struct nvme_softc *sc,
+    struct nvme_queue *q, bool (*finished)(void *), void *cookie)
+{
+	mutex_enter(&q->q_ccb_mtx);
+	if (finished(cookie))
+		goto out;
+
+	for(;;) {
+		q->q_ccb_waiting = true;
+		cv_wait(&q->q_ccb_wait, &q->q_ccb_mtx);
+
+		if (finished(cookie))
+			break;
+	}
+
+out:
+	mutex_exit(&q->q_ccb_mtx);
 }
 
 static int
@@ -1018,9 +1521,8 @@ nvme_identify(struct nvme_softc *sc, u_int mps)
 	u_int mdts;
 	int rv = 1;
 
-	ccb = nvme_ccb_get(sc->sc_admin_q);
-	if (ccb == NULL)
-		panic("%s: nvme_ccb_get returned NULL", __func__);
+	ccb = nvme_ccb_get(sc->sc_admin_q, false);
+	KASSERT(ccb != NULL); /* it's a bug if we don't have spare ccb here */
 
 	mem = nvme_dmamem_alloc(sc, sizeof(*identify));
 	if (mem == NULL)
@@ -1030,7 +1532,8 @@ nvme_identify(struct nvme_softc *sc, u_int mps)
 	ccb->ccb_cookie = mem;
 
 	nvme_dmamem_sync(sc, mem, BUS_DMASYNC_PREREAD);
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_fill_identify);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_fill_identify,
+	    NVME_TIMO_IDENT);
 	nvme_dmamem_sync(sc, mem, BUS_DMASYNC_POSTREAD);
 
 	nvme_ccb_put(sc->sc_admin_q, ccb);
@@ -1039,25 +1542,30 @@ nvme_identify(struct nvme_softc *sc, u_int mps)
 		goto done;
 
 	identify = NVME_DMA_KVA(mem);
+	sc->sc_identify = *identify;
+	identify = NULL;
 
-	strnvisx(sn, sizeof(sn), (const char *)identify->sn,
-	    sizeof(identify->sn), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
-	strnvisx(mn, sizeof(mn), (const char *)identify->mn,
-	    sizeof(identify->mn), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
-	strnvisx(fr, sizeof(fr), (const char *)identify->fr,
-	    sizeof(identify->fr), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	/* Convert data to host endian */
+	nvme_identify_controller_swapbytes(&sc->sc_identify);
+
+	strnvisx(sn, sizeof(sn), (const char *)sc->sc_identify.sn,
+	    sizeof(sc->sc_identify.sn), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(mn, sizeof(mn), (const char *)sc->sc_identify.mn,
+	    sizeof(sc->sc_identify.mn), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
+	strnvisx(fr, sizeof(fr), (const char *)sc->sc_identify.fr,
+	    sizeof(sc->sc_identify.fr), VIS_TRIM|VIS_SAFE|VIS_OCTAL);
 	aprint_normal_dev(sc->sc_dev, "%s, firmware %s, serial %s\n", mn, fr,
 	    sn);
 
-	if (identify->mdts > 0) {
-		mdts = (1 << identify->mdts) * (1 << mps);
+	strlcpy(sc->sc_modelname, mn, sizeof(sc->sc_modelname));
+
+	if (sc->sc_identify.mdts > 0) {
+		mdts = (1 << sc->sc_identify.mdts) * (1 << mps);
 		if (mdts < sc->sc_mdts)
 			sc->sc_mdts = mdts;
 	}
 
-	sc->sc_nn = lemtoh32(&identify->nn);
-
-	memcpy(&sc->sc_identify, identify, sizeof(sc->sc_identify));
+	sc->sc_nn = sc->sc_identify.nn;
 
 done:
 	nvme_dmamem_free(sc, mem);
@@ -1072,10 +1580,10 @@ nvme_q_create(struct nvme_softc *sc, struct nvme_queue *q)
 	struct nvme_ccb *ccb;
 	int rv;
 
-	if (sc->sc_use_mq && sc->sc_intr_establish(sc, q->q_id, q))
+	if (sc->sc_use_mq && sc->sc_intr_establish(sc, q->q_id, q) != 0)
 		return 1;
 
-	ccb = nvme_ccb_get(sc->sc_admin_q);
+	ccb = nvme_ccb_get(sc->sc_admin_q, false);
 	KASSERT(ccb != NULL);
 
 	ccb->ccb_done = nvme_empty_done;
@@ -1090,7 +1598,7 @@ nvme_q_create(struct nvme_softc *sc, struct nvme_queue *q)
 	if (sc->sc_use_mq)
 		htolem16(&sqe.cqid, q->q_id);	/* qid == vector */
 
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill, NVME_TIMO_QOP);
 	if (rv != 0)
 		goto fail;
 
@@ -1105,11 +1613,17 @@ nvme_q_create(struct nvme_softc *sc, struct nvme_queue *q)
 	htolem16(&sqe.cqid, q->q_id);
 	sqe.qflags = NVM_SQE_Q_PC;
 
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill, NVME_TIMO_QOP);
 	if (rv != 0)
 		goto fail;
 
+	nvme_ccb_put(sc->sc_admin_q, ccb);
+	return 0;
+
 fail:
+	if (sc->sc_use_mq)
+		sc->sc_intr_disestablish(sc, q->q_id);
+
 	nvme_ccb_put(sc->sc_admin_q, ccb);
 	return rv;
 }
@@ -1121,7 +1635,7 @@ nvme_q_delete(struct nvme_softc *sc, struct nvme_queue *q)
 	struct nvme_ccb *ccb;
 	int rv;
 
-	ccb = nvme_ccb_get(sc->sc_admin_q);
+	ccb = nvme_ccb_get(sc->sc_admin_q, false);
 	KASSERT(ccb != NULL);
 
 	ccb->ccb_done = nvme_empty_done;
@@ -1131,7 +1645,7 @@ nvme_q_delete(struct nvme_softc *sc, struct nvme_queue *q)
 	sqe.opcode = NVM_ADMIN_DEL_IOSQ;
 	htolem16(&sqe.qid, q->q_id);
 
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill, NVME_TIMO_QOP);
 	if (rv != 0)
 		goto fail;
 
@@ -1140,10 +1654,9 @@ nvme_q_delete(struct nvme_softc *sc, struct nvme_queue *q)
 
 	memset(&sqe, 0, sizeof(sqe));
 	sqe.opcode = NVM_ADMIN_DEL_IOCQ;
-	htolem64(&sqe.prp1, NVME_DMA_DVA(q->q_sq_dmamem));
 	htolem16(&sqe.qid, q->q_id);
 
-	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill);
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_sqe_fill, NVME_TIMO_QOP);
 	if (rv != 0)
 		goto fail;
 
@@ -1170,7 +1683,44 @@ nvme_fill_identify(struct nvme_queue *q, struct nvme_ccb *ccb, void *slot)
 }
 
 static int
-nvme_ccbs_alloc(struct nvme_queue *q, u_int nccbs)
+nvme_set_number_of_queues(struct nvme_softc *sc, u_int nq, u_int *ncqa,
+    u_int *nsqa)
+{
+	struct nvme_pt_state state;
+	struct nvme_pt_command pt;
+	struct nvme_ccb *ccb;
+	int rv;
+
+	ccb = nvme_ccb_get(sc->sc_admin_q, false);
+	KASSERT(ccb != NULL); /* it's a bug if we don't have spare ccb here */
+
+	memset(&pt, 0, sizeof(pt));
+	pt.cmd.opcode = NVM_ADMIN_SET_FEATURES;
+	pt.cmd.cdw10 = NVM_FEATURE_NUMBER_OF_QUEUES;
+	pt.cmd.cdw11 = ((nq - 1) << 16) | (nq - 1);
+
+	memset(&state, 0, sizeof(state));
+	state.pt = &pt;
+	state.finished = false;
+
+	ccb->ccb_done = nvme_pt_done;
+	ccb->ccb_cookie = &state;
+
+	rv = nvme_poll(sc, sc->sc_admin_q, ccb, nvme_pt_fill, NVME_TIMO_QOP);
+
+	if (rv != 0) {
+		*ncqa = *nsqa = 0;
+		return EIO;
+	}
+
+	*ncqa = (pt.cpl.cdw0 >> 16) + 1;
+	*nsqa = (pt.cpl.cdw0 & 0xffff) + 1;
+
+	return 0;
+}
+
+static int
+nvme_ccbs_alloc(struct nvme_queue *q, uint16_t nccbs)
 {
 	struct nvme_softc *sc = q->q_sc;
 	struct nvme_ccb *ccb;
@@ -1179,11 +1729,11 @@ nvme_ccbs_alloc(struct nvme_queue *q, u_int nccbs)
 	u_int i;
 
 	mutex_init(&q->q_ccb_mtx, MUTEX_DEFAULT, IPL_BIO);
+	cv_init(&q->q_ccb_wait, "nvmeqw");
+	q->q_ccb_waiting = false;
 	SIMPLEQ_INIT(&q->q_ccb_list);
 
 	q->q_ccbs = kmem_alloc(sizeof(*ccb) * nccbs, KM_SLEEP);
-	if (q->q_ccbs == NULL)
-		return 1;
 
 	q->q_nccbs = nccbs;
 	q->q_ccb_prpls = nvme_dmamem_alloc(sc,
@@ -1220,14 +1770,25 @@ free_maps:
 }
 
 static struct nvme_ccb *
-nvme_ccb_get(struct nvme_queue *q)
+nvme_ccb_get(struct nvme_queue *q, bool wait)
 {
-	struct nvme_ccb *ccb;
+	struct nvme_ccb *ccb = NULL;
 
 	mutex_enter(&q->q_ccb_mtx);
+again:
 	ccb = SIMPLEQ_FIRST(&q->q_ccb_list);
-	if (ccb != NULL)
+	if (ccb != NULL) {
 		SIMPLEQ_REMOVE_HEAD(&q->q_ccb_list, ccb_entry);
+#ifdef DEBUG
+		ccb->ccb_cookie = NULL;
+#endif
+	} else {
+		if (__predict_false(wait)) {
+			q->q_ccb_waiting = true;
+			cv_wait(&q->q_ccb_wait, &q->q_ccb_mtx);
+			goto again;
+		}
+	}
 	mutex_exit(&q->q_ccb_mtx);
 
 	return ccb;
@@ -1238,7 +1799,17 @@ nvme_ccb_put(struct nvme_queue *q, struct nvme_ccb *ccb)
 {
 
 	mutex_enter(&q->q_ccb_mtx);
+#ifdef DEBUG
+	ccb->ccb_cookie = (void *)NVME_CCB_FREE;
+#endif
 	SIMPLEQ_INSERT_HEAD(&q->q_ccb_list, ccb, ccb_entry);
+
+	/* It's unlikely there are any waiters, it's not used for regular I/O */
+	if (__predict_false(q->q_ccb_waiting)) {
+		q->q_ccb_waiting = false;
+		cv_broadcast(&q->q_ccb_wait);
+	}
+
 	mutex_exit(&q->q_ccb_mtx);
 }
 
@@ -1251,13 +1822,20 @@ nvme_ccbs_free(struct nvme_queue *q)
 	mutex_enter(&q->q_ccb_mtx);
 	while ((ccb = SIMPLEQ_FIRST(&q->q_ccb_list)) != NULL) {
 		SIMPLEQ_REMOVE_HEAD(&q->q_ccb_list, ccb_entry);
+		/* 
+		 * bus_dmamap_destroy() may call vm_map_lock() and rw_enter()
+		 * internally. don't hold spin mutex
+		 */
+		mutex_exit(&q->q_ccb_mtx);
 		bus_dmamap_destroy(sc->sc_dmat, ccb->ccb_dmamap);
+		mutex_enter(&q->q_ccb_mtx);
 	}
 	mutex_exit(&q->q_ccb_mtx);
 
 	nvme_dmamem_free(sc, q->q_ccb_prpls);
 	kmem_free(q->q_ccbs, sizeof(*ccb) * q->q_nccbs);
 	q->q_ccbs = NULL;
+	cv_destroy(&q->q_ccb_wait);
 	mutex_destroy(&q->q_ccb_mtx);
 }
 
@@ -1267,9 +1845,6 @@ nvme_q_alloc(struct nvme_softc *sc, uint16_t id, u_int entries, u_int dstrd)
 	struct nvme_queue *q;
 
 	q = kmem_alloc(sizeof(*q), KM_SLEEP);
-	if (q == NULL)
-		return NULL;
-
 	q->q_sc = sc;
 	q->q_sq_dmamem = nvme_dmamem_alloc(sc,
 	    sizeof(struct nvme_sqe) * entries);
@@ -1297,7 +1872,12 @@ nvme_q_alloc(struct nvme_softc *sc, uint16_t id, u_int entries, u_int dstrd)
 	nvme_dmamem_sync(sc, q->q_sq_dmamem, BUS_DMASYNC_PREWRITE);
 	nvme_dmamem_sync(sc, q->q_cq_dmamem, BUS_DMASYNC_PREREAD);
 
-	if (nvme_ccbs_alloc(q, entries) != 0) {
+	/*
+	 * Due to definition of full and empty queue (queue is empty
+	 * when head == tail, full when tail is one less then head),
+	 * we can actually only have (entries - 1) in-flight commands.
+	 */
+	if (nvme_ccbs_alloc(q, entries - 1) != 0) {
 		aprint_error_dev(sc->sc_dev, "unable to allocate ccbs\n");
 		goto free_cq;
 	}
@@ -1315,9 +1895,29 @@ free:
 }
 
 static void
+nvme_q_reset(struct nvme_softc *sc, struct nvme_queue *q)
+{
+
+	memset(NVME_DMA_KVA(q->q_sq_dmamem), 0, NVME_DMA_LEN(q->q_sq_dmamem));
+	memset(NVME_DMA_KVA(q->q_cq_dmamem), 0, NVME_DMA_LEN(q->q_cq_dmamem));
+
+	q->q_sqtdbl = NVME_SQTDBL(q->q_id, sc->sc_dstrd);
+	q->q_cqhdbl = NVME_CQHDBL(q->q_id, sc->sc_dstrd);
+
+	q->q_sq_tail = 0;
+	q->q_cq_head = 0;
+	q->q_cq_phase = NVME_CQE_PHASE;
+
+	nvme_dmamem_sync(sc, q->q_sq_dmamem, BUS_DMASYNC_PREWRITE);
+	nvme_dmamem_sync(sc, q->q_cq_dmamem, BUS_DMASYNC_PREREAD);
+}
+
+static void
 nvme_q_free(struct nvme_softc *sc, struct nvme_queue *q)
 {
 	nvme_ccbs_free(q);
+	mutex_destroy(&q->q_sq_mtx);
+	mutex_destroy(&q->q_cq_mtx);
 	nvme_dmamem_sync(sc, q->q_cq_dmamem, BUS_DMASYNC_POSTREAD);
 	nvme_dmamem_sync(sc, q->q_sq_dmamem, BUS_DMASYNC_POSTWRITE);
 	nvme_dmamem_free(sc, q->q_cq_dmamem);
@@ -1329,48 +1929,64 @@ int
 nvme_intr(void *xsc)
 {
 	struct nvme_softc *sc = xsc;
-	int rv = 0;
 
+	/*
+	 * INTx is level triggered, controller deasserts the interrupt only
+	 * when we advance command queue head via write to the doorbell.
+	 * Tell the controller to block the interrupts while we process
+	 * the queue(s).
+	 */
 	nvme_write4(sc, NVME_INTMS, 1);
 
-	if (nvme_q_complete(sc, sc->sc_admin_q))
-		rv = 1;
-	if (sc->sc_q != NULL)
-		if (nvme_q_complete(sc, sc->sc_q[0]))
-			rv = 1;
+	softint_schedule(sc->sc_softih[0]);
 
-	nvme_write4(sc, NVME_INTMC, 1);
-
-	return rv;
+	/* don't know, might not have been for us */
+	return 1;
 }
 
-int
-nvme_mq_msi_intr(void *xq)
+void
+nvme_softintr_intx(void *xq)
 {
 	struct nvme_queue *q = xq;
 	struct nvme_softc *sc = q->q_sc;
-	int rv = 0;
 
-	nvme_write4(sc, NVME_INTMS, 1U << q->q_id);
+	nvme_q_complete(sc, sc->sc_admin_q);
+	if (sc->sc_q != NULL)
+	        nvme_q_complete(sc, sc->sc_q[0]);
 
-	if (nvme_q_complete(sc, q))
-		rv = 1;
-
-	nvme_write4(sc, NVME_INTMC, 1U << q->q_id);
-
-	return rv;
+	/*
+	 * Processing done, tell controller to issue interrupts again. There
+	 * is no race, as NVMe spec requires the controller to maintain state,
+	 * and assert the interrupt whenever there are unacknowledged
+	 * completion queue entries.
+	 */
+	nvme_write4(sc, NVME_INTMC, 1);
 }
 
 int
-nvme_mq_msix_intr(void *xq)
+nvme_intr_msi(void *xq)
 {
 	struct nvme_queue *q = xq;
-	int rv = 0;
 
-	if (nvme_q_complete(q->q_sc, q))
-		rv = 1;
+	KASSERT(q && q->q_sc && q->q_sc->sc_softih
+	    && q->q_sc->sc_softih[q->q_id]);
 
-	return rv;
+	/*
+	 * MSI/MSI-X are edge triggered, so can handover processing to softint
+	 * without masking the interrupt.
+	 */
+	softint_schedule(q->q_sc->sc_softih[q->q_id]);
+
+	return 1;
+}
+
+void
+nvme_softintr_msi(void *xq)
+{
+	struct nvme_queue *q = xq;
+	struct nvme_softc *sc = q->q_sc;
+
+	nvme_q_complete(sc, q);
 }
 
 static struct nvme_dmamem *
@@ -1385,7 +2001,7 @@ nvme_dmamem_alloc(struct nvme_softc *sc, size_t size)
 
 	ndm->ndm_size = size;
 
-	if (bus_dmamap_create(sc->sc_dmat, size, 1, size, 0,
+	if (bus_dmamap_create(sc->sc_dmat, size, btoc(round_page(size)), size, 0,
 	    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW, &ndm->ndm_map) != 0)
 		goto ndmfree;
 
@@ -1396,11 +2012,13 @@ nvme_dmamem_alloc(struct nvme_softc *sc, size_t size)
 	if (bus_dmamem_map(sc->sc_dmat, &ndm->ndm_seg, nsegs, size,
 	    &ndm->ndm_kva, BUS_DMA_WAITOK) != 0)
 		goto free;
-	memset(ndm->ndm_kva, 0, size);
 
 	if (bus_dmamap_load(sc->sc_dmat, ndm->ndm_map, ndm->ndm_kva, size,
 	    NULL, BUS_DMA_WAITOK) != 0)
 		goto unmap;
+
+	memset(ndm->ndm_kva, 0, size);
+	bus_dmamap_sync(sc->sc_dmat, ndm->ndm_map, 0, size, BUS_DMASYNC_PREREAD);
 
 	return ndm;
 
@@ -1436,7 +2054,6 @@ nvme_dmamem_free(struct nvme_softc *sc, struct nvme_dmamem *ndm)
  * ioctl
  */
 
-/* nvme */
 dev_type_open(nvmeopen);
 dev_type_close(nvmeclose);
 dev_type_ioctl(nvmeioctl);
@@ -1456,8 +2073,6 @@ const struct cdevsw nvme_cdevsw = {
 	.d_flag = D_OTHER,
 };
 
-extern struct cfdriver nvme_cd;
-
 /*
  * Accept an open operation on the control device.
  */
@@ -1465,16 +2080,29 @@ int
 nvmeopen(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct nvme_softc *sc;
-	int unit = minor(dev);
+	int unit = minor(dev) / 0x10000;
+	int nsid = minor(dev) & 0xffff;
+	int nsidx;
 
 	if ((sc = device_lookup_private(&nvme_cd, unit)) == NULL)
 		return ENXIO;
 	if ((sc->sc_flags & NVME_F_ATTACHED) == 0)
 		return ENXIO;
-	if (ISSET(sc->sc_flags, NVME_F_OPEN))
-		return EBUSY;
 
-	SET(sc->sc_flags, NVME_F_OPEN);
+	if (nsid == 0) {
+		/* controller */
+		if (ISSET(sc->sc_flags, NVME_F_OPEN))
+			return EBUSY;
+		SET(sc->sc_flags, NVME_F_OPEN);
+	} else {
+		/* namespace */
+		nsidx = nsid - 1;
+		if (nsidx >= sc->sc_nn || sc->sc_namespaces[nsidx].dev == NULL)
+			return ENXIO;
+		if (ISSET(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN))
+			return EBUSY;
+		SET(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN);
+	}
 	return 0;
 }
 
@@ -1485,13 +2113,25 @@ int
 nvmeclose(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct nvme_softc *sc;
-	int unit = minor(dev);
+	int unit = minor(dev) / 0x10000;
+	int nsid = minor(dev) & 0xffff;
+	int nsidx;
 
 	sc = device_lookup_private(&nvme_cd, unit);
 	if (sc == NULL)
 		return ENXIO;
 
-	CLR(sc->sc_flags, NVME_F_OPEN);
+	if (nsid == 0) {
+		/* controller */
+		CLR(sc->sc_flags, NVME_F_OPEN);
+	} else {
+		/* namespace */
+		nsidx = nsid - 1;
+		if (nsidx >= sc->sc_nn)
+			return ENXIO;
+		CLR(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN);
+	}
+
 	return 0;
 }
 
@@ -1502,8 +2142,9 @@ int
 nvmeioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 {
 	struct nvme_softc *sc;
+	int unit = minor(dev) / 0x10000;
+	int nsid = minor(dev) & 0xffff;
 	struct nvme_pt_command *pt;
-	int unit = minor(dev);
 
 	sc = device_lookup_private(&nvme_cd, unit);
 	if (sc == NULL)
@@ -1511,107 +2152,9 @@ nvmeioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 
 	switch (cmd) {
 	case NVME_PASSTHROUGH_CMD:
-		pt = (struct nvme_pt_command *)data;
-		return nvme_command_passthrough(sc, pt, pt->cmd.nsid, l, true);
-	}
-
-	return ENOTTY;
-}
-
-/* nvmens */
-dev_type_open(nvmensopen);
-dev_type_close(nvmensclose);
-dev_type_ioctl(nvmensioctl);
-
-const struct cdevsw nvmens_cdevsw = {
-	.d_open = nvmensopen,
-	.d_close = nvmensclose,
-	.d_read = noread,
-	.d_write = nowrite,
-	.d_ioctl = nvmensioctl,
-	.d_stop = nostop,
-	.d_tty = notty,
-	.d_poll = nopoll,
-	.d_mmap = nommap,
-	.d_kqfilter = nokqfilter,
-	.d_discard = nodiscard,
-	.d_flag = D_OTHER,
-};
-
-extern struct cfdriver nvmens_cd;
-
-/*
- * Accept an open operation on the control device.
- */
-int
-nvmensopen(dev_t dev, int flag, int mode, struct lwp *l)
-{
-	struct nvme_softc *sc;
-	int unit = minor(dev) / 0x10000;
-	int nsid = minor(dev) & 0xffff;
-	int nsidx;
-
-	if ((sc = device_lookup_private(&nvme_cd, unit)) == NULL)
-		return ENXIO;
-	if ((sc->sc_flags & NVME_F_ATTACHED) == 0)
-		return ENXIO;
-	if (nsid == 0)
-		return ENXIO;
-
-	nsidx = nsid - 1;
-	if (nsidx > sc->sc_nn || sc->sc_namespaces[nsidx].dev == NULL)
-		return ENXIO;
-	if (ISSET(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN))
-		return EBUSY;
-
-	SET(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN);
-	return 0;
-}
-
-/*
- * Accept the last close on the control device.
- */
-int
-nvmensclose(dev_t dev, int flag, int mode, struct lwp *l)
-{
-	struct nvme_softc *sc;
-	int unit = minor(dev) / 0x10000;
-	int nsid = minor(dev) & 0xffff;
-	int nsidx;
-
-	sc = device_lookup_private(&nvme_cd, unit);
-	if (sc == NULL)
-		return ENXIO;
-	if (nsid == 0)
-		return ENXIO;
-
-	nsidx = nsid - 1;
-	if (nsidx > sc->sc_nn)
-		return ENXIO;
-
-	CLR(sc->sc_namespaces[nsidx].flags, NVME_NS_F_OPEN);
-	return 0;
-}
-
-/*
- * Handle control operations.
- */
-int
-nvmensioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
-{
-	struct nvme_softc *sc;
-	int unit = minor(dev) / 0x10000;
-	int nsid = minor(dev) & 0xffff;
-
-	sc = device_lookup_private(&nvme_cd, unit);
-	if (sc == NULL)
-		return ENXIO;
-	if (nsid == 0)
-		return ENXIO;
-
-	switch (cmd) {
-	case NVME_PASSTHROUGH_CMD:
-		return nvme_command_passthrough(sc, data, nsid, l, false);
+		pt = data;
+		return nvme_command_passthrough(sc, data,
+		    nsid == 0 ? pt->cmd.nsid : nsid, l, nsid == 0);
 	}
 
 	return ENOTTY;

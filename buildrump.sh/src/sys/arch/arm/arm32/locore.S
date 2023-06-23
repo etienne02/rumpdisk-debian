@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.37 2014/08/27 03:35:32 matt Exp $	*/
+/*	$NetBSD: locore.S,v 1.43 2020/08/28 13:36:52 skrll Exp $	*/
 
 /*
  * Copyright (C) 1994-1997 Mark Brinicombe
@@ -31,16 +31,16 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "opt_arm_debug.h"
+
 #include "assym.h"
+#include <sys/cdefs.h>
 #include <sys/syscall.h>
 #include <sys/errno.h>
 #include <arm/asm.h>
 #include <arm/locore.h>
 
-/* What size should this really be ? It is only used by init_arm() */
-#define INIT_ARM_STACK_SIZE	2048
-
-	RCSID("$NetBSD: locore.S,v 1.37 2014/08/27 03:35:32 matt Exp $")
+	RCSID("$NetBSD: locore.S,v 1.43 2020/08/28 13:36:52 skrll Exp $")
 
 /*
  * This is for kvm_mkdb, and should be the address of the beginning
@@ -56,8 +56,12 @@ ASENTRY_NP(start)
 	mrs	r1, cpsr		/* fetch CPSR value */
 	msr	spsr_sx, r1		/* set SPSR[23:8] to known value */
 
+	/*
+	 * Get bss bounds (r1, r2), curlwp or curcpu (r8), and set initial
+	 * stack.
+	 */
 	adr	r1, .Lstart
-	ldmia	r1, {r1, r2, r8, sp}	/* Set initial stack and */
+	ldmia	r1, {r1, r2, r8, sp}
 
 #if defined(TPIDRPRW_IS_CURCPU) || defined(TPIDRPRW_IS_CURLWP)
 	mcr	p15, 0, r8, c13, c0, 4
@@ -85,7 +89,7 @@ ASENTRY_NP(start)
 	mov	fp, #0x00000000		/* trace back starts here */
 	bl	_C_LABEL(initarm)	/* Off we go */
 
-	/* init arm will return the new stack pointer. */
+	/* initarm will return the new stack pointer. */
 	mov	sp, r0
 
 	mov	fp, #0x00000000		/* trace back starts here */
@@ -99,6 +103,13 @@ ASENTRY_NP(start)
 	b	_C_LABEL(panic)
 	/* NOTREACHED */
 
+ENTRY_NP(uartputc)
+#ifdef EARLYCONS
+	b	___CONCAT(EARLYCONS, _platform_early_putchar)
+#endif
+	RET
+ASEND(uartputc)
+
 .Lstart:
 	.word	_edata
 	.word	_end
@@ -107,19 +118,27 @@ ASENTRY_NP(start)
 #else
 	.word	_C_LABEL(cpu_info_store)
 #endif
-	.word	svcstk + INIT_ARM_STACK_SIZE
+#if !defined(__HAVE_GENERIC_START)
+	.word	svcstk_end
+#else
+	.word   start_stacks_top
+#endif
 
 .Lmainreturned:
 	.asciz	"main() returned"
 	.align	0
 ASEND(start)
 
+#if !defined(__HAVE_GENERIC_START)
 	.bss
 #ifdef __ARM_EABI__
 	.align	3
 #endif
+/* What size should this really be ? It is only used by initarm() */
 svcstk:
 	.space	INIT_ARM_STACK_SIZE
+svcstk_end:
+#endif
 
 	.text
 	.align	0

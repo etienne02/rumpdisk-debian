@@ -1,4 +1,4 @@
-/* $NetBSD: secmodel_extensions.c,v 1.7 2015/12/12 14:57:52 maxv Exp $ */
+/* $NetBSD: secmodel_extensions.c,v 1.12 2020/03/16 21:20:12 pgoyette Exp $ */
 /*-
  * Copyright (c) 2011 Elad Efrat <elad@NetBSD.org>
  * All rights reserved.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: secmodel_extensions.c,v 1.7 2015/12/12 14:57:52 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: secmodel_extensions.c,v 1.12 2020/03/16 21:20:12 pgoyette Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -38,6 +38,7 @@ __KERNEL_RCSID(0, "$NetBSD: secmodel_extensions.c,v 1.7 2015/12/12 14:57:52 maxv
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/proc.h>
+#include <sys/ptrace.h>
 #include <sys/module.h>
 
 #include <secmodel/secmodel.h>
@@ -49,10 +50,13 @@ static int dovfsusermount;
 static int curtain;
 static int user_set_cpu_affinity;
 
+#ifdef PT_SETDBREGS
+int user_set_dbregs;
+#endif
+
 static kauth_listener_t l_system, l_process, l_network;
 
 static secmodel_t extensions_sm;
-static struct sysctllog *extensions_sysctl_log;
 
 static void secmodel_extensions_init(void);
 static void secmodel_extensions_start(void);
@@ -70,8 +74,8 @@ static int secmodel_extensions_process_cb(kauth_cred_t, kauth_action_t,
 static int secmodel_extensions_network_cb(kauth_cred_t, kauth_action_t,
     void *, void *, void *, void *, void *);
 
-static void
-sysctl_security_extensions_setup(struct sysctllog **clog)
+SYSCTL_SETUP(sysctl_security_extensions_setup,
+    "security extensions sysctl")
 {
 	const struct sysctlnode *rnode, *rnode2;
 
@@ -134,6 +138,17 @@ sysctl_security_extensions_setup(struct sysctllog **clog)
 		       sysctl_extensions_user_handler, 0,
 		       &user_set_cpu_affinity, 0,
 		       CTL_CREATE, CTL_EOL);
+
+#ifdef PT_SETDBREGS
+	sysctl_createv(clog, 0, &rnode, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		       CTLTYPE_INT, "user_set_dbregs",
+		       SYSCTL_DESCR("Whether unprivileged users may set "\
+		       		    "CPU Debug Registers."),
+		       sysctl_extensions_user_handler, 0,
+		       &user_set_dbregs, 0,
+		       CTL_CREATE, CTL_EOL);
+#endif
 
 	/* Compatibility: vfs.generic.usermount */
 	sysctl_createv(clog, 0, NULL, NULL,
@@ -250,6 +265,9 @@ secmodel_extensions_init(void)
 
 	curtain = 0;
 	user_set_cpu_affinity = 0;
+#ifdef PT_SETDBREGS
+	user_set_dbregs = 0;
+#endif
 }
 
 static void
@@ -289,11 +307,9 @@ extensions_modcmd(modcmd_t cmd, void *arg)
 
 		secmodel_extensions_init();
 		secmodel_extensions_start();
-		sysctl_security_extensions_setup(&extensions_sysctl_log);
 		break;
 
 	case MODULE_CMD_FINI:
-		sysctl_teardown(&extensions_sysctl_log);
 		secmodel_extensions_stop();
 
 		error = secmodel_deregister(extensions_sm);
@@ -327,7 +343,7 @@ secmodel_extensions_system_cb(kauth_cred_t cred, kauth_action_t action,
 	enum kauth_system_req req;
 	int error;
 
-	req = (enum kauth_system_req)arg0;
+	req = (enum kauth_system_req)(uintptr_t)arg0;
 	result = KAUTH_RESULT_DEFER;
 
 	switch (action) {
@@ -401,7 +417,7 @@ secmodel_extensions_process_cb(kauth_cred_t cred, kauth_action_t action,
 	enum kauth_process_req req;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_process_req)arg1;
+	req = (enum kauth_process_req)(uintptr_t)arg1;
 
 	switch (action) {
 	case KAUTH_PROCESS_CANSEE:
@@ -409,6 +425,7 @@ secmodel_extensions_process_cb(kauth_cred_t cred, kauth_action_t action,
 		case KAUTH_REQ_PROCESS_CANSEE_ARGS:
 		case KAUTH_REQ_PROCESS_CANSEE_ENTRY:
 		case KAUTH_REQ_PROCESS_CANSEE_OPENFILES:
+		case KAUTH_REQ_PROCESS_CANSEE_EPROC:
 			if (curtain != 0) {
 				struct proc *p = arg0;
 
@@ -430,6 +447,7 @@ secmodel_extensions_process_cb(kauth_cred_t cred, kauth_action_t action,
 
 			break;
 
+		case KAUTH_REQ_PROCESS_CANSEE_KPTR:
 		default:
 			break;
 		}
@@ -460,7 +478,7 @@ secmodel_extensions_network_cb(kauth_cred_t cred, kauth_action_t action,
 	enum kauth_network_req req;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_network_req)arg0;
+	req = (enum kauth_network_req)(uintptr_t)arg0;
 
 	if (action != KAUTH_NETWORK_SOCKET ||
 	    req != KAUTH_REQ_NETWORK_SOCKET_CANSEE)

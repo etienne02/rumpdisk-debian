@@ -1,6 +1,5 @@
-/*	$NetBSD: npf_if.c,v 1.6 2016/05/12 02:24:17 ozaki-r Exp $	*/
-
 /*-
+ * Copyright (c) 2019 Mindaugas Rasiukevicius <rmind at noxt eu>
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -30,157 +29,216 @@
  */
 
 /*
- * NPF network interface handling module.
+ * NPF network interface handling.
  *
- * NPF uses its own interface IDs (npf-if-id).  When NPF configuration is
- * (re)loaded, each required interface name is registered and a matching
- * network interface gets an ID assigned.  If an interface is not present,
- * it gets an ID on attach.
+ * NPF uses its own interface IDs (npf-if-id).  These IDs start from 1.
+ * Zero is reserved to indicate "no interface" case or an interface of
+ * no interest (i.e. not registered).
  *
- * IDs start from 1.  Zero is reserved to indicate "no interface" case or
- * an interface of no interest (i.e. not registered).
+ * This module provides an interface to primarily handle the following:
  *
- * The IDs are mapped synchronously based on interface events which are
- * monitored using pfil(9) hooks.
+ * - Bind a symbolic interface name to NPF interface ID.
+ * - Associate NPF interface ID when the network interface is attached.
+ *
+ * When NPF configuration is (re)loaded, each referenced network interface
+ * name is registered with a unique ID.  If the network interface is already
+ * attached, then the ID is associated with it immediately; otherwise, IDs
+ * are associated/disassociated on interface events which are monitored
+ * using pfil(9) hooks.
+ *
+ * To avoid race conditions when an active NPF configuration is updated or
+ * interfaces are detached/attached, the interface names are never removed
+ * and therefore IDs are never re-assigned.  The only point when interface
+ * names and IDs are cleared is when the configuration is flushed.
+ *
+ * A linear counter is used for IDs.
  */
 
+#ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npf_if.c,v 1.6 2016/05/12 02:24:17 ozaki-r Exp $");
-
-#ifdef _KERNEL_OPT
-#include "pf.h"
-#if NPF > 0
-#error "NPF and PF are mutually exclusive; please select one"
-#endif
-#endif
+__KERNEL_RCSID(0, "$NetBSD: npf_if.c,v 1.13 2020/05/30 14:16:56 rmind Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/kmem.h>
-
 #include <net/if.h>
+#endif
 
 #include "npf_impl.h"
 
-typedef struct {
-	char		n_ifname[IFNAMSIZ];
+typedef struct npf_ifmap {
+	char		ifname[IFNAMSIZ + 1];
 } npf_ifmap_t;
 
-static npf_ifmap_t	npf_ifmap[NPF_MAX_IFMAP]	__read_mostly;
-static u_int		npf_ifmap_cnt			__read_mostly;
+#define	NPF_IFMAP_NOID			(0U)
+#define	NPF_IFMAP_SLOT2ID(npf, slot)	((npf)->ifmap_off + (slot) + 1)
+#define	NPF_IFMAP_ID2SLOT(npf, id)	\
+    ((id) - atomic_load_relaxed(&(npf)->ifmap_off) - 1)
 
-static u_int
-npf_ifmap_new(void)
+void
+npf_ifmap_init(npf_t *npf, const npf_ifops_t *ifops)
 {
-	KASSERT(npf_config_locked_p());
+	const size_t nbytes = sizeof(npf_ifmap_t) * NPF_MAX_IFMAP;
 
-	for (u_int i = 0; i < npf_ifmap_cnt; i++)
-		if (npf_ifmap[i].n_ifname[0] == '\0')
-			return i + 1;
+	KASSERT(ifops != NULL);
+	ifops->flush(npf, (void *)(uintptr_t)0);
 
-	if (npf_ifmap_cnt == NPF_MAX_IFMAP) {
+	mutex_init(&npf->ifmap_lock, MUTEX_DEFAULT, IPL_SOFTNET);
+	npf->ifmap = kmem_zalloc(nbytes, KM_SLEEP);
+	npf->ifmap_cnt = 0;
+	npf->ifmap_off = 0;
+	npf->ifops = ifops;
+}
+
+void
+npf_ifmap_fini(npf_t *npf)
+{
+	const size_t nbytes = sizeof(npf_ifmap_t) * NPF_MAX_IFMAP;
+	mutex_destroy(&npf->ifmap_lock);
+	kmem_free(npf->ifmap, nbytes);
+}
+
+static unsigned
+npf_ifmap_lookup(npf_t *npf, const char *ifname)
+{
+	KASSERT(mutex_owned(&npf->ifmap_lock));
+
+	for (unsigned i = 0; i < npf->ifmap_cnt; i++) {
+		npf_ifmap_t *ifmap = &npf->ifmap[i];
+
+		if (strcmp(ifmap->ifname, ifname) == 0) {
+			return NPF_IFMAP_SLOT2ID(npf, i);
+		}
+	}
+	return NPF_IFMAP_NOID;
+}
+
+/*
+ * npf_ifmap_register: register an interface name; return an assigned
+ * NPF network ID on success (non-zero).
+ *
+ * This routine is mostly called on NPF configuration (re)load for the
+ * interfaces names referenced by the rules.
+ */
+unsigned
+npf_ifmap_register(npf_t *npf, const char *ifname)
+{
+	npf_ifmap_t *ifmap;
+	unsigned id, i;
+	ifnet_t *ifp;
+
+	mutex_enter(&npf->ifmap_lock);
+	if ((id = npf_ifmap_lookup(npf, ifname)) != NPF_IFMAP_NOID) {
+		goto out;
+	}
+	if (npf->ifmap_cnt == NPF_MAX_IFMAP) {
 		printf("npf_ifmap_new: out of slots; bump NPF_MAX_IFMAP\n");
-		return 0;
-	}
-	return ++npf_ifmap_cnt;
-}
-
-static u_int
-npf_ifmap_lookup(const char *ifname)
-{
-	KASSERT(npf_config_locked_p());
-
-	for (u_int i = 0; i < npf_ifmap_cnt; i++) {
-		npf_ifmap_t *nim = &npf_ifmap[i];
-
-		if (nim->n_ifname[0] && strcmp(nim->n_ifname, ifname) == 0)
-			return i + 1;
-	}
-	return 0;
-}
-
-u_int
-npf_ifmap_register(const char *ifname)
-{
-	npf_ifmap_t *nim;
-	ifnet_t *ifp;
-	u_int i;
-
-	npf_config_enter();
-	if ((i = npf_ifmap_lookup(ifname)) != 0) {
+		id = NPF_IFMAP_NOID;
 		goto out;
 	}
-	if ((i = npf_ifmap_new()) == 0) {
-		goto out;
-	}
-	nim = &npf_ifmap[i - 1];
-	strlcpy(nim->n_ifname, ifname, IFNAMSIZ);
+	KASSERT(npf->ifmap_cnt < NPF_MAX_IFMAP);
 
-	KERNEL_LOCK(1, NULL);
-	if ((ifp = ifunit(ifname)) != NULL) {
-		ifp->if_pf_kif = (void *)(uintptr_t)i;
+	/* Allocate a new slot and convert and assign an ID. */
+	i = npf->ifmap_cnt++;
+	ifmap = &npf->ifmap[i];
+	strlcpy(ifmap->ifname, ifname, IFNAMSIZ);
+	id = NPF_IFMAP_SLOT2ID(npf, i);
+
+	if ((ifp = npf->ifops->lookup(npf, ifname)) != NULL) {
+		npf->ifops->setmeta(npf, ifp, (void *)(uintptr_t)id);
 	}
-	KERNEL_UNLOCK_ONE(NULL);
 out:
-	npf_config_exit();
-	return i;
+	mutex_exit(&npf->ifmap_lock);
+	return id;
 }
 
 void
-npf_ifmap_flush(void)
+npf_ifmap_flush(npf_t *npf)
 {
-	ifnet_t *ifp;
-
-	KASSERT(npf_config_locked_p());
-
-	for (u_int i = 0; i < npf_ifmap_cnt; i++) {
-		npf_ifmap[i].n_ifname[0] = '\0';
+	mutex_enter(&npf->ifmap_lock);
+	npf->ifops->flush(npf, (void *)(uintptr_t)NPF_IFMAP_NOID);
+	for (unsigned i = 0; i < npf->ifmap_cnt; i++) {
+		npf->ifmap[i].ifname[0] = '\0';
 	}
-	npf_ifmap_cnt = 0;
+	npf->ifmap_cnt = 0;
 
-	KERNEL_LOCK(1, NULL);
-	IFNET_LOCK();
-	IFNET_WRITER_FOREACH(ifp) {
-		ifp->if_pf_kif = (void *)(uintptr_t)0;
+	/*
+	 * Reset the ID counter if reaching the overflow; this is not
+	 * realistic, but we maintain correctness.
+	 */
+	if (npf->ifmap_off < (UINT_MAX - NPF_MAX_IFMAP)) {
+		npf->ifmap_off += NPF_MAX_IFMAP;
+	} else {
+		npf->ifmap_off = 0;
 	}
-	IFNET_UNLOCK();
-	KERNEL_UNLOCK_ONE(NULL);
+	mutex_exit(&npf->ifmap_lock);
 }
 
-u_int
-npf_ifmap_getid(const ifnet_t *ifp)
+/*
+ * npf_ifmap_getid: get the ID for the given network interface.
+ *
+ * => This routine is typically called from the packet handler when
+ *    matching whether the packet is on particular network interface.
+ *
+ * => This routine is lock-free; if the NPF configuration is flushed
+ *    while the packet is in-flight, the ID will not match because we
+ *    keep the IDs linear.
+ */
+unsigned
+npf_ifmap_getid(npf_t *npf, const ifnet_t *ifp)
 {
-	const u_int i = (uintptr_t)ifp->if_pf_kif;
-	KASSERT(i <= npf_ifmap_cnt);
-	return i;
+	const unsigned id = (uintptr_t)npf->ifops->getmeta(npf, ifp);
+	return id;
 }
 
-const char *
-npf_ifmap_getname(const u_int id)
+/*
+ * npf_ifmap_copylogname: this function is toxic; it can return garbage
+ * as we don't lock, but it is only used temporarily and only for logging.
+ */
+void
+npf_ifmap_copylogname(npf_t *npf, unsigned id, char *buf, size_t len)
 {
-	const char *ifname;
+	const unsigned i = NPF_IFMAP_ID2SLOT(npf, id);
 
-	KASSERT(npf_config_locked_p());
-	KASSERT(id > 0 && id <= npf_ifmap_cnt);
+	membar_consumer();
 
-	ifname = npf_ifmap[id - 1].n_ifname;
-	KASSERT(ifname[0] != '\0');
-	return ifname;
+	if (id != NPF_IFMAP_NOID && i < NPF_MAX_IFMAP) {
+		/*
+		 * Lock-free access is safe as there is an extra byte
+		 * with a permanent NUL terminator at the end.
+		 */
+		const npf_ifmap_t *ifmap = &npf->ifmap[i];
+		strlcpy(buf, ifmap->ifname, MIN(len, IFNAMSIZ));
+	} else {
+		strlcpy(buf, "???", len);
+	}
 }
 
 void
-npf_ifmap_attach(ifnet_t *ifp)
+npf_ifmap_copyname(npf_t *npf, unsigned id, char *buf, size_t len)
 {
-	npf_config_enter();
-	ifp->if_pf_kif = (void *)(uintptr_t)npf_ifmap_lookup(ifp->if_xname);
-	npf_config_exit();
+	mutex_enter(&npf->ifmap_lock);
+	npf_ifmap_copylogname(npf, id, buf, len);
+	mutex_exit(&npf->ifmap_lock);
 }
 
-void
-npf_ifmap_detach(ifnet_t *ifp)
+__dso_public void
+npfk_ifmap_attach(npf_t *npf, ifnet_t *ifp)
+{
+	const npf_ifops_t *ifops = npf->ifops;
+	unsigned id;
+
+	mutex_enter(&npf->ifmap_lock);
+	id = npf_ifmap_lookup(npf, ifops->getname(npf, ifp));
+	ifops->setmeta(npf, ifp, (void *)(uintptr_t)id);
+	mutex_exit(&npf->ifmap_lock);
+}
+
+__dso_public void
+npfk_ifmap_detach(npf_t *npf, ifnet_t *ifp)
 {
 	/* Diagnostic. */
-	npf_config_enter();
-	ifp->if_pf_kif = (void *)(uintptr_t)0;
-	npf_config_exit();
+	mutex_enter(&npf->ifmap_lock);
+	npf->ifops->setmeta(npf, ifp, (void *)(uintptr_t)NPF_IFMAP_NOID);
+	mutex_exit(&npf->ifmap_lock);
 }

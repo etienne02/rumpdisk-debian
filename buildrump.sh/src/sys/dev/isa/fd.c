@@ -1,4 +1,4 @@
-/*	$NetBSD: fd.c,v 1.110 2015/12/08 20:36:15 christos Exp $	*/
+/*	$NetBSD: fd.c,v 1.116 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2003, 2008 The NetBSD Foundation, Inc.
@@ -81,7 +81,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.110 2015/12/08 20:36:15 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.116 2021/08/07 16:19:12 thorpej Exp $");
 
 #include "opt_ddb.h"
 
@@ -452,7 +452,7 @@ fdcfinishattach(device_t self)
 			if (fdc->sc_present & (1 << fa.fa_drive)) {
 				fa.fa_deftype = fdc->sc_knownfds[fa.fa_drive];
 				config_found(fdc->sc_dev, (void *)&fa,
-				    fdprint);
+				    fdprint, CFARGS_NONE);
 			}
 		} else {
 #if defined(atari)
@@ -460,14 +460,18 @@ fdcfinishattach(device_t self)
 			 * Atari has a different ordening, defaults to 1.44
 			 */
 			fa.fa_deftype = &fd_types[2];
+			 /* Atari also configures ISA fdc(4) as "fdcisa" */
+			config_found(fdc->sc_dev, &fa, fdprint,
+			    CFARGS(.iattr = "fdcisa"));
 #else
 			/*
 			 * Default to 1.44MB on Alpha and BeBox.  How do we tell
 			 * on these platforms?
 			 */
 			fa.fa_deftype = &fd_types[0];
+			config_found(fdc->sc_dev, &fa, fdprint,
+			    CFARGS(.iattr = "fdc"));
 #endif
-			(void)config_found_ia(fdc->sc_dev, "fdc", (void *)&fa, fdprint);
 		}
 	}
 	fdc->sc_state = DEVIDLE;
@@ -1143,8 +1147,8 @@ loop:
 				      (char *)finfo;
 		sec = fd->sc_blkno % type->seccyl;
 		nblks = type->seccyl - sec;
-		nblks = min(nblks, fd->sc_bcount / FDC_BSIZE);
-		nblks = min(nblks, fdc->sc_maxiosize / FDC_BSIZE);
+		nblks = uimin(nblks, fd->sc_bcount / FDC_BSIZE);
+		nblks = uimin(nblks, fdc->sc_maxiosize / FDC_BSIZE);
 		fd->sc_nblks = nblks;
 		fd->sc_nbytes = finfo ? bp->b_bcount : nblks * FDC_BSIZE;
 		head = sec / type->sectrac;
@@ -1233,6 +1237,7 @@ loop:
 
 	case IOTIMEDOUT:
 		isa_dmaabort(fdc->sc_ic, fdc->sc_drq);
+		/* FALLTHROUGH */
 	case SEEKTIMEDOUT:
 	case RECALTIMEDOUT:
 	case RESETTIMEDOUT:
@@ -1549,10 +1554,7 @@ fdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 		}
 
 		fd_formb = malloc(sizeof(struct ne7_fd_formb),
-		    M_TEMP, M_NOWAIT);
-		if (fd_formb == 0)
-			return ENOMEM;
-
+		    M_TEMP, M_WAITOK);
 		fd_formb->head = form_cmd->head;
 		fd_formb->cyl = form_cmd->cylinder;
 		fd_formb->transfer_rate = fd->sc_type->rate;

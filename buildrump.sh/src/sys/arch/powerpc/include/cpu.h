@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.101 2015/01/23 07:27:05 nonaka Exp $	*/
+/*	$NetBSD: cpu.h,v 1.119 2021/08/14 17:51:19 ryo Exp $	*/
 
 /*
  * Copyright (C) 1999 Wolfgang Solfrank.
@@ -32,6 +32,7 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #ifndef	_POWERPC_CPU_H_
 #define	_POWERPC_CPU_H_
 
@@ -44,19 +45,46 @@ struct cache_info {
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 #if defined(_KERNEL_OPT)
-#include "opt_lockdebug.h"
+#include "opt_gprof.h"
 #include "opt_modular.h"
 #include "opt_multiprocessor.h"
 #include "opt_ppcarch.h"
 #endif
 
 #ifdef _KERNEL
-#include <machine/intr.h>
+#include <sys/intr.h>
 #include <sys/device_if.h>
 #include <sys/evcnt.h>
+#include <sys/param.h>
+#include <sys/kernel.h>
 #endif
 
 #include <sys/cpu_data.h>
+
+#ifdef _KERNEL
+#define	CI_SAVETEMP	(0*CPUSAVE_LEN)
+#define	CI_SAVEDDB	(1*CPUSAVE_LEN)
+#define	CI_SAVEIPKDB	(2*CPUSAVE_LEN)	/* obsolete */
+#define	CI_SAVEMMU	(3*CPUSAVE_LEN)
+#define	CI_SAVEMAX	(4*CPUSAVE_LEN)
+#define	CPUSAVE_LEN	8
+#if defined(PPC_BOOKE) && !defined(MODULAR) && !defined(_MODULE)
+#define	CPUSAVE_SIZE	128
+#else
+#define	CPUSAVE_SIZE	(CI_SAVEMAX*CPUSAVE_LEN)
+CTASSERT(CPUSAVE_SIZE >= 128);
+#endif
+#define	CPUSAVE_R28	0		/* where r28 gets saved */
+#define	CPUSAVE_R29	1		/* where r29 gets saved */
+#define	CPUSAVE_R30	2		/* where r30 gets saved */
+#define	CPUSAVE_R31	3		/* where r31 gets saved */
+#define	CPUSAVE_DEAR	4		/* where IBM4XX SPR_DEAR gets saved */
+#define	CPUSAVE_DAR	4		/* where OEA SPR_DAR gets saved */
+#define	CPUSAVE_ESR	5		/* where IBM4XX SPR_ESR gets saved */
+#define	CPUSAVE_DSISR	5		/* where OEA SPR_DSISR gets saved */
+#define	CPUSAVE_SRR0	6		/* where SRR0 gets saved */
+#define	CPUSAVE_SRR1	7		/* where SRR1 gets saved */
+#endif /* _KERNEL */
 
 struct cpu_info {
 	struct cpu_data ci_data;	/* MI per-cpu data */
@@ -64,9 +92,13 @@ struct cpu_info {
 	device_t ci_dev;		/* device of corresponding cpu */
 	struct cpu_softc *ci_softc;	/* private cpu info */
 	struct lwp *ci_curlwp;		/* current owner of the processor */
-
+	struct lwp *ci_onproc;		/* current user LWP / kthread */
 	struct pcb *ci_curpcb;
 	struct pmap *ci_curpm;
+#if defined(PPC_OEA) || defined(PPC_OEA601) || defined(PPC_OEA64) || \
+    defined(PPC_OEA64_BRIDGE) || defined(MODULAR) || defined(_MODULE)
+	void *ci_battable;		/* BAT table in use by this CPU */
+#endif
 	struct lwp *ci_softlwps[SOFTINT_COUNT];
 	int ci_cpuid;			/* from SPR_PIR */
 
@@ -87,38 +119,20 @@ struct cpu_info {
 	volatile uint32_t ci_pending_ipis;
 	int ci_mtx_oldspl;
 	int ci_mtx_count;
-#if defined(PPC_IBM4XX) || defined(MODULAR) || defined(_MODULE)
+#if defined(PPC_IBM4XX) || \
+    ((defined(MODULAR) || defined(_MODULE)) && !defined(_LP64))
 	char *ci_intstk;
 #endif
-#define	CI_SAVETEMP	(0*CPUSAVE_LEN)
-#define	CI_SAVEDDB	(1*CPUSAVE_LEN)
-#define	CI_SAVEIPKDB	(2*CPUSAVE_LEN)
-#define	CI_SAVEMMU	(3*CPUSAVE_LEN)
-#define	CI_SAVEMAX	(4*CPUSAVE_LEN)
-#define	CPUSAVE_LEN	8
-#if !defined(PPC_BOOKE) && !defined(MODULAR) && !defined(_MODULE)
-#define	CPUSAVE_SIZE	(CI_SAVEMAX*CPUSAVE_LEN)
-#else
-#define	CPUSAVE_SIZE	128
-#endif
-#define	CPUSAVE_R28	0		/* where r28 gets saved */
-#define	CPUSAVE_R29	1		/* where r29 gets saved */
-#define	CPUSAVE_R30	2		/* where r30 gets saved */
-#define	CPUSAVE_R31	3		/* where r31 gets saved */
-#define	CPUSAVE_DEAR	4		/* where IBM4XX SPR_DEAR gets saved */
-#define	CPUSAVE_DAR	4		/* where OEA SPR_DAR gets saved */
-#define	CPUSAVE_ESR	5		/* where IBM4XX SPR_ESR gets saved */
-#define	CPUSAVE_DSISR	5		/* where OEA SPR_DSISR gets saved */
-#define	CPUSAVE_SRR0	6		/* where SRR0 gets saved */
-#define	CPUSAVE_SRR1	7		/* where SRR1 gets saved */
+
 	register_t ci_savearea[CPUSAVE_SIZE];
-#if defined(PPC_BOOKE) || defined(MODULAR) || defined(_MODULE)
+#if defined(PPC_BOOKE) || \
+    ((defined(MODULAR) || defined(_MODULE)) && !defined(_LP64))
 	uint32_t ci_pmap_asid_cur;
 	union pmap_segtab *ci_pmap_segtabs[2];
 #define	ci_pmap_kern_segtab	ci_pmap_segtabs[0]
 #define	ci_pmap_user_segtab	ci_pmap_segtabs[1]
 	struct pmap_tlb_info *ci_tlb_info;
-#endif /* PPC_BOOKE || MODULAR || _MODULE */
+#endif /* PPC_BOOKE || ((MODULAR || _MODULE) && !_LP64) */
 	struct cache_info ci_ci;		
 	void *ci_sysmon_cookie;
 	void (*ci_idlespin)(void);
@@ -146,6 +160,9 @@ struct cpu_info {
 	struct evcnt ci_ev_tlbmiss_soft; /* tlb miss (no trap) */
 	struct evcnt ci_ev_dtlbmiss_hard; /* data tlb miss (trap) */
 	struct evcnt ci_ev_itlbmiss_hard; /* instruction tlb miss (trap) */
+#if defined(GPROF) && defined(MULTIPROCESSOR)
+	struct gmonparam *ci_gmon;	/* MI per-cpu GPROF */
+#endif
 #endif /* _KERNEL */
 };
 #endif /* _KERNEL || _KMEMUSER */
@@ -159,7 +176,14 @@ struct cpu_hatch_data {
 	struct cpu_info *hatch_ci;
 	uint32_t hatch_tbu;
 	uint32_t hatch_tbl;
+#if defined(PPC_OEA64_BRIDGE) || defined (_ARCH_PPC64)
+	uint64_t hatch_hid0;
+	uint64_t hatch_hid1;
+	uint64_t hatch_hid4;
+	uint64_t hatch_hid5;
+#else
 	uint32_t hatch_hid0;
+#endif
 	uint32_t hatch_pir;
 #if defined(PPC_OEA) || defined(PPC_OEA64_BRIDGE)
 	uintptr_t hatch_asr;
@@ -191,7 +215,7 @@ extern struct cpuset_info cpuset_info;
 #define CPU_IS_PRIMARY(ci)	((ci)->ci_cpuid == 0)
 #define CPU_INFO_ITERATOR	int
 #define CPU_INFO_FOREACH(cii, ci)				\
-	cii = 0, ci = &cpu_info[0]; cii < ncpu; cii++, ci++
+	cii = 0, ci = &cpu_info[0]; cii < (ncpu ? ncpu : 1); cii++, ci++
 
 #else
 #define cpu_number()		0
@@ -381,6 +405,8 @@ void	icache_inv(vaddr_t, vsize_t);
 void *	mapiodev(paddr_t, psize_t, bool);
 void	unmapiodev(vaddr_t, vsize_t);
 
+int	emulate_mxmsr(struct lwp *, struct trapframe *, uint32_t);
+
 #ifdef MULTIPROCESSOR
 int	md_setup_trampoline(volatile struct cpu_hatch_data *,
 	    struct cpu_info *);
@@ -406,8 +432,10 @@ void	cpu_debug_dump(void);
 
 #define	cpu_proc_fork(p1, p2)
 
+#ifndef __HIDE_DELAY
 #define	DELAY(n)		delay(n)
 void	delay(unsigned int);
+#endif /* __HIDE_DELAY */
 
 #define	CLKF_USERMODE(cf)	cpu_clkf_usermode(cf)
 #define	CLKF_PC(cf)		cpu_clkf_pc(cf)
@@ -424,10 +452,8 @@ vaddr_t	cpu_lwp_pc(struct lwp *);
 void	cpu_ast(struct lwp *, struct cpu_info *);
 void *	cpu_uarea_alloc(bool);
 bool	cpu_uarea_free(void *);
-void	cpu_need_resched(struct cpu_info *, int);
 void	cpu_signotify(struct lwp *);
 void	cpu_need_proftick(struct lwp *);
-#define	cpu_did_resched(l)			((l)->l_md.md_astpending = 0)
 
 void	cpu_fixup_stubs(void);
 
@@ -479,6 +505,6 @@ void	__syncicache(void *, size_t);
 #define	CPU_BOOTED_DEVICE	9	/* string: device we booted from */
 #define	CPU_BOOTED_KERNEL	10	/* string: kernel we booted */
 #define	CPU_EXECPROT		11	/* bool: PROT_EXEC works */
-#define	CPU_MAXID		12	/* number of valid machdep ids */
+#define	CPU_FPU			12
 
 #endif	/* _POWERPC_CPU_H_ */

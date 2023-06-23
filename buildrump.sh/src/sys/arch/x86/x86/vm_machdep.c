@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.25 2014/03/11 20:55:19 para Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.45 2021/03/28 10:29:05 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986 The Regents of the University of California.
@@ -80,7 +80,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.25 2014/03/11 20:55:19 para Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.45 2021/03/28 10:29:05 skrll Exp $");
 
 #include "opt_mtrr.h"
 
@@ -105,6 +105,9 @@ __KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.25 2014/03/11 20:55:19 para Exp $")
 #endif
 
 #include <x86/fpu.h>
+#include <x86/dbregs.h>
+
+extern struct pool x86_dbregspl;
 
 void
 cpu_proc_fork(struct proc *p1, struct proc *p2)
@@ -133,32 +136,23 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	struct switchframe *sf;
 	vaddr_t uv;
 
+	KASSERT(l1 == curlwp || l1 == &lwp0);
+
 	pcb1 = lwp_getpcb(l1);
 	pcb2 = lwp_getpcb(l2);
 
-	/*
-	 * If parent LWP was using FPU, then we have to save the FPU h/w
-	 * state to PCB so that we can copy it.
-	 */
-	fpusave_lwp(l1, true);
+	/* Copy the PCB from parent, except the FPU state. */
+	memcpy(pcb2, pcb1, offsetof(struct pcb, pcb_savefpu));
 
-	/*
-	 * Sync the PCB before we copy it.
-	 */
-	if (l1 == curlwp) {
-		KASSERT(pcb1 == curpcb);
-		savectx(pcb1);
-	} else {
-		KASSERT(l1 == &lwp0);
-	}
+	/* Fork the FPU state. */
+	fpu_lwp_fork(l1, l2);
 
-	/* Copy the PCB from parent. */
-	memcpy(pcb2, pcb1, sizeof(struct pcb));
-	/* Copy any additional fpu state */
-	fpu_save_area_fork(pcb2, pcb1);
+	/* Never inherit CPU Debug Registers */
+	pcb2->pcb_dbregs = NULL;
+	pcb2->pcb_flags &= ~PCB_DBREGS;
 
-#if defined(XEN)
-	pcb2->pcb_iopl = SEL_KPL;
+#if defined(XENPV)
+	pcb2->pcb_iopl = IOPL_KPL;
 #endif
 
 	/*
@@ -172,9 +166,16 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	 * returns normally.
 	 */
 	uv = uvm_lwp_getuarea(l2);
+	KASSERT(uv % PAGE_SIZE == 0);
 
 #ifdef __x86_64__
-	pcb2->pcb_rsp0 = (uv + USPACE - 16) & ~0xf;
+#ifdef SVS
+	pcb2->pcb_rsp0 = (uv + USPACE - PAGE_SIZE +
+	    sizeof(struct trapframe));
+	KASSERT((pcb2->pcb_rsp0 & 0xF) == 0);
+#else
+	pcb2->pcb_rsp0 = (uv + USPACE - 16);
+#endif
 	tf = (struct trapframe *)pcb2->pcb_rsp0 - 1;
 #else
 	pcb2->pcb_esp0 = (uv + USPACE - 16);
@@ -192,12 +193,6 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 
 	/* Child LWP might get aston() before returning to userspace. */
 	tf->tf_trapno = T_ASTFLT;
-
-#if 0 /* DIAGNOSTIC */
-	/* Set a red zone in the kernel stack after the uarea. */
-	pmap_kremove(uv, PAGE_SIZE);
-	pmap_update(pmap_kernel());
-#endif
 
 	/* If specified, set a different user stack for a child. */
 	if (stack != NULL) {
@@ -236,14 +231,21 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 /*
  * cpu_lwp_free is called from exit() to let machine-dependent
  * code free machine-dependent resources.  Note that this routine
- * must not block.
+ * must not block.  NB: this may be called with l != curlwp in
+ * error paths.
  */
 void
 cpu_lwp_free(struct lwp *l, int proc)
 {
 
-	/* If we were using the FPU, forget about it. */
-	fpusave_lwp(l, false);
+	if (l != curlwp)
+		return;
+
+	/* Abandon the FPU state. */
+	fpu_lwp_abandon(l);
+
+	/* Abandon the dbregs state. */
+	x86_dbregs_abandon(l);
 
 #ifdef MTRR
 	if (proc && l->l_proc->p_md.md_flags & MDP_USEDMTRR)
@@ -258,9 +260,14 @@ cpu_lwp_free(struct lwp *l, int proc)
 void
 cpu_lwp_free2(struct lwp *l)
 {
+	struct pcb *pcb;
 
-	KASSERT(l->l_md.md_gc_ptp == NULL);
-	KASSERT(l->l_md.md_gc_pmap == NULL);
+	pcb = lwp_getpcb(l);
+	KASSERT((pcb->pcb_flags & PCB_DBREGS) == 0);
+	if (pcb->pcb_dbregs) {
+		pool_put(&x86_dbregspl, pcb->pcb_dbregs);
+		pcb->pcb_dbregs = NULL;
+	}
 }
 
 /*
@@ -297,15 +304,15 @@ vmapbuf(struct buf *bp, vsize_t len)
 	taddr = uvm_km_alloc(phys_map, len, 0, UVM_KMF_VAONLY | UVM_KMF_WAITVA);
 	bp->b_data = (void *)(taddr + off);
 	/*
-	 * The region is locked, so we expect that pmap_pte() will return
-	 * non-NULL.
+	 * The region is locked, so we expect that pmap_extract() will return
+	 * true.
 	 * XXX: unwise to expect this in a multithreaded environment.
 	 * anything can happen to a pmap between the time we lock a
 	 * region, release the pmap lock, and then relock it for
 	 * the pmap_extract().
 	 *
 	 * no need to flush TLB since we expect nothing to be mapped
-	 * where we we just allocated (TLB will be flushed when our
+	 * where we just allocated (TLB will be flushed when our
 	 * mapping is removed).
 	 */
 	while (len) {
@@ -342,56 +349,56 @@ vunmapbuf(struct buf *bp, vsize_t len)
 }
 
 #ifdef __HAVE_CPU_UAREA_ROUTINES
+/*
+ * Layout of the uarea:
+ *    Page[0]        = PCB
+ *    Page[1]        = RedZone
+ *    Page[2]        = Stack
+ *    Page[...]      = Stack
+ *    Page[UPAGES-1] = Stack
+ *    Page[UPAGES]   = RedZone
+ * There is a redzone at the beginning of the stack, and another one at the
+ * end. The former is to protect against deep recursions that could corrupt
+ * the PCB, the latter to protect against severe stack overflows.
+ */
 void *
 cpu_uarea_alloc(bool system)
 {
-	struct pglist pglist;
-	int error;
+	vaddr_t base, va;
+	paddr_t pa;
 
-	/*
-	 * Allocate a new physically contiguous uarea which can be
-	 * direct-mapped.
-	 */
-	error = uvm_pglistalloc(USPACE, 0, ptoa(physmem), 0, 0, &pglist, 1, 1);
-	if (error) {
-		return NULL;
+	base = uvm_km_alloc(kernel_map, USPACE + PAGE_SIZE, 0,
+	    UVM_KMF_WIRED|UVM_KMF_WAITVA);
+
+	/* Page[1] = RedZone */
+	va = base + PAGE_SIZE;
+	if (!pmap_extract(pmap_kernel(), va, &pa)) {
+		panic("%s: impossible, Page[1] unmapped", __func__);
 	}
+	pmap_kremove(va, PAGE_SIZE);
+	uvm_pagefree(PHYS_TO_VM_PAGE(pa));
 
-	/*
-	 * Get the physical address from the first page.
-	 */
-	const struct vm_page * const pg = TAILQ_FIRST(&pglist);
-	KASSERT(pg != NULL);
-	const paddr_t pa = VM_PAGE_TO_PHYS(pg);
+	/* Page[UPAGES] = RedZone */
+	va = base + USPACE;
+	if (!pmap_extract(pmap_kernel(), va, &pa)) {
+		panic("%s: impossible, Page[UPAGES] unmapped", __func__);
+	}
+	pmap_kremove(va, PAGE_SIZE);
+	uvm_pagefree(PHYS_TO_VM_PAGE(pa));
 
-	/*
-	 * We need to return a direct-mapped VA for the pa.
-	 */
+	pmap_update(pmap_kernel());
 
-	return (void *)PMAP_MAP_POOLPAGE(pa);
+	return (void *)base;
 }
 
-/*
- * Return true if we freed it, false if we didn't.
- */
 bool
-cpu_uarea_free(void *vva)
+cpu_uarea_free(void *addr)
 {
-	vaddr_t va = (vaddr_t) vva;
+	vaddr_t base = (vaddr_t)addr;
 
-	if (va >= VM_MIN_KERNEL_ADDRESS && va < VM_MAX_KERNEL_ADDRESS) {
-		return false;
-	}
-
-	/*
-	 * Since the pages are physically contiguous, the vm_page structures
-	 * will be as well.
-	 */
-	struct vm_page *pg = PHYS_TO_VM_PAGE(PMAP_UNMAP_POOLPAGE(va));
-	KASSERT(pg != NULL);
-	for (size_t i = 0; i < UPAGES; i++, pg++) {
-		uvm_pagefree(pg);
-	}
+	KASSERT(!pmap_extract(pmap_kernel(), base + PAGE_SIZE, NULL));
+	KASSERT(!pmap_extract(pmap_kernel(), base + USPACE, NULL));
+	uvm_km_free(kernel_map, base, USPACE + PAGE_SIZE, UVM_KMF_WIRED);
 	return true;
 }
 #endif /* __HAVE_CPU_UAREA_ROUTINES */

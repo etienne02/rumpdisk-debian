@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.67 2013/11/07 19:37:18 njoly Exp $
+	$NetBSD: syscalls.master,v 1.73 2019/06/18 01:42:36 christos Exp $
 
 ;	from: @(#)syscalls.master	8.2 (Berkeley) 1/13/94
 
@@ -36,6 +36,7 @@
 #include "opt_ntp.h"
 #include "opt_sysv.h"
 #include "opt_compat_43.h"
+#include "opt_quota.h"
 #endif
 
 #include <sys/param.h>
@@ -49,7 +50,7 @@
 
 #include <compat/freebsd/freebsd_syscallargs.h>
 
-#include <machine/freebsd_machdep.h>
+#include <compat/freebsd/freebsd_machdep.h>
 
 %%
 
@@ -157,8 +158,8 @@
 66	NOARGS		{ int|sys||vfork(void); }
 67	OBSOL		vread
 68	OBSOL		vwrite
-69	NOARGS		{ int|sys||sbrk(intptr_t incr); }
-70	NOARGS		{ int|sys||sstk(int incr); }
+69	OBSOL		sbrk
+70	OBSOL		sstk
 71	NOARGS		{ int|compat_43_sys||mmap(void *addr, size_t len, \
 			    int prot, int flags, int fd, long pos); } ommap
 72	NOARGS		{ int|sys||ovadvise(int anom); } vadvise
@@ -277,9 +278,14 @@
 146	NOARGS		{ int|compat_43_sys||killpg(int pgid, int signum); } \
 			    okillpg
 147	NOARGS		{ int|sys||setsid(void); }
+#if defined(QUOTA) || !defined(_KERNEL_OPT)
 148	NOARGS		{ int|compat_50_sys||quotactl(char *path, int cmd, \
 			    int uid, void *arg); }
 149	NOARGS		{ int|compat_43_sys||quota(void); } oquota
+#else
+148	EXCL		compat_50_sys_quotactl
+149	EXCL		compat_43_sys_quota
+#endif
 150	NOARGS		{ int|compat_43_sys||getsockname(int fdec, void *asa, \
 			    int *alen); } ogetsockname
 

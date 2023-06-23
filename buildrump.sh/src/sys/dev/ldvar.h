@@ -1,4 +1,4 @@
-/*	$NetBSD: ldvar.h,v 1.27 2015/08/28 17:41:49 mlelstv Exp $	*/
+/*	$NetBSD: ldvar.h,v 1.35 2021/05/30 11:24:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -57,24 +57,26 @@ struct ld_softc {
 	int		sc_secsize;	/* sector size in bytes */
 	int		sc_maxxfer;	/* max xfer size in bytes */
 	int		sc_maxqueuecnt;	/* maximum h/w queue depth */
+	char		*sc_typename;	/* inquiry data */
 
 	int		(*sc_dump)(struct ld_softc *, void *, int, int);
-	int		(*sc_flush)(struct ld_softc *, int);
+	int		(*sc_ioctl)(struct ld_softc *, u_long, void *, int32_t, bool);
 	int		(*sc_start)(struct ld_softc *, struct buf *);
-	int		(*sc_discard)(struct ld_softc *, off_t, off_t);
+	int		(*sc_discard)(struct ld_softc *, struct buf *);
 };
 
 /* sc_flags */
 #define	LDF_ENABLED	0x001		/* device enabled */
-#define	LDF_DRAIN	0x020		/* maxqueuecnt has changed; drain */
-
-/* sc_flush() flags */
-#define	LDFL_POLL	0x001		/* poll for completion */
+#define	LDF_UNUSED0	0x020		/* was LDF_DRAIN */
+#define	LDF_NO_RND	0x040		/* do not attach rnd source */
+#define	LDF_MPSAFE	0x080		/* backend is MPSAFE */
+#define	LDF_SUSPEND	0x100		/* disk is suspended until resume */
 
 int	ldadjqparam(struct ld_softc *, int);
-void	ldattach(struct ld_softc *);
+void	ldattach(struct ld_softc *, const char *);
 int	ldbegindetach(struct ld_softc *, int);
 void	ldenddetach(struct ld_softc *);
 void	lddone(struct ld_softc *, struct buf *);
+void	lddiscardend(struct ld_softc *, struct buf *);
 
 #endif	/* !_DEV_LDVAR_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.122 2016/06/25 13:52:04 palle Exp $ */
+/*	$NetBSD: cpu.h,v 1.133 2021/08/14 17:51:19 ryo Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -51,7 +51,18 @@
 #define	CPU_BOOT_ARGS		3	/* string: args booted with */
 #define	CPU_ARCH		4	/* integer: cpu architecture version */
 #define CPU_VIS			5	/* 0 - no VIS, 1 - VIS 1.0, etc. */
-#define	CPU_MAXID		6	/* number of valid machdep ids */
+
+/*
+ * This is exported via sysctl for cpuctl(8).
+ */
+struct cacheinfo {
+	int 	c_itotalsize;
+	int 	c_ilinesize;
+	int 	c_dtotalsize;
+	int 	c_dlinesize;
+	int 	c_etotalsize;
+	int 	c_elinesize;
+};
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 /*
@@ -59,6 +70,7 @@
  */
 
 #if defined(_KERNEL_OPT)
+#include "opt_gprof.h"
 #include "opt_multiprocessor.h"
 #include "opt_lockdebug.h"
 #endif
@@ -112,6 +124,7 @@ struct cpu_info {
 
 	/* Most important fields first */
 	struct lwp		*ci_curlwp;
+	struct lwp		*ci_onproc;	/* current user LWP / kthread */
 	struct pcb		*ci_cpcb;
 	struct cpu_info		*ci_next;
 
@@ -128,8 +141,14 @@ struct cpu_info {
 
 	int			ci_cpuid;
 
+	uint64_t		ci_ver;
+
 	/* CPU PROM information. */
 	u_int			ci_node;
+	const char		*ci_name;
+
+	/* This is for sysctl. */
+	struct cacheinfo	ci_cacheinfo;
 
 	/* %tick and cpu frequency information */
 	u_long			ci_tick_increment;
@@ -180,12 +199,12 @@ struct cpu_info {
 
 	/* TSB description (sun4v). */
 	struct tsb_desc         *ci_tsb_desc;
-	
+
 	/* MMU Fault Status Area (sun4v).
 	 * Will be initialized to the physical address of the bottom of
 	 * the interrupt stack.
 	 */
-	paddr_t			ci_mmfsa;
+	paddr_t			ci_mmufsa;
 
 	/*
 	 * sun4v mondo control fields
@@ -194,12 +213,18 @@ struct cpu_info {
 	paddr_t			ci_devmq;  /* device mondo queue address */
 	paddr_t			ci_cpuset; /* mondo recipient address */ 
 	paddr_t			ci_mondo;  /* mondo message address */
-	
+
 	/* probe fault in PCI config space reads */
 	bool			ci_pci_probe;
 	bool			ci_pci_fault;
 
 	volatile void		*ci_ddb_regs;	/* DDB regs */
+
+	void (*ci_idlespin)(void);
+
+#if defined(GPROF) && defined(MULTIPROCESSOR)
+	struct gmonparam *ci_gmon;	/* MI per-cpu GPROF */
+#endif
 };
 
 #endif /* _KERNEL || _KMEMUSER */
@@ -238,19 +263,21 @@ extern int sparc_ncpus;
 extern struct cpu_info *cpus;
 extern struct pool_cache *fpstate_cache;
 
-#define	curcpu()	(((struct cpu_info *)CPUINFO_VA)->ci_self)
+/* CURCPU_INT() a local (per CPU) view of our cpu_info */
+#define	CURCPU_INT()	((struct cpu_info *)CPUINFO_VA)
+/* in general we prefer the globaly visible pointer */
+#define	curcpu()	(CURCPU_INT()->ci_self)
 #define	cpu_number()	(curcpu()->ci_index)
 #define	CPU_IS_PRIMARY(ci)	((ci)->ci_flags & CPUF_PRIMARY)
 
 #define CPU_INFO_ITERATOR		int __unused
 #define CPU_INFO_FOREACH(cii, ci)	ci = cpus; ci != NULL; ci = ci->ci_next
 
-#define curlwp		curcpu()->ci_curlwp
-#define fplwp		curcpu()->ci_fplwp
-#define curpcb		curcpu()->ci_cpcb
-
-#define want_ast	curcpu()->ci_want_ast
-#define want_resched	curcpu()->ci_want_resched
+/* these are only valid on the local cpu */
+#define curlwp		CURCPU_INT()->ci_curlwp
+#define fplwp		CURCPU_INT()->ci_fplwp
+#define curpcb		CURCPU_INT()->ci_cpcb
+#define want_ast	CURCPU_INT()->ci_want_ast
 
 /*
  * definitions of cpu-dependent requirements
@@ -417,6 +444,7 @@ void	switchtoctx_us(int);
 void	switchtoctx_usiii(int);
 void	next_tick(long);
 void	next_stick(long);
+void	next_stick_init(void);
 /* trap.c */
 void	cpu_vmspace_exec(struct lwp *, vaddr_t, vaddr_t);
 int	rwindow_save(struct lwp *);
@@ -435,16 +463,6 @@ void kgdb_panic(void);
 /* emul.c */
 int	fixalign(struct lwp *, struct trapframe64 *);
 int	emulinstr(vaddr_t, struct trapframe64 *);
-
-#else /* _KERNEL */
-
-/*
- * XXX: provide some definitions for crash(8), probably can share
- */
-#if defined(_KMEMUSER)
-#define	curcpu()	(((struct cpu_info *)CPUINFO_VA)->ci_self)
-#define curlwp		curcpu()->ci_curlwp
-#endif
 
 #endif /* _KERNEL */
 #endif /* _CPU_H_ */

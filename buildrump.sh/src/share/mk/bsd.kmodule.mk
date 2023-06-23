@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.kmodule.mk,v 1.58 2016/02/02 18:38:10 christos Exp $
+#	$NetBSD: bsd.kmodule.mk,v 1.76 2021/03/29 05:22:49 simonb Exp $
 
 # We are not building this with PIE
 MKPIE=no
@@ -11,6 +11,11 @@ CFLAGS+=	-g
 # Only need symbols for ctf, strip them after converting to CTF
 CTFFLAGS=	-L VERSION
 CTFMFLAGS=	-t -L VERSION
+# Keep symbols if built with "-g"
+.if !empty(COPTS:M*-g*) || ${MKDEBUG:Uno} == "yes"
+CTFFLAGS+=     -g
+CTFMFLAGS+=    -g
+.endif
 .endif
 
 .include <bsd.sys.mk>
@@ -24,7 +29,9 @@ MKLDSCRIPT?=	no
 CFLAGS+=	-ffreestanding ${COPTS}
 CPPFLAGS+=	-nostdinc -I. -I${.CURDIR} -isystem $S -isystem $S/arch
 CPPFLAGS+=	-isystem ${S}/../common/include
-CPPFLAGS+=	-D_KERNEL -D_LKM -D_MODULE -DSYSCTL_INCLUDE_DESCR
+CPPFLAGS+=	-D_KERNEL -D_MODULE -DSYSCTL_INCLUDE_DESCR
+
+CWARNFLAGS.clang+=	-Wno-error=constant-conversion
 
 # XXX until the kernel is fixed again...
 CFLAGS+=	-fno-strict-aliasing -Wno-pointer-sign
@@ -35,22 +42,33 @@ CFLAGS+=	-fno-strict-aliasing -Wno-pointer-sign
 # The real solution to this involves generating trampolines for those
 # relocations inside the loader and removing this workaround, as the
 # resulting code would be much faster.
-.if ${MACHINE_CPU} == "arm"
+.if ${MACHINE_CPU} == "aarch64"
+CFLAGS+=	-march=armv8-a+nofp+nosimd
+.elif ${MACHINE_CPU} == "arm"
 CFLAGS+=	-fno-common -fno-unwind-tables
 .elif ${MACHINE_CPU} == "hppa"
-CFLAGS+=	-mlong-calls
+CFLAGS+=	-mlong-calls -mno-space-regs -mfast-indirect-calls
 .elif ${MACHINE_CPU} == "powerpc"
 CFLAGS+=	${${ACTIVE_CC} == "gcc":? -mlongcall :}
+CFLAGS+=	${${ACTIVE_CC} == "gcc" && ${HAVE_GCC:U0} >= 9:? -mno-pltseq :}
 .elif ${MACHINE_CPU} == "vax"
 CFLAGS+=	-fno-pic
 .elif ${MACHINE_CPU} == "riscv"
 CFLAGS+=	-fPIC -Wa,-fno-pic
 .elif ${MACHINE_ARCH} == "mips64eb" && !defined(BSD_MK_COMPAT_FILE)
 CFLAGS+=	-mabi=64
+AFLAGS+=	-mabi=64
 LDFLAGS+=	-Wl,-m,elf64btsmip
 .elif ${MACHINE_ARCH} == "mips64el" && !defined(BSD_MK_COMPAT_FILE)
 CFLAGS+=	-mabi=64
+AFLAGS+=	-mabi=64
 LDFLAGS+=	-Wl,-m,elf64ltsmip
+.endif
+
+.if ${MACHINE_CPU} == "mips"
+# We can't use -msym32 with -mlong-calls as -msym32 forces all addresses
+# to be 32-bit which defeats the whole purpose of long calls.
+CFLAGS+=	-mlong-calls
 .endif
 
 .if ${MACHINE_CPU} == "sparc64"
@@ -68,15 +86,17 @@ PPC_INTR_IMPL=\"powerpc/intr.h\"
 . ifndef PPC_PCI_MACHDEP_IMPL
 PPC_PCI_MACHDEP_IMPL=\"powerpc/pci_machdep.h\"
 . endif
-CPPFLAGS+=      -DPPC_INTR_IMPL=${PPC_INTR_IMPL}
-CPPFLAGS+=      -DPPC_PCI_MACHDEP_IMPL=${DPPC_PCI_MACHDEP_IMPL}
+CPPFLAGS+=	-DPPC_INTR_IMPL=${PPC_INTR_IMPL}
+CPPFLAGS+=	-DPPC_PCI_MACHDEP_IMPL=${DPPC_PCI_MACHDEP_IMPL}
 
 . ifdef PPC_IBM4XX
-CPPFLAGS+=      -DPPC_IBM4XX
+CPPFLAGS+=	-DPPC_IBM4XX
 . elifdef PPC_BOOKE
-CPPFLAGS+=      -DPPC_BOOKE
+CPPFLAGS+=	-DPPC_BOOKE
+. elif ${MACHINE_ARCH} == "powerpc64"
+CPPFLAGS+=	-DPPC_OEA64
 . else
-CPPFLAGS+=      -DPPC_OEA
+CPPFLAGS+=	-DPPC_OEA
 . endif
 
 .endif
@@ -99,43 +119,14 @@ KMODSCRIPT=	${KMODSCRIPTSRC}
 .endif
 
 PROG?=		${KMOD}.kmod
+.if ${MKDEBUG:Uno} != "no" && !defined(NODEBUG) && !commands(${PROG}) && \
+    empty(SRCS:M*.sh)
+PROGDEBUG:=      ${PROG}.debug
+.endif  
 
 ##### Build rules
-realall:	${PROG}
+realall:	${PROG} ${PROGDEBUG}
 
-.if (defined(USE_COMBINE) && ${USE_COMBINE} != "no" && !commands(${_P}) \
-   && !defined(NOCOMBINE.${_P}) && !defined(NOCOMBINE))
-.for f in ${SRCS:N*.h:N*.sh:N*.fth:C/\.[yl]$/.c/g}
-.if (${CPPFLAGS.$f:D1} == "1" || ${CPUFLAGS.$f:D2} == "2" \
-     || ${COPTS.$f:D3} == "3" || ${OBJCOPTS.$f:D4} == "4" \
-     || ${CXXFLAGS.$f:D5} == "5") \
-    || ("${f:M*.[cyl]}" == "" || commands(${f:R:S/$/.o/}))
-XOBJS+=		${f:R:S/$/.o/}
-.else
-XSRCS+=		${f}
-NODPSRCS+=	${f}
-.endif
-.endfor
-
-.if !empty(XOBJS)
-${XOBJS}:	${DPSRCS}
-.endif
-
-.if ${MKLDSCRIPT} == "yes"
-${KMODSCRIPT}: ${KMODSCRIPTSRC} ${XOBJS} $S/conf/mkldscript.sh
-	@rm -f ${.TARGET}
-	@OBJDUMP=${OBJDUMP} ${HOST_SH} $S/conf/mkldscript.sh \
-	    -t ${KMODSCRIPTSRC} ${XOBJS} > ${.TARGET}
-.endif
-
-${PROG}: ${XOBJS} ${XSRCS} ${DPSRCS} ${DPADD} ${KMODSCRIPT}
-	${CC} ${LDFLAGS} -nostdlib -MD -combine -r -Wl,-T,${KMODSCRIPT},-d \
-		-Wl,-Map=${.TARGET}.map \
-		-o ${.TARGET} ${CFLAGS} ${CPPFLAGS} ${XOBJS} \
-		${XSRCS:@.SRC.@${.ALLSRC:M*.c:M*${.SRC.}}@:O:u} && \
-	echo '.-include "${KMOD}.d"' > .depend
-
-.else
 OBJS+=		${SRCS:N*.h:N*.sh:R:S/$/.o/g}
 
 ${OBJS} ${LOBJS}: ${DPSRCS}
@@ -167,7 +158,7 @@ ${KMOD}_tramp.S: ${KMOD}_tmp.o ${ARCHDIR}/kmodtramp.awk ${ASM_H}
 	${OBJDUMP} --syms --reloc ${KMOD}_tmp.o | \
 		 ${TOOL_AWK} -f ${ARCHDIR}/kmodtramp.awk \
 		 > tmp.S && \
-	mv tmp.S ${.TARGET}
+	${MV} tmp.S ${.TARGET}
 
 ${PROG}: ${KMOD}_tmp.o ${KMOD}_tramp.o
 	${_MKTARGET_LINK}
@@ -189,53 +180,80 @@ ${PROG}: ${OBJS} ${DPADD} ${KMODSCRIPT}
 		-Wl,-Map=${.TARGET}.map \
 		-o ${.TARGET} ${OBJS}
 .endif
-.endif
 .if defined(CTFMERGE)
 	${CTFMERGE} ${CTFMFLAGS} -o ${.TARGET} ${OBJS}
+.endif
+
+.if defined(PROGDEBUG)
+${PROGDEBUG}: ${PROG}
+	${_MKTARGET_CREATE}
+	(  ${OBJCOPY} --only-keep-debug ${PROG} ${PROGDEBUG} \
+	&& ${OBJCOPY} --strip-debug -p -R .gnu_debuglink \
+		--add-gnu-debuglink=${PROGDEBUG} ${PROG} \
+	) || (rm -f ${PROGDEBUG}; false)
 .endif
 
 ##### Install rules
 .if !target(kmodinstall)
 .if !defined(KMODULEDIR)
-_OSRELEASE!=	${HOST_SH} $S/conf/osrelease.sh -k
+.if ${KERNEL_DIR:Uno} == "yes"
+_INST_DIRS=	/netbsd
+_INST_DIRS+=	/netbsd/modules
+KMODULEDIR=	/netbsd/modules/${KMOD}
+.else
 # Ensure these are recorded properly in METALOG on unprived installes:
+_OSRELEASE!=	${HOST_SH} $S/conf/osrelease.sh -k
 KMODULEARCHDIR?= ${MACHINE}
-_INST_DIRS=	${DESTDIR}/stand/${KMODULEARCHDIR}
-_INST_DIRS+=	${DESTDIR}/stand/${KMODULEARCHDIR}/${_OSRELEASE}
-_INST_DIRS+=	${DESTDIR}/stand/${KMODULEARCHDIR}/${_OSRELEASE}/modules
-KMODULEDIR=	${DESTDIR}/stand/${KMODULEARCHDIR}/${_OSRELEASE}/modules/${KMOD}
+_INST_DIRS=	/stand/${KMODULEARCHDIR}
+_INST_DIRS+=	/stand/${KMODULEARCHDIR}/${_OSRELEASE}
+_INST_DIRS+=	/stand/${KMODULEARCHDIR}/${_OSRELEASE}/modules
+KMODULEDIR=	/stand/${KMODULEARCHDIR}/${_OSRELEASE}/modules/${KMOD}
 .endif
-_PROG:=		${KMODULEDIR}/${PROG} # installed path
+.endif
 
+_INST_DIRS+=	${KMODULEDIR}
+_PROG:=		${DESTDIR}${KMODULEDIR}/${PROG} # installed path
+
+.if defined(PROGDEBUG)
+.for i in ${_INST_DIRS}
+_DEBUG_INST_DIRS += ${DEBUGDIR}${i}
+.endfor
+_INST_DIRS += ${_DEBUG_INST_DIRS}
+_PROGDEBUG:=	${DESTDIR}${DEBUGDIR}${KMODULEDIR}/${PROG}.debug
+.endif
+
+.for _P P in ${_PROG} ${PROG} ${_PROGDEBUG} ${PROGDEBUG}
 .if ${MKUPDATE} == "no"
-${_PROG}! ${PROG}					# install rule
-.if !defined(BUILD) && !make(all) && !make(${PROG})
-${_PROG}!	.MADE					# no build at install
+${_P}! ${P}					# install rule
+.if !defined(BUILD) && !make(all) && !make(${P})
+${_P}!	.MADE					# no build at install
 .endif
 .else
-${_PROG}: ${PROG}					# install rule
-.if !defined(BUILD) && !make(all) && !make(${PROG})
-${_PROG}:	.MADE					# no build at install
+${_P}: ${P}					# install rule
+.if !defined(BUILD) && !make(all) && !make(${P})
+${_P}:	.MADE					# no build at install
 .endif
 .endif
 	${_MKTARGET_INSTALL}
 	dirs=${_INST_DIRS:Q}; \
 	for d in $$dirs; do \
-		${INSTALL_DIR} $$d; \
+		${INSTALL_DIR} ${DESTDIR}$$d; \
 	done
-	${INSTALL_DIR} ${KMODULEDIR}
 	${INSTALL_FILE} -o ${KMODULEOWN} -g ${KMODULEGRP} -m ${KMODULEMODE} \
 		${.ALLSRC} ${.TARGET}
 
-kmodinstall::	${_PROG}
+kmodinstall::	${_P}
 .PHONY:		kmodinstall
-.PRECIOUS:	${_PROG}				# keep if install fails
+.PRECIOUS:	${_P}				# keep if install fails
+.endfor
 
-.undef _PROG
+.undef _PPROG
+.undef _PPROGDEBUG
 .endif # !target(kmodinstall)
 
 ##### Clean rules
 CLEANFILES+= a.out [Ee]rrs mklog core *.core ${PROG} ${OBJS} ${LOBJS}
+CLEANFILES+= ${PROGDEBUG}
 CLEANFILES+= ${PROG}.map
 .if ${MKLDSCRIPT} == "yes"
 CLEANFILES+= kldscript

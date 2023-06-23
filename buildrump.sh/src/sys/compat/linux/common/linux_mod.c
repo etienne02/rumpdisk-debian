@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_mod.c,v 1.6 2015/12/03 02:51:01 pgoyette Exp $	*/
+/*	$NetBSD: linux_mod.c,v 1.14 2020/04/26 18:53:33 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_mod.c,v 1.6 2015/12/03 02:51:01 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_mod.c,v 1.14 2020/04/26 18:53:33 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_execfmt.h"
@@ -44,9 +44,9 @@ __KERNEL_RCSID(0, "$NetBSD: linux_mod.c,v 1.6 2015/12/03 02:51:01 pgoyette Exp $
 #include <sys/module.h>
 #include <sys/exec.h>
 #include <sys/signalvar.h>
+#include <sys/sysctl.h>
 
 #include <compat/linux/common/linux_sysctl.h>
-#include <compat/linux/common/linux_futex.h>
 #include <compat/linux/common/linux_exec.h>
 
 #if defined(EXEC_ELF32) && ELFSIZE == 32
@@ -65,8 +65,10 @@ __KERNEL_RCSID(0, "$NetBSD: linux_mod.c,v 1.6 2015/12/03 02:51:01 pgoyette Exp $
 # define	MD3	""
 #endif
 
-MODULE(MODULE_CLASS_EXEC, compat_linux, "compat,compat_ossaudio,sysv_ipc"
-	MD1 MD2 MD3);
+#define REQ1    "compat_ossaudio,sysv_ipc,compat_util"
+#define REQ2    ",compat_50,compat_43"
+
+MODULE(MODULE_CLASS_EXEC, compat_linux, REQ1 REQ2 MD1 MD2 MD3);
 
 static struct execsw linux_execsw[] = {
 #if defined(EXEC_ELF32) && ELFSIZE == 32
@@ -118,6 +120,41 @@ static struct execsw linux_execsw[] = {
 #endif
 };
 
+int linux_enabled = 1;
+
+int
+linux_sysctl_enable(SYSCTLFN_ARGS)
+{
+	struct sysctlnode node;
+	int error, val;
+
+	val = *(int *)rnode->sysctl_data;
+
+	node = *rnode;
+	node.sysctl_data = &val;
+
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error != 0 || newp == NULL)
+		return error;
+
+	if (val == *(int *)rnode->sysctl_data)
+		return 0;
+
+	if (val == 1)
+		error = exec_add(linux_execsw, __arraycount(linux_execsw));
+	else if (val == 0)
+		error = exec_remove(linux_execsw, __arraycount(linux_execsw));
+	else 
+		error = EINVAL;
+
+	if (error)
+		return error;
+
+	*(int *)rnode->sysctl_data = val;
+
+	return 0;
+}
+
 static int
 compat_linux_modcmd(modcmd_t cmd, void *arg)
 {
@@ -125,22 +162,15 @@ compat_linux_modcmd(modcmd_t cmd, void *arg)
 
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		linux_futex_init();
-		linux_sysctl_init();
-		error = exec_add(linux_execsw,
-		    __arraycount(linux_execsw));
-		if (error != 0)
-			linux_sysctl_fini();
+		error = exec_add(linux_execsw, __arraycount(linux_execsw));
 		return error;
 
 	case MODULE_CMD_FINI:
-		error = exec_remove(linux_execsw,
-		    __arraycount(linux_execsw));
-		if (error == 0) {
-			linux_sysctl_fini();
-			linux_futex_fini();
-		}
-		return error;
+		error = exec_remove(linux_execsw, __arraycount(linux_execsw));
+		if (error)
+			return error;
+		linux_sysctl_fini();
+		return 0;
 
 	default:
 		return ENOTTY;

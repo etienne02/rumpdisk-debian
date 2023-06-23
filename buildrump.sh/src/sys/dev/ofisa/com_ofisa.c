@@ -1,4 +1,4 @@
-/*	$NetBSD: com_ofisa.c,v 1.15 2012/10/27 17:18:27 chs Exp $	*/
+/*	$NetBSD: com_ofisa.c,v 1.20 2021/01/27 03:10:21 thorpej Exp $	*/
 
 /*
  * Copyright 1997, 1998
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com_ofisa.c,v 1.15 2012/10/27 17:18:27 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com_ofisa.c,v 1.20 2021/01/27 03:10:21 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -68,15 +68,18 @@ void com_ofisa_attach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(com_ofisa, sizeof(struct com_ofisa_softc),
     com_ofisa_probe, com_ofisa_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "pnpPNP,501" },
+	DEVICE_COMPAT_EOL
+};
+
 int
 com_ofisa_probe(device_t parent, cfdata_t cf, void *aux)
 {
 	struct ofisa_attach_args *aa = aux;
-	static const char *const compatible_strings[] = { "pnpPNP,501", NULL };
-	int rv = 0;
+	int rv;
 
-	if (of_compatible(aa->oba.oba_phandle, compatible_strings) != -1)
-		rv = 5;
+	rv = of_compatible_match(aa->oba.oba_phandle, compat_data) ? 5 : 0;
 #ifdef _COM_OFISA_MD_MATCH
 	if (!rv)
 		rv = com_ofisa_md_match(parent, cf, aux);
@@ -147,7 +150,7 @@ com_ofisa_attach(device_t parent, device_t self, void *aux)
 		aprint_error(": can't map register space\n");
                 return;
         }
-	COM_INIT_REGS(sc->sc_regs, iot, ioh, iobase);
+	com_init_regs(&sc->sc_regs, iot, ioh, iobase);
 
 	osc->sc_ih = isa_intr_establish(aa->ic, intr.irq, intr.share,
 	    IPL_SERIAL, comintr, sc);

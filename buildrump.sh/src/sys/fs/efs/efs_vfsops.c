@@ -1,4 +1,4 @@
-/*	$NetBSD: efs_vfsops.c,v 1.27 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: efs_vfsops.c,v 1.29 2020/01/17 20:08:07 ad Exp $	*/
 
 /*
  * Copyright (c) 2006 Stephen M. Rumble <rumble@ephemeral.org>
@@ -17,7 +17,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: efs_vfsops.c,v 1.27 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: efs_vfsops.c,v 1.29 2020/01/17 20:08:07 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -295,12 +295,12 @@ efs_unmount(struct mount *mp, int mntflags)
  * Returns 0 on success.
  */
 static int
-efs_root(struct mount *mp, struct vnode **vpp)
+efs_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	int err;
 	struct vnode *vp;
 	
-	if ((err = VFS_VGET(mp, EFS_ROOTINO, &vp)))
+	if ((err = VFS_VGET(mp, EFS_ROOTINO, lktype, &vp)))
 		return (err);
 
 	*vpp = vp;
@@ -343,14 +343,14 @@ efs_statvfs(struct mount *mp, struct statvfs *sbp)
  * Returns 0 on success.
  */
 static int
-efs_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
+efs_vget(struct mount *mp, ino_t ino, int lktype, struct vnode **vpp)
 {
 	int error;
 
 	error = vcache_get(mp, &ino, sizeof(ino), vpp);
 	if (error)
 		return error;
-	error = vn_lock(*vpp, LK_EXCLUSIVE);
+	error = vn_lock(*vpp, lktype);
 	if (error) {
 		vrele(*vpp);
 		*vpp = NULL;
@@ -453,7 +453,7 @@ efs_loadvnode(struct mount *mp, struct vnode *vp,
  * Returns 0 on success.
  */
 static int
-efs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
+efs_fhtovp(struct mount *mp, struct fid *fhp, int lktype, struct vnode **vpp)
 {
 	int err;
 	struct vnode *vp;
@@ -465,7 +465,7 @@ efs_fhtovp(struct mount *mp, struct fid *fhp, struct vnode **vpp)
 
 	efp = (struct efs_fid *)fhp;
 
-	if ((err = VFS_VGET(mp, efp->ef_ino, &vp))) {
+	if ((err = VFS_VGET(mp, efp->ef_ino, lktype, &vp))) {
 		*vpp = NULL;
 		return (err);
 	}
@@ -575,7 +575,7 @@ struct vfsops efs_vfsops = {
 	.vfs_mountroot	= (void *)eopnotsupp,
 	.vfs_snapshot	= (void *)eopnotsupp,
 	.vfs_extattrctl	= vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_opv_descs	= efs_vnodeopv_descs
 /*	.vfs_refcount */
 /*	.vfs_list */

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -574,12 +574,12 @@ OpcDoPld (
 
     /* Disable further optimization */
 
-    Op->Asl.CompileFlags &= ~NODE_COMPILE_TIME_CONST;
+    Op->Asl.CompileFlags &= ~OP_COMPILE_TIME_CONST;
     UtSetParseOpName (Op);
 
     /* Child node is the buffer length */
 
-    NewOp = TrAllocateNode (PARSEOP_INTEGER);
+    NewOp = TrAllocateOp (PARSEOP_INTEGER);
 
     NewOp->Asl.AmlOpcode = AML_BYTE_OP;
     NewOp->Asl.Value.Integer = 20;
@@ -590,7 +590,7 @@ OpcDoPld (
 
     /* Peer to the child is the raw buffer data */
 
-    NewOp = TrAllocateNode (PARSEOP_RAW_DATA);
+    NewOp = TrAllocateOp (PARSEOP_RAW_DATA);
     NewOp->Asl.AmlOpcode = AML_RAW_DATA_BUFFER;
     NewOp->Asl.AmlLength = 20;
     NewOp->Asl.Value.String = ACPI_CAST_PTR (char, Buffer);
@@ -620,11 +620,7 @@ OpcEncodePldBuffer (
     UINT32                  Dword;
 
 
-    Buffer = ACPI_ALLOCATE_ZEROED (ACPI_PLD_BUFFER_SIZE);
-    if (!Buffer)
-    {
-        return (NULL);
-    }
+    Buffer = ACPI_CAST_PTR (UINT32, UtLocalCacheCalloc (ACPI_PLD_BUFFER_SIZE));
 
     /* First 32 bits */
 

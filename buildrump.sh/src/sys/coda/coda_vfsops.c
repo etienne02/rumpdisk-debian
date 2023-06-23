@@ -1,4 +1,4 @@
-/*	$NetBSD: coda_vfsops.c,v 1.84 2014/12/13 15:59:30 hannken Exp $	*/
+/*	$NetBSD: coda_vfsops.c,v 1.89 2020/11/20 10:08:47 hannken Exp $	*/
 
 /*
  *
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coda_vfsops.c,v 1.84 2014/12/13 15:59:30 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coda_vfsops.c,v 1.89 2020/11/20 10:08:47 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -114,7 +114,7 @@ struct vfsops coda_vfsops = {
 	.vfs_mountroot = (void *)eopnotsupp,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
@@ -197,7 +197,11 @@ coda_mount(struct mount *vfsp,	/* Allocated and initialized by mount(2) */
      * fixed default size for the filename buffer.
      */
     /* Ensure that namei() doesn't run off the filename buffer */
-    ((char *)data)[*data_len - 1] = 0;
+    if (*data_len < 1 || *data_len > PATH_MAX ||
+	strnlen(data, *data_len) >= *data_len) {
+	MARK_INT_FAIL(CODA_MOUNT_STATS);
+	return EINVAL;
+    }
     error = namei_simple_kernel((char *)data, NSM_FOLLOW_NOEMULROOT,
 		&dvp);
 
@@ -346,7 +350,7 @@ coda_unmount(struct mount *vfsp, int mntflags)
  * find root of cfs
  */
 int
-coda_root(struct mount *vfsp, struct vnode **vpp)
+coda_root(struct mount *vfsp, int lktype, struct vnode **vpp)
 {
     struct coda_mntinfo *mi = vftomi(vfsp);
     int error;
@@ -363,7 +367,7 @@ coda_root(struct mount *vfsp, struct vnode **vpp)
 		*vpp = mi->mi_rootvp;
 		/* On Mach, this is vref.  On NetBSD, VOP_LOCK */
 		vref(*vpp);
-		vn_lock(*vpp, LK_EXCLUSIVE);
+		vn_lock(*vpp, lktype);
 		MARK_INT_SAT(CODA_ROOT_STATS);
 		return(0);
 	    }
@@ -388,7 +392,7 @@ coda_root(struct mount *vfsp, struct vnode **vpp)
 
 	*vpp = mi->mi_rootvp;
 	vref(*vpp);
-	vn_lock(*vpp, LK_EXCLUSIVE);
+	vn_lock(*vpp, lktype);
 	MARK_INT_SAT(CODA_ROOT_STATS);
 	goto exit;
     } else if (error == ENODEV || error == EINTR) {
@@ -403,7 +407,7 @@ coda_root(struct mount *vfsp, struct vnode **vpp)
 	 */
 	*vpp = mi->mi_rootvp;
 	vref(*vpp);
-	vn_lock(*vpp, LK_EXCLUSIVE);
+	vn_lock(*vpp, lktype);
 	MARK_INT_FAIL(CODA_ROOT_STATS);
 	error = 0;
 	goto exit;
@@ -475,7 +479,7 @@ coda_sync(struct mount *vfsp, int waitfor,
 }
 
 int
-coda_vget(struct mount *vfsp, ino_t ino,
+coda_vget(struct mount *vfsp, ino_t ino, int lktype,
     struct vnode **vpp)
 {
     ENTRY;
@@ -515,7 +519,7 @@ coda_loadvnode(struct mount *mp, struct vnode *vp,
 int
 coda_fhtovp(struct mount *vfsp, struct fid *fhp, struct mbuf *nam,
     struct vnode **vpp, int *exflagsp,
-    kauth_cred_t *creadanonp)
+    kauth_cred_t *creadanonp, int lktype)
 {
     struct cfid *cfid = (struct cfid *)fhp;
     struct cnode *cp = 0;
@@ -621,26 +625,23 @@ getNewVnode(struct vnode **vpp)
 	return ENODEV;
 
     return coda_fhtovp(mi->mi_vfsp, (struct fid*)&cfid, NULL, vpp,
-		      NULL, NULL);
+		      NULL, NULL, LK_EXCLUSIVE);
 }
 
-#include <ufs/ufs/quota.h>
-#include <ufs/ufs/ufsmount.h>
-/* get the mount structure corresponding to a given device.  Assume
- * device corresponds to a UFS. Return NULL if no device is found.
+/* Get the mount structure corresponding to a given device.
+ * Return NULL if no device is found or the device is not mounted.
  */
 struct mount *devtomp(dev_t dev)
 {
     struct mount *mp;
+    struct vnode *vp;
 
-    mutex_enter(&mountlist_lock);
-    TAILQ_FOREACH(mp, &mountlist, mnt_list) {
-	if ((!strcmp(mp->mnt_op->vfs_name, MOUNT_UFS)) &&
-	    ((VFSTOUFS(mp))->um_dev == (dev_t) dev)) {
-	    /* mount corresponds to UFS and the device matches one we want */
-	    break;
-	}
+    if (spec_node_lookup_by_dev(VBLK, dev, &vp) == 0) {
+	mp = spec_node_getmountedfs(vp);
+	vrele(vp);
+    } else {
+	mp = NULL;
     }
-    mutex_exit(&mountlist_lock);
+
     return mp;
 }

@@ -1,7 +1,8 @@
-/*	$NetBSD: sleepq.h,v 1.24 2015/02/08 19:39:09 christos Exp $	*/
+/*	$NetBSD: sleepq.h,v 1.34 2020/11/01 20:56:13 christos Exp $	*/
 
 /*-
- * Copyright (c) 2002, 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2002, 2006, 2007, 2008, 2009, 2019, 2020
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -38,30 +39,21 @@
 #include <sys/queue.h>
 #include <sys/sched.h>
 #include <sys/syncobj.h>
+#include <sys/param.h>
 
 /*
  * Generic sleep queues.
  */
 
-#define	SLEEPTAB_HASH_SHIFT	7
-#define	SLEEPTAB_HASH_SIZE	(1 << SLEEPTAB_HASH_SHIFT)
-#define	SLEEPTAB_HASH_MASK	(SLEEPTAB_HASH_SIZE - 1)
-#define	SLEEPTAB_HASH(wchan)	(((uintptr_t)(wchan) >> 8) & SLEEPTAB_HASH_MASK)
-
-TAILQ_HEAD(sleepq, lwp);
-
 typedef struct sleepq sleepq_t;
-
-typedef struct sleeptab {
-	struct {
-		kmutex_t	*st_mutex;
-		sleepq_t	st_queue;
-	} st_queues[SLEEPTAB_HASH_SIZE];
-} sleeptab_t;
 
 void	sleepq_init(sleepq_t *);
 void	sleepq_remove(sleepq_t *, lwp_t *);
-void	sleepq_enqueue(sleepq_t *, wchan_t, const char *, struct syncobj *);
+void	sleepq_enqueue(sleepq_t *, wchan_t, const char *, struct syncobj *,
+	    bool);
+void	sleepq_transfer(lwp_t *, sleepq_t *, sleepq_t *, wchan_t, const char *,
+	    struct syncobj *, kmutex_t *, bool);
+void	sleepq_uncatch(lwp_t *);
 void	sleepq_unsleep(lwp_t *, bool);
 void	sleepq_timeout(void *);
 void	sleepq_wake(sleepq_t *, wchan_t, u_int, kmutex_t *);
@@ -70,17 +62,18 @@ void	sleepq_changepri(lwp_t *, pri_t);
 void	sleepq_lendpri(lwp_t *, pri_t);
 int	sleepq_block(int, bool);
 
-void	sleeptab_init(sleeptab_t *);
-
-extern sleeptab_t	sleeptab;
-
 #ifdef _KERNEL
+typedef union {
+	kmutex_t	lock;
+	uint8_t		pad[COHERENCY_UNIT];
+} sleepqlock_t;
+
 /*
  * Return non-zero if it is unsafe to sleep.
  *
  * XXX This only exists because panic() is broken.
  */
-static inline bool
+static __inline bool
 sleepq_dontsleep(lwp_t *l)
 {
 	extern int cold;
@@ -89,35 +82,10 @@ sleepq_dontsleep(lwp_t *l)
 }
 
 /*
- * Find the correct sleep queue for the specified wait channel.  This
- * acquires and holds the per-queue interlock.
- */
-static inline sleepq_t *
-sleeptab_lookup(sleeptab_t *st, wchan_t wchan, kmutex_t **mp)
-{
-	sleepq_t *sq;
-
-	sq = &st->st_queues[SLEEPTAB_HASH(wchan)].st_queue;
-	*mp = st->st_queues[SLEEPTAB_HASH(wchan)].st_mutex;
-	mutex_spin_enter(*mp);
-	return sq;
-}
-
-static inline kmutex_t *
-sleepq_hashlock(wchan_t wchan)
-{
-	kmutex_t *mp;
-
-	mp = sleeptab.st_queues[SLEEPTAB_HASH(wchan)].st_mutex;
-	mutex_spin_enter(mp);
-	return mp;
-}
-
-/*
  * Prepare to block on a sleep queue, after which any interlock can be
  * safely released.
  */
-static inline void
+static __inline void
 sleepq_enter(sleepq_t *sq, lwp_t *l, kmutex_t *mp)
 {
 
@@ -131,55 +99,6 @@ sleepq_enter(sleepq_t *sq, lwp_t *l, kmutex_t *mp)
 }
 #endif
 
-/*
- * Turnstiles, specialized sleep queues for use by kernel locks.
- */
-
-typedef struct turnstile {
-	LIST_ENTRY(turnstile)	ts_chain;	/* link on hash chain */
-	struct turnstile	*ts_free;	/* turnstile free list */
-	wchan_t			ts_obj;		/* lock object */
-	sleepq_t		ts_sleepq[2];	/* sleep queues */
-	u_int			ts_waiters[2];	/* count of waiters */
-
-	/* priority inheritance */
-	pri_t			ts_eprio;
-	lwp_t			*ts_inheritor;
-	SLIST_ENTRY(turnstile)	ts_pichain;
-} turnstile_t;
-
-typedef struct tschain {
-	kmutex_t		*tc_mutex;	/* mutex on structs & queues */
-	LIST_HEAD(, turnstile)	tc_chain;	/* turnstile chain */
-} tschain_t;
-
-#define	TS_READER_Q	0		/* reader sleep queue */
-#define	TS_WRITER_Q	1		/* writer sleep queue */
-
-#define	TS_WAITERS(ts, q)						\
-	(ts)->ts_waiters[(q)]
-
-#define	TS_ALL_WAITERS(ts)						\
-	((ts)->ts_waiters[TS_READER_Q] +				\
-	 (ts)->ts_waiters[TS_WRITER_Q])
-
-#define	TS_FIRST(ts, q)	(TAILQ_FIRST(&(ts)->ts_sleepq[(q)]))
-
-#ifdef	_KERNEL
-
-void	turnstile_init(void);
-turnstile_t	*turnstile_lookup(wchan_t);
-void	turnstile_exit(wchan_t);
-void	turnstile_block(turnstile_t *, int, wchan_t, syncobj_t *);
-void	turnstile_wakeup(turnstile_t *, int, int, lwp_t *);
-void	turnstile_print(volatile void *, void (*)(const char *, ...)
-    __printflike(1, 2));
-void	turnstile_unsleep(lwp_t *, bool);
-void	turnstile_changepri(lwp_t *, pri_t);
-
-extern pool_cache_t turnstile_cache;
-extern turnstile_t turnstile0;
-
-#endif	/* _KERNEL */
+#include <sys/sleeptab.h>
 
 #endif	/* _SYS_SLEEPQ_H_ */

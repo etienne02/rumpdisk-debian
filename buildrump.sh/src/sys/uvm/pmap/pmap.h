@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.7 2016/07/11 16:06:09 matt Exp $	*/
+/*	$NetBSD: pmap.h,v 1.20 2021/03/19 07:51:33 skrll Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -71,13 +71,14 @@
  *	@(#)pmap.h	8.1 (Berkeley) 6/10/93
  */
 
-#ifndef	_COMMON_PMAP_H_
-#define	_COMMON_PMAP_H_
+#ifndef	_UVM_PMAP_PMAP_H_
+#define	_UVM_PMAP_PMAP_H_
 
 #include <uvm/uvm_stat.h>
 #ifdef UVMHIST
 UVMHIST_DECL(pmapexechist);
 UVMHIST_DECL(pmaphist);
+UVMHIST_DECL(pmapsegtabhist);
 #endif
 
 /*
@@ -103,11 +104,18 @@ typedef union pmap_segtab {
 struct pmap;
 typedef bool (*pte_callback_t)(struct pmap *, vaddr_t, vaddr_t,
 	pt_entry_t *, uintptr_t);
+
+/*
+ * Common part of the bootstraping the system enough to run with
+ * virtual memory.
+ */
+void pmap_bootstrap_common(void);
 pt_entry_t *pmap_pte_lookup(struct pmap *, vaddr_t);
 pt_entry_t *pmap_pte_reserve(struct pmap *, vaddr_t, int);
 void pmap_pte_process(struct pmap *, vaddr_t, vaddr_t, pte_callback_t,
 	uintptr_t);
 void pmap_segtab_activate(struct pmap *, struct lwp *);
+void pmap_segtab_deactivate(struct pmap *);
 void pmap_segtab_init(struct pmap *);
 void pmap_segtab_destroy(struct pmap *, pte_callback_t, uintptr_t);
 extern kmutex_t pmap_segtab_lock;
@@ -130,10 +138,13 @@ struct pmap {
 	pmap_segtab_t *		pm_segtab;	/* pointers to pages of PTEs */
 	u_int			pm_count;	/* pmap reference count */
 	u_int			pm_flags;
-#define	PMAP_DEFERRED_ACTIVATE	0x0001
+#define	PMAP_DEFERRED_ACTIVATE	__BIT(0)
 	struct pmap_statistics	pm_stats;	/* pmap statistics */
 	vaddr_t			pm_minaddr;
 	vaddr_t			pm_maxaddr;
+#ifdef __HAVE_PMAP_MD
+	struct pmap_md		pm_md;
+#endif
 	struct pmap_asid_info	pm_pai[1];
 };
 
@@ -154,14 +165,14 @@ struct pmap_limits {
 
 /*
  * Initialize the kernel pmap.
- */      
+ */
 #ifdef MULTIPROCESSOR
 #define PMAP_SIZE	offsetof(struct pmap, pm_pai[PMAP_TLB_MAX])
-#else       
+#else
 #define PMAP_SIZE	sizeof(struct pmap)
-#endif      
+#endif
 
-/* 
+/*
  * The pools from which pmap structures and sub-structures are allocated.
  */
 extern struct pool pmap_pmap_pool;
@@ -175,21 +186,26 @@ extern u_int pmap_page_colormask;
 
 extern pmap_segtab_t pmap_kern_segtab;
 
+/*
+ * The current top of kernel VM
+ */
+extern vaddr_t pmap_curmaxkvaddr;
+
 #define	pmap_wired_count(pmap) 	((pmap)->pm_stats.wired_count)
 #define pmap_resident_count(pmap) ((pmap)->pm_stats.resident_count)
 
-/*
- *	Bootstrap the system enough to run with virtual memory.
- */
-void	pmap_remove_all(pmap_t);
+bool	pmap_remove_all(pmap_t);
 void	pmap_set_modified(paddr_t);
 bool	pmap_page_clear_attributes(struct vm_page_md *, u_int);
 void	pmap_page_set_attributes(struct vm_page_md *, u_int);
 void	pmap_pvlist_lock_init(size_t);
 #ifdef PMAP_VIRTUAL_CACHE_ALIASES
-void	pmap_page_cache(struct vm_page *, bool cached);
+void	pmap_page_cache(struct vm_page_md *, bool);
 #endif
 
+#ifdef __HAVE_PMAP_PV_TRACK
+void	pmap_pv_protect(paddr_t, vm_prot_t);
+#endif
 
 #define	PMAP_WB		0
 #define	PMAP_WBINV	1
@@ -218,4 +234,4 @@ struct evcnt pmap_evcnt_##name = \
 EVCNT_ATTACH_STATIC(pmap_evcnt_##name)
 
 #endif	/* _KERNEL */
-#endif	/* _COMMON_PMAP_H_ */
+#endif	/* _UVM_PMAP_PMAP_H_ */

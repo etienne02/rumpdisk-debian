@@ -1,4 +1,4 @@
-/*	$NetBSD: uhci_pci.c,v 1.60 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: uhci_pci.c,v 1.66 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uhci_pci.c,v 1.60 2016/04/23 10:15:31 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uhci_pci.c,v 1.66 2021/08/07 16:19:14 thorpej Exp $");
 
 #include "ehci.h"
 
@@ -91,7 +91,7 @@ uhci_pci_attach(device_t parent, device_t self, void *aux)
 	pci_chipset_tag_t pc = pa->pa_pc;
 	pcitag_t tag = pa->pa_tag;
 	char const *intrstr;
-	pci_intr_handle_t ih;
+	pci_intr_handle_t *ih;
 	pcireg_t csr;
 	int s;
 	char intrbuf[PCI_INTRSTR_LEN];
@@ -126,12 +126,13 @@ uhci_pci_attach(device_t parent, device_t self, void *aux)
 		       csr | PCI_COMMAND_MASTER_ENABLE);
 
 	/* Map and establish the interrupt. */
-	if (pci_intr_map(pa, &ih)) {
+	if (pci_intr_alloc(pa, &ih, NULL, 0) != 0) {
 		aprint_error_dev(self, "couldn't map interrupt\n");
 		return;
 	}
-	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_USB, uhci_intr, sc);
+	intrstr = pci_intr_string(pc, ih[0], intrbuf, sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish_xname(pc, ih[0], IPL_USB, uhci_intr, sc,
+	    device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -153,7 +154,7 @@ uhci_pci_attach(device_t parent, device_t self, void *aux)
 	    bus_space_read_2(sc->sc.iot, sc->sc.ioh, UHCI_STS));
 	splx(s);
 
-	switch(pci_conf_read(pc, tag, PCI_USBREV) & PCI_USBREV_MASK) {
+	switch (pci_conf_read(pc, tag, PCI_USBREV) & PCI_USBREV_MASK) {
 	case PCI_USBREV_PRE_1_0:
 		sc->sc.sc_bus.ub_revision = USBREV_PRE_1_0;
 		break;
@@ -168,10 +169,6 @@ uhci_pci_attach(device_t parent, device_t self, void *aux)
 		break;
 	}
 
-	/* Figure out vendor for root hub descriptor. */
-	sc->sc.sc_id_vendor = PCI_VENDOR(pa->pa_id);
-	pci_findvendor(sc->sc.sc_vendor, sizeof(sc->sc.sc_vendor),
-	    sc->sc.sc_id_vendor);
 	int err = uhci_init(&sc->sc);
 	if (err) {
 		aprint_error_dev(self, "init failed, error=%d\n", err);
@@ -189,7 +186,8 @@ uhci_pci_attach(device_t parent, device_t self, void *aux)
 		sc->sc_initialized |= SC_INIT_PMF;
 
 	/* Attach usb device. */
-	sc->sc.sc_child = config_found(self, &sc->sc.sc_bus, usbctlprint);
+	sc->sc.sc_child = config_found(self, &sc->sc.sc_bus, usbctlprint,
+	    CFARGS_NONE);
 }
 
 static int

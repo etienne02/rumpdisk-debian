@@ -1,17 +1,9 @@
-#	$NetBSD: archdirs.mk,v 1.3 2015/06/22 06:46:27 matt Exp $
+#	$NetBSD: archdirs.mk,v 1.7 2021/08/03 09:25:44 rin Exp $
 
 # list of subdirs used per-platform
 
-.if ${MACHINE} == "amd64"
-ARCHDIR_SUBDIR=	x86/amd64-xen
-.endif
-
-.if ${MACHINE} == "i386"
-ARCHDIR_SUBDIR=	x86/i386-xen x86/i386pae-xen
-.endif
-
 .if ${MACHINE_ARCH} == "powerpc"
-ARCHDIR_SUBDIR=	powerpc/powerpc-4xx powerpc/powerpc-booke
+ARCHDIR_SUBDIR=	powerpc/powerpc-booke
 .endif
 
 .if ${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el"

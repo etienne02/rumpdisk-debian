@@ -1,4 +1,4 @@
-/*	$NetBSD: btms.c,v 1.12 2014/12/13 19:28:55 nonaka Exp $	*/
+/*	$NetBSD: btms.c,v 1.15 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btms.c,v 1.12 2014/12/13 19:28:55 nonaka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btms.c,v 1.15 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -79,7 +79,7 @@ __KERNEL_RCSID(0, "$NetBSD: btms.c,v 1.12 2014/12/13 19:28:55 nonaka Exp $");
 #include <dev/bluetooth/bthid.h>
 #include <dev/bluetooth/bthidev.h>
 
-#include <dev/usb/hid.h>
+#include <dev/hid/hid.h>
 #include <dev/usb/usb.h>
 #include <dev/usb/usbhid.h>
 
@@ -327,7 +327,7 @@ btms_attach(device_t parent, device_t self, void *aux)
 	wsma.accessops = &btms_wsmouse_accessops;
 	wsma.accesscookie = sc;
 
-	sc->sc_wsmouse = config_found(self, &wsma, wsmousedevprint);
+	sc->sc_wsmouse = config_found(self, &wsma, wsmousedevprint, CFARGS_NONE);
 
 	pmf_device_register(self, NULL, NULL);
 }

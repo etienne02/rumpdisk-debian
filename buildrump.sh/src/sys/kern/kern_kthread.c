@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_kthread.c,v 1.41 2015/04/21 11:10:29 pooka Exp $	*/
+/*	$NetBSD: kern_kthread.c,v 1.46 2020/08/01 02:04:55 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 1998, 1999, 2007, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 1999, 2007, 2009, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,9 +31,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_kthread.c,v 1.41 2015/04/21 11:10:29 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_kthread.c,v 1.46 2020/08/01 02:04:55 riastradh Exp $");
 
 #include <sys/param.h>
+#include <sys/cpu.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
@@ -82,7 +83,7 @@ kthread_create(pri_t pri, int flag, struct cpu_info *ci,
 	}
 
 	error = lwp_create(&lwp0, &proc0, uaddr, LWP_DETACHED, NULL,
-	    0, func, arg, &l, lc);
+	    0, func, arg, &l, lc, &lwp0.l_sigmask, &lwp0.l_sigstk);
 	if (error) {
 		uvm_uarea_system_free(uaddr);
 		return error;
@@ -108,10 +109,10 @@ kthread_create(pri_t pri, int flag, struct cpu_info *ci,
 	}
 	mutex_enter(proc0.p_lock);
 	lwp_lock(l);
-	l->l_priority = pri;
+	lwp_changepri(l, pri);
 	if (ci != NULL) {
 		if (ci != l->l_cpu) {
-			lwp_unlock_to(l, ci->ci_schedstate.spc_mutex);
+			lwp_unlock_to(l, ci->ci_schedstate.spc_lwplock);
 			lwp_lock(l);
 		}
 		l->l_pflag |= LP_BOUND;
@@ -133,15 +134,12 @@ kthread_create(pri_t pri, int flag, struct cpu_info *ci,
 	 * Set the new LWP running, unless the caller has requested
 	 * otherwise.
 	 */
+	KASSERT(l->l_stat == LSIDL);
 	if ((flag & KTHREAD_IDLE) == 0) {
-		l->l_stat = LSRUN;
-		sched_enqueue(l, false);
-		lwp_unlock(l);
+		setrunnable(l);
+		/* LWP now unlocked */
 	} else {
-		if (ci != NULL)
-			lwp_unlock_to(l, ci->ci_schedstate.spc_lwplock);
-		else
-			lwp_unlock(l);
+		lwp_unlock(l);
 	}
 	mutex_exit(proc0.p_lock);
 
@@ -181,6 +179,11 @@ kthread_exit(int ecode)
 		mutex_exit(&kthread_lock);
 	}
 
+	/* If the kernel lock is held, we need to drop it now. */
+	if ((l->l_pflag & LP_MPSAFE) == 0) {
+		KERNEL_UNLOCK_LAST(l);
+	}
+
 	/* And exit.. */
 	lwp_exit(l);
 	panic("kthread_exit");
@@ -194,6 +197,7 @@ kthread_join(lwp_t *l)
 {
 
 	KASSERT((l->l_flag & LW_SYSTEM) != 0);
+	KASSERT((l->l_pflag & LP_MUSTJOIN) != 0);
 
 	/*
 	 * - Wait if some other thread has occupied the target.
@@ -212,4 +216,72 @@ kthread_join(lwp_t *l)
 	mutex_exit(&kthread_lock);
 
 	return 0;
+}
+
+/*
+ * kthread_fpu_enter()
+ *
+ *	Allow the current lwp, which must be a kthread, to use the FPU.
+ *	Return a cookie that must be passed to kthread_fpu_exit when
+ *	done.  Must be used only in thread context.  Recursive -- you
+ *	can call kthread_fpu_enter several times in a row as long as
+ *	you pass the cookies in reverse order to kthread_fpu_exit.
+ */
+int
+kthread_fpu_enter(void)
+{
+	struct lwp *l = curlwp;
+	int s;
+
+	KASSERTMSG(!cpu_intr_p(),
+	    "%s is not allowed in interrupt context", __func__);
+	KASSERTMSG(!cpu_softintr_p(),
+	    "%s is not allowed in interrupt context", __func__);
+
+	/*
+	 * Remember whether this thread already had FPU access, and
+	 * mark this thread as having FPU access.
+	 */
+	lwp_lock(l);
+	KASSERTMSG(l->l_flag & LW_SYSTEM,
+	    "%s is allowed only in kthreads", __func__);
+	s = l->l_flag & LW_SYSTEM_FPU;
+	l->l_flag |= LW_SYSTEM_FPU;
+	lwp_unlock(l);
+
+	/* Take MD steps to enable the FPU if necessary.  */
+	if (s == 0)
+		kthread_fpu_enter_md();
+
+	return s;
+}
+
+/*
+ * kthread_fpu_exit(s)
+ *
+ *	Restore the current lwp's FPU access to what it was before the
+ *	matching call to kthread_fpu_enter() that returned s.  Must be
+ *	used only in thread context.
+ */
+void
+kthread_fpu_exit(int s)
+{
+	struct lwp *l = curlwp;
+
+	KASSERT(s == (s & LW_SYSTEM_FPU));
+	KASSERTMSG(!cpu_intr_p(),
+	    "%s is not allowed in interrupt context", __func__);
+	KASSERTMSG(!cpu_softintr_p(),
+	    "%s is not allowed in interrupt context", __func__);
+
+	lwp_lock(l);
+	KASSERTMSG(l->l_flag & LW_SYSTEM,
+	    "%s is allowed only in kthreads", __func__);
+	KASSERT(l->l_flag & LW_SYSTEM_FPU);
+	l->l_flag ^= s ^ LW_SYSTEM_FPU;
+	lwp_unlock(l);
+
+	/* Take MD steps to zero and disable the FPU if necessary.  */
+	if (s == 0)
+		kthread_fpu_exit_md();
 }

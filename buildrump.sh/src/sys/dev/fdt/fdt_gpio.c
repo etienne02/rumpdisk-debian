@@ -1,4 +1,4 @@
-/* $NetBSD: fdt_gpio.c,v 1.3 2015/12/22 22:19:07 jmcneill Exp $ */
+/* $NetBSD: fdt_gpio.c,v 1.7 2020/12/23 04:07:34 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2015 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,11 +27,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fdt_gpio.c,v 1.3 2015/12/22 22:19:07 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fdt_gpio.c,v 1.7 2020/12/23 04:07:34 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/kmem.h>
+#include <sys/queue.h>
 
 #include <libfdt.h>
 #include <dev/fdt/fdtvar.h>
@@ -41,10 +42,11 @@ struct fdtbus_gpio_controller {
 	int gc_phandle;
 	const struct fdtbus_gpio_controller_func *gc_funcs;
 
-	struct fdtbus_gpio_controller *gc_next;
+	LIST_ENTRY(fdtbus_gpio_controller) gc_next;
 };
 
-static struct fdtbus_gpio_controller *fdtbus_gc = NULL;
+static LIST_HEAD(, fdtbus_gpio_controller) fdtbus_gpio_controllers =
+    LIST_HEAD_INITIALIZER(fdtbus_gpio_controllers);
 
 int
 fdtbus_register_gpio_controller(device_t dev, int phandle,
@@ -57,8 +59,7 @@ fdtbus_register_gpio_controller(device_t dev, int phandle,
 	gc->gc_phandle = phandle;
 	gc->gc_funcs = funcs;
 
-	gc->gc_next = fdtbus_gc;
-	fdtbus_gc = gc;
+	LIST_INSERT_HEAD(&fdtbus_gpio_controllers, gc, gc_next);
 
 	return 0;
 }
@@ -68,50 +69,80 @@ fdtbus_get_gpio_controller(int phandle)
 {
 	struct fdtbus_gpio_controller *gc;
 
-	for (gc = fdtbus_gc; gc; gc = gc->gc_next) {
-		if (gc->gc_phandle == phandle) {
+	LIST_FOREACH(gc, &fdtbus_gpio_controllers, gc_next) {
+		if (gc->gc_phandle == phandle)
 			return gc;
-		}
 	}
 
 	return NULL;
 }
 
+int
+fdtbus_gpio_count(int phandle, const char *prop)
+{
+	const uint32_t *gpios, *p;
+	u_int n, gpio_cells;
+	int len, resid;
+
+	gpios = fdtbus_get_prop(phandle, prop, &len);
+	if (gpios == NULL)
+		return 0;
+
+	p = gpios;
+	for (n = 0, resid = len; resid > 0; n++) {
+		const int gc_phandle =
+		    fdtbus_get_phandle_from_native(be32toh(p[0]));
+		if (of_getprop_uint32(gc_phandle, "#gpio-cells", &gpio_cells))
+			break;
+		resid -= (gpio_cells + 1) * 4;
+		p += gpio_cells + 1;
+	}
+
+	return n;
+}
+
 struct fdtbus_gpio_pin *
 fdtbus_gpio_acquire(int phandle, const char *prop, int flags)
 {
+	return fdtbus_gpio_acquire_index(phandle, prop, 0, flags);
+}
+
+struct fdtbus_gpio_pin *
+fdtbus_gpio_acquire_index(int phandle, const char *prop,
+    int index, int flags)
+{
 	struct fdtbus_gpio_controller *gc;
-	struct fdtbus_gpio_pin *gp;
-	int gpio_phandle, len;
-	u_int *data;
+	struct fdtbus_gpio_pin *gp = NULL;
+	const uint32_t *gpios, *p;
+	u_int n, gpio_cells;
+	int len, resid;
 
-	gpio_phandle = fdtbus_get_phandle(phandle, prop);
-	if (gpio_phandle == -1) {
+	gpios = fdtbus_get_prop(phandle, prop, &len);
+	if (gpios == NULL)
 		return NULL;
-	}
 
-	gc = fdtbus_get_gpio_controller(gpio_phandle);
-	if (gc == NULL) {
-		return NULL;
-	}
-
-	len = OF_getproplen(phandle, prop);
-	if (len < 4) {
-		return NULL;
-	}
-
-	data = kmem_alloc(len, KM_SLEEP);
-	if (OF_getprop(phandle, prop, data, len) != len) {
-		kmem_free(data, len);
-		return NULL;
-	}
-
-	gp = kmem_alloc(sizeof(*gp), KM_SLEEP);
-	gp->gp_gc = gc;
-	gp->gp_priv = gc->gc_funcs->acquire(gc->gc_dev, data, len, flags);
-	if (gp->gp_priv == NULL) {
-		kmem_free(data, len);
-		return NULL;
+	p = gpios;
+	for (n = 0, resid = len; resid > 0; n++) {
+		const int gc_phandle =
+		    fdtbus_get_phandle_from_native(be32toh(p[0]));
+		if (of_getprop_uint32(gc_phandle, "#gpio-cells", &gpio_cells))
+			break;
+		if (n == index) {
+			gc = fdtbus_get_gpio_controller(gc_phandle);
+			if (gc == NULL)
+				return NULL;
+			gp = kmem_alloc(sizeof(*gp), KM_SLEEP);
+			gp->gp_gc = gc;
+			gp->gp_priv = gc->gc_funcs->acquire(gc->gc_dev,
+			    &p[0], (gpio_cells + 1) * 4, flags);
+			if (gp->gp_priv == NULL) {
+				kmem_free(gp, sizeof(*gp));
+				return NULL;
+			}
+			break;
+		}
+		resid -= (gpio_cells + 1) * 4;
+		p += gpio_cells + 1;
 	}
 
 	return gp;

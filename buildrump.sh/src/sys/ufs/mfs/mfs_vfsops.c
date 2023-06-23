@@ -1,4 +1,4 @@
-/*	$NetBSD: mfs_vfsops.c,v 1.110 2015/03/17 09:39:29 hannken Exp $	*/
+/*	$NetBSD: mfs_vfsops.c,v 1.114 2020/03/16 21:20:13 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1989, 1990, 1993, 1994
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mfs_vfsops.c,v 1.110 2015/03/17 09:39:29 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mfs_vfsops.c,v 1.114 2020/03/16 21:20:13 pgoyette Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -76,8 +76,6 @@ static int mfs_initcnt;
 
 extern int (**mfs_vnodeop_p)(void *);
 
-static struct sysctllog *mfs_sysctl_log;
-
 /*
  * mfs vfs operations.
  */
@@ -109,12 +107,29 @@ struct vfsops mfs_vfsops = {
 	.vfs_done = mfs_done,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = genfs_renamelock_enter,
 	.vfs_renamelock_exit = genfs_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
 	.vfs_opv_descs = mfs_vnodeopv_descs
 };
+
+SYSCTL_SETUP(mfs_sysctl_setup, "mfs sysctl")
+{
+
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_ALIAS,
+		       CTLTYPE_NODE, "mfs",
+		       SYSCTL_DESCR("Memory based file system"),
+		       NULL, 1, NULL, 0,
+		       CTL_VFS, 3, CTL_EOL);
+	/*
+	 * XXX the "1" and the "3" above could be dynamic, thereby
+	 * eliminating one more instance of the "number to vfs"
+	 * mapping problem, but they are in order as taken from
+	 * sys/mount.h
+	 */
+}
 
 static int
 mfs_modcmd(modcmd_t cmd, void *arg)
@@ -126,24 +141,11 @@ mfs_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_attach(&mfs_vfsops);
 		if (error != 0)
 			break;
-		sysctl_createv(&mfs_sysctl_log, 0, NULL, NULL,
-			       CTLFLAG_PERMANENT|CTLFLAG_ALIAS,
-			       CTLTYPE_NODE, "mfs",
-			       SYSCTL_DESCR("Memory based file system"),
-			       NULL, 1, NULL, 0,
-			       CTL_VFS, 3, CTL_EOL);
-		/*
-		 * XXX the "1" and the "3" above could be dynamic, thereby
-		 * eliminating one more instance of the "number to vfs"
-		 * mapping problem, but they are in order as taken from
-		 * sys/mount.h
-		 */
 		break;
 	case MODULE_CMD_FINI:
 		error = vfs_detach(&mfs_vfsops);
 		if (error != 0)
 			break;
-		sysctl_teardown(&mfs_sysctl_log);
 		break;
 	default:
 		error = ENOTTY;
@@ -215,9 +217,9 @@ mfs_mountroot(void)
 	mfsp->mfs_refcnt = 1;
 	bufq_alloc(&mfsp->mfs_buflist, "fcfs", 0);
 	if ((error = ffs_mountfs(rootvp, mp, l)) != 0) {
-		vfs_unbusy(mp, false, NULL);
+		vfs_unbusy(mp);
 		bufq_free(mfsp->mfs_buflist);
-		vfs_destroy(mp);
+		vfs_rele(mp);
 		kmem_free(mfsp, sizeof(*mfsp));
 		return (error);
 	}
@@ -227,7 +229,7 @@ mfs_mountroot(void)
 	fs = ump->um_fs;
 	(void) copystr(mp->mnt_stat.f_mntonname, fs->fs_fsmnt, MNAMELEN - 1, 0);
 	(void)ffs_statvfs(mp, &mp->mnt_stat);
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 	return (0);
 }
 
@@ -375,14 +377,14 @@ mfs_start(struct mount *mp, int flags)
 	 * Add a reference to the mfsnode to prevent it disappearing in
 	 * this routine.
 	 */
-	if ((error = vfs_busy(mp, NULL)) != 0)
+	if ((error = vfs_busy(mp)) != 0)
 		return error;
 	vp = VFSTOUFS(mp)->um_devvp;
 	mfsp = VTOMFS(vp);
 	mutex_enter(&mfs_lock);
 	mfsp->mfs_refcnt++;
 	mutex_exit(&mfs_lock);
-	vfs_unbusy(mp, false, NULL);
+	vfs_unbusy(mp);
 
 	base = mfsp->mfs_baseoff;
 	mutex_enter(&mfs_lock);

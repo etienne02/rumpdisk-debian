@@ -1,4 +1,4 @@
-/* $NetBSD: coda.h,v 1.19 2015/09/06 06:00:59 dholland Exp $ */
+/* $NetBSD: coda.h,v 1.21 2020/11/14 11:42:56 hannken Exp $ */
 
 /*
 
@@ -59,6 +59,10 @@ Mellon the rights to redistribute these changes without encumbrance.
 
 #ifndef CODA_MAXSYMLINKS
 #define CODA_MAXSYMLINKS 10
+#endif
+
+#ifndef CODA_DIRBLKSIZ
+#define CODA_DIRBLKSIZ 0x1000
 #endif
 
 #if defined(DJGPP) || defined(__CYGWIN32__)
@@ -169,7 +173,7 @@ struct venus_dirent {
 #ifndef _VENUS_DIRENT_T_
 #define _VENUS_DIRENT_T_ 1
 struct venus_dirent {
-        unsigned long	d_fileno;		/* file number of entry */
+        unsigned int	d_fileno;		/* file number of entry */
         unsigned short	d_reclen;		/* length of this record */
         unsigned char 	d_type;			/* file type, see below */
         unsigned char	d_namlen;		/* length of string in d_name */
@@ -208,13 +212,13 @@ typedef struct {
     u_long Unique;
 } CodaFid;
 
-static inline ino_t coda_f2i(CodaFid *fid)
+static __inline ino_t coda_f2i(CodaFid *fid)
 {
 	if (!fid) return 0;
 	return (fid->Unique + (fid->Vnode<<10) + (fid->Volume<<20));
 }
 
-static inline char * coda_f2s(CodaFid *fid)
+static __inline char * coda_f2s(CodaFid *fid)
 {
   static char fid_str [35];
   snprintf (fid_str, 35, "[%lx.%lx.%lx]", fid->Volume,
@@ -222,7 +226,7 @@ static inline char * coda_f2s(CodaFid *fid)
   return fid_str;
 }
 
-static inline int coda_fid_eq (CodaFid *fid1, CodaFid *fid2)
+static __inline int coda_fid_eq (CodaFid *fid1, CodaFid *fid2)
 {
   return (fid1->Volume == fid2->Volume &&
 	  fid1->Vnode == fid2->Vnode &&
@@ -241,13 +245,13 @@ typedef struct {
 } CodaFid;
 
 
-static inline ino_t coda_f2i(CodaFid *fid)
+static __inline ino_t coda_f2i(CodaFid *fid)
 {
 	if (!fid) return 0;
 	return (fid->opaque[1] + (fid->opaque[2]<<10) + (fid->opaque[3]<<20));
 }
 
-static inline char * coda_f2s(CodaFid *fid)
+static __inline char * coda_f2s(CodaFid *fid)
 {
   static char fid_str [35];
   snprintf (fid_str, 35, "[%x.%x.%x.%x]", fid->opaque[0],
@@ -255,7 +259,7 @@ static inline char * coda_f2s(CodaFid *fid)
   return fid_str;
 }
 
-static inline int coda_fid_eq (CodaFid *fid1, CodaFid *fid2)
+static __inline int coda_fid_eq (CodaFid *fid1, CodaFid *fid2)
 {
   return (fid1->opaque[0] == fid2->opaque[0] &&
 	  fid1->opaque[1] == fid2->opaque[1] &&

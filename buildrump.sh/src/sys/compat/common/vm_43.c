@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_43.c,v 1.18 2011/02/08 20:20:26 rmind Exp $	*/
+/*	$NetBSD: vm_43.c,v 1.21 2019/01/27 02:08:39 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -43,7 +43,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_43.c,v 1.18 2011/02/08 20:20:26 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_43.c,v 1.21 2019/01/27 02:08:39 pgoyette Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,9 +58,20 @@ __KERNEL_RCSID(0, "$NetBSD: vm_43.c,v 1.18 2011/02/08 20:20:26 rmind Exp $");
 #include <sys/file.h>
 #include <sys/mman.h>
 
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
 #include <sys/syscallargs.h>
 
 #include <miscfs/specfs/specdev.h>
+
+#include <compat/common/compat_mod.h>
+
+static struct syscall_package vm_43_syscalls[] = {
+	{ SYS_compat_43_ogetpagesize, 0,
+	    (sy_call_t *)compat_43_sys_getpagesize },
+	{ SYS_compat_43_ommap, 0, (sy_call_t *)compat_43_sys_mmap },
+	{ 0, 0, NULL }
+};
 
 /* ARGSUSED */
 int
@@ -110,12 +125,21 @@ compat_43_sys_mmap(struct lwp *l, const struct compat_43_sys_mmap_args *uap, reg
 	SCARG(&nargs, flags) = 0;
 	if (SCARG(uap, flags) & OMAP_ANON)
 		SCARG(&nargs, flags) |= MAP_ANON;
-	if (SCARG(uap, flags) & OMAP_COPY)
-		SCARG(&nargs, flags) |= MAP_COPY;
 	if (SCARG(uap, flags) & OMAP_SHARED)
 		SCARG(&nargs, flags) |= MAP_SHARED;
 	else
 		SCARG(&nargs, flags) |= MAP_PRIVATE;
+	if (SCARG(uap, flags) & OMAP_COPY) {
+		SCARG(&nargs, flags) |= MAP_PRIVATE;
+#if defined(COMPAT_10) && defined(__i386__)
+		/*
+		 * Ancient kernel on x86 did not obey PROT_EXEC on i386 at least
+		 * and ld.so did not turn it on. We take care of this on amd64
+		 * in compat32.
+		 */
+		SCARG(&nargs, prot) |= PROT_EXEC;
+#endif
+	}
 	if (SCARG(uap, flags) & OMAP_FIXED)
 		SCARG(&nargs, flags) |= MAP_FIXED;
 	if (SCARG(uap, flags) & OMAP_INHERIT)
@@ -123,4 +147,18 @@ compat_43_sys_mmap(struct lwp *l, const struct compat_43_sys_mmap_args *uap, reg
 	SCARG(&nargs, fd) = SCARG(uap, fd);
 	SCARG(&nargs, pos) = SCARG(uap, pos);
 	return (sys_mmap(l, &nargs, retval));
+}
+
+int
+vm_43_init(void)
+{
+
+	return syscall_establish(NULL, vm_43_syscalls);
+}
+
+int
+vm_43_fini(void)
+{
+
+	return syscall_disestablish(NULL, vm_43_syscalls);
 }

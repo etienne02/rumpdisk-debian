@@ -1,4 +1,4 @@
-/*	$NetBSD: layer_extern.h,v 1.36 2014/05/25 13:51:25 hannken Exp $	*/
+/*	$NetBSD: layer_extern.h,v 1.41 2020/01/17 20:08:09 ad Exp $	*/
 
 /*
  * Copyright (c) 1999 National Aeronautics & Space Administration
@@ -80,16 +80,17 @@ int	layer_node_create(struct mount *, struct vnode *, struct vnode **);
 
 /* VFS routines */
 int	layerfs_start(struct mount *, int);
-int	layerfs_root(struct mount *, struct vnode **);
+int	layerfs_root(struct mount *, int, struct vnode **);
 int	layerfs_quotactl(struct mount *, struct quotactl_args *);
 int	layerfs_statvfs(struct mount *, struct statvfs *);
 int	layerfs_sync(struct mount *, int, struct kauth_cred *);
 int	layerfs_loadvnode(struct mount *,  struct vnode *,
 	    const void *, size_t, const void **);
-int	layerfs_vget(struct mount *, ino_t, struct vnode **);
-int	layerfs_fhtovp(struct mount *, struct fid *, struct vnode **);
+int	layerfs_vget(struct mount *, ino_t, int, struct vnode **);
+int	layerfs_fhtovp(struct mount *, struct fid *, int, struct vnode **);
 int	layerfs_vptofh(struct vnode *, struct fid *, size_t *);
 int	layerfs_snapshot(struct mount *, struct vnode *, struct timespec *);
+int	layerfs_suspendctl(struct mount *, int);
 int	layerfs_renamelock_enter(struct mount *);
 void	layerfs_renamelock_exit(struct mount *);
 
@@ -98,7 +99,6 @@ int	layer_bypass(void *);
 int	layer_getattr(void *);
 int	layer_inactive(void *);
 int	layer_reclaim(void *);
-int	layer_lock(void *);
 int	layer_print(void *);
 int	layer_bmap(void *);
 int	layer_fsync(void *);
@@ -106,6 +106,7 @@ int	layer_lookup(void *);
 int	layer_setattr(void *);
 int	layer_access(void *);
 int	layer_open(void *);
+int	layer_close(void *);
 int	layer_remove(void *);
 int	layer_rename(void *);
 int	layer_revoke(void *);

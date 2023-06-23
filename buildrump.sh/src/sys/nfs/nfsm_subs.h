@@ -1,4 +1,4 @@
-/*	$NetBSD: nfsm_subs.h,v 1.53 2013/09/14 22:29:08 martin Exp $	*/
+/*	$NetBSD: nfsm_subs.h,v 1.55 2021/08/12 20:25:27 andvar Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -53,6 +53,14 @@
 #define	NFSMADV(m, s)	(m)->m_data += (s)
 #define	NFSMSIZ(m)	((M_HASCL(m)) ? (m)->m_ext.ext_size : \
 				(((m)->m_flags & M_PKTHDR) ? MHLEN : MLEN))
+
+/*
+ * NFSv2 can only handle signed 32bit quantities and some clients
+ * get confused by larger than 16bit block sizes. Limit values
+ * for better compatibility.
+ */
+#define NFS_V2CLAMP32(x) ((x) > INT32_MAX ? INT32_MAX : (int32_t)(x))
+#define NFS_V2CLAMP16(x) ((x) > INT16_MAX ? INT16_MAX : (int32_t)(x))
 
 /*
  * Now for the macros that do the simple stuff and call the functions
@@ -144,7 +152,7 @@
  * for nfsv3, dissect post_op_fh3 and following post_op_attr.
  * for nfsv2, dissect fhandle and following fattr.
  *
- * d: (IN) the vnode of the parent directry.
+ * d: (IN) the vnode of the parent directory.
  * v: (OUT) the corresponding vnode (we allocate one if needed)
  * v3: (IN) true for nfsv3.
  * f: (OUT) true if we got valid filehandle.  always true for nfsv2.

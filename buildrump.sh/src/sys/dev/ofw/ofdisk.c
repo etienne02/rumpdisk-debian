@@ -1,4 +1,4 @@
-/*	$NetBSD: ofdisk.c,v 1.51 2015/04/26 15:15:20 mlelstv Exp $	*/
+/*	$NetBSD: ofdisk.c,v 1.54 2020/01/26 21:43:52 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofdisk.c,v 1.51 2015/04/26 15:15:20 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofdisk.c,v 1.54 2020/01/26 21:43:52 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -131,7 +131,7 @@ ofdisk_match(device_t parent, cfdata_t match, void *aux)
 	if (l >= sizeof type)
 		return 0;
 	type[l] = 0;
-	return !strcmp(type, "block");
+	return strcmp(type, "block") == 0 || strcmp(type, "scsi") == 0;
 }
 
 static void
@@ -367,6 +367,7 @@ ofdisk_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	case DIOCDWEDGE:
 	case DIOCAWEDGE:
 	case DIOCLWEDGES:
+	case DIOCRMWEDGES:
 	case DIOCMWEDGES:
 		if (OFDISK_FLOPPY_P(of))
 			return ENOTTY;
@@ -403,11 +404,11 @@ ofdisk_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		error = setdisklabel(of->sc_dk.dk_label,
 		    lp, /*of->sc_dk.dk_openmask */0,
 		    of->sc_dk.dk_cpulabel);
-		if (error == 0 && cmd == DIOCWDINFO
+		if (error == 0 && (cmd == DIOCWDINFO
 #ifdef __HAVE_OLD_DISKLABEL
-		    || xfer == ODIOCWDINFO
+		    || cmd == ODIOCWDINFO
 #endif
-		    )
+		    ))
 			error = writedisklabel(MAKEDISKDEV(major(dev),
 			    DISKUNIT(dev), RAW_PART), ofdisk_strategy,
 			    of->sc_dk.dk_label, of->sc_dk.dk_cpulabel);
@@ -421,7 +422,7 @@ ofdisk_ioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 		ofdisk_getdefaultlabel(of, (struct disklabel *)data);
 		return 0;
 #ifdef __HAVE_OLD_DISKLABEL
-	case DIOCGDEFLABEL:
+	case ODIOCGDEFLABEL:
 		ofdisk_getdefaultlabel(of, &newlabel);
 		if (newlabel.d_npartitions > OLDMAXPARTITIONS)
 			return ENOTTY;

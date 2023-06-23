@@ -1,4 +1,4 @@
-/*	$NetBSD: pf_ioctl.c,v 1.51 2015/08/20 14:40:18 christos Exp $	*/
+/*	$NetBSD: pf_ioctl.c,v 1.57 2020/02/21 00:26:22 joerg Exp $	*/
 /*	$OpenBSD: pf_ioctl.c,v 1.182 2007/06/24 11:17:13 mcbride Exp $ */
 
 /*
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pf_ioctl.c,v 1.51 2015/08/20 14:40:18 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pf_ioctl.c,v 1.57 2020/02/21 00:26:22 joerg Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -66,6 +66,7 @@ __KERNEL_RCSID(0, "$NetBSD: pf_ioctl.c,v 1.51 2015/08/20 14:40:18 christos Exp $
 #include <sys/kauth.h>
 #include <sys/module.h>
 #include <sys/cprng.h>
+#include <sys/device.h>
 #endif /* __NetBSD__ */
 
 #include <net/if.h>
@@ -83,6 +84,7 @@ __KERNEL_RCSID(0, "$NetBSD: pf_ioctl.c,v 1.51 2015/08/20 14:40:18 christos Exp $
 #include <dev/rndvar.h>
 #include <crypto/md5.h>
 #else
+#include <netinet/in_offload.h>
 #include <sys/md5.h>
 #endif /* __NetBSD__ */
 #include <net/pfvar.h>
@@ -98,6 +100,7 @@ __KERNEL_RCSID(0, "$NetBSD: pf_ioctl.c,v 1.51 2015/08/20 14:40:18 christos Exp $
 #ifdef INET6
 #include <netinet/ip6.h>
 #include <netinet/in_pcb.h>
+#include <netinet6/in6_offload.h>
 #endif /* INET6 */
 
 #ifdef ALTQ
@@ -166,6 +169,10 @@ int			 pf_rtlabel_add(struct pf_addr_wrap *);
 void			 pf_rtlabel_remove(struct pf_addr_wrap *);
 void			 pf_rtlabel_copyout(struct pf_addr_wrap *);
 
+#ifdef __NetBSD__
+void	pf_deferred_init(device_t);
+#endif
+
 #define DPFPRINTF(n, x) if (pf_status.debug >= (n)) printf x
 
 #ifdef __NetBSD__
@@ -206,7 +213,7 @@ pf_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	enum kauth_network_req req;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_network_req)arg0;
+	req = (enum kauth_network_req)(uintptr_t)arg0;
 
 	if (action != KAUTH_NETWORK_FIREWALL)
 		return result;
@@ -310,15 +317,19 @@ pfattach(int num)
 	bzero(&pf_status, sizeof(pf_status));
 	pf_status.debug = PF_DEBUG_URGENT;
 
+#ifdef __NetBSD__
+	/*
+	 * Defer rest of initialization until we can use cprng_fast32()
+	 * which requires per-CPU data to have been initialized which
+	 * in turn requires that all CPUs have been discovered and
+	 * attached!
+	 */
+	config_interrupts(NULL, pf_deferred_init);
+#else
 	/* XXX do our best to avoid a conflict */
 	pf_status.hostid = cprng_fast32();
 
 	/* require process context to purge states, so perform in a thread */
-#ifdef __NetBSD__
-	if (kthread_create(PRI_NONE, 0, NULL, pf_purge_thread, NULL, NULL,
-	    "pfpurge"))
-		panic("pfpurge thread");
-#else
 	kthread_create_deferred(pf_thread_create, NULL);
 #endif /* !__NetBSD__ */
 
@@ -327,6 +338,22 @@ pfattach(int num)
 	    pf_listener_cb, NULL);
 #endif /* __NetBSD__ */
 }
+
+#ifdef __NetBSD__
+/* ARGSUSED */
+void
+pf_deferred_init(device_t dev)
+{
+
+	/* XXX do our best to avoid a conflict */
+	pf_status.hostid = cprng_fast32();
+
+	/* require process context to purge states, so perform in a thread */
+	if (kthread_create(PRI_NONE, 0, NULL, pf_purge_thread, NULL, NULL,
+	    "pfpurge"))
+		panic("pfpurge thread");
+}
+#endif /* __NetBSD__ */
 
 #ifdef _MODULE
 void
@@ -3268,7 +3295,7 @@ pfil4_wrapper(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 	 */
 	if (dir == PFIL_OUT) {
 		if ((*mp)->m_pkthdr.csum_flags & (M_CSUM_TCPv4|M_CSUM_UDPv4)) {
-			in_delayed_cksum(*mp);
+			in_undefer_cksum_tcpudp(*mp);
 			(*mp)->m_pkthdr.csum_flags &=
 			    ~(M_CSUM_TCPv4|M_CSUM_UDPv4);
 		}
@@ -3318,7 +3345,7 @@ pfil6_wrapper(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 	 */
 	if (dir == PFIL_OUT) {
 		if ((*mp)->m_pkthdr.csum_flags & (M_CSUM_TCPv6|M_CSUM_UDPv6)) {
-			in6_delayed_cksum(*mp);
+			in6_undefer_cksum_tcpudp(*mp);
 			(*mp)->m_pkthdr.csum_flags &=
 			    ~(M_CSUM_TCPv6|M_CSUM_UDPv6);
 		}

@@ -1,7 +1,7 @@
-/* $NetBSD: dwc_mmc_var.h,v 1.5 2015/12/26 23:13:10 jmcneill Exp $ */
+/* $NetBSD: dwc_mmc_var.h,v 1.14 2020/03/20 17:07:17 skrll Exp $ */
 
 /*-
- * Copyright (c) 2014 Jared D. McNeill <jmcneill@invisible.ca>
+ * Copyright (c) 2014-2017 Jared McNeill <jmcneill@invisible.ca>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,31 +30,65 @@
 #define _DWC_MMC_VAR_H
 
 struct dwc_mmc_softc {
-	device_t		sc_dev;
-	bus_space_tag_t		sc_bst;
-	bus_space_handle_t	sc_bsh;
-	bus_dma_tag_t		sc_dmat;
-	void			*sc_ih;
-	unsigned int		sc_clock_freq;
-	unsigned int		sc_clock_max;
-	unsigned int		sc_fifo_depth;
-	uint32_t		sc_flags;
-#define DWC_MMC_F_USE_HOLD_REG	0x0001	/* set USE_HOLD_REG with every cmd */
-#define DWC_MMC_F_PWREN_CLEAR	0x0002	/* clear POWER_ENABLE bit to enable */
-#define DWC_MMC_F_FORCE_CLK	0x0004	/* update clk div with every cmd */
-#define DWC_MMC_F_BROKEN_CD	0x0008	/* card detect doesn't work */
-	int			(*sc_set_clkdiv)(struct dwc_mmc_softc *, int);
-	int			(*sc_card_detect)(struct dwc_mmc_softc *);
+	device_t sc_dev;
+	bus_space_tag_t sc_bst;
+	bus_space_handle_t sc_bsh;
+	bus_space_handle_t sc_clk_bsh;
+	bus_dma_tag_t sc_dmat;
 
-	device_t		sc_sdmmc_dev;
-	kmutex_t		sc_intr_lock;
-	kcondvar_t		sc_intr_cv;
+	u_int sc_flags;
+#define	DWC_MMC_F_DMA		__BIT(0)
+#define	DWC_MMC_F_USE_HOLD_REG	__BIT(1)
+#define	DWC_MMC_F_PWREN_INV	__BIT(2)
+	uint32_t sc_fifo_reg;
+	uint32_t sc_fifo_depth;
+	u_int sc_clock_freq;
+	u_int sc_bus_width;
+	bool sc_card_inited;
+	u_int sc_verid;
 
-	uint32_t		sc_intr_rint;
-	u_int			sc_cur_freq;
+	void *sc_ih;
+	kmutex_t sc_lock;
+	kmutex_t sc_intr_lock;
+	kcondvar_t sc_intr_cv;
+
+	int sc_mmc_width;
+	int sc_mmc_port;
+
+	u_int sc_ciu_div;
+
+	device_t sc_sdmmc_dev;
+
+	uint32_t sc_idma_xferlen;
+	bus_dma_segment_t sc_idma_segs[1];
+	int sc_idma_nsegs;
+	bus_size_t sc_idma_size;
+	bus_dmamap_t sc_idma_map;
+	int sc_idma_ndesc;
+	void *sc_idma_desc;
+
+	bus_dmamap_t sc_dmabounce_map;
+	void *sc_dmabounce_buf;
+	size_t sc_dmabounce_buflen;
+
+	uint32_t sc_intr_card;
+	uint32_t sc_intr_cardmask;
+	struct sdmmc_command *sc_curcmd;
+	bool sc_wait_dma;
+	bool sc_wait_cmd;
+	bool sc_wait_data;
+
+	void (*sc_pre_power_on)(struct dwc_mmc_softc *);
+	void (*sc_post_power_on)(struct dwc_mmc_softc *);
+
+	int (*sc_card_detect)(struct dwc_mmc_softc *);
+	int (*sc_write_protect)(struct dwc_mmc_softc *);
+	void (*sc_set_led)(struct dwc_mmc_softc *, int);
+	int (*sc_bus_clock)(struct dwc_mmc_softc *, int);
+	int (*sc_signal_voltage)(struct dwc_mmc_softc *, int);
 };
 
-void	dwc_mmc_init(struct dwc_mmc_softc *);
+int	dwc_mmc_init(struct dwc_mmc_softc *);
 int	dwc_mmc_intr(void *);
 
 #endif /* !_DWC_MMC_VAR_H */

@@ -1,10 +1,13 @@
-/*	$NetBSD: frameasm.h,v 1.20 2012/07/15 15:17:56 dsl Exp $	*/
+/*	$NetBSD: frameasm.h,v 1.53 2021/04/17 20:12:55 rillig Exp $	*/
 
 #ifndef _AMD64_MACHINE_FRAMEASM_H
 #define _AMD64_MACHINE_FRAMEASM_H
 
 #ifdef _KERNEL_OPT
 #include "opt_xen.h"
+#include "opt_svs.h"
+#include "opt_kcov.h"
+#include "opt_kmsan.h"
 #endif
 
 /*
@@ -12,7 +15,7 @@
  * and system calls. Currently all the same; will diverge later.
  */
 
-#ifdef XEN
+#ifdef XENPV
 #define HYPERVISOR_iret hypercall_page + (__HYPERVISOR_iret * 32)
 /* Xen do not need swapgs, done by hypervisor */
 #define swapgs
@@ -28,12 +31,88 @@
  	movq CPUVAR(VCPU),%r ## temp_reg ;			\
 	movb $0,EVTCHN_UPCALL_MASK(%r ## temp_reg);
 
-#else /* XEN */
+#define PUSHF(temp_reg) \
+ 	movq CPUVAR(VCPU),%r ## temp_reg ;			\
+	movzbl EVTCHN_UPCALL_MASK(%r ## temp_reg), %e ## temp_reg; \
+	pushq %r ## temp_reg
+
+#define POPF \
+	popq %rdi; \
+	call _C_LABEL(xen_write_psl)
+
+
+#else /* XENPV */
 #define	XEN_ONLY2(x,y)
 #define	NOT_XEN(x)	x
 #define CLI(temp_reg) cli
 #define STI(temp_reg) sti
-#endif	/* XEN */
+#define PUSHF(temp_reg) pushf
+#define POPL popl
+#endif	/* XENPV */
+
+#define HP_NAME_CLAC		1
+#define HP_NAME_STAC		2
+#define HP_NAME_NOLOCK		3
+#define HP_NAME_RETFENCE	4
+#define HP_NAME_SVS_ENTER	5
+#define HP_NAME_SVS_LEAVE	6
+#define HP_NAME_SVS_ENTER_ALT	7
+#define HP_NAME_SVS_LEAVE_ALT	8
+#define HP_NAME_IBRS_ENTER	9
+#define HP_NAME_IBRS_LEAVE	10
+#define HP_NAME_SVS_ENTER_NMI	11
+#define HP_NAME_SVS_LEAVE_NMI	12
+#define HP_NAME_MDS_LEAVE	13
+#define HP_NAME_SSE2_LFENCE	14
+#define HP_NAME_SSE2_MFENCE	15
+
+#define HOTPATCH(name, size) \
+123:						; \
+	.pushsection	.rodata.hotpatch, "a"	; \
+	.byte		name			; \
+	.byte		size			; \
+	.quad		123b			; \
+	.popsection
+
+#define SMAP_ENABLE \
+	HOTPATCH(HP_NAME_CLAC, 3)		; \
+	.byte 0x0F, 0x1F, 0x00			; \
+
+#define SMAP_DISABLE \
+	HOTPATCH(HP_NAME_STAC, 3)		; \
+	.byte 0x0F, 0x1F, 0x00			; \
+
+/*
+ * IBRS
+ */
+
+#define IBRS_ENTER_BYTES	12
+#define IBRS_ENTER \
+	HOTPATCH(HP_NAME_IBRS_ENTER, IBRS_ENTER_BYTES)		; \
+	NOIBRS_ENTER
+#define NOIBRS_ENTER \
+	.byte 0xEB, (IBRS_ENTER_BYTES-2)	/* jmp */	; \
+	.fill	(IBRS_ENTER_BYTES-2),1,0xCC
+
+#define IBRS_LEAVE_BYTES	12
+#define IBRS_LEAVE \
+	HOTPATCH(HP_NAME_IBRS_LEAVE, IBRS_LEAVE_BYTES)		; \
+	NOIBRS_LEAVE
+#define NOIBRS_LEAVE \
+	.byte 0xEB, (IBRS_LEAVE_BYTES-2)	/* jmp */	; \
+	.fill	(IBRS_LEAVE_BYTES-2),1,0xCC
+
+/*
+ * MDS
+ */
+
+#define MDS_LEAVE_BYTES	10
+#define MDS_LEAVE \
+	HOTPATCH(HP_NAME_MDS_LEAVE, MDS_LEAVE_BYTES)		; \
+	NOMDS_LEAVE
+#define NOMDS_LEAVE \
+	.byte 0xEB, (MDS_LEAVE_BYTES-2)	/* jmp */		; \
+	.fill	(MDS_LEAVE_BYTES-2),1,0xCC
 
 #define	SWAPGS	NOT_XEN(swapgs)
 
@@ -55,8 +134,7 @@
 	movq	%r15,TF_R15(%rsp)	; \
 	movq	%rbp,TF_RBP(%rsp)	; \
 	movq	%rbx,TF_RBX(%rsp)	; \
-	movq	%rax,TF_RAX(%rsp)	; \
-	cld
+	movq	%rax,TF_RAX(%rsp)
 
 #define	INTR_RESTORE_GPRS \
 	movq	TF_RDI(%rsp),%rdi	; \
@@ -75,33 +153,164 @@
 	movq	TF_RBX(%rsp),%rbx	; \
 	movq	TF_RAX(%rsp),%rax
 
-#define	INTRENTRY_L(kernel_trap, usertrap) \
+#define TEXT_USER_BEGIN	.pushsection	.text.user, "ax"
+#define TEXT_USER_END	.popsection
+
+#ifdef SVS
+
+/* XXX: put this somewhere else */
+#define SVS_UTLS		0xffffff0000000000 /* PMAP_PCPU_BASE */
+#define UTLS_KPDIRPA		0
+#define UTLS_SCRATCH		8
+#define UTLS_RSP0		16
+
+#define SVS_ENTER_BYTES	22
+#define NOSVS_ENTER \
+	.byte 0xEB, (SVS_ENTER_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_ENTER_BYTES-2),1,0xCC
+#define SVS_ENTER \
+	HOTPATCH(HP_NAME_SVS_ENTER, SVS_ENTER_BYTES)	; \
+	NOSVS_ENTER
+
+#define SVS_LEAVE_BYTES	21
+#define NOSVS_LEAVE \
+	.byte 0xEB, (SVS_LEAVE_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_LEAVE_BYTES-2),1,0xCC
+#define SVS_LEAVE \
+	HOTPATCH(HP_NAME_SVS_LEAVE, SVS_LEAVE_BYTES)	; \
+	NOSVS_LEAVE
+
+#define SVS_ENTER_ALT_BYTES	23
+#define NOSVS_ENTER_ALTSTACK \
+	.byte 0xEB, (SVS_ENTER_ALT_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_ENTER_ALT_BYTES-2),1,0xCC
+#define SVS_ENTER_ALTSTACK \
+	HOTPATCH(HP_NAME_SVS_ENTER_ALT, SVS_ENTER_ALT_BYTES)	; \
+	NOSVS_ENTER_ALTSTACK
+
+#define SVS_LEAVE_ALT_BYTES	22
+#define NOSVS_LEAVE_ALTSTACK \
+	.byte 0xEB, (SVS_LEAVE_ALT_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_LEAVE_ALT_BYTES-2),1,0xCC
+#define SVS_LEAVE_ALTSTACK \
+	HOTPATCH(HP_NAME_SVS_LEAVE_ALT, SVS_LEAVE_ALT_BYTES)	; \
+	NOSVS_LEAVE_ALTSTACK
+
+#define SVS_ENTER_NMI_BYTES	22
+#define NOSVS_ENTER_NMI \
+	.byte 0xEB, (SVS_ENTER_NMI_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_ENTER_NMI_BYTES-2),1,0xCC
+#define SVS_ENTER_NMI \
+	HOTPATCH(HP_NAME_SVS_ENTER_NMI, SVS_ENTER_NMI_BYTES)	; \
+	NOSVS_ENTER_NMI
+
+#define SVS_LEAVE_NMI_BYTES	11
+#define NOSVS_LEAVE_NMI \
+	.byte 0xEB, (SVS_LEAVE_NMI_BYTES-2)	/* jmp */	; \
+	.fill	(SVS_LEAVE_NMI_BYTES-2),1,0xCC
+#define SVS_LEAVE_NMI \
+	HOTPATCH(HP_NAME_SVS_LEAVE_NMI, SVS_LEAVE_NMI_BYTES)	; \
+	NOSVS_LEAVE_NMI
+
+#else
+#define SVS_ENTER	/* nothing */
+#define SVS_ENTER_NMI	/* nothing */
+#define SVS_LEAVE	/* nothing */
+#define SVS_LEAVE_NMI	/* nothing */
+#define SVS_ENTER_ALTSTACK	/* nothing */
+#define SVS_LEAVE_ALTSTACK	/* nothing */
+#endif
+
+#ifdef KMSAN
+/* XXX this belongs somewhere else. */
+#define KMSAN_ENTER	\
+	movq	%rsp,%rdi		; \
+	movq	$TF_REGSIZE+16+40,%rsi	; \
+	xorq	%rdx,%rdx		; \
+	callq	kmsan_mark		; \
+	callq	kmsan_intr_enter
+#define KMSAN_LEAVE	\
+	pushq	%rbp			; \
+	movq	%rsp,%rbp		; \
+	callq	kmsan_intr_leave	; \
+	popq	%rbp
+#define KMSAN_INIT_ARG(sz)	\
+	pushq	%rax			; \
+	pushq	%rcx			; \
+	pushq	%rdx			; \
+	pushq	%rsi			; \
+	pushq	%rdi			; \
+	pushq	%r8			; \
+	pushq	%r9			; \
+	pushq	%r10			; \
+	pushq	%r11			; \
+	movq	$sz,%rdi		; \
+	callq	_C_LABEL(kmsan_init_arg); \
+	popq	%r11			; \
+	popq	%r10			; \
+	popq	%r9			; \
+	popq	%r8			; \
+	popq	%rdi			; \
+	popq	%rsi			; \
+	popq	%rdx			; \
+	popq	%rcx			; \
+	popq	%rax
+#define KMSAN_INIT_RET(sz)	\
+	pushq	%rax			; \
+	pushq	%rcx			; \
+	pushq	%rdx			; \
+	pushq	%rsi			; \
+	pushq	%rdi			; \
+	pushq	%r8			; \
+	pushq	%r9			; \
+	pushq	%r10			; \
+	pushq	%r11			; \
+	movq	$sz,%rdi		; \
+	callq	_C_LABEL(kmsan_init_ret); \
+	popq	%r11			; \
+	popq	%r10			; \
+	popq	%r9			; \
+	popq	%r8			; \
+	popq	%rdi			; \
+	popq	%rsi			; \
+	popq	%rdx			; \
+	popq	%rcx			; \
+	popq	%rax
+#else
+#define KMSAN_ENTER		/* nothing */
+#define KMSAN_LEAVE		/* nothing */
+#define KMSAN_INIT_ARG(sz)	/* nothing */
+#define KMSAN_INIT_RET(sz)	/* nothing */
+#endif
+
+#ifdef KCOV
+#define KCOV_DISABLE			\
+	incl	CPUVAR(IDEPTH)
+#define KCOV_ENABLE			\
+	decl	CPUVAR(IDEPTH)
+#else
+#define KCOV_DISABLE		/* nothing */
+#define KCOV_ENABLE		/* nothing */
+#endif
+
+#define	INTRENTRY \
 	subq	$TF_REGSIZE,%rsp	; \
 	INTR_SAVE_GPRS			; \
+	cld				; \
+	SMAP_ENABLE			; \
 	testb	$SEL_UPL,TF_CS(%rsp)	; \
-	je	kernel_trap		; \
-usertrap				; \
+	je	98f			; \
 	SWAPGS				; \
+	IBRS_ENTER			; \
+	SVS_ENTER			; \
 	movw	%gs,TF_GS(%rsp)		; \
 	movw	%fs,TF_FS(%rsp)		; \
 	movw	%es,TF_ES(%rsp)		; \
-	movw	%ds,TF_DS(%rsp)	
-
-#define	INTRENTRY \
-	INTRENTRY_L(98f,)		; \
-98:
+	movw	%ds,TF_DS(%rsp)		; \
+98:	KMSAN_ENTER
 
 #define INTRFASTEXIT \
-	INTR_RESTORE_GPRS 		; \
-	testq	$SEL_UPL,TF_CS(%rsp)	/* Interrupted %cs */ ; \
-	je	99f			; \
-/* Disable interrupts until the 'iret', user registers loaded. */ \
-	NOT_XEN(cli;)			  \
-	movw	TF_ES(%rsp),%es		; \
-	movw	TF_DS(%rsp),%ds		; \
-	SWAPGS				; \
-99:	addq	$TF_REGSIZE+16,%rsp	/* + T_xxx and error code */ ; \
-	iretq
+	jmp	intrfastexit
 
 #define INTR_RECURSE_HWFRAME \
 	movq	%rsp,%r10		; \
@@ -109,22 +318,35 @@ usertrap				; \
 	pushq	%r11			; \
 	pushq	%r10			; \
 	pushfq				; \
-	movl	%cs,%r11d		; \
-	pushq	%r11			; \
+	pushq	$GSEL(GCODE_SEL,SEL_KPL); \
 /* XEN: We must fixup CS, as even kernel mode runs at CPL 3 */ \
  	XEN_ONLY2(andb	$0xfc,(%rsp);)	  \
 	pushq	%r13			;
 
-#define	DO_DEFERRED_SWITCH \
-	cmpl	$0, CPUVAR(WANT_PMAPLOAD)		; \
-	jz	1f					; \
-	call	_C_LABEL(do_pmap_load)			; \
-1:
+#define INTR_RECURSE_ENTRY \
+	subq	$TF_REGSIZE,%rsp	; \
+	INTR_SAVE_GPRS			; \
+	cld				; \
+	KMSAN_ENTER
 
 #define	CHECK_DEFERRED_SWITCH \
 	cmpl	$0, CPUVAR(WANT_PMAPLOAD)
 
 #define CHECK_ASTPENDING(reg)	cmpl	$0, L_MD_ASTPENDING(reg)
 #define CLEAR_ASTPENDING(reg)	movl	$0, L_MD_ASTPENDING(reg)
+
+/*
+ * If the FPU state is not in the CPU, restore it. Executed with interrupts
+ * disabled.
+ *
+ *     %r14 is curlwp, must not be modified
+ *     %rbx must not be modified
+ */
+#define HANDLE_DEFERRED_FPU	\
+	testl	$MDL_FPU_IN_CPU,L_MD_FLAGS(%r14)	; \
+	jnz	1f					; \
+	call	_C_LABEL(fpu_handle_deferred)		; \
+	orl	$MDL_FPU_IN_CPU,L_MD_FLAGS(%r14)	; \
+1:
 
 #endif /* _AMD64_MACHINE_FRAMEASM_H */

@@ -1,4 +1,4 @@
-/*	$NetBSD: strptime.c,v 1.60 2016/05/15 20:37:48 christos Exp $	*/
+/*	$NetBSD: strptime.c,v 1.63 2020/09/21 15:31:54 ginsbach Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 2005, 2008 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: strptime.c,v 1.60 2016/05/15 20:37:48 christos Exp $");
+__RCSID("$NetBSD: strptime.c,v 1.63 2020/09/21 15:31:54 ginsbach Exp $");
 #endif
 
 #include "namespace.h"
@@ -382,10 +382,10 @@ literal:
 		case 'U':	/* The week of year, beginning on sunday. */
 		case 'W':	/* The week of year, beginning on monday. */
 			/*
-			 * XXX This is bogus, as we can not assume any valid
+			 * This is bogus, as we can not assume any valid
 			 * information present in the tm structure at this
-			 * point to calculate a real value, so just check the
-			 * range for now.
+			 * point to calculate a real value, so save the
+			 * week for now in case it can be used later.
 			 */
 			bp = conv_num(bp, &i, 0, 53);
 			LEGAL_ALT(ALT_O);
@@ -424,7 +424,7 @@ literal:
 			continue;
 
 		case 'V':	/* The ISO 8601:1988 week number as decimal */
-			bp = conv_num(bp, &i, 0, 53);
+			bp = conv_num(bp, &i, 1, 53);
 			continue;
 
 		case 'Y':	/* The year. */
@@ -516,16 +516,16 @@ namedzone:
 				/* Nautical / Military style */
 				if (delim(bp[1]) &&
 				    ((*bp >= 'A' && *bp <= 'I') ||
-				    (*bp >= 'L' && *bp <= 'Y'))) {
+				     (*bp >= 'L' && *bp <= 'Y'))) {
 #ifdef TM_GMTOFF
 					/* Argh! No 'J'! */
 					if (*bp >= 'A' && *bp <= 'I')
 						tm->TM_GMTOFF =
-						    ('A' - 1) - (int)*bp;
+						    (int)*bp - ('A' - 1);
 					else if (*bp >= 'L' && *bp <= 'M')
-						tm->TM_GMTOFF = 'A' - (int)*bp;
+						tm->TM_GMTOFF = (int)*bp - 'A';
 					else if (*bp >= 'N' && *bp <= 'Y')
-						tm->TM_GMTOFF = (int)*bp - 'M';
+						tm->TM_GMTOFF = 'M' - (int)*bp;
 					tm->TM_GMTOFF *= SECSPERHOUR;
 #endif
 #ifdef TM_ZONE
@@ -635,6 +635,7 @@ loadzone:
 				bp = zname;
 				continue;
 			}
+			/* ISO 8601 & RFC 3339 limit to 23:59 max */
 			if (offs >= (HOURSPERDAY * SECSPERHOUR))
 				goto out;
 			if (neg)

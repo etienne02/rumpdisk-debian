@@ -6,7 +6,7 @@ NoEcho('
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@ NoEcho('
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -68,8 +68,9 @@ NoEcho('
 %type <n> ParameterTypesPackage
 %type <n> ParameterTypesPackageList
 %type <n> RequiredTarget
-%type <n> SimpleTarget
+%type <n> SimpleName
 %type <n> StringData
+%type <n> StringLiteral
 %type <n> Target
 %type <n> Term
 %type <n> TermArg
@@ -252,7 +253,10 @@ NoEcho('
 /* Types */
 
 %type <n> SuperName
-%type <n> ObjectTypeName
+%type <n> ObjectTypeSource
+%type <n> DerefOfSource
+%type <n> RefOfSource
+%type <n> CondRefOfSource
 %type <n> ArgTerm
 %type <n> LocalTerm
 %type <n> DebugTerm
@@ -278,7 +282,6 @@ NoEcho('
 %type <n> PackageElement
 %type <n> PackageList
 %type <n> PackageTerm
-%type <n> VarPackageLengthTerm
 
 /* Macros */
 
@@ -299,6 +302,7 @@ NoEcho('
 /* Resource Descriptors */
 
 %type <n> ConnectionTerm
+%type <n> Csi2SerialBusTerm
 %type <n> DMATerm
 %type <n> DWordIOTerm
 %type <n> DWordMemoryTerm
@@ -322,6 +326,11 @@ NoEcho('
 %type <n> Memory32Term
 %type <n> NameSeg
 %type <n> NameString
+%type <n> PinConfigTerm
+%type <n> PinFunctionTerm
+%type <n> PinGroupTerm
+%type <n> PinGroupConfigTerm
+%type <n> PinGroupFunctionTerm
 %type <n> QWordIOTerm
 %type <n> QWordMemoryTerm
 %type <n> QWordSpaceTerm
@@ -346,13 +355,14 @@ NoEcho('
 %type <n> TermArgItem
 
 %type <n> OptionalAccessSize
+%type <n> OptionalAccessTypeKeyword
 %type <n> OptionalAddressingMode
 %type <n> OptionalAddressRange
 %type <n> OptionalBitsPerByte
 %type <n> OptionalBuffer_Last
-%type <n> OptionalBufferLength
 %type <n> OptionalByteConstExpr
 %type <n> OptionalCount
+%type <n> OptionalDataCount
 %type <n> OptionalDecodeType
 %type <n> OptionalDevicePolarity
 %type <n> OptionalDWordConstExpr
@@ -360,6 +370,7 @@ NoEcho('
 %type <n> OptionalFlowControl
 %type <n> OptionalIoRestriction
 %type <n> OptionalListString
+%type <n> OptionalLockRuleKeyword
 %type <n> OptionalMaxType
 %type <n> OptionalMemType
 %type <n> OptionalMinType
@@ -369,6 +380,7 @@ NoEcho('
 %type <n> OptionalObjectTypeKeyword
 %type <n> OptionalParameterTypePackage
 %type <n> OptionalParameterTypesPackage
+%type <n> OptionalParentheses
 %type <n> OptionalParityType
 %type <n> OptionalPredicate
 %type <n> OptionalQWordConstExpr
@@ -376,25 +388,74 @@ NoEcho('
 %type <n> OptionalReference
 %type <n> OptionalResourceType
 %type <n> OptionalResourceType_First
+%type <n> OptionalProducerResourceType
 %type <n> OptionalReturnArg
 %type <n> OptionalSerializeRuleKeyword
 %type <n> OptionalShareType
 %type <n> OptionalShareType_First
 %type <n> OptionalSlaveMode
+%type <n> OptionalSlaveMode_First
 %type <n> OptionalStopBits
 %type <n> OptionalStringData
+%type <n> OptionalSyncLevel
 %type <n> OptionalTermArg
 %type <n> OptionalTranslationType_Last
 %type <n> OptionalType
 %type <n> OptionalType_Last
+%type <n> OptionalUpdateRuleKeyword
 %type <n> OptionalWireMode
 %type <n> OptionalWordConst
 %type <n> OptionalWordConstExpr
 %type <n> OptionalXferSize
 
 /*
- * C-style expression parser
+ * ASL+ (C-style) parser
  */
+
+/* Expressions and symbolic operators */
+
 %type <n> Expression
 %type <n> EqualsTerm
 %type <n> IndexExpTerm
+
+/* ASL+ Named object declaration support */
+/*
+%type <n> NameTermAslPlus
+
+%type <n> BufferBegin
+%type <n> BufferEnd
+%type <n> PackageBegin
+%type <n> PackageEnd
+%type <n> OptionalLength
+*/
+/* ASL+ Structure declarations */
+/*
+%type <n> StructureTerm
+%type <n> StructureTermBegin
+%type <n> StructureType
+%type <n> StructureTag
+%type <n> StructureElementList
+%type <n> StructureElement
+%type <n> StructureElementType
+%type <n> OptionalStructureElementType
+%type <n> StructureId
+*/
+/* Structure instantiantion */
+/*
+%type <n> StructureInstanceTerm
+%type <n> StructureTagReference
+%type <n> StructureInstanceEnd
+*/
+/* Pseudo-instantiantion for method Args/Locals */
+/*
+%type <n> MethodStructureTerm
+%type <n> LocalStructureName
+*/
+/* Direct structure references via the Index operator */
+/*
+%type <n> StructureReference
+%type <n> StructureIndexTerm
+%type <n> StructurePointerTerm
+%type <n> StructurePointerReference
+%type <n> OptionalDefinePointer
+*/

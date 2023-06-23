@@ -1,4 +1,4 @@
-/*	$NetBSD: if_arcsubr.c,v 1.73 2016/04/28 14:40:09 ozaki-r Exp $	*/
+/*	$NetBSD: if_arcsubr.c,v 1.83 2021/06/16 00:21:19 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Ignatios Souvatzis
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_arcsubr.c,v 1.73 2016/04/28 14:40:09 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_arcsubr.c,v 1.83 2021/06/16 00:21:19 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -46,8 +46,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_arcsubr.c,v 1.73 2016/04/28 14:40:09 ozaki-r Exp 
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#include <sys/protosw.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/syslog.h>
@@ -157,7 +155,7 @@ arc_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 		/* If broadcasting on a simplex interface, loopback a copy */
 		if ((m->m_flags & (M_BCAST|M_MCAST)) &&
 		    (ifp->if_flags & IFF_SIMPLEX))
-			mcopy = m_copy(m, 0, (int)M_COPYALL);
+			mcopy = m_copypacket(m, M_DONTWAIT);
 		if (ifp->if_flags & IFF_LINK0) {
 			atype = ARCTYPE_IP;
 			newencoding = 1;
@@ -173,8 +171,10 @@ arc_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 			adst = arcbroadcastaddr;
 		else {
 			uint8_t *tha = ar_tha(arph);
-			if (tha == NULL)
+			if (tha == NULL) {
+				m_freem(m);
 				return 0;
+			}
 			adst = *tha;
 		}
 
@@ -218,8 +218,14 @@ arc_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 #endif
 #ifdef INET6
 	case AF_INET6:
-		if (!nd6_storelladdr(ifp, rt, m, dst, &adst, sizeof(adst)))
-			return (0); /* it must be impossible, but... */
+		if (m->m_flags & M_MCAST) {
+			adst = 0;
+		} else {
+			error = nd6_resolve(ifp, rt, m, dst, &adst,
+			    sizeof(adst));
+			if (error != 0)
+				return error == EWOULDBLOCK ? 0 : error;
+		}
 		atype = htons(ARCTYPE_INET6);
 		newencoding = 1;
 		break;
@@ -352,7 +358,7 @@ arc_defrag(struct ifnet *ifp, struct mbuf *m)
 	if (m->m_len < ARC_HDRNEWLEN) {
 		m = m_pullup(m, ARC_HDRNEWLEN);
 		if (m == NULL) {
-			++ifp->if_ierrors;
+			if_statinc(ifp, if_ierrors);
 			return NULL;
 		}
 	}
@@ -372,7 +378,7 @@ arc_defrag(struct ifnet *ifp, struct mbuf *m)
 		if (m->m_len < ARC_HDRNEWLEN) {
 			m = m_pullup(m, ARC_HDRNEWLEN);
 			if (m == NULL) {
-				++ifp->if_ierrors;
+				if_statinc(ifp, if_ierrors);
 				return NULL;
 			}
 		}
@@ -505,7 +511,6 @@ arc_input(struct ifnet *ifp, struct mbuf *m)
 	struct ifqueue *inq;
 	uint8_t atype;
 	int isr = 0;
-	int s;
 
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
@@ -519,11 +524,11 @@ arc_input(struct ifnet *ifp, struct mbuf *m)
 
 	ah = mtod(m, struct arc_header *);
 
-	ifp->if_ibytes += m->m_pkthdr.len;
+	if_statadd(ifp, if_ibytes, m->m_pkthdr.len);
 
 	if (arcbroadcastaddr == ah->arc_dhost) {
 		m->m_flags |= M_BCAST|M_MCAST;
-		ifp->if_imcasts++;
+		if_statinc(ifp, if_imcasts);
 	}
 
 	atype = ah->arc_type;
@@ -568,22 +573,14 @@ arc_input(struct ifnet *ifp, struct mbuf *m)
 		return;
 	}
 
-	s = splnet();
 	if (__predict_true(pktq)) {
 		if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
 			m_freem(m);
 		}
-		splx(s);
 		return;
 	}
-	if (IF_QFULL(inq)) {
-		IF_DROP(inq);
-		m_freem(m);
-	} else {
-		IF_ENQUEUE(inq, m);
-		schednetisr(isr);
-	}
-	splx(s);
+
+	IFQ_ENQUEUE_ISR(inq, m, isr);
 }
 
 /*
@@ -604,7 +601,7 @@ arc_sprintf(uint8_t *ap)
 /*
  * Perform common duties while attaching to interface list
  */
-void
+int
 arc_ifattach(struct ifnet *ifp, uint8_t lla)
 {
 	struct arccom *ac;
@@ -630,9 +627,12 @@ arc_ifattach(struct ifnet *ifp, uint8_t lla)
 		   ifp->if_xname, ifp->if_xname);
 	}
 	if_attach(ifp);
+
 	if_set_sadl(ifp, &lla, sizeof(lla), true);
 
 	ifp->if_broadcastaddr = &arcbroadcastaddr;
 
 	bpf_attach(ifp, DLT_ARCNET, ARC_HDRLEN);
+
+	return 0;
 }

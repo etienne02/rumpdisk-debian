@@ -1,4 +1,4 @@
-/*	$NetBSD: ossaudio.c,v 1.69 2014/09/05 09:21:55 matt Exp $	*/
+/*	$NetBSD: ossaudio.c,v 1.83 2020/04/19 21:37:00 nia Exp $	*/
 
 /*-
  * Copyright (c) 1997, 2008 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ossaudio.c,v 1.69 2014/09/05 09:21:55 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ossaudio.c,v 1.83 2020/04/19 21:37:00 nia Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -59,11 +59,16 @@ int ossdebug = 0;
 #define TO_OSSVOL(x)	(((x) * 100 + 127) / 255)
 #define FROM_OSSVOL(x)	((((x) > 100 ? 100 : (x)) * 255 + 50) / 100)
 
+#define GETPRINFO(info, name)	\
+	(((info)->mode == AUMODE_RECORD) \
+	    ? (info)->record.name : (info)->play.name)
+
 static struct audiodevinfo *getdevinfo(file_t *);
 static int opaque_to_enum(struct audiodevinfo *di, audio_mixer_name_t *label, int opq);
 static int enum_to_ord(struct audiodevinfo *di, int enm);
 static int enum_to_mask(struct audiodevinfo *di, int enm);
 
+static void setchannels(file_t *, int, int);
 static void setblocksize(file_t *, struct audio_info *);
 
 #ifdef AUDIO_DEBUG
@@ -171,12 +176,14 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 	} */
 	file_t *fp;
 	u_long com;
-	struct audio_info tmpinfo;
+	struct audio_info tmpinfo, hwfmt;
 	struct audio_offset tmpoffs;
 	struct oss_audio_buf_info bufinfo;
 	struct oss_count_info cntinfo;
 	struct audio_encoding tmpenc;
 	u_int u;
+	u_int encoding;
+	u_int precision;
 	int idat, idata;
 	int error = 0;
 	int (*ioctlf)(file_t *, u_long, void *);
@@ -224,13 +231,43 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 		tmpinfo.play.sample_rate =
 		tmpinfo.record.sample_rate = idat;
 		DPRINTF(("%s: SNDCTL_DSP_SPEED > %d\n", __func__, idat));
-		error = ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
-		if (error) {
-			DPRINTF(("%s: SNDCTL_DSP_SPEED %d = %d\n",
-			     __func__, idat, error));
-			goto out;
+		/*
+		 * The default NetBSD behavior if an unsupported sample rate
+		 * is set is to return an error code and keep the rate at the
+		 * default of 8000 Hz.
+		 *
+		 * However, the OSS expectation is a sample rate supported by
+		 * the hardware is returned if the exact rate could not be set.
+		 *
+		 * So, if the chosen sample rate is invalid, set and return
+		 * the current hardware rate.
+		 */
+		if (ioctlf(fp, AUDIO_SETINFO, &tmpinfo) != 0) {
+			error = ioctlf(fp, AUDIO_GETFORMAT, &hwfmt);
+			if (error) {
+				DPRINTF(("%s: AUDIO_GETFORMAT %d\n",
+				     __func__, error));
+				goto out;
+			}
+			error = ioctlf(fp, AUDIO_GETINFO, &tmpinfo);
+			if (error) {
+				DPRINTF(("%s: AUDIO_GETINFO %d\n",
+				     __func__, error));
+				goto out;
+			}
+			tmpinfo.play.sample_rate =
+			tmpinfo.record.sample_rate =
+			    (tmpinfo.mode == AUMODE_RECORD) ?
+			    hwfmt.record.sample_rate :
+			    hwfmt.play.sample_rate;
+			error = ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
+			if (error) {
+				DPRINTF(("%s: SNDCTL_DSP_SPEED %d = %d\n",
+				     __func__, idat, error));
+				goto out;
+			}
 		}
-		/* fall into ... */
+		/* FALLTHROUGH */
 	case OSS_SOUND_PCM_READ_RATE:
 		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
 		if (error) {
@@ -238,7 +275,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			 __func__, error));
 			goto out;
 		}
-		idat = tmpinfo.play.sample_rate;
+		idat = GETPRINFO(&tmpinfo, sample_rate);
 		DPRINTF(("%s: SNDCTL_PCM_READ_RATE < %d\n", __func__, idat));
 		error = copyout(&idat, SCARG(uap, data), sizeof idat);
 		if (error) {
@@ -269,7 +306,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		idat = tmpinfo.play.channels - 1;
+		idat = GETPRINFO(&tmpinfo, channels) - 1;
 		error = copyout(&idat, SCARG(uap, data), sizeof idat);
 		if (error) {
 			DPRINTF(("%s: SNDCTL_DSP_STEREO %d = %d\n",
@@ -359,10 +396,19 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			tmpinfo.record.encoding = AUDIO_ENCODING_AC3;
 			break;
 		default:
-			DPRINTF(("%s: SNDCTL_DSP_SETFMT bad fmt %d\n",
-			     __func__, idat));
-			error = EINVAL;
-			goto out;
+			/*
+			 * OSSv4 specifies that if an invalid format is chosen
+			 * by an application then a sensible format supported
+			 * by the hardware is returned.
+			 *
+			 * In this case, we pick S16LE since it's reasonably
+			 * assumed to be supported by applications.
+			 */
+			tmpinfo.play.precision =
+			tmpinfo.record.precision = 16;
+			tmpinfo.play.encoding =
+			tmpinfo.record.encoding = AUDIO_ENCODING_SLINEAR_LE;
+			break;
 		}
 		DPRINTF(("%s: SNDCTL_DSP_SETFMT > 0x%x\n",
 		    __func__, idat));
@@ -372,7 +418,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		/* fall into ... */
+		/* FALLTHROUGH */
 	case OSS_SOUND_PCM_READ_BITS:
 		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
 		if (error) {
@@ -380,7 +426,9 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		switch (tmpinfo.play.encoding) {
+		encoding = GETPRINFO(&tmpinfo, encoding);
+		precision = GETPRINFO(&tmpinfo, precision);
+		switch (encoding) {
 		case AUDIO_ENCODING_ULAW:
 			idat = OSS_AFMT_MU_LAW;
 			break;
@@ -388,25 +436,25 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			idat = OSS_AFMT_A_LAW;
 			break;
 		case AUDIO_ENCODING_SLINEAR_LE:
-			if (tmpinfo.play.precision == 16)
+			if (precision == 16)
 				idat = OSS_AFMT_S16_LE;
 			else
 				idat = OSS_AFMT_S8;
 			break;
 		case AUDIO_ENCODING_SLINEAR_BE:
-			if (tmpinfo.play.precision == 16)
+			if (precision == 16)
 				idat = OSS_AFMT_S16_BE;
 			else
 				idat = OSS_AFMT_S8;
 			break;
 		case AUDIO_ENCODING_ULINEAR_LE:
-			if (tmpinfo.play.precision == 16)
+			if (precision == 16)
 				idat = OSS_AFMT_U16_LE;
 			else
 				idat = OSS_AFMT_U8;
 			break;
 		case AUDIO_ENCODING_ULINEAR_BE:
-			if (tmpinfo.play.precision == 16)
+			if (precision == 16)
 				idat = OSS_AFMT_U16_BE;
 			else
 				idat = OSS_AFMT_U8;
@@ -440,16 +488,14 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		tmpinfo.play.channels =
-		tmpinfo.record.channels = idat;
-		DPRINTF(("%s: SNDCTL_DSP_CHANNELS > %d\n", __func__, idat));
-		error = ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
+		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
 		if (error) {
-			DPRINTF(("%s: AUDIO_SETINFO %d\n",
+			DPRINTF(("%s: AUDIO_GETBUFINFO %d\n",
 			     __func__, error));
 			goto out;
 		}
-		/* fall into ... */
+		setchannels(fp, tmpinfo.mode, idat);
+		/* FALLTHROUGH */
 	case OSS_SOUND_PCM_READ_CHANNELS:
 		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
 		if (error) {
@@ -457,7 +503,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		idat = tmpinfo.play.channels;
+		idat = GETPRINFO(&tmpinfo, channels);
 		DPRINTF(("%s: SOUND_PCM_READ_CHANNELS < %d\n", __func__, idat));
 		error = copyout(&idat, SCARG(uap, data), sizeof idat);
 		if (error) {
@@ -509,12 +555,12 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 		AUDIO_INITINFO(&tmpinfo);
 		error = copyin(SCARG(uap, data), &idat, sizeof idat);
 		if (error) {
-			DPRINTF(("%s: DSP_SETFRAGMENT %d\n",
+			DPRINTF(("%s: SNDCTL_DSP_SETFRAGMENT %d\n",
 			     __func__, error));
 			goto out;
 		}
 		if ((idat & 0xffff) < 4 || (idat & 0xffff) > 17) {
-			DPRINTF(("%s: DSP_SETFRAGMENT bad ival%d\n",
+			DPRINTF(("%s: SNDCTL_DSP_SETFRAGMENT bad ival%d\n",
 			     __func__, idat));
 			error = EINVAL;
 			goto out;
@@ -641,12 +687,10 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 		}
 		setblocksize(fp, &tmpinfo);
 		bufinfo.fragsize = tmpinfo.blocksize;
-		bufinfo.fragments = tmpinfo.hiwat -
-		    (tmpinfo.record.seek + tmpinfo.blocksize - 1) /
-		    tmpinfo.blocksize;
-                bufinfo.fragstotal = tmpinfo.hiwat;
-		bufinfo.bytes =
-		    tmpinfo.hiwat * tmpinfo.blocksize - tmpinfo.record.seek;
+		bufinfo.fragments = tmpinfo.record.seek / tmpinfo.blocksize;
+		bufinfo.fragstotal =
+		    tmpinfo.record.buffer_size / tmpinfo.blocksize;
+		bufinfo.bytes = tmpinfo.record.seek;
 		error = copyout(&bufinfo, SCARG(uap, data), sizeof bufinfo);
 		if (error) {
 			DPRINTF(("%s: SNDCTL_DSP_GETISPACE %d %d %d %d = %d\n",
@@ -659,7 +703,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 		idat = 1;
 		error = ioctlf(fp, FIONBIO, &idat);
 		if (error) {
-			DPRINTF(("%s: SENDCLT_DSP_NONBLOCK %d\n",
+			DPRINTF(("%s: FIONBIO %d\n",
 			     __func__, error));
 			goto out;
 		}
@@ -671,7 +715,7 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		idat = OSS_DSP_CAP_TRIGGER; /* pretend we have trigger */
+		idat = OSS_DSP_CAP_TRIGGER;
 		if (idata & AUDIO_PROP_FULLDUPLEX)
 			idat |= OSS_DSP_CAP_DUPLEX;
 		if (idata & AUDIO_PROP_MMAP)
@@ -686,7 +730,26 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			goto out;
 		}
 		break;
-#if 0
+	case OSS_SNDCTL_DSP_SETTRIGGER:
+		error = copyin(SCARG(uap, data), &idat, sizeof idat);
+		if (error) {
+			DPRINTF(("%s: SNDCTL_DSP_SETTRIGGER: %d\n",
+			     __func__, error));
+			goto out;
+		}
+		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
+		if (error) {
+			DPRINTF(("%s: AUDIO_GETBUFINFO %d\n",
+			     __func__, error));
+			goto out;
+		}
+		AUDIO_INITINFO(&tmpinfo);
+		if (tmpinfo.mode & AUMODE_PLAY)
+			tmpinfo.play.pause = (idat & OSS_PCM_ENABLE_OUTPUT) == 0;
+		if (tmpinfo.mode & AUMODE_RECORD)
+			tmpinfo.record.pause = (idat & OSS_PCM_ENABLE_INPUT) == 0;
+		(void)ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
+		/* FALLTHRU */
 	case OSS_SNDCTL_DSP_GETTRIGGER:
 		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo);
 		if (error) {
@@ -694,56 +757,18 @@ oss_ioctl_audio(struct lwp *l, const struct oss_sys_ioctl_args *uap, register_t 
 			     __func__, error));
 			goto out;
 		}
-		idat = (tmpinfo.play.pause ? 0 : OSS_PCM_ENABLE_OUTPUT) |
-		       (tmpinfo.record.pause ? 0 : OSS_PCM_ENABLE_INPUT);
+		idat = 0;
+		if ((tmpinfo.mode & AUMODE_PLAY) && !tmpinfo.play.pause)
+			idat |= OSS_PCM_ENABLE_OUTPUT;
+		if ((tmpinfo.mode & AUMODE_RECORD) && !tmpinfo.record.pause)
+			idat |= OSS_PCM_ENABLE_INPUT;
 		error = copyout(&idat, SCARG(uap, data), sizeof idat);
 		if (error) {
-			DPRINTF(("%s: SNDCTL_DSP_SETRIGGER %x = %d\n",
+			DPRINTF(("%s: SNDCTL_DSP_GETTRIGGER = %x = %d\n",
 			    __func__, idat, error));
 			goto out;
 		}
 		break;
-	case OSS_SNDCTL_DSP_SETTRIGGER:
-		error = ioctlf(fp, AUDIO_GETBUFINFO, &tmpinfo, p);
-		if (error) {
-			DPRINTF(("%s: AUDIO_GETBUFINFO %d\n",
-			     __func__, error));
-			goto out;
-		}
-		error = copyin(SCARG(uap, data), &idat, sizeof idat);
-		if (error) {
-			DPRINTF(("%s: AUDIO_GETBUFINFO %d\n",
-			     __func__, error));
-			goto out;
-		}
-		tmpinfo.play.pause = (idat & OSS_PCM_ENABLE_OUTPUT) == 0;
-		tmpinfo.record.pause = (idat & OSS_PCM_ENABLE_INPUT) == 0;
-		error = ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
-		if (error) {
-			DPRINTF(("%s: AUDIO_SETINFO %d\n",
-			     __func__, error));
-			goto out;
-		}
-		error = copyout(&idat, SCARG(uap, data), sizeof idat);
-		if (error) {
-			DPRINTF(("%s: SNDCTL_DSP_SETRIGGER %x = %d\n",
-			    __func__, idat, error));
-			goto out;
-		}
-		break;
-#else
-	case OSS_SNDCTL_DSP_GETTRIGGER:
-	case OSS_SNDCTL_DSP_SETTRIGGER:
-		/* XXX Do nothing for now. */
-		idat = OSS_PCM_ENABLE_OUTPUT;
-		error = copyout(&idat, SCARG(uap, data), sizeof idat);
-		if (error) {
-			DPRINTF(("%s: SNDCTL_DSP_{GET,SET}RIGGER %x = %d\n",
-			    __func__, idat, error));
-			goto out;
-		}
-		break;
-#endif
 	case OSS_SNDCTL_DSP_GETIPTR:
 		error = ioctlf(fp, AUDIO_GETIOFFS, &tmpoffs);
 		if (error) {
@@ -968,7 +993,7 @@ getdevinfo(file_t *fp)
 	}
 	for(i = 0; i < NETBSD_MAXDEVS; i++) {
 		mi.index = i;
-		if (ioctlf(fp, AUDIO_MIXER_DEVINFO, &mi) < 0)
+		if (ioctlf(fp, AUDIO_MIXER_DEVINFO, &mi) != 0)
 			break;
 		switch(mi.type) {
 		case AUDIO_MIXER_VALUE:
@@ -996,7 +1021,7 @@ getdevinfo(file_t *fp)
 	}
 	for(i = 0; i < NETBSD_MAXDEVS; i++) {
 		mi.index = i;
-		if (ioctlf(fp, AUDIO_MIXER_DEVINFO, &mi) < 0)
+		if (ioctlf(fp, AUDIO_MIXER_DEVINFO, &mi) != 0)
 			break;
 		if (strcmp(mi.label.name, AudioNsource) != 0)
 			continue;
@@ -1078,6 +1103,7 @@ oss_ioctl_mixer(struct lwp *lwp, const struct oss_sys_ioctl_args *uap, register_
 			    __func__, error));
 			goto out;
 		}
+		memset(&omi, 0, sizeof omi);
 		omi.modify_counter = 1;
 		strncpy(omi.id, adev.name, sizeof omi.id);
 		strncpy(omi.name, adev.name, sizeof omi.name);
@@ -1089,7 +1115,7 @@ oss_ioctl_mixer(struct lwp *lwp, const struct oss_sys_ioctl_args *uap, register_
 		}
 		break;
 	case OSS_SOUND_MIXER_READ_RECSRC:
-		if (di->source == -1) {
+		if (di->source == (u_long)-1) {
 			DPRINTF(("%s: OSS_SOUND_MIXER_READ_RECSRC bad source\n",
 			    __func__));
 			error = EINVAL;
@@ -1134,7 +1160,7 @@ oss_ioctl_mixer(struct lwp *lwp, const struct oss_sys_ioctl_args *uap, register_
 		break;
 	case OSS_SOUND_MIXER_WRITE_RECSRC:
 	case OSS_SOUND_MIXER_WRITE_R_RECSRC:
-		if (di->source == -1) {
+		if (di->source == (u_long)-1) {
 			DPRINTF(("%s: OSS_SOUND_MIXER_WRITE_RECSRC bad "
 			    "source\n", __func__));
 			error = EINVAL;
@@ -1487,6 +1513,54 @@ oss_ioctl_sequencer(struct lwp *l, const struct oss_sys_ioctl_args *uap, registe
 }
 
 /*
+ * When AUDIO_SETINFO fails to set a channel count, the application's chosen
+ * number is out of range of what the kernel allows.
+ *
+ * When this happens, we use the current hardware settings. This is just in
+ * case an application is abusing SNDCTL_DSP_CHANNELS - OSSv4 always sets and
+ * returns a reasonable value, even if it wasn't what the user requested.
+ *
+ * XXX: If a device is opened for both playback and recording, and supports
+ * fewer channels for recording than playback, applications that do both will
+ * behave very strangely. OSS doesn't allow for reporting separate channel
+ * counts for recording and playback. This could be worked around by always
+ * mixing recorded data up to the same number of channels as is being used
+ * for playback.
+ */
+static void
+setchannels(file_t *fp, int mode, int nchannels)
+{
+	struct audio_info tmpinfo, hwfmt;
+	int (*ioctlf)(file_t *, u_long, void *);
+
+	ioctlf = fp->f_ops->fo_ioctl;
+
+	if (ioctlf(fp, AUDIO_GETFORMAT, &hwfmt) < 0) {
+		hwfmt.record.channels = hwfmt.play.channels = 2;
+	}
+
+	if (mode & AUMODE_PLAY) {
+		AUDIO_INITINFO(&tmpinfo);
+		tmpinfo.play.channels = nchannels;
+		if (ioctlf(fp, AUDIO_SETINFO, &tmpinfo) < 0) {
+			AUDIO_INITINFO(&tmpinfo);
+			tmpinfo.play.channels = hwfmt.play.channels;
+			(void)ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
+		}
+	}
+
+	if (mode & AUMODE_RECORD) {
+		AUDIO_INITINFO(&tmpinfo);
+		tmpinfo.record.channels = nchannels;
+		if (ioctlf(fp, AUDIO_SETINFO, &tmpinfo) < 0) {
+			AUDIO_INITINFO(&tmpinfo);
+			tmpinfo.record.channels = hwfmt.record.channels;
+			(void)ioctlf(fp, AUDIO_SETINFO, &tmpinfo);
+		}
+	}
+}
+
+/*
  * Check that the blocksize is a power of 2 as OSS wants.
  * If not, set it to be.
  */
@@ -1494,11 +1568,11 @@ static void
 setblocksize(file_t *fp, struct audio_info *info)
 {
 	struct audio_info set;
-	int s;
+	u_int s;
 
-	 if (info->blocksize & (info->blocksize-1)) {
+	 if (info->blocksize & (info->blocksize - 1)) {
 		for(s = 32; s < info->blocksize; s <<= 1)
-			;
+			continue;
 		AUDIO_INITINFO(&set);
 		set.blocksize = s;
 		fp->f_ops->fo_ioctl(fp, AUDIO_SETINFO, &set);

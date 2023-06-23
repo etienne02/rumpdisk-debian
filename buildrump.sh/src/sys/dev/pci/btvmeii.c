@@ -1,4 +1,4 @@
-/* $NetBSD: btvmeii.c,v 1.22 2012/10/27 17:18:28 chs Exp $ */
+/* $NetBSD: btvmeii.c,v 1.26 2021/08/07 16:19:14 thorpej Exp $ */
 
 /*
  * Copyright (c) 1999
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btvmeii.c,v 1.22 2012/10/27 17:18:28 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btvmeii.c,v 1.26 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -145,8 +145,8 @@ b3_2706_match(device_t parent, cfdata_t match, void *aux)
 	    || (PCI_PRODUCT(pa->pa_id) != PCI_PRODUCT_DEC_21152))
 		return (0);
 
-	secbus = PPB_BUSINFO_SECONDARY(pci_conf_read(pc, pa->pa_tag,
-						     PPB_REG_BUSINFO));
+	secbus = PCI_BRIDGE_BUS_NUM_SECONDARY(pci_conf_read(pc, pa->pa_tag,
+		PCI_BRIDGE_BUS_REG));
 	if (secbus == 0) {
 		printf("b3_2706_match: ppb not configured\n");
 		return (0);
@@ -195,8 +195,8 @@ b3_2706_attach(device_t parent, device_t self, void *aux)
 	aprint_naive(": VME bus adapter\n");
 	aprint_normal("\n");
 
-	secbus = PPB_BUSINFO_SECONDARY(pci_conf_read(pc, pa->pa_tag,
-						     PPB_REG_BUSINFO));
+	secbus = PCI_BRIDGE_BUS_NUM_SECONDARY(pci_conf_read(pc, pa->pa_tag,
+		PCI_BRIDGE_BUS_REG));
 
 	memcpy(&aa, pa, sizeof(struct pci_attach_args));
 	aa.pa_device = 4;
@@ -276,7 +276,7 @@ b3_2706_attach(device_t parent, device_t self, void *aux)
 	vaa.va_bdt = pa->pa_dmat; /* XXX */
 	vaa.va_slaveconfig = 0; /* XXX CSR window? */
 
-	config_found(self, &vaa, 0);
+	config_found(self, &vaa, 0, CFARGS_NONE);
 }
 
 #define sc ((struct b3_2706_softc*)vsc)
@@ -433,10 +433,7 @@ b3_2706_establish_vmeint(void *vsc, vme_intr_handle_t handle, int prior, int (*f
 	long lv;
 	int s;
 
-	/* no point in sleeping unless someone can free memory. */
-	ih = malloc(sizeof *ih, M_DEVBUF, cold ? M_NOWAIT : M_WAITOK);
-	if (ih == NULL)
-		panic("b3_2706_map_vmeint: can't malloc handler info");
+	ih = malloc(sizeof *ih, M_DEVBUF, M_WAITOK);
 
 	lv = (long)handle; /* XXX */
 

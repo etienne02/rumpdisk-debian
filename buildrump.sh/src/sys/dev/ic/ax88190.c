@@ -1,4 +1,4 @@
-/*	$NetBSD: ax88190.c,v 1.12 2012/07/22 14:32:56 matt Exp $	*/
+/*	$NetBSD: ax88190.c,v 1.18 2021/07/01 20:39:15 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ax88190.c,v 1.12 2012/07/22 14:32:56 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ax88190.c,v 1.18 2021/07/01 20:39:15 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,8 +58,8 @@ __KERNEL_RCSID(0, "$NetBSD: ax88190.c,v 1.12 2012/07/22 14:32:56 matt Exp $");
 #include <dev/ic/ax88190reg.h>
 #include <dev/ic/ax88190var.h>
 
-static int	ax88190_mii_readreg(device_t, int, int);
-static void	ax88190_mii_writereg(device_t, int, int, int);
+static int	ax88190_mii_readreg(device_t, int, int, uint16_t *);
+static int	ax88190_mii_writereg(device_t, int, int, uint16_t);
 static void	ax88190_mii_statchg(struct ifnet *);
 
 /*
@@ -80,34 +80,53 @@ static const struct mii_bitbang_ops ax88190_mii_bitbang_ops = {
 	}
 };
 
+static void
+ax88190_tick(void *arg)
+{
+	struct dp8390_softc *sc = arg;
+	int s;
+
+	s = splnet();
+	mii_tick(&sc->sc_mii);
+	splx(s);
+
+	callout_schedule(&sc->sc_tick_ch, hz);
+}
+
 void
 ax88190_media_init(struct dp8390_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ec.ec_if;
+	struct mii_data *mii = &sc->sc_mii;
 
-	sc->sc_mii.mii_ifp = ifp;
-	sc->sc_mii.mii_readreg = ax88190_mii_readreg;
-	sc->sc_mii.mii_writereg = ax88190_mii_writereg;
-	sc->sc_mii.mii_statchg = ax88190_mii_statchg;
-	ifmedia_init(&sc->sc_mii.mii_media, IFM_IMASK, dp8390_mediachange,
+	callout_setfunc(&sc->sc_tick_ch, ax88190_tick, sc);
+
+	sc->sc_ec.ec_mii = mii;
+
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = ax88190_mii_readreg;
+	mii->mii_writereg = ax88190_mii_writereg;
+	mii->mii_statchg = ax88190_mii_statchg;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, dp8390_mediachange,
 	    dp8390_mediastatus);
 
-	mii_attach(sc->sc_dev, &sc->sc_mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(sc->sc_dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
 
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE, 0,
-		    NULL);
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_NONE);
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
 	} else
-		ifmedia_set(&sc->sc_mii.mii_media, IFM_ETHER|IFM_AUTO);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 }
 
 void
 ax88190_media_fini(struct dp8390_softc *sc)
 {
 
+	callout_stop(&sc->sc_tick_ch);
 	mii_detach(&sc->sc_mii, MII_PHY_ANY, MII_OFFSET_ANY);
+	/* dp8390_detach() will call ifmedia_fini(). */
 }
 
 int
@@ -134,12 +153,14 @@ ax88190_init_card(struct dp8390_softc *sc)
 {
 
 	mii_mediachg(&sc->sc_mii);
+	callout_schedule(&sc->sc_tick_ch, hz);
 }
 
 void
 ax88190_stop_card(struct dp8390_softc *sc)
 {
 
+	callout_stop(&sc->sc_tick_ch);
 	mii_down(&sc->sc_mii);
 }
 
@@ -160,17 +181,19 @@ ax88190_mii_bitbang_write(device_t self, uint32_t val)
 }
 
 static int
-ax88190_mii_readreg(device_t self, int phy, int reg)
+ax88190_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 {
 
-	return (mii_bitbang_readreg(self, &ax88190_mii_bitbang_ops, phy, reg));
+	return mii_bitbang_readreg(self, &ax88190_mii_bitbang_ops, phy, reg,
+	    val);
 }
 
-static void
-ax88190_mii_writereg(device_t self, int phy, int reg, int val)
+static int
+ax88190_mii_writereg(device_t self, int phy, int reg, uint16_t val)
 {
 
-	mii_bitbang_writereg(self, &ax88190_mii_bitbang_ops, phy, reg, val);
+	return mii_bitbang_writereg(self, &ax88190_mii_bitbang_ops, phy, reg,
+	    val);
 }
 
 static void

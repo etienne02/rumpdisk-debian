@@ -1,4 +1,4 @@
-/*      $NetBSD: clockctl.c,v 1.34 2016/01/06 18:06:38 christos Exp $ */
+/*      $NetBSD: clockctl.c,v 1.38 2020/02/21 00:26:22 joerg Exp $ */
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: clockctl.c,v 1.34 2016/01/06 18:06:38 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: clockctl.c,v 1.38 2020/02/21 00:26:22 joerg Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ntp.h"
@@ -46,18 +46,16 @@ __KERNEL_RCSID(0, "$NetBSD: clockctl.c,v 1.34 2016/01/06 18:06:38 christos Exp $
 #include <sys/device.h>
 #include <sys/time.h>
 #include <sys/conf.h>
-#ifdef NTP
 #include <sys/timex.h>
-#endif /* NTP */
 #include <sys/kauth.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/compat_stub.h>
 
 #include <sys/clockctl.h>
-#ifdef COMPAT_50
 #include <compat/sys/clockctl.h>
 #include <compat/sys/time_types.h>
-#endif
+
 
 kmutex_t clockctl_mtx;
 int clockctl_refcnt;
@@ -92,13 +90,13 @@ clockctl_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	bool device_context;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_system_req)arg0;
+	req = (enum kauth_system_req)(uintptr_t)arg0;
 
 	if ((action != KAUTH_SYSTEM_TIME) ||
 	    (req != KAUTH_REQ_SYSTEM_TIME_SYSTEM))
 		return result;
 
-	device_context = (bool)arg3;
+	device_context = arg3 != NULL;
 
 	/* Device is controlled by permissions, so allow. */
 	if (device_context)
@@ -245,98 +243,31 @@ clockctlioctl(
 		error = clock_settime1(l->l_proc, args->clock_id, &ts, false);
 		break;
 	}
-#ifdef NTP
 	case CLOCKCTL_NTP_ADJTIME: {
 		struct clockctl_ntp_adjtime *args = data;
 		struct timex ntv;
 
+		if (vec_ntp_timestatus == NULL) {
+			error = ENOTTY;
+			break;
+		}
 		error = copyin(args->tp, &ntv, sizeof(ntv));
 		if (error)
 			return (error);
 
-		ntp_adjtime1(&ntv);
+		(*vec_ntp_adjtime1)(&ntv);
 
 		error = copyout(&ntv, args->tp, sizeof(ntv));
 		if (error == 0)
-			args->retval = ntp_timestatus();
+			args->retval = (*vec_ntp_timestatus)();
 		break;
 	}
-#endif /* NTP */
 	default:
-#ifdef COMPAT_50
-		error = compat50_clockctlioctl(dev, cmd, data, flags, l);
-#else
-		error = EINVAL;
-#endif
+		MODULE_HOOK_CALL(clockctl_ioctl_50_hook,
+		    (dev, cmd, data, flags, l), enosys(), error);
+		if (error == ENOSYS)
+			error = ENOTTY;
 	}
 
 	return (error);
 }
-
-#ifdef COMPAT_50
-int
-compat50_clockctlioctl(dev_t dev, u_long cmd, void *data, int flags,
-    struct lwp *l)
-{
-	int error = 0;
-	const struct cdevsw *cd = cdevsw_lookup(dev);
-
-	if (cd == NULL || cd->d_ioctl == NULL)
-		return ENXIO;
-
-	switch (cmd) {
-	case CLOCKCTL_OSETTIMEOFDAY: {
-		struct timeval50 tv50;
-		struct timeval tv;
-		struct clockctl50_settimeofday *args = data;
-
-		error = copyin(args->tv, &tv50, sizeof(tv50));
-		if (error)
-			return (error);
-		timeval50_to_timeval(&tv50, &tv);
-		error = settimeofday1(&tv, false, args->tzp, l, false);
-		break;
-	}
-	case CLOCKCTL_OADJTIME: {
-		struct timeval atv, oldatv;
-		struct timeval50 atv50;
-		struct clockctl50_adjtime *args = data;
-
-		if (args->delta) {
-			error = copyin(args->delta, &atv50, sizeof(atv50));
-			if (error)
-				return (error);
-			timeval50_to_timeval(&atv50, &atv);
-		}
-		adjtime1(args->delta ? &atv : NULL,
-		    args->olddelta ? &oldatv : NULL, l->l_proc);
-		if (args->olddelta) {
-			timeval_to_timeval50(&oldatv, &atv50);
-			error = copyout(&atv50, args->olddelta, sizeof(atv50));
-		}
-		break;
-	}
-	case CLOCKCTL_OCLOCK_SETTIME: {
-		struct timespec50 tp50;
-		struct timespec tp;
-		struct clockctl50_clock_settime *args = data;
-
-		error = copyin(args->tp, &tp50, sizeof(tp50));
-		if (error)
-			return (error);
-		timespec50_to_timespec(&tp50, &tp);
-		error = clock_settime1(l->l_proc, args->clock_id, &tp, true);
-		break;
-	}
-	case CLOCKCTL_ONTP_ADJTIME:
-		/* The ioctl number changed but the data did not change. */
-		error = (cd->d_ioctl)(dev, CLOCKCTL_NTP_ADJTIME,
-		    data, flags, l);
-		break;
-	default:
-		error = EINVAL;
-	}
-
-	return (error);
-}
-#endif

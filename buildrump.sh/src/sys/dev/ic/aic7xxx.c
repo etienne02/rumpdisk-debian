@@ -1,4 +1,4 @@
-/*	$NetBSD: aic7xxx.c,v 1.132 2015/02/07 04:27:54 christos Exp $	*/
+/*	$NetBSD: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $	*/
 
 /*
  * Core routines and tables shareable across OS platforms.
@@ -39,7 +39,7 @@
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGES.
  *
- * $Id: aic7xxx.c,v 1.132 2015/02/07 04:27:54 christos Exp $
+ * $Id: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $
  *
  * //depot/aic7xxx/aic7xxx/aic7xxx.c#112 $
  *
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aic7xxx.c,v 1.132 2015/02/07 04:27:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $");
 
 #include <dev/ic/aic7xxx_osm.h>
 #include <dev/ic/aic7xxx_inline.h>
@@ -60,7 +60,7 @@ __KERNEL_RCSID(0, "$NetBSD: aic7xxx.c,v 1.132 2015/02/07 04:27:54 christos Exp $
 struct ahc_softc_tailq ahc_tailq = TAILQ_HEAD_INITIALIZER(ahc_tailq);
 
 /***************************** Lookup Tables **********************************/
-const char *ahc_chip_names[] =
+const char * const ahc_chip_names[] =
 {
 	"NONE",
 	"aic7770",
@@ -232,7 +232,7 @@ static void		ahc_dumpseq(struct ahc_softc *ahc);
 #endif
 static void		ahc_loadseq(struct ahc_softc *ahc);
 static int		ahc_check_patch(struct ahc_softc *ahc,
-					struct patch **start_patch,
+					const struct patch **start_patch,
 					u_int start_instr, u_int *skip_addr);
 static void		ahc_download_instr(struct ahc_softc *ahc,
 					   u_int instrptr, uint8_t *dconsts);
@@ -922,7 +922,7 @@ ahc_handle_seqint(struct ahc_softc *ahc, u_int intstat)
 		       scbptr, ahc_inb(ahc, ARG_1),
 		       ahc->scb_data->hscbs[scbptr].tag);
 		ahc_dump_card_state(ahc);
-		panic("for saftey");
+		panic("for safety");
 		break;
 	}
 	case OUT_OF_RANGE:
@@ -1107,7 +1107,7 @@ ahc_handle_scsiint(struct ahc_softc *ahc, u_int intstat)
 					printf("\tCRC Value Mismatch\n");
 				if ((sstat2 & CRCENDERR) != 0)
 					printf("\tNo terminal CRC packet "
-					       "recevied\n");
+					       "received\n");
 				if ((sstat2 & CRCREQERR) != 0)
 					printf("\tIllegal CRC packet "
 					       "request\n");
@@ -1165,7 +1165,7 @@ ahc_handle_scsiint(struct ahc_softc *ahc, u_int intstat)
 		/*
 		 * Although the driver does not care about the
 		 * 'Selection in Progress' status bit, the busy
-		 * LED does.  SELINGO is only cleared by a sucessfull
+		 * LED does.  SELINGO is only cleared by a successful
 		 * selection, so we must manually clear it to insure
 		 * the LED turns off just incase no future successful
 		 * selections occur (e.g. no devices on the bus).
@@ -1573,9 +1573,7 @@ ahc_alloc_tstate(struct ahc_softc *ahc, u_int scsi_id, char channel)
 	    && ahc->enabled_targets[scsi_id] != master_tstate)
 		panic("%s: ahc_alloc_tstate - Target already allocated",
 		      ahc_name(ahc));
-	tstate = malloc(sizeof(*tstate), M_DEVBUF, M_NOWAIT);
-	if (tstate == NULL)
-		return (NULL);
+	tstate = malloc(sizeof(*tstate), M_DEVBUF, M_WAITOK);
 
 	/*
 	 * If we have allocated a master tstate, copy user settings from
@@ -3816,10 +3814,7 @@ ahc_softc_init(struct ahc_softc *ahc)
 	/* XXX The shared scb data stuff should be deprecated */
 	if (ahc->scb_data == NULL) {
 		ahc->scb_data = malloc(sizeof(*ahc->scb_data),
-				       M_DEVBUF, M_NOWAIT);
-		if (ahc->scb_data == NULL)
-			return (ENOMEM);
-		memset(ahc->scb_data, 0, sizeof(*ahc->scb_data));
+				       M_DEVBUF, M_WAITOK | M_ZERO);
 	}
 
 	return (0);
@@ -3922,12 +3917,9 @@ ahc_free(struct ahc_softc *ahc)
 		/* TAILQ_REMOVE(&ahc_tailq, ahc, links); XXX */
 		/* FALLTHROUGH */
 	case 1:
-		bus_dmamap_unload(ahc->parent_dmat, ahc->shared_data_dmamap);
-		bus_dmamap_destroy(ahc->parent_dmat, ahc->shared_data_dmamap);
-		bus_dmamem_unmap(ahc->parent_dmat, (void *)ahc->qoutfifo,
-		    ahc->shared_data_size);
-		bus_dmamem_free(ahc->parent_dmat, &ahc->shared_data_seg,
-		    ahc->shared_data_nseg);
+		ahc_freedmamem(ahc->parent_dmat, ahc->shared_data_size,
+		    ahc->shared_data_dmamap, (void *)ahc->qoutfifo,
+		    &ahc->shared_data_seg, ahc->shared_data_nseg);
 		break;
 	case 0:
 		break;
@@ -4184,10 +4176,7 @@ ahc_init_scbdata(struct ahc_softc *ahc)
 
 	/* Allocate SCB resources */
 	scb_data->scbarray = malloc(sizeof(struct scb) * AHC_SCB_MAX_ALLOC,
-				     M_DEVBUF, M_NOWAIT);
-	if (scb_data->scbarray == NULL)
-		return (ENOMEM);
-	memset(scb_data->scbarray, 0, sizeof(struct scb) * AHC_SCB_MAX_ALLOC);
+				     M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/* Determine the number of hardware SCBs and initialize them */
 
@@ -4511,8 +4500,9 @@ ahc_init(struct ahc_softc *ahc)
 	if ((ahc->features & AHC_TARGETMODE) != 0)
 		driver_data_size += AHC_TMODE_CMDS * sizeof(struct target_cmd)
 				 + /*DMA WideOdd Bug Buffer*/1;
+	ahc->shared_data_size = driver_data_size;
 
-	if (ahc_createdmamem(ahc->parent_dmat, driver_data_size,
+	if (ahc_createdmamem(ahc->parent_dmat, ahc->shared_data_size,
 			     ahc->sc_dmaflags,
 			     &ahc->shared_data_dmamap, (void **)&ahc->qoutfifo,
 			     &ahc->shared_data_busaddr, &ahc->shared_data_seg,
@@ -4526,7 +4516,7 @@ ahc_init(struct ahc_softc *ahc)
 		ahc->targetcmds = (struct target_cmd *)ahc->qoutfifo;
 		ahc->qoutfifo = (uint8_t *)&ahc->targetcmds[AHC_TMODE_CMDS];
 		ahc->dma_bug_buf = ahc->shared_data_busaddr
-				 + driver_data_size - 1;
+				 + ahc->shared_data_size - 1;
 		/* All target command blocks start out invalid. */
 		for (i = 0; i < AHC_TMODE_CMDS; i++)
 			ahc->targetcmds[i].cmd_valid = 0;
@@ -5477,8 +5467,8 @@ ahc_search_qinfifo(struct ahc_softc *ahc, int target, char channel,
 					printf("Inactive SCB in "
 					       "Waiting List\n");
 				ahc_done(ahc, scb);
-				/* FALLTHROUGH */
 			}
+			/* FALLTHROUGH */
 			case SEARCH_REMOVE:
 				next = ahc_rem_wscb(ahc, next, prev);
 				break;
@@ -6285,13 +6275,13 @@ ahc_dumpseq(struct ahc_softc* ahc)
 }
 #endif
 
-static void
+static void __noinline
 ahc_loadseq(struct ahc_softc *ahc)
 {
 	struct	cs cs_table[num_critical_sections];
 	u_int	begin_set[num_critical_sections];
 	u_int	end_set[num_critical_sections];
-	struct	patch *cur_patch;
+	const struct	patch *cur_patch;
 	u_int	cs_count;
 	u_int	cur_cs;
 	u_int	i;
@@ -6367,9 +6357,7 @@ ahc_loadseq(struct ahc_softc *ahc)
 	if (cs_count != 0) {
 
 		cs_count *= sizeof(struct cs);
-		ahc->critical_sections = malloc(cs_count, M_DEVBUF, M_NOWAIT);
-		if (ahc->critical_sections == NULL)
-			panic("ahc_loadseq: Could not malloc");
+		ahc->critical_sections = malloc(cs_count, M_DEVBUF, M_WAITOK);
 		memcpy(ahc->critical_sections, cs_table, cs_count);
 	}
 	ahc_outb(ahc, SEQCTL, PERRORDIS|FAILDIS|FASTMODE);
@@ -6383,11 +6371,11 @@ ahc_loadseq(struct ahc_softc *ahc)
 }
 
 static int
-ahc_check_patch(struct ahc_softc *ahc, struct patch **start_patch,
+ahc_check_patch(struct ahc_softc *ahc, const struct patch **start_patch,
 		u_int start_instr, u_int *skip_addr)
 {
-	struct	patch *cur_patch;
-	struct	patch *last_patch;
+	const struct patch *cur_patch;
+	const struct patch *last_patch;
 	u_int	num_patches;
 
 	num_patches = sizeof(patches)/sizeof(struct patch);
@@ -6403,7 +6391,7 @@ ahc_check_patch(struct ahc_softc *ahc, struct patch **start_patch,
 			cur_patch += cur_patch->skip_patch;
 		} else {
 			/* Accepted this patch.  Advance to the next
-			 * one and wait for our intruction pointer to
+			 * one and wait for our instruction pointer to
 			 * hit this point.
 			 */
 			cur_patch++;
@@ -6429,7 +6417,7 @@ ahc_download_instr(struct ahc_softc *ahc, u_int instrptr, uint8_t *dconsts)
 	/*
 	 * The firmware is always compiled into a little endian format.
 	 */
-	instr.integer = ahc_le32toh(*(uint32_t*)&seqprog[instrptr * 4]);
+	instr.integer = ahc_le32toh(*(const uint32_t*)&seqprog[instrptr * 4]);
 
 	fmt1_ins = &instr.format1;
 	fmt3_ins = NULL;
@@ -6446,7 +6434,7 @@ ahc_download_instr(struct ahc_softc *ahc, u_int instrptr, uint8_t *dconsts)
 	case AIC_OP_JE:
 	case AIC_OP_JZ:
 	{
-		struct patch *cur_patch;
+		const struct patch *cur_patch;
 		int address_offset;
 		u_int address;
 		u_int skip_addr;
@@ -6472,8 +6460,8 @@ ahc_download_instr(struct ahc_softc *ahc, u_int instrptr, uint8_t *dconsts)
 		}
 		address -= address_offset;
 		fmt3_ins->address = address;
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 	case AIC_OP_OR:
 	case AIC_OP_AND:
 	case AIC_OP_XOR:

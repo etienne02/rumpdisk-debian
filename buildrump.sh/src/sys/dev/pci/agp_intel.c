@@ -1,4 +1,4 @@
-/*	$NetBSD: agp_intel.c,v 1.37 2011/04/04 20:37:56 dyoung Exp $	*/
+/*	$NetBSD: agp_intel.c,v 1.39 2019/11/10 21:16:36 chs Exp $	*/
 
 /*-
  * Copyright (c) 2000 Doug Rabson
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: agp_intel.c,v 1.37 2011/04/04 20:37:56 dyoung Exp $");
+__KERNEL_RCSID(0, "$NetBSD: agp_intel.c,v 1.39 2019/11/10 21:16:36 chs Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -113,12 +113,7 @@ agp_intel_attach(device_t parent, device_t self, void *aux)
 	struct agp_gatt *gatt;
 	u_int32_t value;
 
-	isc = malloc(sizeof *isc, M_AGP, M_NOWAIT|M_ZERO);
-	if (isc == NULL) {
-		aprint_error(": can't allocate chipset-specific softc\n");
-		return ENOMEM;
-	}
-
+	isc = malloc(sizeof *isc, M_AGP, M_WAITOK|M_ZERO);
 	sc->as_methods = &agp_intel_methods;
 	sc->as_chipc = isc;
 
@@ -209,6 +204,7 @@ agp_intel_init(struct agp_softc *sc)
 	case CHIP_I443:
 		pci_conf_write(sc->as_pc, sc->as_tag, AGP_INTEL_AGPCTRL,
 		    AGPCTRL_AGPRSE | AGPCTRL_GTLB);
+		break;
 
 	default:
 		pci_conf_write(sc->as_pc, sc->as_tag, AGP_INTEL_AGPCTRL,

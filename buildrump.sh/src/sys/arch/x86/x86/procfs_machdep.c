@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs_machdep.c,v 1.12 2016/04/27 08:45:22 msaitoh Exp $ */
+/*	$NetBSD: procfs_machdep.c,v 1.41 2021/07/10 17:33:28 msaitoh Exp $ */
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_machdep.c,v 1.12 2016/04/27 08:45:22 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_machdep.c,v 1.41 2021/07/10 17:33:28 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -55,19 +55,21 @@ __KERNEL_RCSID(0, "$NetBSD: procfs_machdep.c,v 1.12 2016/04/27 08:45:22 msaitoh 
 #include <machine/cpu.h>
 #include <machine/reg.h>
 #include <machine/specialreg.h>
+#include <x86/cputypes.h>
+#include <x86/cpuvar.h>
 
 /*
  *  The feature table. The order is the same as Linux's
  *  x86/include/asm/cpufeatures.h.
  */
 static const char * const x86_features[][32] = {
-	{ /* (0) Common */
+	{ /* (0) Common: 0x0000001 edx */
 	"fpu", "vme", "de", "pse", "tsc", "msr", "pae", "mce",
 	"cx8", "apic", NULL, "sep", "mtrr", "pge", "mca", "cmov",
 	"pat", "pse36", "pn", "clflush", NULL, "dts", "acpi", "mmx",
 	"fxsr", "sse", "sse2", "ss", "ht", "tm", "ia64", "pbe"},
 
-	{ /* (1) AMD-defined: 80000001 edx */
+	{ /* (1) AMD-defined: 0x80000001 edx */
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, "syscall", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, "mp", "nx", NULL, "mmxext", NULL,
@@ -80,13 +82,15 @@ static const char * const x86_features[][32] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (3) Linux mapping */
-	"cxmmx", NULL, "cyrix_arr", "centaur_mcr", NULL,
-	"constant_tsc", NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+	"cxmmx", "k6_mtrr", "cyrix_arr", "centaur_mcr", NULL, NULL, NULL, NULL,
+	"constant_tsc", "up", "art", "arch_perfmon",
+	"pebs", "bts", NULL, NULL,
+	"rep_good", NULL, NULL, "acc_power",
+	"nopl", NULL, "xtopology", "tsc_reliable",
+	"nonstop_tsc", "cpuid", "extd_apicid", "amd_dcm",
+	"aperfmperf", "rapl", "nonstop_tsc_s3", "tsc_known_freq"},
 
-	{ /* (4) Intel-defined: 80000001 ecx */
+	{ /* (4) Intel-defined: 0x00000001 ecx */
 	"pni", "pclmulqdq", "dtes64", "monitor", "ds_cpl", "vmx", "smx", "est",
 	"tm2", "ssse3", "cid", "sdbg", "fma", "cx16", "xtpr", "pdcm",
 	NULL, "pcid", "dca", "sse4_1", "sse4_2", "x2apic", "movbe", "popcnt",
@@ -95,7 +99,7 @@ static const char * const x86_features[][32] = {
 
 	{ /* (5) VIA/Cyrix/Centaur-defined */
 	NULL, NULL, "rng", "rng_en", NULL, NULL, "ace", "ace_en",
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	"ace2", "ace2_en", "phe", "phe_en", "pmm", "pmm_en", NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
@@ -106,32 +110,32 @@ static const char * const x86_features[][32] = {
 	"fma4", "tce", NULL, "nodeid_msr",
 	NULL, "tbm", "topoext", "perfctr_core",
 	"perfctr_nb", NULL, "bpext", "ptsc",
-	"perfctr_l2", "mwaitx", NULL, NULL},
+	"perfctr_llc", "mwaitx", NULL, NULL},
 
 	{ /* (7) Linux mapping */
 	NULL, NULL, "cpb", "ebp", NULL, "pln", "pts", "dtherm",
 	"hw_pstate", "proc_feedback", NULL, NULL,
-	NULL, NULL, NULL, "intel_pt",
+	NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+	NULL, "ibrs", "ibpb", "stibp", NULL, NULL, NULL, NULL},
 
 	{ /* (8) Linux mapping */
 	"tpr_shadow", "vnmi", "flexpriority", "ept",
 	"vpid", "npt", "lbrv", "svm_lock",
 	"nrip_save", "tsc_scale", "vmcb_clean", "flushbyasid",
 	"decodeassists", "pausefilter", "pfthreshold", "vmmcall",
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, "ept_ad", NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (9) Intel-defined: 00000007 ebx */
-	"fsgsbase", "tsc_adjust", NULL, "bmi1", "hle", "avx2", NULL, "smep",
-	"bmi2", "erms", "invpcid", "rtm", "cqm", NULL, "mpx", NULL,
+	"fsgsbase", "tsc_adjust", "sgx", "bmi1", "hle", "avx2", NULL, "smep",
+	"bmi2", "erms", "invpcid", "rtm", "cqm", NULL, "mpx", "rdt_a",
 	"avx512f", "avx512dq", "rdseed", "adx",
-	"smap", NULL, "pcommit", "clflushopt",
-	"clwb", NULL, "avx512pf", "avx512er",
+	"smap", "avx512ifma", NULL, "clflushopt",
+	"clwb", "intel_pt", "avx512pf", "avx512er",
 	"avx512cd", "sha_ni", "avx512bw", "avx512vl"},
 
-	{ /* (10) 0000000d eax */
+	{ /* (10) 0x0000000d:1 eax */
 	"xsaveopt", "xsavec", "xgetbv1", "xsaves", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -144,7 +148,56 @@ static const char * const x86_features[][32] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (12) 0x0000000f:1 edx */
-	"cqm_occup_llc", NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	"cqm_occup_llc", "cqm_mbm_total", "cqm_mbm_local", NULL,
+	NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+
+	{ /* (13) AMD 0x80000008 ebx */
+	"clzero", "irperf", "xsaveerptr", NULL, "rdpru", NULL, NULL, NULL,
+	NULL, "wbnoinvd", NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, "ppin",
+	NULL, "virt_ssbd", NULL, NULL, NULL, NULL, NULL, NULL},
+
+	{ /* (14) 0x00000006 eax */
+	"dtherm", "ida", "arat", NULL, "pln", NULL, "pts", "hwp",
+	"hwp_notify", "hwp_act_window", "hwp_epp","hwp_pkg_req",
+	NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+
+	{ /* (15) AMD 0x8000000a edx */
+	"npt", "lbrv", "svm_lock", "nrip_save",
+	"tsc_scale", "vmcb_clean", "flushbyasid", "decodeassists",
+	NULL, NULL, "pausefilter", NULL, "pfthreshold", "avic", NULL,
+	"v_vmsave_vmload",
+	"vgif", NULL, NULL, NULL, "v_spec_ctrl", NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+
+	{ /* (16) 0x00000007:0 ecx */
+	NULL, "avx512vbmi", "umip", "pku",
+	"ospke", "waitpkg", "avx512_vbmi2", NULL,
+	"gfni", "vaes", "vpclmulqdq", "avx512_vnni",
+	"avx512_bitalg", "tme", "avx512_vpopcntdq", NULL,
+	"la57", NULL, NULL, NULL, NULL, NULL, "rdpid", NULL,
+	NULL, "cldemote", NULL, "movdiri", "movdir64b", NULL, "sgx_lc", NULL},
+
+	{ /* (17) 0x80000007 ebx */
+	"overflow_recov", "succor", NULL, "smca", NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+
+	{ /* (18) Intel 0x00000007 edx */
+	NULL, NULL, "avx512_4vnniw", "avx512_4fmaps", "fsrm", NULL, NULL, NULL,
+	"vp2intersect", NULL, "md_clear", NULL, NULL, NULL, "serialize", NULL,
+	"tsxldtrk", NULL, "pconfig", NULL, NULL, NULL, NULL, "avx512_fp16",
+	NULL, NULL, NULL, NULL,
+	"flush_l1d", "arch_capabilities", NULL, "ssbd"},
+
+	{ /* (19) AMD 0x8000001f eax */
+	"sme", "sev", NULL, "sev_es", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
@@ -171,7 +224,7 @@ procfs_getcpuinfstr(char *bf, size_t *len)
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		procfs_getonecpu(i++, ci, bf, &used);
 		total += used + 1;
-		if (used + 1 < size) {
+		if (used + 1 <= size) {
 			bf += used;
 			*bf++ = '\n';
 			size -= used + 1;
@@ -191,7 +244,7 @@ procfs_getonefeatreg(uint32_t reg, const char * const *table, char *p,
 	size_t l;
 
 	for (size_t i = 0; i < 32; i++) {
-		if ((reg & (1 << i)) && table[i]) {
+		if ((reg & (1U << i)) && table[i]) {
 			l = snprintf(p, *left, "%s ", table[i]);
 			if (l < *left) {
 				*left -= l;
@@ -216,6 +269,7 @@ procfs_getonecpufeatures(struct cpu_info *ci, char *p, size_t *left)
 {
 	size_t last = *left;
 	size_t diff;
+	u_int descs[4];
 
 	procfs_getonefeatreg(ci->ci_feat_val[0], x86_features[0], p, left);
 	diff = last - *left;
@@ -246,9 +300,75 @@ procfs_getonecpufeatures(struct cpu_info *ci, char *p, size_t *left)
 	    left);
 	diff = last - *left;
 
-	/* (10) 0000000d eax */
-	/* (11) 0x0000000f(ecx=0) edx */
-	/* (12) 0x0000000f(ecx=1) edx */
+	if (ci->ci_max_cpuid >= 0x0d) {
+		x86_cpuid2(0x0d, 1, descs);
+		procfs_getonefeatreg(descs[0], x86_features[10], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if (ci->ci_max_cpuid >= 0x0f) {
+		x86_cpuid2(0x0f, 0, descs);
+		procfs_getonefeatreg(descs[3], x86_features[11], p + diff,
+		    left);
+		diff = last - *left;
+
+		x86_cpuid2(0x0f, 1, descs);
+		procfs_getonefeatreg(descs[3], x86_features[12], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if ((cpu_vendor == CPUVENDOR_AMD)
+	    && (ci->ci_max_ext_cpuid >= 0x80000008)) {
+		x86_cpuid(0x80000008, descs);
+		procfs_getonefeatreg(descs[1], x86_features[13], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if (ci->ci_max_cpuid >= 0x06) {
+		x86_cpuid(0x06, descs);
+		procfs_getonefeatreg(descs[0], x86_features[14], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if ((cpu_vendor == CPUVENDOR_AMD)
+	    && (ci->ci_max_ext_cpuid >= 0x8000000a)) {
+		x86_cpuid(0x8000000a, descs);
+		procfs_getonefeatreg(descs[3], x86_features[15], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	procfs_getonefeatreg(ci->ci_feat_val[6], x86_features[16], p + diff,
+	    left);
+	diff = last - *left;
+
+	if ((cpu_vendor == CPUVENDOR_AMD)
+	    && (ci->ci_max_ext_cpuid >= 0x80000007)) {
+		x86_cpuid(0x80000007, descs);
+		procfs_getonefeatreg(descs[1], x86_features[17], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if ((cpu_vendor == CPUVENDOR_INTEL)
+	    && (ci->ci_max_cpuid >= 0x00000007)) {
+		x86_cpuid(0x00000007, descs);
+		procfs_getonefeatreg(descs[3], x86_features[18], p + diff,
+		    left);
+		diff = last - *left;
+	}
+
+	if ((cpu_vendor == CPUVENDOR_AMD)
+	    && (ci->ci_max_ext_cpuid >= 0x80000019)) {
+		x86_cpuid(0x8000001f, descs);
+		procfs_getonefeatreg(descs[0], x86_features[19], p + diff,
+		    left);
+		diff = last - *left;
+	}
 
 	return 0; /* XXX */
 }
@@ -318,17 +438,35 @@ procfs_getonecpu(int xcpu, struct cpu_info *ci, char *bf, size_t *len)
 		left = 0;
 
 	l = snprintf(p, left,
+	    "apicid\t\t: %lu\n"
+	    "initial apicid\t: %u\n",
+	    ci->ci_cpuid,
+	    ci->ci_initapicid
+	);
+	size += l;
+	if (l < left) {
+		left -= l;
+		p += l;
+	} else
+		left = 0;
+
+	l = snprintf(p, left,
+#ifdef __i386__
 	    "fdiv_bug\t: %s\n"
-	    "fpu\t\t: %s\n"
+#endif
+	    "fpu\t\t: yes\n"
 	    "fpu_exception\t: yes\n"
 	    "cpuid level\t: %d\n"
 	    "wp\t\t: %s\n"
-	    "flags\t\t: %s\n",
+	    "flags\t\t: %s\n"
+	    "clflush size\t: %d\n",
+#ifdef __i386__
 	    i386_fpu_fdivbug ? "yes" : "no",	/* an old pentium */
-	    i386_fpu_present ? "yes" : "no",	/* not a 486SX */
-	    cpuid_level,
+#endif
+	    ci->ci_max_cpuid,
 	    (rcr0() & CR0_WP) ? "yes" : "no",
-	    featurebuf
+	    featurebuf,
+	    ci->ci_cflush_lsize
 	);
 	size += l;
 

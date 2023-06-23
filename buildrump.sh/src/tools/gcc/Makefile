@@ -1,14 +1,14 @@
-#	$NetBSD: Makefile,v 1.80 2016/03/26 09:02:56 mrg Exp $
+#	$NetBSD: Makefile,v 1.104 2021/05/08 19:36:28 christos Exp $
 
-.include <bsd.own.mk>
+.include <bsd.hostinit.mk>
 
 GCC_LANGUAGES=c c++ objc
-MODULE=			gcc4
+MODULE=		${EXTERNAL_GCC_SUBDIR}
 
 GCCDIST=	${.CURDIR}/../../external/gpl3/${EXTERNAL_GCC_SUBDIR}/dist
 GNUHOSTDIST=	${GCCDIST}
 
-.if ${HAVE_GCC} == 48
+.if ${HAVE_GCC} == 9
 MKNATIVE=		${.CURDIR}/mknative-gcc.old
 .endif
 
@@ -23,7 +23,7 @@ MULTILIB_ARGS= --disable-multilib
 .endif
 
 .if ${MKSOFTFLOAT} != "no" && ${MACHINE_CPU} != "m68k" \
-    && ${MACHINE_CPU} != "or1k"
+    && ${MACHINE_CPU} != "or1k" && ${MACHINE_CPU} != "sh3"
 SOFTFLOAT_ARGS=	-with-float=soft
 .endif
 
@@ -32,12 +32,14 @@ SOFTFLOAT_ARGS=	-with-float=soft
 COMMON_CONFIGURE_ARGS=	--target=${MACHINE_GNU_PLATFORM} \
 			--enable-long-long \
 			--enable-threads \
-			--with-bugurl=http://www.NetBSD.org/Misc/send-pr.html \
+			--with-bugurl=http://www.NetBSD.org/support/send-pr.html \
 			--with-pkgversion="NetBSD ${NETBSD_GCC_VERSION}" \
 			--with-system-zlib \
+			--without-isl \
 			--enable-__cxa_atexit \
 			--enable-libstdcxx-time=rt \
-			--enable-libstdcxx-threads
+			--enable-libstdcxx-threads \
+			--with-diagnostics-color=auto-if-env
 .if defined(GCC_CONFIG_ARCH.${MACHINE_ARCH})
 COMMON_CONFIGURE_ARGS+=	--with-arch=${GCC_CONFIG_ARCH.${MACHINE_ARCH}}
 .endif
@@ -45,13 +47,15 @@ COMMON_CONFIGURE_ARGS+=	--with-arch=${GCC_CONFIG_ARCH.${MACHINE_ARCH}}
 COMMON_CONFIGURE_ARGS+=	--with-tune=${GCC_CONFIG_TUNE.${MACHINE_ARCH}}
 .endif
 
-.if ${HAVE_GCC} == 48
-COMMON_CONFIGURE_ARGS+= --enable-lto
+# Too many CPUs have one or both of these bugs, the common code should
+# default to safety.
+.if ${MACHINE_CPU} == "aarch64"
+COMMON_CONFIGURE_ARGS+=	--enable-fix-cortex-a53-835769 \
+			--enable-fix-cortex-a53-843419
 .endif
 
-.if ${HAVE_GCC} == 53
-# Turn on colour output only if GCC_COLORS env is set
-COMMON_CONFIGURE_ARGS+= --with-diagnostics-color=auto-if-env
+.if ${HAVE_GCC} >= 7
+COMMON_CONFIGURE_ARGS+=	--with-default-libstdcxx-abi=new
 .endif
 
 CONFIGURE_ARGS=	${COMMON_CONFIGURE_ARGS}
@@ -91,15 +95,19 @@ MKNATIVE_CONFIG_TARGET_LIBS=
 
 MKNATIVE_CONFIG_TARGET_LIBS+=	configure-target-libgcc
 MKNATIVE_CONFIG_TARGET_LIBS+=	configure-target-libgomp
-.if ${HAVE_GCC} == 53
-MKNATIVE_TARGET=	gcc5
-.elif ${HAVE_GCC} == 48
-MKNATIVE_TARGET=	gcc48
-.endif
 
 MKNATIVE_CONFIG_TARGET_LIBS+= \
 	configure-target-libstdc++-v3 \
+	configure-target-libbacktrace \
 	configure-target-libobjc
+
+.if ${HAVE_GCC} >= 9
+# XXX needs to build libstdc++ fully, which fails
+.if 0
+MKNATIVE_CONFIG_TARGET_LIBS+= \
+	configure-target-libsanitizer
+.endif
+.endif
 
 BINENV=		/usr/bin/env -i
 
@@ -110,7 +118,7 @@ MKNATIVE_ENV=	${BINENV} ${CONFIGURE_ENV:NC*:NLD*} \
 			CFLAGS_FOR_BUILD="-I${TOOLDIR}/include" \
 			CC=${CC:Q}' '${CCADDFLAGS:Q} \
 			CXX=${CXX:Q}' '${CCADDFLAGS:Q}' '${CXXADDFLAGS:Q} \
-			CPP=${CPP:Q}' '-I${DESTDIR}/usr/include \
+			CPP=${CPP:Q}' '-I${DESTDIR}/usr/include' '-I${DESTDIR}/usr/include/g++/bits \
 			CFLAGS= CPPFLAGS= CXXFLAGS= LDFLAGS= \
 			AS=${AS:Q} AWK=${TOOL_AWK:Q} LD=${LD:Q} \
 			MSGFMT=${TOOLDIR}/bin/${_TOOL_PREFIX}msgfmt \
@@ -133,25 +141,27 @@ CCADDFLAGS=	--sysroot=${DESTDIR} -L${DESTDIR}/lib -L${DESTDIR}/usr/lib -B${DESTD
 # in case the version being used is not.
 NEWCONFIGDIR?=	${.CURDIR}/../..
 
+GCC_MACHINE_ARCH=	${MACHINE_ARCH:S/earmv5/earm/}
+
 bootstrap-libgcc: .configure_done
 	@echo 'Creating files needed for libgcc by a native bootstrap build.'
 	(cd ${.OBJDIR}/build && ${BUILD_COMMAND} configure-target-libgcc)
-	@MAKE=${BUILD_MAKE:Q} ${HOST_SH} ${MKNATIVE} lib${MKNATIVE_TARGET}-bootstrap \
+	@MAKE=${BUILD_MAKE:Q} ${HOST_SH} ${MKNATIVE} libgcc-bootstrap \
 		${.OBJDIR}/build ${NEWCONFIGDIR} ${NETBSDSRCDIR} \
-		${MACHINE_GNU_PLATFORM} ${DESTDIR} ${TOOLDIR}
+		${MACHINE_GNU_PLATFORM} ${GCC_MACHINE_ARCH} ${DESTDIR} ${TOOLDIR}
 
 bootstrap-libstdc++: .configure_done
 	@echo 'Creating files needed for libstdc++ by a native bootstrap build.'
 	(cd ${.OBJDIR}/build && ${BUILD_COMMAND} configure-target-libstdc++-v3)
 	@MAKE=${BUILD_MAKE:Q} ${HOST_SH} ${MKNATIVE} libstdc++-bootstrap \
 		${.OBJDIR}/build ${NEWCONFIGDIR} ${NETBSDSRCDIR} \
-		${MACHINE_GNU_PLATFORM} ${DESTDIR} ${TOOLDIR}
+		${MACHINE_GNU_PLATFORM} ${GCC_MACHINE_ARCH} ${DESTDIR} ${TOOLDIR}
 
 native-gcc: .native/.configure_done
 	@echo 'Extracting GNU GCC configury for a native toolchain.'
-	@MAKE=${BUILD_MAKE:Q} ${HOST_SH} ${MKNATIVE} ${MKNATIVE_TARGET} \
+	@MAKE=${BUILD_MAKE:Q} ${HOST_SH} ${MKNATIVE} gcc \
 		${.OBJDIR}/.native ${NEWCONFIGDIR} ${NETBSDSRCDIR} \
-		${MACHINE_GNU_PLATFORM} ${DESTDIR} ${TOOLDIR}
+		${MACHINE_GNU_PLATFORM} ${GCC_MACHINE_ARCH} ${DESTDIR} ${TOOLDIR}
 
 NATIVE_CONFIGURE_ARGS=	${COMMON_CONFIGURE_ARGS}
 MPC=		${NETBSDSRCDIR}/external/lgpl3/mpc
@@ -161,7 +171,7 @@ MPCOBJ!=	cd ${MPC}/lib/libmpc && ${PRINTOBJDIR}
 MPFROBJ!=	cd ${MPFR}/lib/libmpfr && ${PRINTOBJDIR}
 GMPOBJ!=	cd ${GMP}/lib/libgmp && ${PRINTOBJDIR}
 
-GMP_MACHINE_ARCH?=	${MACHINE_ARCH:S/earmv4/arm/:C/armv[5-7]/arm/}
+.include "../../external/lgpl3/gmp/Makefile.arch"
 
 NATIVE_CONFIGURE_ARGS+=	\
 			--with-mpc-lib=${MPCOBJ} \
@@ -185,24 +195,22 @@ NATIVE_CONFIGURE_ARGS+= --disable-shared
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "x86_64"
 EXTRA_GCC_TARGETS=	i386-builtin-types.inc
 .endif
+.if !empty(MACHINE_ARCH:M*arm*)
+EXTRA_GCC_TARGETS=	arm-cpu-data.h arm-cpu-cdata.h
+.endif
 
 NATIVE_CONFIGURE_ARGS+=	\
 			--disable-multilib \
-			--disable-symvers \
 			--disable-libstdcxx-pch \
 			--build=`${GCCDIST}/config.guess` \
 			--host=${MACHINE_GNU_PLATFORM} \
 			--with-sysroot=${DESTDIR}
 MKENV_BUILD_MAKE=cd .native && ${MKNATIVE_ENV} ${BUILD_MAKE}
 
-UNWIND_H=unwind.h
-# XXXGCC5
-.if ${HAVE_GCC} == 53
-UNWIND_H=
-.endif
-
 .native/.configure_done: ${_GNU_CFGSRC} ${.CURDIR}/Makefile
-	mkdir .native 2>/dev/null || true
+	mkdir .native .native/gcc .native/gcc/include 2>/dev/null || true
+	# If this fails, gthreads won't be configured initially, but reconfig will.
+	cp ${DESTDIR}/usr/include/g++/bits/gthr-default.h .native/gcc/include || true
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
 		(cd .native && ${MKNATIVE_ENV} \
 			${HOST_SH} ${GNUHOSTDIST}/configure \
@@ -223,8 +231,10 @@ UNWIND_H=
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
 		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e tree-check.h config.h multilib.h gcov-iov.h)
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
-		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e libgcc.mvars tconfig.h ${UNWIND_H}); \
+		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e libgcc.mvars tconfig.h); \
 		(cd .native && touch gcc/cc1obj gcc/cc1plus gcc/f771 gcc/libgcc.a gcc/libgcc_s.so)
+	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
+		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e s-omp-device-properties-h)
 .if defined(EXTRA_GCC_TARGETS)
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
 		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e ${EXTRA_GCC_TARGETS})
@@ -250,6 +260,27 @@ UNWIND_H=
 			all-local) && \
 	true
 	@touch $@
+
+.if !defined(PREV_GCC)
+.  if exists(PREV_GCC)
+PREV_GCC!=	cat PREV_GCC
+.  else
+PREV_GCC=
+.  endif
+.endif
+
+CLEANFILES+=	PREV_GCC
+
+realall realdepend: .MAKE
+.if !empty(PREV_GCC) && "${PREV_GCC}" != "${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}"
+	@echo "*** WARNING: GCC has changed version?"
+	@echo "*** PREV_GCC '${PREV_GCC}'"
+	@echo "***     !=  EXTERNAL_GCC_SUBDIR-HAVE_GCC '${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}'"
+	@echo "*** Cleaning mis-matched tools/gcc"
+	rm -f PREV_GCC
+	(cd ${.CURDIR} && ${MAKE} cleandir)
+.endif
+	echo ${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC} >PREV_GCC
 
 clean: clean.native
 clean.native:

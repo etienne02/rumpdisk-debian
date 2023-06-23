@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic_sub_64.S,v 1.2 2014/03/04 16:15:28 matt Exp $	*/
+/*	$NetBSD: atomic_sub_64.S,v 1.5 2021/07/28 07:32:20 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -31,10 +31,10 @@
 
 #include "atomic_op_asm.h"
 
-#ifdef _ARM_ARCH_6
+#if defined(_ARM_ARCH_6)
 
 ENTRY_NP(_atomic_sub_64_nv)
-	push	{r3,r4}			/* save temporary */
+	push	{r3, r4}		/* save temporary */
 	mov	ip, r0			/* need r0 for return value */
 #ifndef __ARM_EABI__
 	mov	r3, r2
@@ -46,18 +46,21 @@ ENTRY_NP(_atomic_sub_64_nv)
 	strexd	r4, r0, [ip]		/* try to store */
 	cmp	r4, #0			/*   succeed? */
 	bne	1b			/*     no, try again? */
-#ifdef _ARM_ARCH_7
-	dmb
-#else
-	mcr	p15, 0, r4, c7, c10, 5	/* data memory barrier */
-#endif
-	pop	{r3,r4}			/* restore temporary */
+	pop	{r3, r4}		/* restore temporary */
 	RET				/* return new value */
 END(_atomic_sub_64_nv)
 
 STRONG_ALIAS(_atomic_sub_64,_atomic_sub_64_nv)
 ATOMIC_OP_ALIAS(atomic_sub_64_nv,_atomic_sub_64_nv)
 ATOMIC_OP_ALIAS(atomic_sub_64,_atomic_sub_64)
-CRT_ALIAS(__sync_sub_and_fetch_8,_atomic_sub_64_nv)
+
+ENTRY_NP(__sync_sub_and_fetch_8)
+	push	{r4, lr}
+	DMB
+	bl	_atomic_sub_64_nv
+	DMB
+	pop	{r4, pc}
+END(__sync_sub_and_fetch_8)
+
 
 #endif /* _ARM_ARCH_6 */

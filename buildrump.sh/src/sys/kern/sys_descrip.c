@@ -1,7 +1,7 @@
-/*	$NetBSD: sys_descrip.c,v 1.30 2014/09/05 09:20:59 matt Exp $	*/
+/*	$NetBSD: sys_descrip.c,v 1.37 2020/02/23 15:46:41 ad Exp $	*/
 
 /*-
- * Copyright (c) 2008 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_descrip.c,v 1.30 2014/09/05 09:20:59 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_descrip.c,v 1.37 2020/02/23 15:46:41 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -239,12 +239,9 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 	proc_t *p;
 	int error, flg;
 
-	if ((fp = fd_getfile(fd)) == NULL)
-		return EBADF;
-	if (fp->f_type != DTYPE_VNODE) {
-		fd_putfile(fd);
-		return EINVAL;
-	}
+	if ((error = fd_getvnode(fd, &fp)) != 0)
+		return error;
+
 	vp = fp->f_vnode;
 	if (fl->l_whence == SEEK_CUR)
 		fl->l_start += fp->f_offset;
@@ -257,6 +254,7 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 		flg |= F_WAIT;
 		/* Fall into F_SETLK */
 
+		/* FALLTHROUGH */
 	case F_SETLK:
 		switch (fl->l_type) {
 		case F_RDLCK:
@@ -314,6 +312,26 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 	return error;
 }
 
+static int
+do_fcntl_getpath(struct lwp *l, file_t *fp, char *upath)
+{
+	char *kpath;
+	int error;
+
+	if (fp->f_type != DTYPE_VNODE)
+		return EOPNOTSUPP;
+
+	kpath = PNBUF_GET();
+
+	error = vnode_to_path(kpath, MAXPATHLEN, fp->f_vnode, l, l->l_proc);
+	if (!error)
+		error = copyoutstr(kpath, upath, MAXPATHLEN, NULL);
+
+	PNBUF_PUT(kpath);
+
+	return error;
+}
+	
 /*
  * The file control system call.
  */
@@ -327,6 +345,7 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 	} */
 	int fd, i, tmp, error, cmd, newmin;
 	filedesc_t *fdp;
+	fdtab_t *dt;
 	file_t *fp;
 	struct flock fl;
 	bool cloexec = false;
@@ -370,7 +389,7 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 	}
 
 	if ((fp = fd_getfile(fd)) == NULL)
-		return (EBADF);
+		return EBADF;
 
 	if ((cmd & F_FSCTL)) {
 		error = fcntl_forfs(fd, fp, cmd, SCARG(uap, arg));
@@ -395,7 +414,8 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 		break;
 
 	case F_GETFD:
-		*retval = fdp->fd_dt->dt_ff[fd]->ff_exclose;
+		dt = atomic_load_consume(&fdp->fd_dt);
+		*retval = dt->dt_ff[fd]->ff_exclose;
 		break;
 
 	case F_SETFD:
@@ -462,6 +482,10 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 		error = (*fp->f_ops->fo_ioctl)(fp, FIOSETOWN, &tmp);
 		break;
 
+	case F_GETPATH:
+		error = do_fcntl_getpath(l, fp, SCARG(uap, arg));
+		break;
+
 	default:
 		error = EINVAL;
 	}
@@ -480,16 +504,17 @@ sys_close(struct lwp *l, const struct sys_close_args *uap, register_t *retval)
 		syscallarg(int)	fd;
 	} */
 	int error;
+	int fd = SCARG(uap, fd);
 
-	if (fd_getfile(SCARG(uap, fd)) == NULL) {
+	if (fd_getfile(fd) == NULL) {
 		return EBADF;
 	}
 
-	error = fd_close(SCARG(uap, fd));
+	error = fd_close(fd);
 	if (error == ERESTART) {
 #ifdef DIAGNOSTIC
-		printf("pid %d: close returned ERESTART\n",
-		    (int)l->l_proc->p_pid);
+		printf("%s[%d]: close(%d) returned ERESTART\n",
+		    l->l_proc->p_comm, (int)l->l_proc->p_pid, fd);
 #endif
 		error = EINTR;
 	}
@@ -604,15 +629,9 @@ sys_flock(struct lwp *l, const struct sys_flock_args *uap, register_t *retval)
 
 	fd = SCARG(uap, fd);
 	how = SCARG(uap, how);
-	error = 0;
 
-	if ((fp = fd_getfile(fd)) == NULL) {
-		return EBADF;
-	}
-	if (fp->f_type != DTYPE_VNODE) {
-		fd_putfile(fd);
-		return EOPNOTSUPP;
-	}
+	if ((error = fd_getvnode(fd, &fp)) != 0)
+		return error == EINVAL ? EOPNOTSUPP : error;
 
 	vp = fp->f_vnode;
 	lf.l_whence = SEEK_SET;
@@ -659,6 +678,9 @@ do_posix_fadvise(int fd, off_t offset, off_t len, int advice)
 	CTASSERT(POSIX_FADV_RANDOM == UVM_ADV_RANDOM);
 	CTASSERT(POSIX_FADV_SEQUENTIAL == UVM_ADV_SEQUENTIAL);
 
+	if (offset < 0) {
+		return EINVAL;
+	}
 	if (len == 0) {
 		endoffset = INT64_MAX;
 	} else if (len > 0 && (INT64_MAX - offset) >= len) {
@@ -720,7 +742,7 @@ do_posix_fadvise(int fd, off_t offset, off_t len, int advice)
 		 */
 		if (round_page(offset) < trunc_page(endoffset) &&
 		    offset <= round_page(offset)) {
-			mutex_enter(vp->v_interlock);
+			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
 			error = VOP_PUTPAGES(vp,
 			    round_page(offset), trunc_page(endoffset),
 			    PGO_DEACTIVATE | PGO_CLEANIT);
@@ -764,7 +786,15 @@ sys___posix_fadvise50(struct lwp *l,
 int
 sys_pipe(struct lwp *l, const void *v, register_t *retval)
 {
-	return pipe1(l, retval, 0);
+	int fd[2], error;
+
+	if ((error = pipe1(l, fd, 0)) != 0)
+		return error;
+
+	retval[0] = fd[0];
+	retval[1] = fd[1];
+
+	return 0;
 }
 
 int
@@ -776,10 +806,9 @@ sys_pipe2(struct lwp *l, const struct sys_pipe2_args *uap, register_t *retval)
 	} */
 	int fd[2], error;
 
-	if ((error = pipe1(l, retval, SCARG(uap, flags))) != 0)
+	if ((error = pipe1(l, fd, SCARG(uap, flags))) != 0)
 		return error;
-	fd[0] = retval[0];
-	fd[1] = retval[1];
+
 	if ((error = copyout(fd, SCARG(uap, fildes), sizeof(fd))) != 0)
 		return error;
 	retval[0] = 0;

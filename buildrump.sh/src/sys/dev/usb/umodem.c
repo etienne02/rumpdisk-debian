@@ -1,4 +1,4 @@
-/*	$NetBSD: umodem.c,v 1.69 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: umodem.c,v 1.74 2020/04/12 01:10:54 simonb Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: umodem.c,v 1.69 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: umodem.c,v 1.74 2020/04/12 01:10:54 simonb Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -70,28 +70,25 @@ __KERNEL_RCSID(0, "$NetBSD: umodem.c,v 1.69 2016/07/07 06:55:42 msaitoh Exp $");
 #include <dev/usb/ucomvar.h>
 #include <dev/usb/umodemvar.h>
 
-Static struct ucom_methods umodem_methods = {
+Static const struct ucom_methods umodem_methods = {
 	.ucom_get_status = umodem_get_status,
 	.ucom_set = umodem_set,
 	.ucom_param = umodem_param,
 	.ucom_ioctl = umodem_ioctl,
 	.ucom_open = umodem_open,
 	.ucom_close = umodem_close,
-	.ucom_read = NULL,
-	.ucom_write = NULL,
 };
 
-int	umodem_match(device_t, cfdata_t, void *);
-void	umodem_attach(device_t, device_t, void *);
-int	umodem_detach(device_t, int);
-int	umodem_activate(device_t, enum devact);
+static int	umodem_match(device_t, cfdata_t, void *);
+static void	umodem_attach(device_t, device_t, void *);
+static int	umodem_detach(device_t, int);
 
-extern struct cfdriver umodem_cd;
+
 
 CFATTACH_DECL_NEW(umodem, sizeof(struct umodem_softc), umodem_match,
-    umodem_attach, umodem_detach, umodem_activate);
+    umodem_attach, umodem_detach, NULL);
 
-int
+static int
 umodem_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usbif_attach_arg *uiaa = aux;
@@ -109,13 +106,15 @@ umodem_match(device_t parent, cfdata_t match, void *aux)
 
 	return UMATCH_IFACECLASS_IFACESUBCLASS_IFACEPROTO;
 }
-//
-void
+
+static void
 umodem_attach(device_t parent, device_t self, void *aux)
 {
 	struct umodem_softc *sc = device_private(self);
 	struct usbif_attach_arg *uiaa = aux;
 	struct ucom_attach_args ucaa;
+
+	memset(&ucaa, 0, sizeof(ucaa));
 
 	ucaa.ucaa_portno = UCOM_UNK_PORTNO;
 	ucaa.ucaa_methods = &umodem_methods;
@@ -129,15 +128,7 @@ umodem_attach(device_t parent, device_t self, void *aux)
 	return;
 }
 
-int
-umodem_activate(device_t self, enum devact act)
-{
-	struct umodem_softc *sc = device_private(self);
-
-	return umodem_common_activate(sc, act);
-}
-
-int
+static int
 umodem_detach(device_t self, int flags)
 {
 	struct umodem_softc *sc = device_private(self);

@@ -1,4 +1,4 @@
-/*	$NetBSD: lpt.c,v 1.80 2014/07/25 08:10:37 dholland Exp $	*/
+/*	$NetBSD: lpt.c,v 1.82 2018/09/03 16:29:31 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994 Charles M. Hannum.
@@ -54,7 +54,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lpt.c,v 1.80 2014/07/25 08:10:37 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lpt.c,v 1.82 2018/09/03 16:29:31 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -73,6 +73,8 @@ __KERNEL_RCSID(0, "$NetBSD: lpt.c,v 1.80 2014/07/25 08:10:37 dholland Exp $");
 #include <dev/ic/lptreg.h>
 #include <dev/ic/lptvar.h>
 
+#include "ioconf.h"
+
 #define	TIMEOUT		hz*16	/* wait up to 16 seconds for a ready */
 #define	STEP		hz/4
 
@@ -87,8 +89,6 @@ __KERNEL_RCSID(0, "$NetBSD: lpt.c,v 1.80 2014/07/25 08:10:37 dholland Exp $");
 #define LPRINTF(a)	if (lptdebug) printf a
 int lptdebug = 0;
 #endif
-
-extern struct cfdriver lpt_cd;
 
 dev_type_open(lptopen);
 dev_type_close(lptclose);
@@ -369,7 +369,7 @@ lptwrite(dev_t dev, struct uio *uio, int flags)
 	size_t n;
 	int error = 0;
 
-	while ((n = min(LPT_BSIZE, uio->uio_resid)) != 0) {
+	while ((n = uimin(LPT_BSIZE, uio->uio_resid)) != 0) {
 		uiomove(sc->sc_cp = sc->sc_inbuf, n, uio);
 		sc->sc_count = n;
 		error = lptpushbytes(sc);

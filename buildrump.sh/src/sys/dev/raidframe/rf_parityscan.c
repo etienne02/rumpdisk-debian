@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_parityscan.c,v 1.34 2011/05/01 01:09:05 mrg Exp $	*/
+/*	$NetBSD: rf_parityscan.c,v 1.38 2021/08/08 21:45:53 andvar Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -33,7 +33,7 @@
  ****************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_parityscan.c,v 1.34 2011/05/01 01:09:05 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_parityscan.c,v 1.38 2021/08/08 21:45:53 andvar Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -50,7 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD: rf_parityscan.c,v 1.34 2011/05/01 01:09:05 mrg Exp $
 
 /*****************************************************************************
  *
- * walk through the entire arry and write new parity.  This works by
+ * walk through the entire array and write new parity.  This works by
  * creating two DAGs, one to read a stripe of data and one to write
  * new parity.  The first is executed, the data is xored together, and
  * then the second is executed.  To avoid constantly building and
@@ -136,7 +136,7 @@ rf_RewriteParityRange(RF_Raid_t *raidPtr, RF_SectorNum_t sec_begin,
 			printf("Bad rc=%d from VerifyParity in RewriteParity\n", rc);
 			ret_val = 1;
 		}
-		rf_FreeAccessStripeMap(asm_h);
+		rf_FreeAccessStripeMap(raidPtr, asm_h);
 	}
 	return (ret_val);
 }
@@ -218,10 +218,11 @@ rf_VerifyParityBasic(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 
 	retcode = RF_PARITY_OKAY;
 
-	mcpair = rf_AllocMCPair();
+	mcpair = rf_AllocMCPair(raidPtr);
 	rf_MakeAllocList(alloclist);
-	RF_MallocAndAdd(bf, numbytes * (layoutPtr->numDataCol + layoutPtr->numParityCol), (char *), alloclist);
-	RF_MallocAndAdd(pbuf, numbytes, (char *), alloclist);
+	bf = RF_MallocAndAdd(numbytes
+	    * (layoutPtr->numDataCol + layoutPtr->numParityCol), alloclist);
+	pbuf = RF_MallocAndAdd(numbytes, alloclist);
 	end_p = bf + bytesPerStripe;
 
 	rd_dag_h = rf_MakeSimpleDAG(raidPtr, stripeWidth, numbytes, bf, rf_DiskReadFunc, rf_DiskReadUndoFunc,
@@ -253,7 +254,7 @@ rf_VerifyParityBasic(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 
 	/* fire off the DAG */
 #if RF_ACC_TRACE > 0
-	memset((char *) &tracerec, 0, sizeof(tracerec));
+	memset(&tracerec, 0, sizeof(tracerec));
 	rd_dag_h->tracerec = &tracerec;
 #endif
 #if 0
@@ -299,7 +300,7 @@ rf_VerifyParityBasic(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 		wrBlock->succedents[0]->params[2].v = psID;
 		wrBlock->succedents[0]->params[3].v = RF_CREATE_PARAM3(RF_IO_NORMAL_PRIORITY, which_ru);
 #if RF_ACC_TRACE > 0
-		memset((char *) &tracerec, 0, sizeof(tracerec));
+		memset(&tracerec, 0, sizeof(tracerec));
 		wr_dag_h->tracerec = &tracerec;
 #endif
 #if 0
@@ -328,10 +329,10 @@ rf_VerifyParityBasic(RF_Raid_t *raidPtr, RF_RaidAddr_t raidAddr,
 			retcode = RF_PARITY_CORRECTED;
 	}
 out:
-	rf_FreeAccessStripeMap(asm_h);
+	rf_FreeAccessStripeMap(raidPtr, asm_h);
 	rf_FreeAllocList(alloclist);
 	rf_FreeDAG(rd_dag_h);
-	rf_FreeMCPair(mcpair);
+	rf_FreeMCPair(raidPtr, mcpair);
 	return (retcode);
 }
 
@@ -416,8 +417,8 @@ rf_VerifyDegrModeWrite(RF_Raid_t *raidPtr, RF_AccessStripeMapHeader_t *asmh)
  */
 RF_DagHeader_t *
 rf_MakeSimpleDAG(RF_Raid_t *raidPtr, int nNodes, int bytesPerSU, char *databuf,
-		 int (*doFunc) (RF_DagNode_t * node),
-		 int (*undoFunc) (RF_DagNode_t * node),
+		 void (*doFunc) (RF_DagNode_t * node),
+		 void (*undoFunc) (RF_DagNode_t * node),
 		 const char *name, RF_AllocListElem_t *alloclist,
 		 RF_RaidAccessFlags_t flags, int priority)
 {
@@ -427,7 +428,7 @@ rf_MakeSimpleDAG(RF_Raid_t *raidPtr, int nNodes, int bytesPerSU, char *databuf,
 
 	/* grab a DAG header... */
 
-	dag_h = rf_AllocDAGHeader();
+	dag_h = rf_AllocDAGHeader(raidPtr);
 	dag_h->raidPtr = (void *) raidPtr;
 	dag_h->allocList = NULL;/* we won't use this alloc list */
 	dag_h->status = rf_enable;
@@ -443,21 +444,21 @@ rf_MakeSimpleDAG(RF_Raid_t *raidPtr, int nNodes, int bytesPerSU, char *databuf,
 	 * node */
 
 	for (i = 0; i < nNodes; i++) {
-		tmpNode = rf_AllocDAGNode();
+		tmpNode = rf_AllocDAGNode(raidPtr);
 		tmpNode->list_next = dag_h->nodes;
 		dag_h->nodes = tmpNode;
 	}
 	nodes = dag_h->nodes;
 
-	blockNode = rf_AllocDAGNode();
+	blockNode = rf_AllocDAGNode(raidPtr);
 	blockNode->list_next = dag_h->nodes;
 	dag_h->nodes = blockNode;
 
-	unblockNode = rf_AllocDAGNode();
+	unblockNode = rf_AllocDAGNode(raidPtr);
 	unblockNode->list_next = dag_h->nodes;
 	dag_h->nodes = unblockNode;
 
-	termNode = rf_AllocDAGNode();
+	termNode = rf_AllocDAGNode(raidPtr);
 	termNode->list_next = dag_h->nodes;
 	dag_h->nodes = termNode;
 

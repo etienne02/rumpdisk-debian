@@ -1,4 +1,4 @@
-/*	$NetBSD: if_cs_ofisa.c,v 1.26 2015/04/13 16:33:24 riastradh Exp $	*/
+/*	$NetBSD: if_cs_ofisa.c,v 1.32 2021/04/28 03:34:02 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_cs_ofisa.c,v 1.26 2015/04/13 16:33:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_cs_ofisa.c,v 1.32 2021/04/28 03:34:02 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -66,20 +66,20 @@ static void	cs_ofisa_attach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(cs_ofisa, sizeof(struct cs_softc_isa),
     cs_ofisa_match, cs_ofisa_attach, NULL, NULL);
 
+static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "CRUS,CS8900" },
+	/* XXX CS8920, CS8920M? */
+	/* XXX PNP names? */
+	DEVICE_COMPAT_EOL
+};
+
 int
 cs_ofisa_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct ofisa_attach_args *aa = aux;
-	static const char *const compatible_strings[] = {
-		"CRUS,CS8900",
-		/* XXX CS8920, CS8920M? */
-		/* XXX PNP names? */
-		NULL,
-	};
-	int rv = 0;
+	int rv;
 
-	if (of_compatible(aa->oba.oba_phandle, compatible_strings) != -1)
-		rv = 5;
+	rv = of_compatible_match(aa->oba.oba_phandle, compat_data) ? 5 : 0;
 #ifdef _CS_OFISA_MD_MATCH
 	if (rv == 0)
 		rv = cs_ofisa_md_match(parent, cf, aux);
@@ -98,7 +98,6 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 	struct ofisa_dma_desc dma;
 	int i, n, *media, nmedia, defmedia;
 	bus_addr_t io_addr, mem_addr;
-	char *model = NULL;
 	const char *message = NULL;
 	u_int8_t enaddr[6];
 
@@ -126,29 +125,29 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 	n = cs_ofisa_md_reg_fixup(parent, self, aux, reg, 2, n);
 #endif
 	if (n < 1 || n > 2) {
-		printf(": error getting register data\n");
+		aprint_error(": error getting register data\n");
 		return;
 	}
 
 	for (i = 0; i < n; i++) {
 		if (reg[i].type == OFISA_REG_TYPE_IO) {
 			if (io_addr != (bus_addr_t) -1) {
-				printf(": multiple I/O regions\n");
+				aprint_error(": multiple I/O regions\n");
 				return;
 			}
 			if (reg[i].len != CS8900_IOSIZE) {
-				printf(": weird register size (%lu, expected %d)\n",
+				aprint_error(": weird register size (%lu, expected %d)\n",
 				    (unsigned long)reg[i].len, CS8900_IOSIZE);
 				return;
 			}
 			io_addr = reg[i].addr;
 		} else {
 			if (mem_addr != (bus_addr_t) -1) {
-				printf(": multiple memory regions\n");
+				aprint_error(": multiple memory regions\n");
 				return;
 			}
 			if (reg[i].len != CS8900_MEMSIZE) {
-				printf(": weird register size (%lu, expected %d)\n",
+				aprint_error(": weird register size (%lu, expected %d)\n",
 				    (unsigned long)reg[i].len, CS8900_MEMSIZE);
 				return;
 			}
@@ -161,13 +160,13 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 	n = cs_ofisa_md_intr_fixup(parent, self, aux, &intr, 1, n);
 #endif
 	if (n != 1) {
-		printf(": error getting interrupt data\n");
+		aprint_error(": error getting interrupt data\n");
 		return;
 	}
 	sc->sc_irq = intr.irq;
 
 	if (CS8900_IRQ_ISVALID(sc->sc_irq) == 0) {
-		printf(": invalid IRQ %d\n", sc->sc_irq);
+		aprint_error(": invalid IRQ %d\n", sc->sc_irq);
 		return;
 	}
 
@@ -180,12 +179,12 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 		isc->sc_drq = dma.drq;
 
 	if (io_addr == (bus_addr_t) -1) {
-		printf(": no I/O space\n");
+		aprint_error(": no I/O space\n");
 		return;
 	}
 	if (bus_space_map(sc->sc_iot, io_addr, CS8900_IOSIZE, 0,
 	    &sc->sc_ioh)) {
-		printf(": unable to map register space\n");
+		aprint_error(": unable to map register space\n");
 		return;
 	}
 
@@ -202,7 +201,7 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 	/* Dig MAC address out of the firmware. */
 	if (OF_getprop(aa->oba.oba_phandle, "mac-address", enaddr,
 	    sizeof(enaddr)) < 0) {
-		printf(": unable to get Ethernet address\n");
+		aprint_error(": unable to get Ethernet address\n");
 		return;
 	}
 
@@ -214,23 +213,13 @@ cs_ofisa_attach(device_t parent, device_t self, void *aux)
 	    &defmedia);
 #endif
 	if (media == NULL) {
-		printf(": unable to get media information\n");
+		aprint_error(": unable to get media information\n");
 		return;
 	}
 
-	n = OF_getproplen(aa->oba.oba_phandle, "model");
-	if (n > 0) {
-		model = alloca(n);
-		if (OF_getprop(aa->oba.oba_phandle, "model", model, n) != n)
-			model = NULL;	/* Safe; alloca is on-stack */
-	}
-	if (model != NULL)
-		printf(": %s\n", model);
-	else
-		printf("\n");
-
+	ofisa_print_model(NULL, aa->oba.oba_phandle);
 	if (message != NULL)
-		printf("%s: %s\n", device_xname(self), message);
+		aprint_normal_dev(self, "%s\n", message);
 
 	if (defmedia == -1) {
 		aprint_error_dev(self, "unable to get default media\n");

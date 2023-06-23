@@ -1,4 +1,4 @@
-/*	$NetBSD: ehci_pci.c,v 1.63 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: ehci_pci.c,v 1.72 2021/08/07 16:19:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.63 2016/04/23 10:15:31 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.72 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -72,10 +72,8 @@ static const struct pci_quirkdata ehci_pci_quirks[] = {
 	    EHCI_PCI_QUIRK_AMD_SB700 },
 };
 
-static void ehci_release_ownership(ehci_softc_t *sc, pci_chipset_tag_t pc,
-				   pcitag_t tag);
-static void ehci_get_ownership(ehci_softc_t *sc, pci_chipset_tag_t pc,
-			       pcitag_t tag);
+static void ehci_release_ownership(ehci_softc_t *, pci_chipset_tag_t, pcitag_t);
+static void ehci_get_ownership(ehci_softc_t *, pci_chipset_tag_t, pcitag_t);
 static bool ehci_pci_suspend(device_t, const pmf_qual_t *);
 static bool ehci_pci_resume(device_t, const pmf_qual_t *);
 
@@ -83,18 +81,22 @@ struct ehci_pci_softc {
 	ehci_softc_t		sc;
 	pci_chipset_tag_t	sc_pc;
 	pcitag_t		sc_tag;
+	pci_intr_handle_t	*sc_pihp;
 	void 			*sc_ih;		/* interrupt vectoring */
+	enum {
+		EHCI_INIT_NONE,
+		EHCI_INIT_INITED
+	} sc_init_state;
 };
 
-static int ehci_sb700_match(const struct pci_attach_args *pa);
-static int ehci_apply_amd_quirks(struct ehci_pci_softc *sc);
-enum ehci_pci_quirk_flags ehci_pci_lookup_quirkdata(pci_vendor_id_t,
-	pci_product_id_t);
+static int ehci_sb700_match(const struct pci_attach_args *);
+static int ehci_apply_amd_quirks(struct ehci_pci_softc *);
+static enum ehci_pci_quirk_flags ehci_pci_lookup_quirkdata(pci_vendor_id_t,
+    pci_product_id_t);
 
 #define EHCI_MAX_BIOS_WAIT		100 /* ms*10 */
 #define EHCI_SBx00_WORKAROUND_REG	0x50
 #define EHCI_SBx00_WORKAROUND_ENABLE	__BIT(27)
-
 
 static int
 ehci_pci_match(device_t parent, cfdata_t match, void *aux)
@@ -116,14 +118,13 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	struct pci_attach_args *pa = (struct pci_attach_args *)aux;
 	pci_chipset_tag_t pc = pa->pa_pc;
 	pcitag_t tag = pa->pa_tag;
-	char const *intrstr;
-	pci_intr_handle_t ih;
-	pcireg_t csr;
-	int ncomp;
-	struct usb_pci *up;
-	int quirk;
 	char intrbuf[PCI_INTRSTR_LEN];
+	char const *intrstr;
+	struct usb_pci *up;
+	int ncomp, quirk;
+	pcireg_t csr;
 
+	sc->sc_init_state = EHCI_INIT_NONE;
 	sc->sc.sc_dev = self;
 	sc->sc.sc_bus.ub_hcpriv = sc;
 
@@ -131,11 +132,11 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 
 	/* Check for quirks */
 	quirk = ehci_pci_lookup_quirkdata(PCI_VENDOR(pa->pa_id),
-					   PCI_PRODUCT(pa->pa_id));
+	    PCI_PRODUCT(pa->pa_id));
 
 	/* Map I/O registers */
 	if (pci_mapreg_map(pa, PCI_CBMEM, PCI_MAPREG_TYPE_MEM, 0,
-			   &sc->sc.iot, &sc->sc.ioh, NULL, &sc->sc.sc_size)) {
+	    &sc->sc.iot, &sc->sc.ioh, NULL, &sc->sc.sc_size)) {
 		sc->sc.sc_size = 0;
 		aprint_error_dev(self, "can't map memory space\n");
 		return;
@@ -161,13 +162,17 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 		break;
 	}
 
+	pcireg_t intr = pci_conf_read(pc, tag, PCI_INTERRUPT_REG);
+	int pin = PCI_INTERRUPT_PIN(intr);
+
 	/* Enable the device. */
 	csr = pci_conf_read(pc, tag, PCI_COMMAND_STATUS_REG);
-	pci_conf_write(pc, tag, PCI_COMMAND_STATUS_REG,
-		       csr | PCI_COMMAND_MASTER_ENABLE);
+	csr |= PCI_COMMAND_MASTER_ENABLE;
+	csr &= ~(pin ? PCI_COMMAND_INTERRUPT_DISABLE : 0);
+	pci_conf_write(pc, tag, PCI_COMMAND_STATUS_REG, csr);
 
 	/* Map and establish the interrupt. */
-	if (pci_intr_map(pa, &ih)) {
+	if (pci_intr_alloc(pa, &sc->sc_pihp, NULL, 0) != 0) {
 		aprint_error_dev(self, "couldn't map interrupt\n");
 		goto fail;
 	}
@@ -175,9 +180,13 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Allocate IRQ
 	 */
-	intrstr = pci_intr_string(pc, ih, intrbuf, sizeof(intrbuf));
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_USB, ehci_intr, sc);
+	intrstr = pci_intr_string(pc, sc->sc_pihp[0], intrbuf, sizeof(intrbuf));
+	sc->sc_ih = pci_intr_establish_xname(pc, sc->sc_pihp[0], IPL_USB,
+	    ehci_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
+		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
+		sc->sc_pihp = NULL;
+
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
@@ -186,12 +195,12 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	}
 	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
 
-	switch(pci_conf_read(pc, tag, PCI_USBREV) & PCI_USBREV_MASK) {
+	switch (pci_conf_read(pc, tag, PCI_USBREV) & PCI_USBREV_MASK) {
 	case PCI_USBREV_PRE_1_0:
 	case PCI_USBREV_1_0:
 	case PCI_USBREV_1_1:
 		sc->sc.sc_bus.ub_revision = USBREV_UNKNOWN;
-		aprint_verbose_dev(self, "pre-2.0 USB rev\n");
+		aprint_verbose_dev(self, "pre-2.0 USB rev, device ignored\n");
 		goto fail;
 	case PCI_USBREV_2_0:
 		sc->sc.sc_bus.ub_revision = USBREV_2_0;
@@ -201,12 +210,8 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 		break;
 	}
 
-	/* Figure out vendor for root hub descriptor. */
-	sc->sc.sc_id_vendor = PCI_VENDOR(pa->pa_id);
-	pci_findvendor(sc->sc.sc_vendor,
-	    sizeof(sc->sc.sc_vendor), sc->sc.sc_id_vendor);
 	/* Enable workaround for dropped interrupts as required */
-	switch (sc->sc.sc_id_vendor) {
+	switch (PCI_VENDOR(pa->pa_id)) {
 	case PCI_VENDOR_ATI:
 	case PCI_VENDOR_VIATECH:
 		sc->sc.sc_flags |= EHCIF_DROPPED_INTR_WORKAROUND;
@@ -224,10 +229,10 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	KASSERT(maxncomp <= EHCI_COMPANION_MAX);
 	ncomp = 0;
 	TAILQ_FOREACH(up, &ehci_pci_alldevs, next) {
-		if (up->bus == pa->pa_bus && up->device == pa->pa_device
-		    && !up->claimed) {
+		if (up->bus == pa->pa_bus && up->device == pa->pa_device &&
+		    !up->claimed) {
 			DPRINTF(("ehci_pci_attach: companion %s\n",
-				 device_xname(up->usb)));
+			    device_xname(up->usb)));
 			sc->sc.sc_comps[ncomp++] = up->usb;
 			up->claimed = true;
 			if (ncomp == maxncomp)
@@ -243,13 +248,15 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self, "init failed, error=%d\n", err);
 		goto fail;
 	}
+	sc->sc_init_state = EHCI_INIT_INITED;
 
 	if (!pmf_device_register1(self, ehci_pci_suspend, ehci_pci_resume,
-	                          ehci_shutdown))
+	    ehci_shutdown))
 		aprint_error_dev(self, "couldn't establish power handler\n");
 
 	/* Attach usb device. */
-	sc->sc.sc_child = config_found(self, &sc->sc.sc_bus, usbctlprint);
+	sc->sc.sc_child = config_found(self, &sc->sc.sc_bus, usbctlprint,
+	    CFARGS_NONE);
 	return;
 
 fail:
@@ -262,7 +269,6 @@ fail:
 		bus_space_unmap(sc->sc.iot, sc->sc.ioh, sc->sc.sc_size);
 		sc->sc.sc_size = 0;
 	}
-	return;
 }
 
 static int
@@ -271,9 +277,11 @@ ehci_pci_detach(device_t self, int flags)
 	struct ehci_pci_softc *sc = device_private(self);
 	int rv;
 
-	rv = ehci_detach(&sc->sc, flags);
-	if (rv)
-		return rv;
+	if (sc->sc_init_state >= EHCI_INIT_INITED) {
+		rv = ehci_detach(&sc->sc, flags);
+		if (rv)
+			return rv;
+	}
 
 	pmf_device_deregister(self);
 	ehci_shutdown(self, flags);
@@ -287,6 +295,12 @@ ehci_pci_detach(device_t self, int flags)
 		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
 		sc->sc_ih = NULL;
 	}
+
+	if (sc->sc_pihp != NULL) {
+		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
+		sc->sc_pihp = NULL;
+	}
+
 	if (sc->sc.sc_size) {
 		ehci_release_ownership(&sc->sc, sc->sc_pc, sc->sc_tag);
 		bus_space_unmap(sc->sc.iot, sc->sc.ioh, sc->sc.sc_size);
@@ -295,11 +309,12 @@ ehci_pci_detach(device_t self, int flags)
 
 #if 1
 	/* XXX created in ehci.c */
-	mutex_destroy(&sc->sc.sc_lock);
-	mutex_destroy(&sc->sc.sc_intr_lock);
-
-	softint_disestablish(sc->sc.sc_doorbell_si);
-	softint_disestablish(sc->sc.sc_pcd_si);
+	if (sc->sc_init_state >= EHCI_INIT_INITED) {
+		mutex_destroy(&sc->sc.sc_lock);
+		mutex_destroy(&sc->sc.sc_intr_lock);
+		softint_disestablish(sc->sc.sc_doorbell_si);
+		softint_disestablish(sc->sc.sc_pcd_si);
+	}
 #endif
 
 	return 0;
@@ -472,7 +487,7 @@ ehci_apply_amd_quirks(struct ehci_pci_softc *sc)
 	return 0;
 }
 
-enum ehci_pci_quirk_flags
+static enum ehci_pci_quirk_flags
 ehci_pci_lookup_quirkdata(pci_vendor_id_t vendor, pci_product_id_t product)
 {
 	int i;

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -45,6 +45,7 @@
 #include "accommon.h"
 #include "acparser.h"
 #include "amlcode.h"
+#include "acconvert.h"
 
 #define _COMPONENT          ACPI_PARSER
         ACPI_MODULE_NAME    ("pstree")
@@ -142,12 +143,12 @@ AcpiPsAppendArg (
     const ACPI_OPCODE_INFO  *OpInfo;
 
 
-    ACPI_FUNCTION_ENTRY ();
+    ACPI_FUNCTION_TRACE (PsAppendArg);
 
 
     if (!Op)
     {
-        return;
+        return_VOID;
     }
 
     /* Get the info structure for this opcode */
@@ -159,7 +160,7 @@ AcpiPsAppendArg (
 
         ACPI_ERROR ((AE_INFO, "Invalid AML Opcode: 0x%2.2X",
             Op->Common.AmlOpcode));
-        return;
+        return_VOID;
     }
 
     /* Check if this opcode requires argument sub-objects */
@@ -168,7 +169,7 @@ AcpiPsAppendArg (
     {
         /* Has no linked argument objects */
 
-        return;
+        return_VOID;
     }
 
     /* Append the argument to the linked argument list */
@@ -200,6 +201,8 @@ AcpiPsAppendArg (
 
         Op->Common.ArgListLength++;
     }
+
+    return_VOID;
 }
 
 
@@ -240,6 +243,7 @@ AcpiPsGetDepthNext (
     Next = AcpiPsGetArg (Op, 0);
     if (Next)
     {
+        ASL_CV_LABEL_FILENODE (Next);
         return (Next);
     }
 
@@ -248,6 +252,7 @@ AcpiPsGetDepthNext (
     Next = Op->Common.Next;
     if (Next)
     {
+        ASL_CV_LABEL_FILENODE (Next);
         return (Next);
     }
 
@@ -260,6 +265,8 @@ AcpiPsGetDepthNext (
         Arg = AcpiPsGetArg (Parent, 0);
         while (Arg && (Arg != Origin) && (Arg != Op))
         {
+
+            ASL_CV_LABEL_FILENODE (Arg);
             Arg = Arg->Common.Next;
         }
 
@@ -274,6 +281,7 @@ AcpiPsGetDepthNext (
         {
             /* Found sibling of parent */
 
+            ASL_CV_LABEL_FILENODE (Parent->Common.Next);
             return (Parent->Common.Next);
         }
 
@@ -281,6 +289,7 @@ AcpiPsGetDepthNext (
         Parent = Parent->Common.Parent;
     }
 
+    ASL_CV_LABEL_FILENODE (Next);
     return (Next);
 }
 
@@ -321,6 +330,7 @@ AcpiPsGetChild (
 
     case AML_BUFFER_OP:
     case AML_PACKAGE_OP:
+    case AML_VARIABLE_PACKAGE_OP:
     case AML_METHOD_OP:
     case AML_IF_OP:
     case AML_WHILE_OP:
@@ -329,7 +339,7 @@ AcpiPsGetChild (
         Child = AcpiPsGetArg (Op, 1);
         break;
 
-    case AML_POWER_RES_OP:
+    case AML_POWER_RESOURCE_OP:
     case AML_INDEX_FIELD_OP:
 
         Child = AcpiPsGetArg (Op, 2);

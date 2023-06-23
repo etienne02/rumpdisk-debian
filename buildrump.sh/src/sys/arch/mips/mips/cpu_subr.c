@@ -1,7 +1,7 @@
-/*	$NetBSD: cpu_subr.c,v 1.27 2016/07/11 16:15:36 matt Exp $	*/
+/*	$NetBSD: cpu_subr.c,v 1.58 2020/08/17 15:22:51 skrll Exp $	*/
 
 /*-
- * Copyright (c) 2010 The NetBSD Foundation, Inc.
+ * Copyright (c) 2010, 2019 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -30,27 +30,28 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.27 2016/07/11 16:15:36 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.58 2020/08/17 15:22:51 skrll Exp $");
 
-#include "opt_ddb.h"
 #include "opt_cputype.h"
+#include "opt_ddb.h"
 #include "opt_modular.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/param.h>
-#include <sys/cpu.h>
-#include <sys/intr.h>
 #include <sys/atomic.h>
+#include <sys/bitops.h>
+#include <sys/cpu.h>
 #include <sys/device.h>
+#include <sys/idle.h>
+#include <sys/intr.h>
+#include <sys/ipi.h>
+#include <sys/kernel.h>
 #include <sys/lwp.h>
+#include <sys/module.h>
 #include <sys/proc.h>
 #include <sys/ras.h>
-#include <sys/module.h>
-#include <sys/bitops.h>
-#include <sys/idle.h>
+#include <sys/reboot.h>
 #include <sys/xcall.h>
-#include <sys/kernel.h>
-#include <sys/ipi.h>
 
 #include <uvm/uvm.h>
 
@@ -63,7 +64,7 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.27 2016/07/11 16:15:36 matt Exp $");
 #include <mips/pte.h>
 
 #if defined(DDB) || defined(KGDB)
-#ifdef DDB 
+#ifdef DDB
 #include <mips/db_machdep.h>
 #include <ddb/db_command.h>
 #include <ddb/db_output.h>
@@ -71,7 +72,8 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.27 2016/07/11 16:15:36 matt Exp $");
 #endif
 
 #ifdef MIPS64_OCTEON
-extern struct cpu_softc octeon_cpu0_softc;
+#include <mips/cavium/octeonvar.h>
+extern struct cpu_softc octeon_cpu_softc[];
 #endif
 
 struct cpu_info cpu_info_store
@@ -93,7 +95,7 @@ struct cpu_info cpu_info_store
 	.ci_flags = CPUF_PRIMARY|CPUF_PRESENT|CPUF_RUNNING,
 #endif
 #ifdef MIPS64_OCTEON
-	.ci_softc = &octeon_cpu0_softc,
+	.ci_softc = &octeon_cpu_softc[0],
 #endif
 };
 
@@ -121,21 +123,24 @@ struct cpu_info *
 cpu_info_alloc(struct pmap_tlb_info *ti, cpuid_t cpu_id, cpuid_t cpu_package_id,
 	cpuid_t cpu_core_id, cpuid_t cpu_smt_id)
 {
+
 	KASSERT(cpu_id < MAXCPUS);
 
 #ifdef MIPS64_OCTEON
-	vaddr_t exc_page = MIPS_UTLB_MISS_EXC_VEC + 0x1000*cpu_id;
-	__CTASSERT(sizeof(struct cpu_info) + sizeof(struct pmap_tlb_info) <= 0x1000 - 0x280);
-	
-	struct cpu_info * const ci = ((struct cpu_info *)(exc_page + 0x1000)) - 1;
-	memset((void *)exc_page, 0, PAGE_SIZE);
+	const int exc_step = 1 << MIPS_EBASE_EXC_BASE_SHIFT;
+	vaddr_t exc_page = MIPS_UTLB_MISS_EXC_VEC + exc_step * cpu_id;
+	__CTASSERT(sizeof(struct cpu_info) + sizeof(struct pmap_tlb_info)
+	    <= exc_step - 0x280);
+
+	struct cpu_info * const ci = ((struct cpu_info *)(exc_page + exc_step)) - 1;
+	memset((void *)exc_page, 0, exc_step);
 
 	if (ti == NULL) {
 		ti = ((struct pmap_tlb_info *)ci) - 1;
 		pmap_tlb_info_init(ti);
 	}
 #else
-	const vaddr_t cpu_info_offset = (vaddr_t)&cpu_info_store & PAGE_MASK; 
+	const vaddr_t cpu_info_offset = (vaddr_t)&cpu_info_store & PAGE_MASK;
 	struct pglist pglist;
 	int error;
 
@@ -181,17 +186,17 @@ cpu_info_alloc(struct pmap_tlb_info *ti, cpuid_t cpu_id, cpuid_t cpu_package_id,
 
 	KASSERT(cpu_id != 0);
 	ci->ci_cpuid = cpu_id;
-	ci->ci_data.cpu_package_id = cpu_package_id;
-	ci->ci_data.cpu_core_id = cpu_core_id;
-	ci->ci_data.cpu_smt_id = cpu_smt_id;
+	ci->ci_pmap_kern_segtab = &pmap_kern_segtab,
 	ci->ci_cpu_freq = cpu_info_store.ci_cpu_freq;
 	ci->ci_cctr_freq = cpu_info_store.ci_cctr_freq;
-        ci->ci_cycles_per_hz = cpu_info_store.ci_cycles_per_hz;
-        ci->ci_divisor_delay = cpu_info_store.ci_divisor_delay;
-        ci->ci_divisor_recip = cpu_info_store.ci_divisor_recip;
+	ci->ci_cycles_per_hz = cpu_info_store.ci_cycles_per_hz;
+	ci->ci_divisor_delay = cpu_info_store.ci_divisor_delay;
+	ci->ci_divisor_recip = cpu_info_store.ci_divisor_recip;
 	ci->ci_cpuwatch_count = cpu_info_store.ci_cpuwatch_count;
 
-	pmap_md_alloc_ephemeral_address_space(ci); 
+	cpu_topology_set(ci, cpu_package_id, cpu_core_id, cpu_smt_id, 0);
+
+	pmap_md_alloc_ephemeral_address_space(ci);
 
 	mi_cpu_attach(ci);
 
@@ -206,17 +211,18 @@ cpu_hwrena_setup(void)
 {
 #if (MIPS32R2 + MIPS64R2) > 0
 	const int cp0flags = mips_options.mips_cpu->cpu_cp0flags;
+
 	if ((cp0flags & MIPS_CP0FL_USE) == 0)
 		return;
 
-	if (cp0flags & MIPS_CP0FL_HWRENA) {
+	if (CPUISMIPSNNR2) {
 		mipsNN_cp0_hwrena_write(
-		    MIPS_HWRENA_UL
-		    |MIPS_HWRENA_CCRES
-		    |MIPS_HWRENA_CC
-		    |MIPS_HWRENA_SYNCI_STEP
-		    |MIPS_HWRENA_CPUNUM);
-		if (cp0flags & MIPS_CP0FL_USERLOCAL) {
+		    (MIPS_HAS_USERLOCAL ? MIPS_HWRENA_UL : 0)
+		    | MIPS_HWRENA_CCRES
+		    | MIPS_HWRENA_CC
+		    | MIPS_HWRENA_SYNCI_STEP
+		    | MIPS_HWRENA_CPUNUM);
+		if (MIPS_HAS_USERLOCAL) {
 			mipsNN_cp0_userlocal_write(curlwp->l_private);
 		}
 	}
@@ -284,6 +290,11 @@ cpu_attach_common(device_t self, struct cpu_info *ci)
 	 * Initialize IPI framework for this cpu instance
 	 */
 	ipi_init(ci);
+
+	kcpuset_create(&ci->ci_shootdowncpus, true);
+	kcpuset_create(&ci->ci_multicastcpus, true);
+	kcpuset_create(&ci->ci_watchcpus, true);
+	kcpuset_create(&ci->ci_ddbcpus, true);
 #endif
 }
 
@@ -333,7 +344,7 @@ cpu_startup_common(void)
 	 * map those pages.)
 	 */
 
-	format_bytes(pbuf, sizeof(pbuf), ptoa(uvmexp.free));
+	format_bytes(pbuf, sizeof(pbuf), ptoa(uvm_availmem(false)));
 	printf("avail memory = %s\n", pbuf);
 
 #if defined(__mips_n32)
@@ -366,13 +377,13 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 
 	/* Save floating point register context, if any. */
 	KASSERT(l == curlwp);
-	if (fpu_used_p()) {
+	if (fpu_used_p(l)) {
 		size_t fplen;
 		/*
 		 * If this process is the current FP owner, dump its
 		 * context to the PCB first.
 		 */
-		fpu_save();
+		fpu_save(l);
 
 		/*
 		 * The PCB FP regs struct includes the FP CSR, so use the
@@ -396,6 +407,7 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 int
 cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
 {
+
 	/* XXX:  Do we validate the addresses?? */
 	return 0;
 }
@@ -446,7 +458,7 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		size_t fplen;
 
 		/* Disable the FPU contents. */
-		fpu_discard();
+		fpu_discard(l);
 
 #if !defined(__mips_o32)
 		if (_MIPS_SIM_NEWABI_P(l->l_proc->p_md.md_abi)) {
@@ -476,85 +488,59 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 }
 
 void
-cpu_need_resched(struct cpu_info *ci, int flags)
+cpu_need_resched(struct cpu_info *ci, struct lwp *l, int flags)
 {
-	struct lwp * const l = ci->ci_data.cpu_onproc;
-#ifdef MULTIPROCESSOR
-	struct cpu_info * const cur_ci = curcpu();
-#endif
 
 	KASSERT(kpreempt_disabled());
 
-	ci->ci_want_resched |= flags;
-
-	if (__predict_false((l->l_pflag & LP_INTR) != 0)) {
-		/*
-		 * No point doing anything, it will switch soon.
-		 * Also here to prevent an assertion failure in
-		 * kpreempt() due to preemption being set on a
-		 * soft interrupt LWP.
-		 */
-		return;
-	}
-
-	if (__predict_false(l == ci->ci_data.cpu_idlelwp)) {
-#ifdef MULTIPROCESSOR
-		/*
-		 * If the other CPU is idling, it must be waiting for an
-		 * interrupt.  So give it one.
-		 */
-		if (__predict_false(ci != cur_ci))
-			cpu_send_ipi(ci, IPI_NOP);
-#endif
-		return;
-	}
-
-#ifdef MULTIPROCESSOR
-	atomic_or_uint(&ci->ci_want_resched, flags);
-#else
-	ci->ci_want_resched |= flags;
-#endif
-
-	if (flags & RESCHED_KPREEMPT) {
+	if ((flags & RESCHED_KPREEMPT) != 0) {
 #ifdef __HAVE_PREEMPTION
-		atomic_or_uint(&l->l_dopreempt, DOPREEMPT_ACTIVE);
-		if (ci == cur_ci) {
+		if ((flags & RESCHED_REMOTE) != 0) {
+			cpu_send_ipi(ci, IPI_KPREEMPT);
+		} else {
 			softint_trigger(SOFTINT_KPREEMPT);
-                } else {
-                        cpu_send_ipi(ci, IPI_KPREEMPT);
-                }
+		}
 #endif
 		return;
 	}
-	l->l_md.md_astpending = 1;		/* force call to ast() */
+	if ((flags & RESCHED_REMOTE) != 0) {
 #ifdef MULTIPROCESSOR
-	if (ci != cur_ci && (flags & RESCHED_IMMED)) {
 		cpu_send_ipi(ci, IPI_AST);
-	} 
 #endif
+	} else {
+		l->l_md.md_astpending = 1;		/* force call to ast() */
+	}
 }
 
 uint32_t
 cpu_clkf_usermode_mask(void)
 {
+
 	return CPUISMIPS3 ? MIPS_SR_KSU_USER : MIPS_SR_KU_PREV;
 }
 
 void
 cpu_signotify(struct lwp *l)
 {
+
 	KASSERT(kpreempt_disabled());
 #ifdef __HAVE_FAST_SOFTINTS
 	KASSERT(lwp_locked(l, NULL));
 #endif
-	KASSERT(l->l_stat == LSONPROC || l->l_stat == LSRUN || l->l_stat == LSSTOP);
 
-	l->l_md.md_astpending = 1; 		/* force call to ast() */
+	if (l->l_cpu != curcpu()) {
+#ifdef MULTIPROCESSOR
+		cpu_send_ipi(l->l_cpu, IPI_AST);
+#endif
+	} else {
+		l->l_md.md_astpending = 1; 	/* force call to ast() */
+	}
 }
 
 void
 cpu_need_proftick(struct lwp *l)
 {
+
 	KASSERT(kpreempt_disabled());
 	KASSERT(l->l_cpu == curcpu());
 
@@ -562,20 +548,12 @@ cpu_need_proftick(struct lwp *l)
 	l->l_md.md_astpending = 1;		/* force call to ast() */
 }
 
-void
-cpu_set_curpri(int pri)
-{
-	kpreempt_disable();
-	curcpu()->ci_schedstate.spc_curpriority = pri;
-	kpreempt_enable();
-}
-
-
 #ifdef __HAVE_PREEMPTION
 bool
 cpu_kpreempt_enter(uintptr_t where, int s)
 {
-        KASSERT(kpreempt_disabled());
+
+	KASSERT(kpreempt_disabled());
 
 #if 0
 	if (where == (intptr_t)-2) {
@@ -614,6 +592,7 @@ cpu_kpreempt_exit(uintptr_t where)
 bool
 cpu_kpreempt_disabled(void)
 {
+
 	/*
 	 * Any elevated IPL disables preemption.
 	 */
@@ -638,11 +617,19 @@ cpu_idle(void)
 bool
 cpu_intr_p(void)
 {
-	bool rv;
-	kpreempt_disable();
-	rv = (curcpu()->ci_idepth != 0);
-	kpreempt_enable();
-	return rv;
+	uint64_t ncsw;
+	int idepth;
+	lwp_t *l;
+
+	l = curlwp;
+	do {
+		ncsw = l->l_ncsw;
+		__insn_barrier();
+		idepth = l->l_cpu->ci_idepth;
+		__insn_barrier();
+	} while (__predict_false(ncsw != l->l_ncsw));
+
+	return idepth != 0;
 }
 
 #ifdef MULTIPROCESSOR
@@ -650,6 +637,7 @@ cpu_intr_p(void)
 void
 cpu_broadcast_ipi(int tag)
 {
+
 	// No reason to remove ourselves since multicast_ipi will do that for us
 	cpu_multicast_ipi(cpus_running, tag);
 }
@@ -658,18 +646,17 @@ void
 cpu_multicast_ipi(const kcpuset_t *kcp, int tag)
 {
 	struct cpu_info * const ci = curcpu();
-	kcpuset_t *kcp2;
+	kcpuset_t *kcp2 = ci->ci_multicastcpus;
 
 	if (kcpuset_match(cpus_running, ci->ci_data.cpu_kcpuset))
 		return;
 
-	kcpuset_clone(&kcp2, kcp);
+	kcpuset_copy(kcp2, kcp);
 	kcpuset_remove(kcp2, ci->ci_data.cpu_kcpuset);
 	for (cpuid_t cii; (cii = kcpuset_ffs(kcp2)) != 0; ) {
 		kcpuset_clear(kcp2, --cii);
 		(void)cpu_send_ipi(cpu_lookup(cii), tag);
 	}
-	kcpuset_destroy(kcp2);
 }
 
 int
@@ -683,9 +670,9 @@ static void
 cpu_ipi_wait(const char *s, const kcpuset_t *watchset, const kcpuset_t *wanted)
 {
 	bool done = false;
-	kcpuset_t *kcp;
-	kcpuset_create(&kcp, false);
-	
+	struct cpu_info * const ci = curcpu();
+	kcpuset_t *kcp = ci->ci_watchcpus;
+
 	/* some finite amount of time */
 
 	for (u_long limit = curcpu()->ci_cpu_freq/10; !done && limit--; ) {
@@ -707,8 +694,6 @@ cpu_ipi_wait(const char *s, const kcpuset_t *watchset, const kcpuset_t *wanted)
 			printf("\n");
 		}
 	}
-
-	kcpuset_destroy(kcp);
 }
 
 /*
@@ -769,8 +754,10 @@ cpu_pause(struct reg *regsp)
 	int s = splhigh();
 	cpuid_t cii = cpu_index(curcpu());
 
-	if (__predict_false(cold))
+	if (__predict_false(cold)) {
+		splx(s);
 		return;
+	}
 
 	do {
 		kcpuset_atomic_set(cpus_paused, cii);
@@ -796,19 +783,18 @@ void
 cpu_pause_others(void)
 {
 	struct cpu_info * const ci = curcpu();
-	kcpuset_t *kcp;
 
 	if (cold || kcpuset_match(cpus_running, ci->ci_data.cpu_kcpuset))
 		return;
 
-	kcpuset_clone(&kcp, cpus_running);
+	kcpuset_t *kcp = ci->ci_ddbcpus;
+
+	kcpuset_copy(kcp, cpus_running);
 	kcpuset_remove(kcp, ci->ci_data.cpu_kcpuset);
 	kcpuset_remove(kcp, cpus_paused);
 
 	cpu_broadcast_ipi(IPI_SUSPEND);
 	cpu_ipi_wait("pause", cpus_paused, kcp);
-
-	kcpuset_destroy(kcp);
 }
 
 /*
@@ -817,19 +803,18 @@ cpu_pause_others(void)
 void
 cpu_resume(cpuid_t cii)
 {
-	kcpuset_t *kcp;
 
 	if (__predict_false(cold))
 		return;
 
-	kcpuset_create(&kcp, true);
+	struct cpu_info * const ci = curcpu();
+	kcpuset_t *kcp = ci->ci_ddbcpus;
+
 	kcpuset_set(kcp, cii);
 	kcpuset_atomicly_remove(cpus_resumed, cpus_resumed);
 	kcpuset_atomic_clear(cpus_paused, cii);
 
 	cpu_ipi_wait("resume", cpus_resumed, kcp);
-
-	kcpuset_destroy(kcp);
 }
 
 /*
@@ -838,19 +823,19 @@ cpu_resume(cpuid_t cii)
 void
 cpu_resume_others(void)
 {
-	kcpuset_t *kcp;
 
 	if (__predict_false(cold))
 		return;
 
+	struct cpu_info * const ci = curcpu();
+	kcpuset_t *kcp = ci->ci_ddbcpus;
+
 	kcpuset_atomicly_remove(cpus_resumed, cpus_resumed);
-	kcpuset_clone(&kcp, cpus_paused);
+	kcpuset_copy(kcp, cpus_paused);
 	kcpuset_atomicly_remove(cpus_paused, cpus_paused);
 
 	/* CPUs awake on cpus_paused clear */
 	cpu_ipi_wait("resume", cpus_resumed, kcp);
-
-	kcpuset_destroy(kcp);
 }
 
 bool
@@ -867,8 +852,7 @@ cpu_debug_dump(void)
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
 	char running, hatched, paused, resumed, halted;
-
-	db_printf("CPU CPUID STATE CPUINFO            CPL INT MTX IPIS\n");
+	db_printf("CPU CPUID STATE CPUINFO            CPL INT MTX IPIS(A/R)\n");
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		hatched = (kcpuset_isset(cpus_hatched, cpu_index(ci)) ? 'H' : '-');
 		running = (kcpuset_isset(cpus_running, cpu_index(ci)) ? 'R' : '-');
@@ -989,13 +973,17 @@ cpu_boot_secondary_processors(void)
 {
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
+
+	if ((boothowto & RB_MD1) != 0)
+		return;
+
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		if (CPU_IS_PRIMARY(ci))
 			continue;
 		KASSERT(ci->ci_data.cpu_idlelwp);
 
 		/*
-		 * Skip this CPU if it didn't sucessfully hatch.
+		 * Skip this CPU if it didn't successfully hatch.
 		 */
 		if (!kcpuset_isset(cpus_hatched, cpu_index(ci)))
 			continue;
@@ -1004,8 +992,8 @@ cpu_boot_secondary_processors(void)
 		atomic_or_ulong(&ci->ci_flags, CPUF_RUNNING);
 		kcpuset_set(cpus_running, cpu_index(ci));
 		// Spin until the cpu calls idle_loop
-		for (u_int i = 0; i < 100; i++) {
-			if (kcpuset_isset(cpus_running, cpu_index(ci)))
+		for (u_int i = 0; i < 10000; i++) {
+			if (kcpuset_isset(kcpuset_running, cpu_index(ci)))
 				break;
 			delay(1000);
 		}
@@ -1022,6 +1010,7 @@ xc_send_ipi(struct cpu_info *ci)
 void
 cpu_ipi(struct cpu_info *ci)
 {
+
 	(*mips_locoresw.lsw_send_ipi)(ci, IPI_GENERIC);
 }
 
@@ -1043,6 +1032,7 @@ cpu_vmspace_exec(lwp_t *l, vaddr_t start, vaddr_t end)
 	 * well before setreg gets called.
 	 */
 	uint32_t sr = mips_cp0_status_read();
+
 	if (end != (uint32_t) end) {
 		mips_cp0_status_write(sr | MIPS3_SR_UX);
 	} else {
@@ -1054,9 +1044,9 @@ cpu_vmspace_exec(lwp_t *l, vaddr_t start, vaddr_t end)
 int
 cpu_lwp_setprivate(lwp_t *l, void *v)
 {
+
 #if (MIPS32R2 + MIPS64R2) > 0
-	if (l == curlwp
-	    && (mips_options.mips_cpu->cpu_cp0flags & MIPS_CP0FL_USERLOCAL)) {
+	if (l == curlwp && MIPS_HAS_USERLOCAL) {
 		mipsNN_cp0_userlocal_write(v);
 	}
 #endif
@@ -1091,6 +1081,7 @@ cpuwatch_free(cpu_watchpoint_t *cwp)
 {
 #ifdef DIAGNOSTIC
 	struct cpu_info * const ci = curcpu();
+
 	KASSERT(cwp >= &ci->ci_cpuwatch_tab[0] &&
 		cwp <= &ci->ci_cpuwatch_tab[ci->ci_cpuwatch_count-1]);
 #endif

@@ -1,4 +1,4 @@
-/* $NetBSD: btvmei.c,v 1.30 2014/03/29 19:28:24 christos Exp $ */
+/* $NetBSD: btvmei.c,v 1.35 2021/08/07 16:19:14 thorpej Exp $ */
 
 /*
  * Copyright (c) 1999
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btvmei.c,v 1.30 2014/03/29 19:28:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btvmei.c,v 1.35 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,7 +61,7 @@ void b3_617_slaveconfig(device_t, struct vme_attach_args *);
 static void b3_617_vmeintr(struct b3_617_softc *, unsigned char);
 
 /*
- * mapping ressources, needed for deallocation
+ * mapping resources, needed for deallocation
  */
 struct b3_617_vmeresc {
 	bus_space_handle_t handle;
@@ -141,7 +141,8 @@ b3_617_attach(device_t parent, device_t self, void *aux)
 	 * Use a low interrupt level (the lowest?).
 	 * We will raise before calling a subdevice's handler.
 	 */
-	sc->sc_ih = pci_intr_establish(pc, ih, IPL_BIO, b3_617_intr, sc);
+	sc->sc_ih = pci_intr_establish_xname(pc, ih, IPL_BIO, b3_617_intr, sc,
+	    device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(sc->sc_dev, "couldn't establish interrupt");
 		if (intrstr != NULL)
@@ -176,7 +177,7 @@ b3_617_attach(device_t parent, device_t self, void *aux)
 	sc->csrwindow.offset = -1;
 	sc->dmawindow24.offset = -1;
 	sc->dmawindow32.offset = -1;
-	config_found(self, &vaa, 0);
+	config_found(self, &vaa, 0, CFARGS_NONE);
 }
 
 #ifdef notyet
@@ -335,7 +336,7 @@ b3_617_halt(struct b3_617_softc *sc)
 {
 	/*
 	 * because detach code checks for existence of children,
-	 * all ressources (mappings, VME IRQs, DMA requests)
+	 * all resources (mappings, VME IRQs, DMA requests)
 	 * should be deallocated at this point
 	 */
 
@@ -446,7 +447,7 @@ b3_617_map_vme(void *vsc, vme_addr_t vmeaddr, vme_size_t len, vme_am_t am, vme_d
 	/*
 	 * save all data needed for later unmapping
 	 */
-	r = malloc(sizeof(*r), M_DEVBUF, M_NOWAIT); /* XXX check! */
+	r = malloc(sizeof(*r), M_DEVBUF, M_WAITOK);
 	r->handle = *handle;
 	r->len = len;
 	r->firstpage = first;
@@ -551,10 +552,7 @@ b3_617_establish_vmeint(void *vsc, vme_intr_handle_t handle, int prior, int (*fu
 	long lv;
 	int s;
 
-	/* no point in sleeping unless someone can free memory. */
-	ih = malloc(sizeof *ih, M_DEVBUF, cold ? M_NOWAIT : M_WAITOK);
-	if (ih == NULL)
-		panic("b3_617_map_vmeint: can't malloc handler info");
+	ih = malloc(sizeof *ih, M_DEVBUF, M_WAITOK);
 
 	lv = (long)handle; /* XXX */
 

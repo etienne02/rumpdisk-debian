@@ -1,4 +1,4 @@
-/*	$NetBSD: pm_runtime.h,v 1.3 2014/08/23 08:03:33 riastradh Exp $	*/
+/*	$NetBSD: pm_runtime.h,v 1.5 2020/02/14 14:34:59 maya Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -32,6 +32,8 @@
 #ifndef _LINUX_PM_RUNTIME_H_
 #define _LINUX_PM_RUNTIME_H_
 
+#include <linux/notifier.h>
+
 struct device;
 
 static inline void
@@ -42,6 +44,12 @@ pm_runtime_allow(struct device *dev __unused)
 static inline void
 pm_runtime_disable(struct device *dev __unused)
 {
+}
+
+static inline int
+pm_runtime_get_noresume(struct device *dev __unused)
+{
+	return 0;
 }
 
 static inline int

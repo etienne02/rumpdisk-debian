@@ -1,11 +1,12 @@
-/* $NetBSD: pmap.h,v 1.1 2014/09/19 17:36:26 matt Exp $ */
+/* $NetBSD: pmap.h,v 1.9 2021/05/01 07:41:24 skrll Exp $ */
 
-/*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
+/*
+ * Copyright (c) 2014, 2019, 2021 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Matt Thomas of 3am Software Foundry.
+ * by Matt Thomas (of 3am Software Foundry), Maxime Villard, and
+ * Nick Hudson.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,32 +39,44 @@
 
 #if !defined(_MODULE)
 
+#include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/pool.h>
 #include <sys/evcnt.h>
 
+#include <uvm/uvm_physseg.h>
 #include <uvm/pmap/vmpagemd.h>
 
 #include <riscv/pte.h>
+#include <riscv/sysreg.h>
 
-#define	PMAP_SEGTABSIZE		(__SHIFTOUT(PTE_PPN0, PTE_PPN0) + 1)
-#define	PMAP_PDETABSIZE		(__SHIFTOUT(PTE_PPN0, PTE_PPN0) + 1)
+#define PMAP_SEGTABSIZE	NPTEPG
+#define PMAP_PDETABSIZE	NPTEPG
 
-#define NBSEG		(NBPG*NPTEPG)
 #ifdef _LP64
-#define NBXSEG		(NBSEG*NSEGPG)
-#define XSEGSHIFT	(SEGSHIFT + PGSHIFT - 3)
-#define XSEGOFSET	(PTE_PPN1|SEGOFSET)
-#define SEGSHIFT	(PGSHIFT + PGSHIFT - 3)
+#define PTPSHIFT	3
+/* This is SV48. */
+//#define SEGLENGTH + SEGSHIFT + SEGSHIFT */
+
+/* This is SV39. */
+#define XSEGSHIFT	(SEGSHIFT + SEGLENGTH)
+#define NBXSEG		(1ULL << XSEGSHIFT)
+#define XSEGOFSET	(NBXSEG - 1)		/* byte offset into xsegment */
+#define XSEGLENGTH	(PGSHIFT - 3)
+#define NXSEGPG		(1 << XSEGLENGTH)
 #else
-#define SEGSHIFT	(PGSHIFT + PGSHIFT - 2)
+#define PTPSHIFT	2
+#define XSEGSHIFT	SEGLENGTH
 #endif
-#define SEGOFSET	(PTE_PPN0|PAGE_MASK)
+
+#define SEGLENGTH	(PGSHIFT - PTPSHIFT)
+#define SEGSHIFT	(SEGLENGTH + PGSHIFT)
+#define NBSEG		(1 << SEGSHIFT)		/* bytes/segment */
+#define SEGOFSET	(NBSEG - 1)		/* byte offset into segment */
 
 #define KERNEL_PID	0
 
 #define PMAP_HWPAGEWALKER		1
-#define PMAP_TLB_NUM_PIDS		256
 #define PMAP_TLB_MAX			1
 #ifdef _LP64
 #define PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)(VM_MIN_KERNEL_ADDRESS - PAGE_SIZE))
@@ -72,9 +85,20 @@
 #define PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)0xdeadbeef)
 #define PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)0xdeadbeef)
 #endif
+#define PMAP_TLB_NUM_PIDS		(__SHIFTOUT_MASK(SATP_ASID) + 1)
+#define PMAP_TLB_BITMAP_LENGTH          PMAP_TLB_NUM_PIDS
 #define PMAP_TLB_FLUSH_ASID_ON_RESET	false
 
 #define pmap_phys_address(x)		(x)
+
+#ifndef __BSD_PTENTRY_T__
+#define __BSD_PTENTRY_T__
+#ifdef _LP64
+#define PRIxPTE         PRIx64
+#else
+#define PRIxPTE         PRIx32
+#endif
+#endif /* __BSD_PTENTRY_T__ */
 
 #define PMAP_NEED_PROCWR
 static inline void
@@ -83,9 +107,7 @@ pmap_procwr(struct proc *p, vaddr_t va, vsize_t len)
 	__asm __volatile("fence\trw,rw; fence.i");
 }
 
-
 #include <uvm/pmap/tlb.h>
-
 #include <uvm/pmap/pmap_tlb.h>
 
 #define PMAP_GROWKERNEL
@@ -96,26 +118,38 @@ pmap_procwr(struct proc *p, vaddr_t va, vsize_t len)
 #define __HAVE_PMAP_MD
 struct pmap_md {
 	paddr_t md_ptbr;
+	pd_entry_t *md_pdetab;
 };
 
-struct vm_page *
-        pmap_md_alloc_poolpage(int flags);
-vaddr_t pmap_md_map_poolpage(paddr_t, vsize_t);
-void    pmap_md_unmap_poolpage(vaddr_t, vsize_t);
-bool    pmap_md_direct_mapped_vaddr_p(vaddr_t);
-bool    pmap_md_io_vaddr_p(vaddr_t);
-paddr_t pmap_md_direct_mapped_vaddr_to_paddr(vaddr_t);
-vaddr_t pmap_md_direct_map_paddr(paddr_t);
-void    pmap_md_init(void);
-bool    pmap_md_tlb_check_entry(void *, vaddr_t, tlb_asid_t, pt_entry_t);
-//void    pmap_md_page_syncicache(struct vm_page *, const kcpuset_t *);
+void	pmap_bootstrap(void);
 
-void	pmap_md_pdetab_activate(struct pmap *);
+struct vm_page *
+	pmap_md_alloc_poolpage(int flags);
+vaddr_t	pmap_md_map_poolpage(paddr_t, vsize_t);
+void	pmap_md_unmap_poolpage(vaddr_t, vsize_t);
+bool	pmap_md_direct_mapped_vaddr_p(vaddr_t);
+bool	pmap_md_io_vaddr_p(vaddr_t);
+paddr_t	pmap_md_direct_mapped_vaddr_to_paddr(vaddr_t);
+vaddr_t	pmap_md_direct_map_paddr(paddr_t);
+void	pmap_md_init(void);
+bool	pmap_md_tlb_check_entry(void *, vaddr_t, tlb_asid_t, pt_entry_t);
+
+void	pmap_md_xtab_activate(struct pmap *, struct lwp *);
+void	pmap_md_xtab_deactivate(struct pmap *);
 void	pmap_md_pdetab_init(struct pmap *);
+bool	pmap_md_ok_to_steal_p(const uvm_physseg_t, size_t);
+
+extern vaddr_t pmap_direct_base;
+extern vaddr_t pmap_direct_end;
+#define PMAP_DIRECT_MAP(pa)	(pmap_direct_base + (pa))
+#define PMAP_DIRECT_UNMAP(va)	((paddr_t)(va) - pmap_direct_base)
+
+#define MEGAPAGE_TRUNC(x)	((x) & ~SEGOFSET)
+#define MEGAPAGE_ROUND(x)	MEGAPAGE_TRUNC((x) + SEGOFSET)
 
 #ifdef __PMAP_PRIVATE
 static inline void
-pmap_md_page_syncicache(struct vm_page *pg, const kcpuset_t *kc)
+pmap_md_page_syncicache(struct vm_page_md *mdpg, const kcpuset_t *kc)
 {
 	__asm __volatile("fence\trw,rw; fence.i");
 }
@@ -124,19 +158,18 @@ pmap_md_page_syncicache(struct vm_page *pg, const kcpuset_t *kc)
  * Virtual Cache Alias helper routines.  Not a problem for RISCV CPUs.
  */
 static inline bool
-pmap_md_vca_add(struct vm_page *pg, vaddr_t va, pt_entry_t *nptep)
+pmap_md_vca_add(struct vm_page_md *mdpg, vaddr_t va, pt_entry_t *nptep)
 {
 	return false;
 }
 
 static inline void
-pmap_md_vca_remove(struct vm_page *pg, vaddr_t va)
+pmap_md_vca_remove(struct vm_page_md *mdpg, vaddr_t va)
 {
-
 }
 
 static inline void
-pmap_md_vca_clean(struct vm_page *pg, vaddr_t va, int op)
+pmap_md_vca_clean(struct vm_page_md *mdpg, vaddr_t va, int op)
 {
 }
 
@@ -145,11 +178,9 @@ pmap_md_tlb_asid_max(void)
 {
 	return PMAP_TLB_NUM_PIDS - 1;
 }
+
 #endif /* __PMAP_PRIVATE */
 #endif /* _KERNEL */
-
-#define POOL_VTOPHYS(va)	((paddr_t)((vaddr_t)(va)-VM_MAX_KERNEL_ADDRESS))
-#define POOL_PHYSTOV(pa)	((vaddr_t)(paddr_t)(pa)+VM_MAX_KERNEL_ADDRESS)
 
 #include <uvm/pmap/pmap.h>
 
@@ -166,9 +197,9 @@ pmap_md_tlb_asid_max(void)
 struct vm_page_md {
 	uintptr_t mdpg_dummy[3];
 };
-#endif /* !__HVE_VM_PAGE_MD */
-
 __CTASSERT(sizeof(struct vm_page_md) == sizeof(uintptr_t)*3);
+
+#endif /* !__HAVE_VM_PAGE_MD */
 
 #endif /* MODULAR || _MODULE */
 

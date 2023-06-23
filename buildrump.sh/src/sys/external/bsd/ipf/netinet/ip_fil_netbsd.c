@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_fil_netbsd.c,v 1.18 2016/07/18 21:07:30 pgoyette Exp $	*/
+/*	$NetBSD: ip_fil_netbsd.c,v 1.36 2021/03/08 23:34:58 christos Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -8,7 +8,7 @@
 #if !defined(lint)
 #if defined(__NetBSD__)
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_fil_netbsd.c,v 1.18 2016/07/18 21:07:30 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_fil_netbsd.c,v 1.36 2021/03/08 23:34:58 christos Exp $");
 #else
 static const char sccsid[] = "@(#)ip_fil.c	2.41 6/5/96 (C) 1993-2000 Darren Reed";
 static const char rcsid[] = "@(#)Id: ip_fil_netbsd.c,v 1.1.1.2 2012/07/22 13:45:17 darrenr Exp";
@@ -57,6 +57,9 @@ static const char rcsid[] = "@(#)Id: ip_fil_netbsd.c,v 1.1.1.2 2012/07/22 13:45:
 #include <sys/module.h>
 #include <sys/mutex.h>
 #endif
+#if defined(__NetBSD__)
+#include <netinet/in_offload.h>
+#endif
 
 #include <net/if.h>
 #include <net/route.h>
@@ -71,13 +74,16 @@ static const char rcsid[] = "@(#)Id: ip_fil_netbsd.c,v 1.1.1.2 2012/07/22 13:45:
 # include <netinet/tcp_var.h>
 #endif
 #include <netinet/udp.h>
-#include <netinet/tcpip.h>
 #include <netinet/ip_icmp.h>
 #include "netinet/ip_compat.h"
 #ifdef USE_INET6
 # include <netinet/icmp6.h>
 # if (__NetBSD_Version__ >= 106000000)
 #  include <netinet6/nd6.h>
+# endif
+# if __NetBSD_Version__ >= 499001100
+#  include <netinet6/scope6_var.h>
+#  include <netinet6/in6_offload.h>
 # endif
 #endif
 #include "netinet/ip_fil.h"
@@ -217,7 +223,7 @@ ipf_check_wrapper(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 	 */
 	if (dir == PFIL_OUT) {
 		if ((*mp)->m_pkthdr.csum_flags & (M_CSUM_TCPv4|M_CSUM_UDPv4)) {
-			in_delayed_cksum(*mp);
+			in_undefer_cksum_tcpudp(*mp);
 			(*mp)->m_pkthdr.csum_flags &=
 			    ~(M_CSUM_TCPv4|M_CSUM_UDPv4);
 		}
@@ -252,7 +258,7 @@ ipf_check_wrapper6(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 	if (dir == PFIL_OUT) {
 		if ((*mp)->m_pkthdr.csum_flags & (M_CSUM_TCPv6|M_CSUM_UDPv6)) {
 #   if (__NetBSD_Version__ > 399000600)
-			in6_delayed_cksum(*mp);
+			in6_undefer_cksum_tcpudp(*mp);
 #   endif
 			(*mp)->m_pkthdr.csum_flags &= ~(M_CSUM_TCPv6|
 							M_CSUM_UDPv6);
@@ -268,10 +274,13 @@ ipf_check_wrapper6(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 
 
 # if defined(PFIL_TYPE_IFNET) && defined(PFIL_IFNET)
-static int ipf_pfilsync(void *, struct mbuf **, struct ifnet *, int);
 
-static int
-ipf_pfilsync(void *hdr, struct mbuf **mp, struct ifnet *ifp, int dir)
+#  if (__NetBSD_Version__ >= 799000400)
+
+static void ipf_pfilsync(void *, unsigned long, void *);
+
+static void
+ipf_pfilsync(void *hdr, unsigned long cmd, void *arg2)
 {
 	/*
 	 * The interface pointer is useless for create (we have nothing to
@@ -281,8 +290,20 @@ ipf_pfilsync(void *hdr, struct mbuf **mp, struct ifnet *ifp, int dir)
 	 * pointer, so it's not much use then, either.
 	 */
 	ipf_sync(&ipfmain, NULL);
+}
+
+#  else
+
+static int ipf_pfilsync(void *, struct mbuf **, struct ifnet *, int);
+
+static int
+ipf_pfilsync(void *hdr, struct mbuf **mp, struct ifnet *ifp, int dir)
+{
+	ipf_sync(&ipfmain, NULL);
 	return 0;
 }
+
+#  endif
 # endif
 
 #endif /* __NetBSD_Version__ >= 105110000 */
@@ -308,7 +329,7 @@ ipf_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 	enum kauth_network_req req;
 
 	result = KAUTH_RESULT_DEFER;
-	req = (enum kauth_network_req)arg0;
+	req = (enum kauth_network_req)(uintptr_t)arg0;
 
 	if (action != KAUTH_NETWORK_FIREWALL)
 		return result;
@@ -445,8 +466,13 @@ ipfattach(ipf_main_softc_t *softc)
 
 # if defined(PFIL_TYPE_IFNET) && defined(PFIL_IFNET)
 	if (ph_ifsync != NULL)
+#if (__NetBSD_Version__ >= 799000400)
+		(void) pfil_add_ihook((void *)ipf_pfilsync, NULL,
+				      PFIL_IFNET, ph_ifsync);
+#else
 		(void) pfil_add_hook((void *)ipf_pfilsync, NULL,
 				     PFIL_IFNET, ph_ifsync);
+#endif
 # endif
 #endif
 
@@ -562,8 +588,13 @@ ipfdetach(ipf_main_softc_t *softc)
 # if (__NetBSD_Version__ >= 104200000)
 #  if __NetBSD_Version__ >= 105110000
 #   if defined(PFIL_TYPE_IFNET) && defined(PFIL_IFNET)
+#    if __NetBSD_Version__ >= 799000400
+	(void) pfil_remove_ihook((void *)ipf_pfilsync, NULL,
+				PFIL_IFNET, ph_ifsync);
+#    else
 	(void) pfil_remove_hook((void *)ipf_pfilsync, NULL,
 				PFIL_IFNET, ph_ifsync);
+#    endif
 #   endif
 
 	if (ph_inet != NULL)
@@ -962,7 +993,7 @@ ipf_send_icmp_err(int type, fr_info_t *fin, int dst)
 		}
 		xtra = MIN(fin->fin_plen, avail - iclen - max_linkhdr);
 		xtra = MIN(xtra, IPV6_MMTU - iclen);
-		if (dst == 0) {
+		if (dst == 0 && !IN6_IS_ADDR_LINKLOCAL(&fin->fin_dst6.in6)) {
 			if (ipf_ifpaddr(&ipfmain, 6, FRI_NORMAL, ifp,
 				       &dst6, NULL) == -1) {
 				FREE_MB_T(m);
@@ -1284,7 +1315,7 @@ ipf_fastroute(mb_t *m0, mb_t **mpp, fr_info_t *fin, frdest_t *fdp)
 		else
 			mhip->ip_off |= IP_MF;
 		mhip->ip_len = htons((u_short)(len + mhlen));
-		m->m_next = m_copy(m0, off, len);
+		m->m_next = m_copym(m0, off, len, M_DONTWAIT);
 		if (m->m_next == 0) {
 			error = ENOBUFS;	/* ??? */
 			goto sendorfree;
@@ -1330,6 +1361,7 @@ done:
 		softc->ipf_frouteok[1]++;
 
 # if __NetBSD_Version__ >= 499001100
+	rtcache_unref(rt, ro);
 	rtcache_free(ro);
 # else
 	if (rt) {
@@ -1394,6 +1426,12 @@ ipf_fastroute6(struct mbuf *m0, struct mbuf **mpp, fr_info_t *fin,
 		sockaddr_in6_init(&u.dst6, &fdp->fd_ip6.in6, 0, 0, 0);
 	else
 		sockaddr_in6_init(&u.dst6, &fin->fin_fi.fi_dst.in6, 0, 0, 0);
+	if ((error = in6_setscope(&u.dst6.sin6_addr, ifp,
+	    &u.dst6.sin6_scope_id)) != 0)
+		return error;
+	if ((error = sa6_embedscope(&u.dst6, 0)) != 0)
+		return error;
+
 	dst = &u.dst;
 	rtcache_setdst(ro, dst);
 
@@ -1405,6 +1443,9 @@ ipf_fastroute6(struct mbuf *m0, struct mbuf **mpp, fr_info_t *fin,
 	dst6->sin6_family = AF_INET6;
 	dst6->sin6_len = sizeof(struct sockaddr_in6);
 	dst6->sin6_addr = fin->fin_fi.fi_dst.in6;
+	/* KAME */
+	if (IN6_IS_ADDR_LINKLOCAL(&dst6->sin6_addr))
+		dst6->sin6_addr.s6_addr16[1] = htons(ifp->if_index);
 
 	if (fdp != NULL) {
 		if (IP6_NOTZERO(&fdp->fd_ip6))
@@ -1423,17 +1464,9 @@ ipf_fastroute6(struct mbuf *m0, struct mbuf **mpp, fr_info_t *fin,
 		goto bad;
 	}
 
-	/* KAME */
-# if __NetBSD_Version__ >= 499001100
-	if (IN6_IS_ADDR_LINKLOCAL(&u.dst6.sin6_addr))
-		u.dst6.sin6_addr.s6_addr16[1] = htons(ifp->if_index);
-# else
-	if (IN6_IS_ADDR_LINKLOCAL(&dst6->sin6_addr))
-		dst6->sin6_addr.s6_addr16[1] = htons(ifp->if_index);
-# endif
-
 	{
-# if (__NetBSD_Version__ >= 106010000) && !defined(IN6_LINKMTU)
+# if (__NetBSD_Version__ >= 106010000) && !defined(IN6_LINKMTU) \
+     && defined(IPV6CTL_ACCEPT_RTADV)
 		struct in6_ifextra *ife;
 # endif
 		if (rt->rt_flags & RTF_GATEWAY)
@@ -1447,26 +1480,31 @@ ipf_fastroute6(struct mbuf *m0, struct mbuf **mpp, fr_info_t *fin,
 		/* Determine path MTU. */
 # if (__NetBSD_Version__ <= 106009999)
 		mtu = nd_ifinfo[ifp->if_index].linkmtu;
-# else
+# elif defined(IPV6CTL_ACCEPT_RTADV)
 #  ifdef IN6_LINKMTU
 		mtu = IN6_LINKMTU(ifp);
 #  else
 		ife = (struct in6_ifextra *)(ifp)->if_afdata[AF_INET6];
 		mtu = ife->nd_ifinfo[ifp->if_index].linkmtu;
 #  endif
+# else
+		mtu = ifp->if_mtu;
 # endif
 		if ((error == 0) && (m0->m_pkthdr.len <= mtu)) {
 # if __NetBSD_Version__ >= 499001100
-			error = nd6_output(ifp, ifp, m0, satocsin6(dst), rt);
+			error = ip6_if_output(ifp, ifp, m0, satocsin6(dst), rt);
 # else
 			error = nd6_output(ifp, ifp, m0, dst6, rt);
 # endif
+			if (error)
+				*mpp = NULL; /* m0 has been freed */
 		} else {
 			error = EMSGSIZE;
 		}
 	}
 bad:
 # if __NetBSD_Version__ >= 499001100
+	rtcache_unref(rt, ro);
 	rtcache_free(ro);
 # else
 	if (ro->ro_rt != NULL) {
@@ -1501,6 +1539,7 @@ ipf_verifysrc(fr_info_t *fin)
 		rc = 0;
 	else
 		rc = (fin->fin_ifp == rt->rt_ifp);
+	rtcache_unref(rt, &iproute);
 	rtcache_free(&iproute);
 #else
 	dst = (struct sockaddr_in *)&iproute.ro_dst;
@@ -1598,7 +1637,7 @@ ipf_newisn(fr_info_t *fin)
 		return 0;
 #ifdef INET
 	return tcp_new_iss1((void *)&fin->fin_src, (void *)&fin->fin_dst,
-			    fin->fin_sport, fin->fin_dport, asz, 0);
+			    fin->fin_sport, fin->fin_dport, asz);
 #else
 	return ENOSYS;
 #endif

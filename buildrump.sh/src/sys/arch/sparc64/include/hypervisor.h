@@ -1,4 +1,4 @@
-/*	$NetBSD: hypervisor.h,v 1.5 2014/09/24 18:32:10 palle Exp $ */
+/*	$NetBSD: hypervisor.h,v 1.8 2021/07/03 19:18:55 palle Exp $ */
 /*	$OpenBSD: hypervisor.h,v 1.14 2011/06/26 17:23:46 kettenis Exp $	*/
 
 /*
@@ -36,7 +36,13 @@
 
 #ifndef _LOCORE
 int64_t	hv_api_get_version(uint64_t api_group,
-	    uint64_t *major_number, uint64_t *minor_number);
+						   uint64_t *major_number,
+						   uint64_t *minor_number);
+int64_t	hv_api_set_version(uint64_t api_group,
+						   uint64_t major_number,
+						   uint64_t req_minor_number,
+						   uint64_t* actual_minor_number);
+#define HV_API_GROUP_INTERRUPT 0x002
 #endif
 /*
  * Domain services
@@ -90,6 +96,17 @@ struct tsb_desc {
 	uint32_t	td_pgsz;
 	paddr_t		td_pa;
 	uint64_t	td_reserved;
+};
+
+struct mmufsa {
+	uint64_t	ift; /* instruction fault type */
+	uint64_t	ifa; /* instruction fault address */
+	uint64_t	ifc; /* instruction fault context */
+	uint64_t	reserved1[5]; /* reserved */
+	uint64_t	dft; /* data fault type */
+	uint64_t	dfa; /* data fault address */
+	uint64_t	dfc; /* data fault context */
+	uint64_t	reserved2[5]; /* reserved */
 };
 
 int64_t	hv_mmu_tsb_ctx0(uint64_t ntsb, paddr_t tsbptr);
@@ -373,5 +390,16 @@ int64_t	hv_rng_data_read(paddr_t raddr, uint64_t *delta);
 #define H_ENOMAP	14
 #define H_ETOOMANY	15
 #define H_ECHANNEL	16
+
+#ifndef _LOCORE
+extern uint64_t sun4v_group_interrupt_major;
+extern uint64_t sun4v_group_sdio_major;
+
+int64_t sun4v_intr_devino_to_sysino(uint64_t, uint64_t, uint64_t *);
+int64_t sun4v_intr_setcookie(uint64_t, uint64_t, uint64_t);
+int64_t sun4v_intr_setenabled(uint64_t, uint64_t, uint64_t);
+int64_t	sun4v_intr_setstate(uint64_t, uint64_t, uint64_t);
+int64_t	sun4v_intr_settarget(uint64_t, uint64_t, uint64_t);
+#endif
 
 #endif	/* _HYPERVISOR_H_ */

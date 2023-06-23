@@ -1,4 +1,4 @@
-/*	$NetBSD: lpt_isa.c,v 1.68 2009/11/23 02:13:47 rmind Exp $	*/
+/*	$NetBSD: lpt_isa.c,v 1.70 2019/12/27 09:28:41 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994 Charles M. Hannum.
@@ -54,7 +54,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lpt_isa.c,v 1.68 2009/11/23 02:13:47 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lpt_isa.c,v 1.70 2019/12/27 09:28:41 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -130,7 +130,7 @@ lpt_port_test(bus_space_tag_t iot, bus_space_handle_t ioh,
  *
  *	2) You should be able to write to and read back the same value
  *	   to the control port lower 5 bits, the upper 3 bits are reserved
- *	   per the IBM PC technical reference manauls and different boards
+ *	   per the IBM PC technical reference manuals and different boards
  *	   do different things with them.  Do an alternating zeros, alternating
  *	   ones, walking zero, and walking one test to check for stuck bits.
  *
@@ -247,8 +247,8 @@ lpt_isa_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_ic = ia->ia_ic;
 	if (sc->sc_irq != -1)
-		lsc->sc_ih = isa_intr_establish(sc->sc_ic, sc->sc_irq,
-		    IST_EDGE, IPL_TTY, lptintr, lsc);
+		lsc->sc_ih = isa_intr_establish_xname(sc->sc_ic, sc->sc_irq,
+		    IST_EDGE, IPL_TTY, lptintr, lsc, device_xname(lsc->sc_dev));
 }
 
 static int

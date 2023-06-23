@@ -1,4 +1,4 @@
-#	$NetBSD: files.dev,v 1.1 2015/08/21 02:18:18 uebayasi Exp $
+#	$NetBSD: files.dev,v 1.7 2021/07/21 23:16:09 jmcneill Exp $
 
 file	dev/bio.c			bio			needs-flag
 file	dev/ccd.c			ccd
@@ -6,12 +6,13 @@ file	dev/cgd.c			cgd
 file	dev/cgd_crypto.c		cgd
 file	dev/clock_subr.c		kern	# XXX
 file	dev/clockctl.c			clockctl
-file	dev/dksubr.c			cgd | xbd | ccd | raid | dm | ld
+file	dev/dksubr.c			cgd | xbd | ccd | raid | dm | ld | sd | cd | wd
 file	dev/dkwedge/dk.c		kern	# XXX
 file	dev/dkwedge/dkwedge_apple.c	dkwedge_method_apple
 file	dev/dkwedge/dkwedge_bsdlabel.c	dkwedge_method_bsdlabel
 file	dev/dkwedge/dkwedge_gpt.c	dkwedge_method_gpt
 file	dev/dkwedge/dkwedge_mbr.c	dkwedge_method_mbr
+file	dev/dkwedge/dkwedge_rdb.c	dkwedge_method_rdb
 file	dev/firmload.c			firmload
 file	dev/fss.c			fss
 file	dev/keylock.c			keylock
@@ -20,7 +21,9 @@ file	dev/md.c			md
 file	dev/mm.c			kern	# XXX
 file	dev/nullcons_subr.c		nullcons		needs-flag
 file	dev/radio.c			radio			needs-flag
-file	dev/rndpseudo.c			rnd			needs-flag
+file	dev/random.c			rnd			needs-flag
 file	dev/sequencer.c			sequencer		needs-flag
 file	dev/video.c			video			needs-flag
 file	dev/vnd.c			vnd
+file	dev/ipmi.c			ipmi			needs-flag
+file	dev/smbios.c			smbios

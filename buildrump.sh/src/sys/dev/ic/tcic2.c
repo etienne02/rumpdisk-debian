@@ -1,4 +1,4 @@
-/*	$NetBSD: tcic2.c,v 1.38 2012/10/27 17:18:22 chs Exp $	*/
+/*	$NetBSD: tcic2.c,v 1.41 2021/08/07 16:19:12 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998, 1999 Christoph Badura.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tcic2.c,v 1.38 2012/10/27 17:18:22 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tcic2.c,v 1.41 2021/08/07 16:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -416,8 +416,9 @@ tcic_attach_socket(struct tcic_handle *h)
 	locs[PCMCIABUSCF_CONTROLLER] = 0;
 	locs[PCMCIABUSCF_SOCKET] = h->sock;
 
-	h->pcmcia = config_found_sm_loc(h->sc->sc_dev, "pcmciabus", locs, &paa,
-					tcic_print, config_stdsubmatch);
+	h->pcmcia = config_found(h->sc->sc_dev, &paa, tcic_print,
+	    CFARGS(.submatch = config_stdsubmatch,
+		   .locators = locs));
 
 	/* if there's actually a pcmcia device attached, initialize the slot */
 
@@ -724,7 +725,7 @@ tcic_chip_mem_alloc(pcmcia_chipset_handle_t pch, bus_size_t size, struct pcmcia_
 	i = tcic_log2((u_int)size);
 	if ((1<<i) < size)
 		i++;
-	sizepg = max(i, TCIC_MEM_SHIFT) - (TCIC_MEM_SHIFT-1);
+	sizepg = uimax(i, TCIC_MEM_SHIFT) - (TCIC_MEM_SHIFT-1);
 
 	DPRINTF(("tcic_chip_mem_alloc: size %ld sizepg %ld\n", (u_long)size,
 	    (u_long)sizepg));

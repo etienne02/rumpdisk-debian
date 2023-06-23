@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -66,6 +66,7 @@
 #define ACPI_RESTAG_DRIVESTRENGTH               "_DRS"
 #define ACPI_RESTAG_ENDIANNESS                  "_END"
 #define ACPI_RESTAG_FLOWCONTROL                 "_FLC"
+#define ACPI_RESTAG_FUNCTION                    "_FUN"
 #define ACPI_RESTAG_GRANULARITY                 "_GRA"
 #define ACPI_RESTAG_INTERRUPT                   "_INT"
 #define ACPI_RESTAG_INTERRUPTLEVEL              "_LL_"  /* ActiveLo(1), ActiveHi(0) */
@@ -74,6 +75,7 @@
 #define ACPI_RESTAG_IORESTRICTION               "_IOR"
 #define ACPI_RESTAG_LENGTH                      "_LEN"
 #define ACPI_RESTAG_LINE                        "_LIN"
+#define ACPI_RESTAG_LOCALPORT                   "_PRT"
 #define ACPI_RESTAG_MEMATTRIBUTES               "_MTP"  /* Memory(0), Reserved(1), ACPI(2), NVS(3) */
 #define ACPI_RESTAG_MEMTYPE                     "_MEM"  /* NonCache(0), Cacheable(1) Cache+combine(2), Cache+prefetch(3) */
 #define ACPI_RESTAG_MAXADDR                     "_MAX"
@@ -83,8 +85,11 @@
 #define ACPI_RESTAG_MODE                        "_MOD"
 #define ACPI_RESTAG_PARITY                      "_PAR"
 #define ACPI_RESTAG_PHASE                       "_PHA"
+#define ACPI_RESTAG_PHYTYPE                     "_PHY"
 #define ACPI_RESTAG_PIN                         "_PIN"
 #define ACPI_RESTAG_PINCONFIG                   "_PPI"
+#define ACPI_RESTAG_PINCONFIG_TYPE              "_TYP"
+#define ACPI_RESTAG_PINCONFIG_VALUE             "_VAL"
 #define ACPI_RESTAG_POLARITY                    "_POL"
 #define ACPI_RESTAG_REGISTERBITOFFSET           "_RBO"
 #define ACPI_RESTAG_REGISTERBITWIDTH            "_RBW"
@@ -457,7 +462,8 @@ typedef struct aml_resource_gpio
 #define AML_RESOURCE_I2C_SERIALBUSTYPE          1
 #define AML_RESOURCE_SPI_SERIALBUSTYPE          2
 #define AML_RESOURCE_UART_SERIALBUSTYPE         3
-#define AML_RESOURCE_MAX_SERIALBUSTYPE          3
+#define AML_RESOURCE_CSI2_SERIALBUSTYPE         4
+#define AML_RESOURCE_MAX_SERIALBUSTYPE          4
 #define AML_RESOURCE_VENDOR_SERIALBUSTYPE       192 /* Vendor defined is 0xC0-0xFF (NOT SUPPORTED) */
 
 typedef struct aml_resource_common_serialbus
@@ -466,6 +472,24 @@ typedef struct aml_resource_common_serialbus
     AML_RESOURCE_SERIAL_COMMON
 
 } AML_RESOURCE_COMMON_SERIALBUS;
+
+
+typedef struct aml_resource_csi2_serialbus
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    AML_RESOURCE_SERIAL_COMMON
+
+    /*
+     * Optional fields follow immediately:
+     * 1) Vendor Data bytes
+     * 2) Resource Source String
+     */
+
+} AML_RESOURCE_CSI2_SERIALBUS;
+
+#define AML_RESOURCE_CSI2_REVISION              1       /* ACPI 6.4 */
+#define AML_RESOURCE_CSI2_TYPE_REVISION         1       /* ACPI 6.4 */
+#define AML_RESOURCE_CSI2_MIN_DATA_LEN          0       /* ACPI 6.4 */
 
 typedef struct aml_resource_i2c_serialbus
 {
@@ -506,7 +530,6 @@ typedef struct aml_resource_spi_serialbus
 #define AML_RESOURCE_SPI_TYPE_REVISION          1       /* ACPI 5.0 */
 #define AML_RESOURCE_SPI_MIN_DATA_LEN           9
 
-
 typedef struct aml_resource_uart_serialbus
 {
     AML_RESOURCE_LARGE_HEADER_COMMON
@@ -528,10 +551,116 @@ typedef struct aml_resource_uart_serialbus
 #define AML_RESOURCE_UART_TYPE_REVISION         1       /* ACPI 5.0 */
 #define AML_RESOURCE_UART_MIN_DATA_LEN          10
 
+typedef struct aml_resource_pin_function
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    UINT8                           RevisionId;
+    UINT16                          Flags;
+    UINT8                           PinConfig;
+    UINT16                          FunctionNumber;
+    UINT16                          PinTableOffset;
+    UINT8                           ResSourceIndex;
+    UINT16                          ResSourceOffset;
+    UINT16                          VendorOffset;
+    UINT16                          VendorLength;
+    /*
+     * Optional fields follow immediately:
+     * 1) PIN list (Words)
+     * 2) Resource Source String
+     * 3) Vendor Data bytes
+     */
 
-/* restore default alignment */
+} AML_RESOURCE_PIN_FUNCTION;
 
-#pragma pack()
+#define AML_RESOURCE_PIN_FUNCTION_REVISION      1       /* ACPI 6.2 */
+
+typedef struct aml_resource_pin_config
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    UINT8                           RevisionId;
+    UINT16                          Flags;
+    UINT8                           PinConfigType;
+    UINT32                          PinConfigValue;
+    UINT16                          PinTableOffset;
+    UINT8                           ResSourceIndex;
+    UINT16                          ResSourceOffset;
+    UINT16                          VendorOffset;
+    UINT16                          VendorLength;
+    /*
+     * Optional fields follow immediately:
+     * 1) PIN list (Words)
+     * 2) Resource Source String
+     * 3) Vendor Data bytes
+     */
+
+} AML_RESOURCE_PIN_CONFIG;
+
+#define AML_RESOURCE_PIN_CONFIG_REVISION      1       /* ACPI 6.2 */
+
+typedef struct aml_resource_pin_group
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    UINT8                           RevisionId;
+    UINT16                          Flags;
+    UINT16                          PinTableOffset;
+    UINT16                          LabelOffset;
+    UINT16                          VendorOffset;
+    UINT16                          VendorLength;
+    /*
+     * Optional fields follow immediately:
+     * 1) PIN list (Words)
+     * 2) Resource Label String
+     * 3) Vendor Data bytes
+     */
+
+} AML_RESOURCE_PIN_GROUP;
+
+#define AML_RESOURCE_PIN_GROUP_REVISION      1       /* ACPI 6.2 */
+
+typedef struct aml_resource_pin_group_function
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    UINT8                           RevisionId;
+    UINT16                          Flags;
+    UINT16                          FunctionNumber;
+    UINT8                           ResSourceIndex;
+    UINT16                          ResSourceOffset;
+    UINT16                          ResSourceLabelOffset;
+    UINT16                          VendorOffset;
+    UINT16                          VendorLength;
+    /*
+     * Optional fields follow immediately:
+     * 1) Resource Source String
+     * 2) Resource Source Label String
+     * 3) Vendor Data bytes
+     */
+
+} AML_RESOURCE_PIN_GROUP_FUNCTION;
+
+#define AML_RESOURCE_PIN_GROUP_FUNCTION_REVISION    1       /* ACPI 6.2 */
+
+typedef struct aml_resource_pin_group_config
+{
+    AML_RESOURCE_LARGE_HEADER_COMMON
+    UINT8                           RevisionId;
+    UINT16                          Flags;
+    UINT8                           PinConfigType;
+    UINT32                          PinConfigValue;
+    UINT8                           ResSourceIndex;
+    UINT16                          ResSourceOffset;
+    UINT16                          ResSourceLabelOffset;
+    UINT16                          VendorOffset;
+    UINT16                          VendorLength;
+    /*
+     * Optional fields follow immediately:
+     * 1) Resource Source String
+     * 2) Resource Source Label String
+     * 3) Vendor Data bytes
+     */
+
+} AML_RESOURCE_PIN_GROUP_CONFIG;
+
+#define AML_RESOURCE_PIN_GROUP_CONFIG_REVISION    1       /* ACPI 6.2 */
 
 /* Union of all resource descriptors, so we can allocate the worst case */
 
@@ -571,7 +700,13 @@ typedef union aml_resource
     AML_RESOURCE_I2C_SERIALBUS              I2cSerialBus;
     AML_RESOURCE_SPI_SERIALBUS              SpiSerialBus;
     AML_RESOURCE_UART_SERIALBUS             UartSerialBus;
+    AML_RESOURCE_CSI2_SERIALBUS             Csi2SerialBus;
     AML_RESOURCE_COMMON_SERIALBUS           CommonSerialBus;
+    AML_RESOURCE_PIN_FUNCTION               PinFunction;
+    AML_RESOURCE_PIN_CONFIG                 PinConfig;
+    AML_RESOURCE_PIN_GROUP                  PinGroup;
+    AML_RESOURCE_PIN_GROUP_FUNCTION         PinGroupFunction;
+    AML_RESOURCE_PIN_GROUP_CONFIG           PinGroupConfig;
 
     /* Utility overlays */
 
@@ -582,6 +717,9 @@ typedef union aml_resource
 
 } AML_RESOURCE;
 
+/* restore default alignment */
+
+#pragma pack()
 
 /* Interfaces used by both the disassembler and compiler */
 

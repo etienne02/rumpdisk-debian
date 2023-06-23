@@ -1,4 +1,4 @@
-/*	$NetBSD: filedesc.h,v 1.63 2012/02/11 23:16:18 martin Exp $	*/
+/*	$NetBSD: filedesc.h,v 1.69 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -112,6 +112,8 @@ typedef struct fdfile {
 	kcondvar_t	ff_closing;	/* d: notifier for close */
 } fdfile_t;
 
+#define FDFILE_SIZE ((sizeof(fdfile_t)+CACHE_LINE_SIZE-1)/CACHE_LINE_SIZE*CACHE_LINE_SIZE)
+
 /* Reference count */
 #define	FR_CLOSING	(0x80000000)	/* closing: must interlock */
 #define	FR_MASK		(~FR_CLOSING)	/* reference count */
@@ -132,7 +134,7 @@ typedef struct filedesc {
 	 * Built-in fdfile_t records first, since they have strict
 	 * alignment requirements.
 	 */
-	uint8_t		fd_dfdfile[NDFDFILE][CACHE_LINE_SIZE];
+	uint8_t		fd_dfdfile[NDFDFILE][FDFILE_SIZE];
 	/*
 	 * All of the remaining fields are locked by fd_lock.
 	 */
@@ -162,13 +164,21 @@ typedef struct filedesc {
 	uint32_t	fd_dlomap[NDENTRIES];
 } filedesc_t;
 
+/*
+ * Working directory, root and umask information.  Serialization:
+ *
+ * a	atomic operations
+ * l	cwdi_lock
+ */
 typedef struct cwdinfo {
-	struct vnode	*cwdi_cdir;	/* current directory */
-	struct vnode	*cwdi_rdir;	/* root directory */
-	struct vnode	*cwdi_edir;	/* emulation root (if known) */
-	krwlock_t	cwdi_lock;	/* lock on entire struct */
-	u_short		cwdi_cmask;	/* mask for file creation */
-	u_int		cwdi_refcnt;	/* reference count */
+	struct vnode	*cwdi_cdir;	/* l: current directory */
+	struct vnode	*cwdi_rdir;	/* l: root directory */
+	struct vnode	*cwdi_edir;	/* l: emulation root (if known) */
+	u_int		cwdi_cmask;	/* a: mask for file creation */
+	u_int		cwdi_refcnt;	/* a: reference count */
+
+	krwlock_t	cwdi_lock	/* :: lock on struct */
+	    __aligned(COHERENCY_UNIT);	/* -> gets own cache line */
 } cwdinfo_t;
 
 #ifdef _KERNEL
@@ -182,7 +192,7 @@ struct proc;
  */
 void	fd_sys_init(void);
 int	fd_open(const char*, int, int, int*);
-int	fd_dupopen(int, int *, int, int);
+int	fd_dupopen(int, bool, int, int *);
 int	fd_alloc(struct proc *, int, int *);
 void	fd_tryexpand(struct proc *);
 int	fd_allocfile(file_t **, int *);
@@ -209,7 +219,7 @@ int	fd_dup(file_t *, int, int *, bool);
 int	fd_dup2(file_t *, unsigned, int);
 int	fd_clone(file_t *, unsigned, int, const struct fileops *, void *);
 void	fd_set_exclose(struct lwp *, int, bool);
-int	pipe1(struct lwp *, register_t *, int);
+int	pipe1(struct lwp *, int *, int);
 int	dodup(struct lwp *, int, int, int, register_t *);
 
 void	cwd_sys_init(void);

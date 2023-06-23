@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_time_30.c,v 1.4 2011/01/19 10:21:16 tsutsui Exp $	*/
+/*	$NetBSD: kern_time_30.c,v 1.8 2019/12/15 16:48:26 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -36,26 +29,37 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_time_30.c,v 1.4 2011/01/19 10:21:16 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_time_30.c,v 1.8 2019/12/15 16:48:26 tsutsui Exp $");
 
+#ifdef _KERNEL_OPT
+#include "opt_compat_netbsd.h"
 #include "opt_ntp.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/timex.h>
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
+#include <sys/syscallargs.h>
+#include <sys/compat_stub.h>
 
+#include <compat/common/compat_mod.h>
 #include <compat/common/compat_util.h>
 #include <compat/sys/time.h>
 #include <compat/sys/timex.h>
 
-#include <sys/syscallargs.h>
+static const struct syscall_package kern_time_30_syscalls[] = {
+        { SYS_compat_30_ntp_gettime, 0,
+	    (sy_call_t *)compat_30_sys_ntp_gettime },
+	{ 0, 0, NULL }
+};
 
 int
 compat_30_sys_ntp_gettime(struct lwp *l,
     const struct compat_30_sys_ntp_gettime_args *uap, register_t *retval)
 {
-#ifdef NTP
 	/* {
 		syscallarg(struct ntptimeval30 *) ontvp;
 	} */
@@ -64,8 +68,12 @@ compat_30_sys_ntp_gettime(struct lwp *l,
 	struct timeval tv;
 	int error;
 
+	if (vec_ntp_gettime == NULL)
+		return ENOSYS;
+
 	if (SCARG(uap, ntvp)) {
-		ntp_gettime(&ntv);
+		(*vec_ntp_gettime)(&ntv);
+		memset(&ntv30, 0, sizeof(ntv30));
 		TIMESPEC_TO_TIMEVAL(&tv, &ntv.time);
 		timeval_to_timeval50(&tv, &ntv30.time);
 		ntv30.maxerror = ntv.maxerror;
@@ -75,9 +83,20 @@ compat_30_sys_ntp_gettime(struct lwp *l,
 		if (error)
 			return error;
  	}
-	*retval = ntp_timestatus();
+	*retval = (*vec_ntp_timestatus)();
 	return 0;
-#else
-	return ENOSYS;
-#endif
+}
+
+int
+kern_time_30_init(void)
+{
+
+	return syscall_establish(NULL, kern_time_30_syscalls);
+}
+
+int
+kern_time_30_fini(void)
+{
+
+	return syscall_disestablish(NULL, kern_time_30_syscalls);
 }

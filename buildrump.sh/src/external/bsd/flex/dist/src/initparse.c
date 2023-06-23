@@ -50,7 +50,7 @@
 /*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR */
 /*  PURPOSE. */
 #include "flexdef.h"
-__RCSID("$NetBSD: initparse.c,v 1.2 2016/03/17 15:28:00 nakayama Exp $");
+__RCSID("$NetBSD: initparse.c,v 1.4 2017/01/07 15:43:27 christos Exp $");
 
 #include "tables.h"
 
@@ -146,13 +146,13 @@ extern int YYPARSE_DECL();
 #define NAME 262
 #define PREVCCL 263
 #define EOF_OP 264
-#define OPTION_OP 265
-#define OPT_OUTFILE 266
-#define OPT_PREFIX 267
-#define OPT_YYCLASS 268
-#define OPT_HEADER 269
-#define OPT_EXTRA_TYPE 270
-#define OPT_TABLES 271
+#define TOK_OPTION 265
+#define TOK_OUTFILE 266
+#define TOK_PREFIX 267
+#define TOK_YYCLASS 268
+#define TOK_HEADER_FILE 269
+#define TOK_EXTRA_TYPE 270
+#define TOK_TABLES_FILE 271
 #define CCE_ALNUM 272
 #define CCE_ALPHA 273
 #define CCE_BLANK 274
@@ -456,8 +456,8 @@ static const char *const yyname[] = {
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"error","CHAR","NUMBER","SECTEND",
-"SCDECL","XSCDECL","NAME","PREVCCL","EOF_OP","OPTION_OP","OPT_OUTFILE",
-"OPT_PREFIX","OPT_YYCLASS","OPT_HEADER","OPT_EXTRA_TYPE","OPT_TABLES",
+"SCDECL","XSCDECL","NAME","PREVCCL","EOF_OP","TOK_OPTION","TOK_OUTFILE",
+"TOK_PREFIX","TOK_YYCLASS","TOK_HEADER_FILE","TOK_EXTRA_TYPE","TOK_TABLES_FILE",
 "CCE_ALNUM","CCE_ALPHA","CCE_BLANK","CCE_CNTRL","CCE_DIGIT","CCE_GRAPH",
 "CCE_LOWER","CCE_PRINT","CCE_PUNCT","CCE_SPACE","CCE_UPPER","CCE_XDIGIT",
 "CCE_NEG_ALNUM","CCE_NEG_ALPHA","CCE_NEG_BLANK","CCE_NEG_CNTRL","CCE_NEG_DIGIT",
@@ -483,15 +483,15 @@ static const char *const yyrule[] = {
 "namelist1 : namelist1 NAME",
 "namelist1 : NAME",
 "namelist1 : error",
-"options : OPTION_OP optionlist",
+"options : TOK_OPTION optionlist",
 "optionlist : optionlist option",
 "optionlist :",
-"option : OPT_OUTFILE '=' NAME",
-"option : OPT_EXTRA_TYPE '=' NAME",
-"option : OPT_PREFIX '=' NAME",
-"option : OPT_YYCLASS '=' NAME",
-"option : OPT_HEADER '=' NAME",
-"option : OPT_TABLES '=' NAME",
+"option : TOK_OUTFILE '=' NAME",
+"option : TOK_EXTRA_TYPE '=' NAME",
+"option : TOK_PREFIX '=' NAME",
+"option : TOK_YYCLASS '=' NAME",
+"option : TOK_HEADER_FILE '=' NAME",
+"option : TOK_TABLES_FILE '=' NAME",
 "sect2 : sect2 scon initforrule flexrule '\\n'",
 "sect2 : sect2 scon '{' sect2 '}'",
 "sect2 :",
@@ -610,7 +610,7 @@ static YYSTACKDATA yystack;
  *                    conditions
  */
 
-void build_eof_action()
+void build_eof_action(void)
 	{
 	int i;
 	char action_text[MAXLINE];
@@ -635,7 +635,8 @@ void build_eof_action()
 			}
 		}
 
-	line_directive_out( (FILE *) 0, 1 );
+	line_directive_out(NULL, 1);
+        add_action("[[");
 
 	/* This isn't a normal rule after all - don't count it as
 	 * such, so we don't have any holes in the rule numbering
@@ -649,8 +650,7 @@ void build_eof_action()
 
 /* format_synerr - write out formatted syntax error */
 
-void format_synerr( msg, arg )
-const char *msg, arg[];
+void format_synerr( const char *msg, const char arg[] )
 	{
 	char errmsg[MAXLINE];
 
@@ -661,8 +661,7 @@ const char *msg, arg[];
 
 /* synerr - report a syntax error */
 
-void synerr( str )
-const char *str;
+void synerr( const char *str )
 	{
 	syntaxerror = true;
 	pinpoint_message( str );
@@ -671,8 +670,7 @@ const char *str;
 
 /* format_warn - write out formatted warning */
 
-void format_warn( msg, arg )
-const char *msg, arg[];
+void format_warn( const char *msg, const char arg[] )
 	{
 	char warn_msg[MAXLINE];
 
@@ -683,8 +681,7 @@ const char *msg, arg[];
 
 /* lwarn - report a warning, unless -w was given */
 
-void lwarn( str )
-const char *str;
+void lwarn( const char *str )
 	{
 	line_warning( str, linenum );
 	}
@@ -693,8 +690,7 @@ const char *str;
  *			     pinpointing its location
  */
 
-void format_pinpoint_message( msg, arg )
-const char *msg, arg[];
+void format_pinpoint_message( const char *msg, const char arg[] )
 	{
 	char errmsg[MAXLINE];
 
@@ -705,8 +701,7 @@ const char *msg, arg[];
 
 /* pinpoint_message - write out a message, pinpointing its location */
 
-void pinpoint_message( str )
-const char *str;
+void pinpoint_message( const char *str )
 	{
 	line_pinpoint( str, linenum );
 	}
@@ -714,9 +709,7 @@ const char *str;
 
 /* line_warning - report a warning at a given line, unless -w was given */
 
-void line_warning( str, line )
-const char *str;
-int line;
+void line_warning( const char *str, int line )
 	{
 	char warning[MAXLINE];
 
@@ -730,9 +723,7 @@ int line;
 
 /* line_pinpoint - write out a message, pinpointing it at the given line */
 
-void line_pinpoint( str, line )
-const char *str;
-int line;
+void line_pinpoint( const char *str, int line )
 	{
 	fprintf( stderr, "%s:%d: %s\n", infilename, line, str );
 	}
@@ -742,8 +733,7 @@ int line;
  *	     currently, messages are ignore
  */
 
-void yyerror( msg )
-const char *msg;
+void yyerror( const char *msg )
 	{
 		(void)msg;
 	}
@@ -973,7 +963,7 @@ case 1:
 			else
 				add_action( "ECHO" );
 
-			add_action( ";\n\tYY_BREAK\n" );
+			add_action( ";\n\tYY_BREAK]]\n" );
 			}
 break;
 case 2:
@@ -1010,24 +1000,26 @@ case 12:
 break;
 case 16:
 	{
-			outfilename = copy_string( nmstr );
+			outfilename = xstrdup(nmstr);
 			did_outfilename = 1;
 			}
 break;
 case 17:
-	{ extra_type = copy_string( nmstr ); }
+	{ extra_type = xstrdup(nmstr); }
 break;
 case 18:
-	{ prefix = copy_string( nmstr ); }
+	{ prefix = xstrdup(nmstr);
+                          if (strchr(prefix, '[') || strchr(prefix, ']'))
+                              flexerror(_("Prefix must not contain [ or ]")); }
 break;
 case 19:
-	{ yyclass = copy_string( nmstr ); }
+	{ yyclass = xstrdup(nmstr); }
 break;
 case 20:
-	{ headerfilename = copy_string( nmstr ); }
+	{ headerfilename = xstrdup(nmstr); }
 break;
 case 21:
-	{ tablesext = true; tablesfilename = copy_string( nmstr ); }
+	{ tablesext = true; tablesfilename = xstrdup(nmstr); }
 break;
 case 22:
 	{ scon_stk_ptr = yystack.l_mark[-3]; }
@@ -1528,7 +1520,7 @@ case 57:
 	{
 				/* Sort characters for fast searching.
 				 */
-				qsort( ccltbl + cclmap[yystack.l_mark[0]], ccllen[yystack.l_mark[0]], sizeof (*ccltbl), cclcmp );
+				qsort( ccltbl + cclmap[yystack.l_mark[0]], (size_t) ccllen[yystack.l_mark[0]], sizeof (*ccltbl), cclcmp );
 
 			if ( useecs )
 				mkeccl( ccltbl + cclmap[yystack.l_mark[0]], ccllen[yystack.l_mark[0]],

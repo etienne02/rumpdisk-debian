@@ -1,4 +1,4 @@
-/*	$NetBSD: exec_script.c,v 1.74 2014/09/05 09:20:59 matt Exp $	*/
+/*	$NetBSD: exec_script.c,v 1.83 2021/05/03 10:25:14 fcambus Exp $	*/
 
 /*
  * Copyright (c) 1993, 1994, 1996 Christopher G. Demetriou
@@ -31,7 +31,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: exec_script.c,v 1.74 2014/09/05 09:20:59 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: exec_script.c,v 1.83 2021/05/03 10:25:14 fcambus Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_script.h"
+#endif
 
 #if defined(SETUIDSCRIPTS) && !defined(FDSCRIPTS)
 #define FDSCRIPTS		/* Need this for safe set-id scripts. */
@@ -141,7 +145,7 @@ exec_script_makecmds(struct lwp *l, struct exec_package *epp)
 	 * Check that the shell spec is terminated by a newline, and that
 	 * it isn't too large.
 	 */
-	hdrlinelen = min(epp->ep_hdrvalid, SCRIPT_HDR_SIZE);
+	hdrlinelen = uimin(epp->ep_hdrvalid, SCRIPT_HDR_SIZE);
 	for (cp = hdrstr + EXEC_SCRIPT_MAGICLEN; cp < hdrstr + hdrlinelen;
 	    cp++) {
 		if (*cp == '\n') {
@@ -205,10 +209,10 @@ check_shell:
 	 * if the script isn't readable, or it's set-id, then we've
 	 * gotta supply a "/dev/fd/..." for the shell to read.
 	 * Note that stupid shells (csh) do the wrong thing, and
-	 * close all open fd's when the start.  That kills this
+	 * close all open fd's when they start.  That kills this
 	 * method of implementing "safe" set-id and x-only scripts.
 	 */
-	vn_lock(epp->ep_vp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(epp->ep_vp, LK_SHARED | LK_RETRY);
 	error = VOP_ACCESS(epp->ep_vp, VREAD, l->l_cred);
 	VOP_UNLOCK(epp->ep_vp);
 	if (error == EACCES
@@ -280,11 +284,9 @@ check_shell:
 	epp->ep_hdrvalid = 0;
 
 	/* try loading the interpreter */
-	shell_pathbuf = pathbuf_create(shellname);
-	if (shell_pathbuf == NULL) {
-		error = ENOMEM;
-	} else {
-		error = check_exec(l, epp, shell_pathbuf);
+	if ((error = exec_makepathbuf(l, shellname, UIO_SYSSPACE,
+	    &shell_pathbuf, NULL)) == 0) {
+		error = check_exec(l, epp, shell_pathbuf, NULL);
 		pathbuf_destroy(shell_pathbuf);
 	}
 

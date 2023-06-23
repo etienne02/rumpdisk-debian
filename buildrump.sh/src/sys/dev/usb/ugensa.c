@@ -1,4 +1,4 @@
-/*	$NetBSD: ugensa.c,v 1.33 2016/07/07 06:55:42 msaitoh Exp $	*/
+/*	$NetBSD: ugensa.c,v 1.45 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2004, 2005 The NetBSD Foundation, Inc.
@@ -30,7 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ugensa.c,v 1.33 2016/07/07 06:55:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ugensa.c,v 1.45 2021/08/07 16:19:17 thorpej Exp $");
+
+#ifdef _KERNEL_OPT
+#include "opt_usb.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -47,9 +51,6 @@ __KERNEL_RCSID(0, "$NetBSD: ugensa.c,v 1.33 2016/07/07 06:55:42 msaitoh Exp $");
 
 #include <dev/usb/ucomvar.h>
 
-/* XXXrcd: heh */
-#define UGENSA_DEBUG 1
-
 #ifdef UGENSA_DEBUG
 #define DPRINTF(x)	if (ugensadebug) printf x
 #define DPRINTFN(n,x)	if (ugensadebug>(n)) printf x
@@ -61,25 +62,22 @@ int ugensadebug = 0;
 
 struct ugensa_softc {
 	device_t		sc_dev;		/* base device */
+
+	enum {
+		UGENSA_INIT_NONE,
+		UGENSA_INIT_INITED
+	} sc_init_state;
+
 	struct usbd_device *	sc_udev;	/* device */
 	struct usbd_interface *	sc_iface;	/* interface */
 
 	device_t		sc_subdev;
 	int			sc_numcon;
 
-	u_char			sc_dying;
+	bool			sc_dying;
 };
 
-struct ucom_methods ugensa_methods = {
-	.ucom_get_status = NULL,
-	.ucom_set = NULL,
-	.ucom_param = NULL,
-	.ucom_ioctl = NULL,
-	.ucom_open = NULL,
-	.ucom_close = NULL,
-	.ucom_read = NULL,
-	.ucom_write = NULL,
-};
+struct ucom_methods ugensa_methods = { 0 };
 
 #define UGENSA_CONFIG_INDEX	0
 #define UGENSA_IFACE_INDEX	0
@@ -96,8 +94,8 @@ static const struct ugensa_type ugensa_devs[] = {
 	{{ USB_VENDOR_DELL, USB_PRODUCT_DELL_HSDPA }, 0 },
 	{{ USB_VENDOR_NOVATEL, USB_PRODUCT_NOVATEL_FLEXPACKGPS }, 0 },
 	{{ USB_VENDOR_QUALCOMM_K, USB_PRODUCT_QUALCOMM_K_CDMA_MSM_K }, 0 },
-	{{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_USB305 }, 0 },
 	{{ USB_VENDOR_ZTE, USB_PRODUCT_ZTE_AC8700 }, 0 },
+	{{ USB_VENDOR_LINUXFOUNDATION, USB_PRODUCT_LINUXFOUNDATION_USB3DEBUG}, 0 },
 
 	/*
 	 * The following devices are untested, but they are purported to
@@ -106,35 +104,34 @@ static const struct ugensa_type ugensa_devs[] = {
 
 	{{ USB_VENDOR_ANYDATA, USB_PRODUCT_ANYDATA_ADU_500A }, UNTESTED },
 	{{ USB_VENDOR_NOVATEL2, USB_PRODUCT_NOVATEL2_EXPRESSCARD }, UNTESTED },
-	{{ USB_VENDOR_QUALCOMM, USB_PRODUCT_QUALCOMM_MSM_HSDPA }, UNTESTED },
+	{{ USB_VENDOR_LG, USB_PRODUCT_LG_MSM_HSDPA }, UNTESTED },
 	{{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_AIRCARD875 }, UNTESTED },
 	{{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_EM5625 }, UNTESTED },
 };
 #define ugensa_lookup(v, p) \
 	((const struct ugensa_type *)usb_lookup(ugensa_devs, v, p))
 
-int ugensa_match(device_t, cfdata_t, void *);
-void ugensa_attach(device_t, device_t, void *);
-void ugensa_childdet(device_t, device_t);
-int ugensa_detach(device_t, int);
-int ugensa_activate(device_t, enum devact);
-extern struct cfdriver ugensa_cd;
-CFATTACH_DECL2_NEW(ugensa, sizeof(struct ugensa_softc), ugensa_match,
-    ugensa_attach, ugensa_detach, ugensa_activate, NULL, ugensa_childdet);
+static int	ugensa_match(device_t, cfdata_t, void *);
+static void	ugensa_attach(device_t, device_t, void *);
+static void	ugensa_childdet(device_t, device_t);
+static int	ugensa_detach(device_t, int);
 
-int
+CFATTACH_DECL2_NEW(ugensa, sizeof(struct ugensa_softc), ugensa_match,
+    ugensa_attach, ugensa_detach, NULL, NULL, ugensa_childdet);
+
+static int
 ugensa_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct usb_attach_arg *uaa = aux;
 
-	DPRINTFN(20,("ugensa: vendor=0x%x, product=0x%x\n",
+	DPRINTFN(20,("ugensa: vendor=%#x, product=%#x\n",
 		     uaa->uaa_vendor, uaa->uaa_product));
 
 	return ugensa_lookup(uaa->uaa_vendor, uaa->uaa_product) != NULL ?
 		UMATCH_VENDOR_PRODUCT : UMATCH_NONE;
 }
 
-void
+static void
 ugensa_attach(device_t parent, device_t self, void *aux)
 {
 	struct ugensa_softc *sc = device_private(self);
@@ -152,6 +149,8 @@ ugensa_attach(device_t parent, device_t self, void *aux)
 	DPRINTFN(10,("\nugensa_attach: sc=%p\n", sc));
 
 	sc->sc_dev = self;
+	sc->sc_dying = false;
+	sc->sc_init_state = UGENSA_INIT_NONE;
 
 	aprint_naive("\n");
 	aprint_normal("\n");
@@ -195,8 +194,6 @@ ugensa_attach(device_t parent, device_t self, void *aux)
 	ucaa.ucaa_methods = &ugensa_methods;
 	ucaa.ucaa_arg = sc;
 
-	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, sc->sc_udev, sc->sc_dev);
-
 	ucaa.ucaa_bulkin = ucaa.ucaa_bulkout = -1;
 	for (i = 0; i < id->bNumEndpoints; i++) {
 		int addr, dir, attr;
@@ -235,10 +232,13 @@ ugensa_attach(device_t parent, device_t self, void *aux)
 		goto bad;
 	}
 
-	DPRINTF(("ugensa: in=0x%x out=0x%x\n", ucaa.ucaa_bulkin,
+	sc->sc_init_state = UGENSA_INIT_INITED;
+	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, sc->sc_udev, sc->sc_dev);
+
+	DPRINTF(("ugensa: in=%#x out=%#x\n", ucaa.ucaa_bulkin,
 	    ucaa.ucaa_bulkout));
-	sc->sc_subdev = config_found_sm_loc(self, "ucombus", NULL, &ucaa,
-					    ucomprint, ucomsubmatch);
+	sc->sc_subdev = config_found(self, &ucaa, ucomprint,
+	    CFARGS(.submatch = ucomsubmatch));
 
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
@@ -246,11 +246,11 @@ ugensa_attach(device_t parent, device_t self, void *aux)
 
 bad:
 	DPRINTF(("ugensa_attach: ATTACH ERROR\n"));
-	sc->sc_dying = 1;
+	sc->sc_dying = true;
 	return;
 }
 
-void
+static void
 ugensa_childdet(device_t self, device_t child)
 {
 	struct ugensa_softc *sc = device_private(self);
@@ -259,23 +259,7 @@ ugensa_childdet(device_t self, device_t child)
 	sc->sc_subdev = NULL;
 }
 
-int
-ugensa_activate(device_t self, enum devact act)
-{
-	struct ugensa_softc *sc = device_private(self);
-
-	DPRINTF(("ugensa_activate: sc=%p\n", sc));
-
-	switch (act) {
-	case DVACT_DEACTIVATE:
-		sc->sc_dying = 1;
-		return 0;
-	default:
-		return EOPNOTSUPP;
-	}
-}
-
-int
+static int
 ugensa_detach(device_t self, int flags)
 {
 	struct ugensa_softc *sc = device_private(self);
@@ -283,13 +267,19 @@ ugensa_detach(device_t self, int flags)
 
 	DPRINTF(("ugensa_detach: sc=%p flags=%d\n", sc, flags));
 
-	sc->sc_dying = 1;
-	pmf_device_deregister(self);
+	sc->sc_dying = true;
 
-	if (sc->sc_subdev != NULL)
+	if (sc->sc_init_state < UGENSA_INIT_INITED)
+		return 0;
+
+	if (sc->sc_subdev != NULL) {
 		rv = config_detach(sc->sc_subdev, flags);
+		sc->sc_subdev = NULL;
+	}
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
+
+	pmf_device_deregister(self);
 
 	return rv;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: db_trace.c,v 1.57 2011/12/13 11:03:52 kiyohara Exp $	*/
+/*	$NetBSD: db_trace.c,v 1.60 2020/07/06 09:34:18 rin Exp $	*/
 /*	$OpenBSD: db_trace.c,v 1.3 1997/03/21 02:10:48 niklas Exp $	*/
 
 /*
@@ -28,9 +28,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.57 2011/12/13 11:03:52 kiyohara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.60 2020/07/06 09:34:18 rin Exp $");
 
+#ifdef _KERNEL_OPT
 #include "opt_ppcarch.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -161,7 +163,10 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 					return;
 				}
 				l = LIST_FIRST(&p->p_lwps);
-				KASSERT(l != NULL);
+				if (l == NULL) {
+					(*pr)("trace: no LWP?\n");
+					return;
+				}
 			}
 			(*pr)("lid %d ", l->l_lid);
 			pcb = lwp_getpcb(l);
@@ -210,7 +215,9 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 				    tf->tf_dar);
 #endif
 #ifdef PPC_IBM4XX
-				(*pr)("DSI %s trap @ %#x by ",
+				trapstr = "DSI";
+dsi:
+				(*pr)("%s %s trap @ %#x by ", trapstr,
 				    tf->tf_esr & ESR_DST ? "write" : "read",
 				    tf->tf_dear);
 #endif
@@ -238,7 +245,11 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 			case EXC_PERF: trapstr = "PERF"; break;
 			case EXC_SMI: trapstr = "SMI"; break;
 			case EXC_RST: trapstr = "RST"; break;
-			case EXC_DTMISS: trapstr = "DTMISS"; break;
+			case EXC_DTMISS: trapstr = "DTMISS";
+#ifdef PPC_IBM4XX
+				goto dsi;
+#endif
+				break;
 			case EXC_ITMISS: trapstr = "ITMISS"; break;
 			case EXC_FIT: trapstr = "FIT"; break;
 			case EXC_PIT: trapstr = "PIT"; break;
@@ -275,7 +286,8 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 #endif /* PPC_OEA601 */
 #endif /* PPC_OEA */
 #ifdef PPC_IBM4XX
-			if (tf->tf_exc == EXC_DSI)
+			if (tf->tf_exc == EXC_DSI ||
+			    tf->tf_exc == EXC_DTMISS)
 				(*pr)(" dear=%#x", tf->tf_dear);
 			(*pr)(" esr=%#x pid=%#x", tf->tf_esr, tf->tf_pid);
 #endif

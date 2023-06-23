@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_module_vfs.c,v 1.14 2016/03/15 02:59:24 pgoyette Exp $	*/
+/*	$NetBSD: kern_module_vfs.c,v 1.18 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_module_vfs.c,v 1.14 2016/03/15 02:59:24 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_module_vfs.c,v 1.18 2021/06/29 22:40:53 dholland Exp $");
 
 #define _MODULE_INTERNAL
 #include <sys/param.h>
@@ -106,7 +106,7 @@ module_load_vfs(const char *name, int flags, bool autoload,
 	/*
 	 * Load and process <module>.plist if it exists.
 	 */
-	if (((flags & MODCTL_NO_PROP) == 0 && filedictp) || autoload) {
+	if ((!ISSET(flags, MODCTL_NO_PROP) && filedictp) || autoload) {
 		error = module_load_plist_vfs(path, nochroot, &moduledict);
 		if (error != 0) {
 			module_print("plist load returned error %d for `%s'",
@@ -124,7 +124,7 @@ module_load_vfs(const char *name, int flags, bool autoload,
 			}
 		}
 		if (error == 0) {	/* can get here if error == ENOENT */
-			if ((flags & MODCTL_NO_PROP) == 0 && filedictp)
+			if (!ISSET(flags, MODCTL_NO_PROP) && filedictp)
 				*filedictp = moduledict;
 			else 
 				prop_object_release(moduledict);
@@ -150,7 +150,7 @@ module_load_plist_vfs(const char *modpath, const bool nochroot,
     prop_dictionary_t *filedictp)
 {
 	struct pathbuf *pb;
-	struct nameidata nd;
+	struct vnode *vp;
 	struct stat sb;
 	void *base;
 	char *proppath;
@@ -162,7 +162,7 @@ module_load_plist_vfs(const char *modpath, const bool nochroot,
 	base = NULL;
 
 	proppath = PNBUF_GET();
-	strcpy(proppath, modpath);
+	strlcpy(proppath, modpath, MAXPATHLEN);
 	pathlen = strlen(proppath);
 	if ((pathlen >= 6) && (strcmp(&proppath[pathlen - 5], ".kmod") == 0)) {
 		strcpy(&proppath[pathlen - 5], ".plist");
@@ -181,14 +181,13 @@ module_load_plist_vfs(const char *modpath, const bool nochroot,
 	}
 	module_print("Loading plist from %s", proppath);
 	
-	NDINIT(&nd, LOOKUP, FOLLOW | (nochroot ? NOCHROOT : 0), pb);
-
-	error = vn_open(&nd, FREAD, 0);
+	error = vn_open(NULL, pb, (nochroot ? NOCHROOT : 0), FREAD, 0,
+	    &vp, NULL, NULL);
  	if (error != 0) {
 	 	goto out2;
 	}
 
-	error = vn_stat(nd.ni_vp, &sb);
+	error = vn_stat(vp, &sb);
 	if (error != 0) {
 		goto out3;
 	}
@@ -198,12 +197,7 @@ module_load_plist_vfs(const char *modpath, const bool nochroot,
 	}
 
 	base = kmem_alloc(plistsize, KM_SLEEP);
-	if (base == NULL) {
-		error = ENOMEM;
-		goto out3;
-	}
-
-	error = vn_rdwr(UIO_READ, nd.ni_vp, base, sb.st_size, 0,
+	error = vn_rdwr(UIO_READ, vp, base, sb.st_size, 0,
 	    UIO_SYSSPACE, IO_NODELOCKED, curlwp->l_cred, &resid, curlwp);
 	*((uint8_t *)base + sb.st_size) = '\0';
 	if (error == 0 && resid != 0) {
@@ -224,8 +218,8 @@ module_load_plist_vfs(const char *modpath, const bool nochroot,
 	KASSERT(error == 0);
 
 out3:
-	VOP_UNLOCK(nd.ni_vp);
-	vn_close(nd.ni_vp, FREAD, kauth_cred_get());
+	VOP_UNLOCK(vp);
+	vn_close(vp, FREAD, kauth_cred_get());
 
 out2:
 	pathbuf_destroy(pb);

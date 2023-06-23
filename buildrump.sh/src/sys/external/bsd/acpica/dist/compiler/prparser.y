@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -43,7 +43,6 @@
  */
 
 #include "aslcompiler.h"
-#include "dtcompiler.h"
 
 #define _COMPONENT          ASL_PREPROCESSOR
         ACPI_MODULE_NAME    ("prparser")
@@ -184,11 +183,11 @@ Expression
 
       /* Default base for a non-prefixed integer is 10 */
 
-    | EXPOP_NUMBER                                  { AcpiUtStrtoul64 (PrParsertext, 10, ACPI_MAX64_BYTE_WIDTH, &$$);}
+    | EXPOP_NUMBER                                  { AcpiUtStrtoul64 (PrParsertext, &$$);}
 
       /* Standard hex number (0x1234) */
 
-    | EXPOP_HEX_NUMBER                              { AcpiUtStrtoul64 (PrParsertext, 16, ACPI_MAX64_BYTE_WIDTH, &$$);}
+    | EXPOP_HEX_NUMBER                              { AcpiUtStrtoul64 (PrParsertext, &$$);}
     ;
 %%
 
@@ -216,10 +215,10 @@ PrParsererror (
     char const              *Message)
 {
 
-    sprintf (StringBuffer, "Preprocessor Parser : %s (near line %u)",
-        Message, Gbl_CurrentLineNumber);
+    sprintf (AslGbl_StringBuffer, "Preprocessor Parser : %s (near line %u)",
+        Message, AslGbl_CurrentLineNumber);
     DtError (ASL_ERROR, ASL_MSG_SYNTAX,
-        NULL, (char *) StringBuffer);
+        NULL, (char *) AslGbl_StringBuffer);
 }
 
 

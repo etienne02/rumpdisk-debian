@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_pcu.c,v 1.19 2014/05/25 14:53:55 rmind Exp $	*/
+/*	$NetBSD: subr_pcu.c,v 1.24 2020/08/07 18:46:00 christos Exp $	*/
 
 /*-
  * Copyright (c) 2011, 2014 The NetBSD Foundation, Inc.
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_pcu.c,v 1.19 2014/05/25 14:53:55 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_pcu.c,v 1.24 2020/08/07 18:46:00 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -88,6 +88,19 @@ typedef struct {
 /* PCU operations structure provided by the MD code. */
 extern const pcu_ops_t * const pcu_ops_md_defs[];
 
+#ifdef DIAGNOSTIC
+/*
+ * pcu_available_p: true if lwp is allowed to use PCU state.
+ */
+static inline bool
+pcu_available_p(struct lwp *l)
+{
+
+	/* XXX Not sure this is safe unless l is locked!  */
+	return (l->l_flag & (LW_SYSTEM|LW_SYSTEM_FPU)) != LW_SYSTEM;
+}
+#endif
+
 /*
  * pcu_switchpoint: release PCU state if the LWP is being run on another CPU.
  * This routine is called on each context switch by by mi_switch().
@@ -110,7 +123,8 @@ pcu_switchpoint(lwp_t *l)
 			continue;
 		}
 		struct cpu_info * const pcu_ci = l->l_pcu_cpu[id];
-		if (pcu_ci == NULL || pcu_ci == l->l_cpu) {
+		if (pcu_ci == l->l_cpu) {
+			KASSERT(pcu_ci->ci_pcu_curlwp[id] == l);
 			continue;
 		}
 		const pcu_ops_t * const pcu = pcu_ops_md_defs[id];
@@ -129,7 +143,12 @@ pcu_discard_all(lwp_t *l)
 {
 	const uint32_t pcu_valid = l->l_pcu_valid;
 
-	KASSERT(l == curlwp || ((l->l_flag & LW_SYSTEM) && pcu_valid == 0));
+	/*
+	 * The check for LSIDL here is to catch the case where the LWP exits
+	 * due to an error in the LWP creation path before it ever runs.
+	 */
+	KASSERT(l == curlwp || l->l_stat == LSIDL ||
+		(!pcu_available_p(l) && pcu_valid == 0));
 
 	if (__predict_true(pcu_valid == 0)) {
 		/* PCUs are not in use. */
@@ -168,7 +187,7 @@ pcu_save_all(lwp_t *l)
 	 * with a different LWP (forking a system LWP or doing a coredump of
 	 * a process with multiple threads) and we need to deal with that.
 	 */
-	KASSERT(l == curlwp || (((l->l_flag & LW_SYSTEM) ||
+	KASSERT(l == curlwp || ((!pcu_available_p(l) ||
 	    (curlwp->l_proc == l->l_proc && l->l_stat == LSSUSPENDED)) &&
 	    pcu_valid == 0));
 
@@ -313,7 +332,7 @@ pcu_load(const pcu_ops_t *pcu)
 		 * some architectures.
 		 */
 		KASSERT(curci->ci_pcu_curlwp[id] == l);
-		KASSERT(pcu_valid_p(pcu));
+		KASSERT(pcu_valid_p(pcu, l));
 		pcu->pcu_state_load(l, PCU_VALID | PCU_REENABLE);
 		splx(s);
 		return;
@@ -356,14 +375,13 @@ pcu_load(const pcu_ops_t *pcu)
 }
 
 /*
- * pcu_discard: discard the PCU state of current LWP.  If "valid"
+ * pcu_discard: discard the PCU state of the given LWP.  If "valid"
  * parameter is true, then keep considering the PCU state as valid.
  */
 void
-pcu_discard(const pcu_ops_t *pcu, bool valid)
+pcu_discard(const pcu_ops_t *pcu, lwp_t *l, bool valid)
 {
 	const u_int id = pcu->pcu_id;
-	lwp_t * const l = curlwp;
 
 	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
 
@@ -382,10 +400,9 @@ pcu_discard(const pcu_ops_t *pcu, bool valid)
  * pcu_save_lwp: save PCU state to the given LWP.
  */
 void
-pcu_save(const pcu_ops_t *pcu)
+pcu_save(const pcu_ops_t *pcu, lwp_t *l)
 {
 	const u_int id = pcu->pcu_id;
-	lwp_t * const l = curlwp;
 
 	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
 
@@ -420,10 +437,9 @@ pcu_save_all_on_cpu(void)
  * it always becomes "valid" when pcu_load() is called.
  */
 bool
-pcu_valid_p(const pcu_ops_t *pcu)
+pcu_valid_p(const pcu_ops_t *pcu, const lwp_t *l)
 {
 	const u_int id = pcu->pcu_id;
-	lwp_t * const l = curlwp;
 
 	return (l->l_pcu_valid & (1U << id)) != 0;
 }

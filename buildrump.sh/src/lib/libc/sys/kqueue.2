@@ -1,4 +1,4 @@
-.\"	$NetBSD: kqueue.2,v 1.35 2015/12/08 14:52:06 christos Exp $
+.\"	$NetBSD: kqueue.2,v 1.53 2020/10/31 14:35:28 christos Exp $
 .\"
 .\" Copyright (c) 2000 Jonathan Lemon
 .\" All rights reserved.
@@ -32,13 +32,14 @@
 .\"
 .\" $FreeBSD: src/lib/libc/sys/kqueue.2,v 1.22 2001/06/27 19:55:57 dd Exp $
 .\"
-.Dd December 8, 2015
+.Dd October 30, 2020
 .Dt KQUEUE 2
 .Os
 .Sh NAME
 .Nm kqueue ,
 .Nm kqueue1 ,
-.Nm kevent
+.Nm kevent ,
+.Nm EV_SET
 .Nd kernel event notification mechanism
 .Sh LIBRARY
 .Lb libc
@@ -51,9 +52,11 @@
 .Fn kqueue1 "int flags"
 .Ft int
 .Fn kevent "int kq" "const struct kevent *changelist" "size_t nchanges" "struct kevent *eventlist" "size_t nevents" "const struct timespec *timeout"
-.Fn EV_SET "\*[Am]kev" ident filter flags fflags data udata
+.Fn EV_SET "&kev" ident filter flags fflags data udata
 .Sh DESCRIPTION
+The
 .Fn kqueue
+system call
 provides a generic method of notifying the user when an event
 happens or a condition holds, based on the results of small
 pieces of kernel code termed filters.
@@ -76,28 +79,31 @@ Multiple events which trigger the filter do not result in multiple
 kevents being placed on the kqueue; instead, the filter will aggregate
 the events into a single struct kevent.
 Calling
-.Fn close
+.Xr close 2
 on a file descriptor will remove any kevents that reference the descriptor.
 .Pp
+The
 .Fn kqueue
+system call
 creates a new kernel event queue and returns a descriptor.
 .Pp
 The
 .Fn kqueue1
-also allows to set the following
+system call also allows to set the following
 .Fa flags
 on the returned file descriptor:
 .Bl -column O_NONBLOCK -offset indent
 .It Dv O_CLOEXEC
 Set the close on exec property.
 .It Dv O_NONBLOCK
-Sets non-blocking I/O.
+Set non-blocking I/O.
 .It Dv O_NOSIGPIPE
 Return
 .Er EPIPE
 instead of raising
 .Dv SIGPIPE .
 .El
+.Pp
 The queue is not inherited by a child created with
 .Xr fork 2 .
 .\" However, if
@@ -107,10 +113,14 @@ The queue is not inherited by a child created with
 .\" flag, then the descriptor table is shared,
 .\" which will allow sharing of the kqueue between two processes.
 .Pp
+The
 .Fn kevent
+system call
 is used to register events with the queue, and return any pending
 events to the user.
+The
 .Fa changelist
+argument
 is a pointer to an array of
 .Va kevent
 structures, as defined in
@@ -118,20 +128,35 @@ structures, as defined in
 All changes contained in the
 .Fa changelist
 are applied before any pending events are read from the queue.
+The
 .Fa nchanges
+argument
 gives the size of
 .Fa changelist .
+The
 .Fa eventlist
+argument
 is a pointer to an array of kevent structures.
+The
 .Fa nevents
+argument
 determines the size of
 .Fa eventlist .
+When
+.Fa nevents
+is zero,
+.Fn kevent
+will return immediately even if there is a
+.Fa timeout
+specified unlike
+.Xr select 2 .
 If
 .Fa timeout
 is a
 .No non- Ns Dv NULL
 pointer, it specifies a maximum interval to wait
-for an event, which will be interpreted as a struct timespec.
+for an event, which will be interpreted as a
+.Li struct timespec .
 If
 .Fa timeout
 is a
@@ -144,16 +169,17 @@ To effect a poll, the
 argument should be
 .No non- Ns Dv NULL ,
 pointing to a zero-valued
-.Va timespec
+.Xr timespec 3
 structure.
 The same array may be used for the
 .Fa changelist
 and
 .Fa eventlist .
 .Pp
+The
 .Fn EV_SET
-is a macro which is provided for ease of initializing a
-kevent structure.
+macro is provided for ease of initializing a kevent structure.
+This macro does not evaluate its parameters multiple times.
 .Pp
 The
 .Va kevent
@@ -165,29 +191,29 @@ struct kevent {
 	uint32_t  flags;	/* action flags for kqueue */
 	uint32_t  fflags;	/* filter flag value */
 	int64_t   data;		/* filter data value */
-	intptr_t  udata;	/* opaque user data identifier */
+	void     *udata;	/* opaque user data identifier */
 };
 .Ed
 .Pp
 The fields of
 .Fa struct kevent
 are:
-.Bl -tag -width XXXfilter -offset indent
+.Bl -tag -width "Fa filter" -offset indent
 .It ident
 Value used to identify this event.
 The exact interpretation is determined by the attached filter,
 but often is a file descriptor.
-.It filter
+.It Fa filter
 Identifies the kernel filter used to process this event.
 There are pre-defined system filters (which are described below), and
 other filters may be added by kernel subsystems as necessary.
-.It flags
+.It Fa flags
 Actions to perform on the event.
-.It fflags
+.It Fa fflags
 Filter-specific flags.
-.It data
+.It Fa data
 Filter-specific data value.
-.It udata
+.It Fa udata
 Opaque user-defined value passed through the kernel unchanged.
 .El
 .Pp
@@ -195,31 +221,31 @@ The
 .Va flags
 field can contain the following values:
 .Bl -tag -width XXXEV_ONESHOT -offset indent
-.It EV_ADD
+.It Dv EV_ADD
 Adds the event to the kqueue.
 Re-adding an existing event will modify the parameters of the original
 event, and not result in a duplicate entry.
 Adding an event automatically enables it,
 unless overridden by the EV_DISABLE flag.
-.It EV_ENABLE
+.It Dv EV_ENABLE
 Permit
 .Fn kevent
 to return the event if it is triggered.
-.It EV_DISABLE
+.It Dv EV_DISABLE
 Disable the event so
 .Fn kevent
 will not return it.
 The filter itself is not disabled.
-.It EV_DISPATCH
+.It Dv EV_DISPATCH
 Disable the event source immediately after delivery of an event.
 See
 .Dv EV_DISABLE
 above.
-.It EV_DELETE
+.It Dv EV_DELETE
 Removes the event from the kqueue.
 Events which are attached to file descriptors are automatically deleted
 on the last close of the descriptor.
-.It EV_RECEIPT
+.It Dv EV_RECEIPT
 This flag is useful for making bulk changes to a kqueue without draining
 any pending events.
 When passed as input, it forces
@@ -228,18 +254,23 @@ to always be returned.
 When a filter is successfully added the
 .Va data
 field will be zero.
-.It EV_ONESHOT
+Note that if this flag is encountered and there is no remaining space in
+.Fa eventlist
+to hold the
+.Dv EV_ERROR
+event, then subsequent changes will not get processed.
+.It Dv EV_ONESHOT
 Causes the event to return only the first occurrence of the filter
 being triggered.
 After the user retrieves the event from the kqueue, it is deleted.
-.It EV_CLEAR
+.It Dv EV_CLEAR
 After the event is retrieved by the user, its state is reset.
 This is useful for filters which report state transitions
 instead of the current state.
 Note that some filters may automatically set this flag internally.
-.It EV_EOF
+.It Dv EV_EOF
 Filters may set this flag to indicate filter-specific EOF condition.
-.It EV_ERROR
+.It Dv EV_ERROR
 See
 .Sx RETURN VALUES
 below.
@@ -260,14 +291,14 @@ are supported on the file descriptor returned by
 to map a filter name to a filter number, and vice-versa (passing
 arguments in a structure described below):
 .Bl -tag -width KFILTER_BYFILTER -offset indent
-.It KFILTER_BYFILTER
+.It Dv KFILTER_BYFILTER
 Map
 .Va filter
 to
 .Va name ,
 which is of size
 .Va len .
-.It KFILTER_BYNAME
+.It Dv KFILTER_BYNAME
 Map
 .Va name
 to
@@ -286,6 +317,7 @@ struct kfilter_mapping {
 };
 .Ed
 .Pp
+The predefined system filters are listed below.
 Arguments may be passed to and from the filter via the
 .Va fflags
 and
@@ -294,16 +326,15 @@ fields in the kevent structure.
 .Pp
 The predefined system filters are:
 .Bl -tag -width EVFILT_SIGNAL
-.It EVFILT_READ
+.It Dv EVFILT_READ
 Takes a descriptor as the identifier, and returns whenever
 there is data available to read.
 The behavior of the filter is slightly different depending
 on the descriptor type.
-.Pp
 .Bl -tag -width 2n
 .It Sockets
 Sockets which have previously been passed to
-.Fn listen
+.Xr listen 2
 return when there is an incoming connection pending.
 .Va data
 contains the size of the listen backlog (i.e., the number of
@@ -337,6 +368,14 @@ Returns when the file pointer is not at the end of file.
 .Va data
 contains the offset from current position to end of file,
 and may be negative.
+.\" .Pp
+.\" This behavior is different from
+.\" .Xr poll 2 ,
+.\" where read events are triggered for regular files unconditionally.
+.\" This event can be triggered unconditionally by setting the
+.\" .Dv NOTE_FILE_POLL
+.\" flag in
+.\" .Va fflags .
 .It "Fifos, Pipes"
 Returns when there is data to read;
 .Va data
@@ -347,8 +386,15 @@ When the last writer disconnects, the filter will set EV_EOF in
 This may be cleared by passing in EV_CLEAR, at which point the
 filter will resume waiting for data to become available before
 returning.
+.It "BPF devices"
+Returns when the BPF buffer is full, the BPF timeout has expired, or
+when the BPF has
+.Dq immediate mode
+enabled and there is any data to read;
+.Va data
+contains the number of bytes available.
 .El
-.It EVFILT_WRITE
+.It Dv EVFILT_WRITE
 Takes a descriptor as the identifier, and returns whenever
 it is possible to write to the descriptor.
 For sockets, pipes, fifos, and ttys,
@@ -360,7 +406,7 @@ Note that this filter is not supported for vnodes.
 .Pp
 For sockets, the low water mark and socket error handling is
 identical to the EVFILT_READ case.
-.It EVFILT_AIO
+.It Dv EVFILT_AIO
 This is not implemented in
 .Nx .
 .ig
@@ -389,35 +435,35 @@ field of the AIO request.
 However, this approach will not work on
 architectures with 64-bit pointers, and should be considered deprecated.
 ..
-.It EVFILT_VNODE
+.It Dv EVFILT_VNODE
 Takes a file descriptor as the identifier and the events to watch for in
 .Va fflags ,
 and returns when one or more of the requested events occurs on the descriptor.
 The events to monitor are:
 .Bl -tag -width XXNOTE_RENAME
-.It NOTE_DELETE
-.Fn unlink
+.It Dv NOTE_DELETE
+.Xr unlink 2
 was called on the file referenced by the descriptor.
-.It NOTE_WRITE
+.It Dv NOTE_WRITE
 A write occurred on the file referenced by the descriptor.
-.It NOTE_EXTEND
+.It Dv NOTE_EXTEND
 The file referenced by the descriptor was extended.
-.It NOTE_ATTRIB
+.It Dv NOTE_ATTRIB
 The file referenced by the descriptor had its attributes changed.
-.It NOTE_LINK
+.It Dv NOTE_LINK
 The link count on the file changed.
-.It NOTE_RENAME
+.It Dv NOTE_RENAME
 The file referenced by the descriptor was renamed.
-.It NOTE_REVOKE
+.It Dv NOTE_REVOKE
 Access to the file was revoked via
 .Xr revoke 2
-or the underlying fileystem was unmounted.
+or the underlying file system was unmounted.
 .El
 .Pp
 On return,
 .Va fflags
 contains the events which triggered the filter.
-.It EVFILT_PROC
+.It Dv EVFILT_PROC
 Takes the process ID to monitor as the identifier and the events to watch for
 in
 .Va fflags ,
@@ -425,20 +471,20 @@ and returns when the process performs one or more of the requested events.
 If a process can normally see another process, it can attach an event to it.
 The events to monitor are:
 .Bl -tag -width XXNOTE_TRACKERR
-.It NOTE_EXIT
+.It Dv NOTE_EXIT
 The process has exited.
 The exit code of the process is stored in
 .Va data .
-.It NOTE_FORK
+.It Dv NOTE_FORK
 The process has called
-.Fn fork .
-.It NOTE_EXEC
+.Xr fork 2 .
+.It Dv NOTE_EXEC
 The process has executed a new process via
 .Xr execve 2
 or similar call.
-.It NOTE_TRACK
+.It Dv NOTE_TRACK
 Follow a process across
-.Fn fork
+.Xr fork 2
 calls.
 The parent process will return with NOTE_TRACK set in the
 .Va fflags
@@ -446,7 +492,7 @@ field, while the child process will return with NOTE_CHILD set in
 .Va fflags
 and the parent PID in
 .Va data .
-.It NOTE_TRACKERR
+.It Dv NOTE_TRACKERR
 This flag is returned if the system was unable to attach an event to
 the child process, usually due to resource limitations.
 .El
@@ -454,13 +500,13 @@ the child process, usually due to resource limitations.
 On return,
 .Va fflags
 contains the events which triggered the filter.
-.It EVFILT_SIGNAL
+.It Dv EVFILT_SIGNAL
 Takes the signal number to monitor as the identifier and returns
 when the given signal is delivered to the current process.
 This coexists with the
-.Fn signal
+.Xr signal 3
 and
-.Fn sigaction
+.Xr sigaction 2
 facilities, and has a lower precedence.
 The filter will record
 all attempts to deliver a signal to a process, even if the signal has
@@ -470,7 +516,7 @@ Event notification happens after normal signal delivery processing.
 returns the number of times the signal has occurred since the last call to
 .Fn kevent .
 This filter automatically sets the EV_CLEAR flag internally.
-.It EVFILT_TIMER
+.It Dv EVFILT_TIMER
 Establishes an arbitrary timer identified by
 .Va ident .
 When adding a timer,
@@ -482,14 +528,71 @@ On return,
 contains the number of times the timeout has expired since the last call to
 .Fn kevent .
 This filter automatically sets the EV_CLEAR flag internally.
+.It Dv EVFILT_FS
+Establishes a file system monitor.
+Currently it only monitors file system mount and unmount actions.
+.It Dv EVFILT_USER
+Establishes a user event identified by
+.Va ident
+which is not associated with any kernel mechanism but is triggered by
+user level code.
+The lower 24 bits of the
+.Va fflags
+may be used for user defined flags and manipulated using the following:
+.Bl -tag -width "Dv NOTE_FFLAGSMASK"
+.It Dv NOTE_FFNOP
+Ignore the input
+.Va fflags .
+.It Dv NOTE_FFAND
+Bitwise AND
+.Va fflags .
+.It Dv NOTE_FFOR
+Bitwise OR
+.Va fflags .
+.It Dv NOTE_FFCOPY
+Copy
+.Va fflags .
+.It Dv NOTE_FFCTRLMASK
+Control mask for
+.Va fflags .
+.It Dv NOTE_FFLAGSMASK
+User defined flag mask for
+.Va fflags .
 .El
+.Pp
+A user event is triggered for output with the following:
+.Bl -tag -width "Dv NOTE_FFLAGSMASK"
+.It Dv NOTE_TRIGGER
+Cause the event to be triggered.
+.El
+.Pp
+On return,
+.Va fflags
+contains the users defined flags in the lower 24 bits.
+.El
+.Sh CANCELLATION BEHAVIOUR
+If
+.Fa nevents
+is non-zero, i.e., the function is potentially blocking, the call
+is a cancellation point.
+Otherwise, i.e., if
+.Fa nevents
+is zero, the call is not cancellable.
+Cancellation can only occur before any changes are made to the kqueue,
+or when the call was blocked and no changes to the queue were requested.
 .Sh RETURN VALUES
+The
 .Fn kqueue
+system call
 creates a new kernel event queue and returns a file descriptor.
 If there was an error creating the kernel event queue, a value of \-1 is
-returned and errno set.
+returned and
+.Dv errno
+is set.
 .Pp
+The
 .Fn kevent
+system call
 returns the number of events placed in the
 .Fa eventlist ,
 up to the value given by
@@ -519,14 +622,14 @@ The following example program monitors a file (provided to it as the first
 argument) and prints information about some common events it receives
 notifications for:
 .Bd -literal -offset indent
-#include \*[Lt]sys/types.h\*[Gt]
-#include \*[Lt]sys/event.h\*[Gt]
-#include \*[Lt]sys/time.h\*[Gt]
-#include \*[Lt]stdio.h\*[Gt]
-#include \*[Lt]unistd.h\*[Gt]
-#include \*[Lt]stdlib.h\*[Gt]
-#include \*[Lt]fcntl.h\*[Gt]
-#include \*[Lt]err.h\*[Gt]
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/time.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <err.h>
 
 int
 main(int argc, char *argv[])
@@ -541,44 +644,44 @@ main(int argc, char *argv[])
         if ((kq = kqueue()) == -1)
                 err(1, "Cannot create kqueue");
 
-        EV_SET(\*[Am]ev, fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
+        EV_SET(&ev, fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR,
             NOTE_DELETE|NOTE_WRITE|NOTE_EXTEND|NOTE_ATTRIB|NOTE_LINK|
             NOTE_RENAME|NOTE_REVOKE, 0, 0);
-        if (kevent(kq, \*[Am]ev, 1, NULL, 0, \*[Am]tout) == -1)
+        if (kevent(kq, &ev, 1, NULL, 0, &tout) == -1)
                 err(1, "kevent");
         for (;;) {
-                nev = kevent(kq, NULL, 0, \*[Am]ev, 1, \*[Am]tout);
+                nev = kevent(kq, NULL, 0, &ev, 1, &tout);
                 if (nev == -1)
                         err(1, "kevent");
                 if (nev == 0)
                         continue;
-                if (ev.fflags \*[Am] NOTE_DELETE) {
+                if (ev.fflags & NOTE_DELETE) {
                         printf("deleted ");
-                        ev.fflags \*[Am]= ~NOTE_DELETE;
+                        ev.fflags &= ~NOTE_DELETE;
                 }
-                if (ev.fflags \*[Am] NOTE_WRITE) {
+                if (ev.fflags & NOTE_WRITE) {
                         printf("written ");
-                        ev.fflags \*[Am]= ~NOTE_WRITE;
+                        ev.fflags &= ~NOTE_WRITE;
                 }
-                if (ev.fflags \*[Am] NOTE_EXTEND) {
+                if (ev.fflags & NOTE_EXTEND) {
                         printf("extended ");
-                        ev.fflags \*[Am]= ~NOTE_EXTEND;
+                        ev.fflags &= ~NOTE_EXTEND;
                 }
-                if (ev.fflags \*[Am] NOTE_ATTRIB) {
+                if (ev.fflags & NOTE_ATTRIB) {
                         printf("chmod/chown/utimes ");
-                        ev.fflags \*[Am]= ~NOTE_ATTRIB;
+                        ev.fflags &= ~NOTE_ATTRIB;
                 }
-                if (ev.fflags \*[Am] NOTE_LINK) {
+                if (ev.fflags & NOTE_LINK) {
                         printf("hardlinked ");
-                        ev.fflags \*[Am]= ~NOTE_LINK;
+                        ev.fflags &= ~NOTE_LINK;
                 }
-                if (ev.fflags \*[Am] NOTE_RENAME) {
+                if (ev.fflags & NOTE_RENAME) {
                         printf("renamed ");
-                        ev.fflags \*[Am]= ~NOTE_RENAME;
+                        ev.fflags &= ~NOTE_RENAME;
                 }
-                if (ev.fflags \*[Am] NOTE_REVOKE) {
+                if (ev.fflags & NOTE_REVOKE) {
                         printf("revoked ");
-                        ev.fflags \*[Am]= ~NOTE_REVOKE;
+                        ev.fflags &= ~NOTE_REVOKE;
                 }
                 printf("\\n");
                 if (ev.fflags)
@@ -614,6 +717,9 @@ structure.
 .It Bq Er EINTR
 A signal was delivered before the timeout expired and before any
 events were placed on the kqueue for return.
+All changes contained in the
+.Fa changelist
+are applied before returning this error.
 .It Bq Er EINVAL
 The specified time limit or filter is invalid.
 .It Bq Er ENOENT
@@ -631,13 +737,17 @@ The specified process to attach to does not exist.
 .\" .Xr aio_error 2 ,
 .\" .Xr aio_read 2 ,
 .\" .Xr aio_return 2 ,
+.Xr fork 2 ,
 .Xr ioctl 2 ,
+.Xr listen 2 ,
 .Xr poll 2 ,
 .Xr read 2 ,
 .Xr select 2 ,
 .Xr sigaction 2 ,
+.Xr unlink 2 ,
 .Xr write 2 ,
 .Xr signal 3 ,
+.Xr timespec 3 ,
 .Xr kfilter_register 9 ,
 .Xr knote 9
 .Rs
@@ -661,3 +771,13 @@ The
 .Fn kqueue1
 function first appeared in
 .Nx 6.0 .
+.Pp
+The
+.Fn EV_SET
+macro was protected from evaluating multiple times the first argument in
+.Nx 8.0 .
+.Pp
+The
+.Va udata
+type was changed from intptr_t to void * in
+.Nx 10.0 .

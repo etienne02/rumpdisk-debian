@@ -1,4 +1,4 @@
-/*	$NetBSD: tlphy.c,v 1.62 2014/06/16 16:48:16 msaitoh Exp $	*/
+/*	$NetBSD: tlphy.c,v 1.71 2020/07/07 08:44:12 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000 The NetBSD Foundation, Inc.
@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tlphy.c,v 1.62 2014/06/16 16:48:16 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tlphy.c,v 1.71 2020/07/07 08:44:12 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -98,7 +98,7 @@ CFATTACH_DECL_NEW(tlphy, sizeof(struct tlphy_softc),
     tlphymatch, tlphyattach, mii_phy_detach, mii_phy_activate);
 
 static int	tlphy_service(struct mii_softc *, struct mii_data *, int);
-static int	tlphy_auto(struct tlphy_softc *, int);
+static int	tlphy_auto(struct tlphy_softc *);
 static void	tlphy_acomp(struct tlphy_softc *);
 static void	tlphy_status(struct mii_softc *);
 
@@ -107,11 +107,8 @@ static const struct mii_phy_funcs tlphy_funcs = {
 };
 
 static const struct mii_phydesc tlphys[] = {
-	{ MII_OUI_TI,		MII_MODEL_TI_TLAN10T,
-	  MII_STR_TI_TLAN10T },
-
-	{ 0,			0,
-	  NULL },
+	MII_PHY_DESC(TI, TLAN10T),
+	MII_PHY_END,
 };
 
 static int
@@ -120,9 +117,9 @@ tlphymatch(device_t parent, cfdata_t match, void *aux)
 	struct mii_attach_args *ma = aux;
 
 	if (mii_phy_match(ma, tlphys) != NULL)
-		return (10);
+		return 10;
 
-	return (0);
+	return 0;
 }
 
 static void
@@ -146,51 +143,62 @@ tlphyattach(device_t parent, device_t self, void *aux)
 	sc->mii_funcs = &tlphy_funcs;
 	sc->mii_pdata = mii;
 	sc->mii_flags = ma->mii_flags;
-	sc->mii_anegticks = MII_ANEGTICKS;
+
+	mii_lock(mii);
 
 	PHY_RESET(sc);
 
 	/*
-	 * Note that if we're on a device that also supports 100baseTX,
-	 * we are not going to want to use the built-in 10baseT port,
-	 * since there will be another PHY on the MII wired up to the
-	 * UTP connector.  The parent indicates this to us by specifying
-	 * the TLPHY_MEDIA_NO_10_T bit.
+	 * Note that if we're on a device that also supports 100baseTX, we are
+	 * not going to want to use the built-in 10baseT port, since there will
+	 * be another PHY on the MII wired up to the UTP connector.  The parent
+	 * indicates this to us by specifying the TLPHY_MEDIA_NO_10_T bit.
 	 */
 	tsc->sc_tlphycap = tlsc->tl_product->tp_tlphymedia;
-	if ((tsc->sc_tlphycap & TLPHY_MEDIA_NO_10_T) == 0)
-		sc->mii_capabilities =
-		    PHY_READ(sc, MII_BMSR) & ma->mii_capmask;
-	else
+	if ((tsc->sc_tlphycap & TLPHY_MEDIA_NO_10_T) == 0) {
+		PHY_READ(sc, MII_BMSR, &sc->mii_capabilities);
+		sc->mii_capabilities &= ma->mii_capmask;
+	} else
 		sc->mii_capabilities = 0;
 
+	mii_unlock(mii);
 
 #define	ADD(m, c)	ifmedia_add(&mii->mii_media, (m), (c), NULL)
-#define	PRINT(str)	aprint_normal("%s%s", sep, str); sep = ", "
+#define	PRINT(str)					     \
+	do {						     \
+		aprint_normal("%s%s", sep, str);	     \
+		sep = ", ";				     \
+	} while (/* CONSTCOND */0)
 
-	aprint_normal_dev(self, "");
 	if (tsc->sc_tlphycap) {
+		mii_lock(mii);
+		sc->mii_anegticks = MII_ANEGTICKS;
+		mii_unlock(mii);
+		aprint_normal_dev(self, "");
 		if (tsc->sc_tlphycap & TLPHY_MEDIA_10_2) {
-			ADD(IFM_MAKEWORD(IFM_ETHER, IFM_10_2, 0,
-			    sc->mii_inst), 0);
+			ADD(IFM_MAKEWORD(IFM_ETHER, IFM_10_2, 0, sc->mii_inst),
+			    0);
 			PRINT("10base2");
 		} else if (tsc->sc_tlphycap & TLPHY_MEDIA_10_5) {
-			ADD(IFM_MAKEWORD(IFM_ETHER, IFM_10_5, 0,
-			    sc->mii_inst), 0);
+			ADD(IFM_MAKEWORD(IFM_ETHER, IFM_10_5, 0, sc->mii_inst),
+			    0);
 			PRINT("10base5");
+		} else
+			PRINT("no media present");
+		aprint_normal("\n");
+	}
+	if (sc->mii_capabilities & BMSR_MEDIAMASK)
+		mii_phy_add_media(sc);
+	else {
+		/*
+		 * mii_phy_add_media() automatically install power handler,
+		 * but if_media_add() doesn't. Do it now.
+		 */
+		if (!pmf_device_register(self, NULL, mii_phy_resume)) {
+			aprint_error_dev(self,
+			    "couldn't establish power handler\n");
 		}
 	}
-	if (sc->mii_capabilities & BMSR_MEDIAMASK) {
-		aprint_normal("%s", sep);
-		mii_phy_add_media(sc);
-	} else if ((tsc->sc_tlphycap &
-		    (TLPHY_MEDIA_10_2 | TLPHY_MEDIA_10_5)) == 0)
-		aprint_error("no media present");
-	else if (!pmf_device_register(self, NULL, mii_phy_resume)) {
-		aprint_normal("\n");
-		aprint_error_dev(self, "couldn't establish power handler");
-	}
-	aprint_normal("\n");
 #undef ADD
 #undef PRINT
 }
@@ -200,18 +208,18 @@ tlphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 {
 	struct tlphy_softc *tsc = (struct tlphy_softc *)sc;
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
-	int reg;
+	uint16_t reg;
+
+	KASSERT(mii_locked(mii));
 
 	if ((sc->mii_flags & MIIF_DOINGAUTO) == 0 && tsc->sc_need_acomp)
 		tlphy_acomp(tsc);
 
 	switch (cmd) {
 	case MII_POLLSTAT:
-		/*
-		 * If we're not polling our PHY instance, just return.
-		 */
+		/* If we're not polling our PHY instance, just return. */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst)
-			return (0);
+			return 0;
 		break;
 
 	case MII_MEDIACHG:
@@ -220,25 +228,18 @@ tlphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		 * isolate ourselves.
 		 */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst) {
-			reg = PHY_READ(sc, MII_BMCR);
+			PHY_READ(sc, MII_BMCR, &reg);
 			PHY_WRITE(sc, MII_BMCR, reg | BMCR_ISO);
-			return (0);
+			return 0;
 		}
 
-		/*
-		 * If the interface is not up, don't do anything.
-		 */
+		/* If the interface is not up, don't do anything. */
 		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
 			break;
 
 		switch (IFM_SUBTYPE(ife->ifm_media)) {
 		case IFM_AUTO:
-			/*
-			 * The ThunderLAN PHY doesn't self-configure after
-			 * an autonegotiation cycle, so there's no such
-			 * thing as "already in auto mode".
-			 */
-			(void) tlphy_auto(tsc, 1);
+			(void) tlphy_auto(tsc);
 			break;
 		case IFM_10_2:
 		case IFM_10_5:
@@ -254,23 +255,50 @@ tlphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		break;
 
 	case MII_TICK:
-		/*
-		 * If we're not currently selected, just return.
-		 */
+		/* If we're not currently selected, just return. */
 		if (IFM_INST(ife->ifm_media) != sc->mii_inst)
-			return (0);
+			return 0;
 
 		/*
 		 * XXX WHAT ABOUT CHECKING LINK ON THE BNC/AUI?!
 		 */
 
-		if (mii_phy_tick(sc) == EJUSTRETURN)
-			return (0);
+		/* Only used for autonegotiation. */
+		if (IFM_SUBTYPE(ife->ifm_media) != IFM_AUTO) {
+			sc->mii_ticks = 0;
+			break;
+		}
+
+		/*
+		 * Check for link.
+		 * Read the status register twice; BMSR_LINK is latch-low.
+		 */
+		PHY_READ(sc, MII_BMSR, &reg);
+		PHY_READ(sc, MII_BMSR, &reg);
+		if (reg & BMSR_LINK) {
+			sc->mii_ticks = 0;
+			break;
+		}
+
+		/*
+		 * mii_ticks == 0 means it's the first tick after changing the
+		 * media or the link became down since the last tick
+		 * (see above), so break to update the status.
+		 */
+		if (sc->mii_ticks++ == 0)
+			break;
+
+		/* Only retry autonegotiation every mii_anegticks seconds. */
+		KASSERT(sc->mii_anegticks != 0);
+		if (sc->mii_ticks <= sc->mii_anegticks)
+			break;
+
+		tlphy_auto(tsc);
 		break;
 
 	case MII_DOWN:
 		mii_phy_down(sc);
-		return (0);
+		return 0;
 	}
 
 	/* Update the media status. */
@@ -278,7 +306,7 @@ tlphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 
 	/* Callback if something changed. */
 	mii_phy_update(sc, cmd);
-	return (0);
+	return 0;
 }
 
 static void
@@ -286,19 +314,21 @@ tlphy_status(struct mii_softc *sc)
 {
 	struct tlphy_softc *tsc = (struct tlphy_softc *)sc;
 	struct mii_data *mii = sc->mii_pdata;
-	int bmsr, bmcr, tlctrl;
+	uint16_t bmsr, bmcr, tlctrl;
+
+	KASSERT(mii_locked(mii));
 
 	mii->mii_media_status = IFM_AVALID;
 	mii->mii_media_active = IFM_ETHER;
 
-	bmcr = PHY_READ(sc, MII_BMCR);
+	PHY_READ(sc, MII_BMCR, &bmcr);
 	if (bmcr & BMCR_ISO) {
 		mii->mii_media_active |= IFM_NONE;
 		mii->mii_media_status = 0;
 		return;
 	}
 
-	tlctrl = PHY_READ(sc, MII_TLPHY_CTRL);
+	PHY_READ(sc, MII_TLPHY_CTRL, &tlctrl);
 	if (tlctrl & CTRL_AUISEL) {
 		if (tsc->sc_tlphycap & TLPHY_MEDIA_10_2)
 			mii->mii_media_active |= IFM_10_2;
@@ -311,8 +341,8 @@ tlphy_status(struct mii_softc *sc)
 		return;
 	}
 
-	bmsr = PHY_READ(sc, MII_BMSR) |
-	    PHY_READ(sc, MII_BMSR);
+	PHY_READ(sc, MII_BMSR, &bmsr);
+	PHY_READ(sc, MII_BMSR, &bmsr);
 	if (bmsr & BMSR_LINK)
 		mii->mii_media_status |= IFM_ACTIVE;
 
@@ -320,10 +350,9 @@ tlphy_status(struct mii_softc *sc)
 		mii->mii_media_active |= IFM_LOOP;
 
 	/*
-	 * Grr, braindead ThunderLAN PHY doesn't have any way to
-	 * tell which media is actually active.  (Note it also
-	 * doesn't self-configure after autonegotiation.)  We
-	 * just have to report what's in the BMCR.
+	 * Grr, braindead ThunderLAN PHY doesn't have any way to tell which
+	 * media is actually active.  (Note it also doesn't self-configure
+	 * after autonegotiation.)  We just have to report what's in the BMCR.
 	 */
 	if (bmcr & BMCR_FDX)
 		mii->mii_media_active |= IFM_FDX;
@@ -333,20 +362,12 @@ tlphy_status(struct mii_softc *sc)
 }
 
 static int
-tlphy_auto(struct tlphy_softc *tsc, int waitfor)
+tlphy_auto(struct tlphy_softc *tsc)
 {
 	struct mii_softc *sc = &tsc->sc_mii;
 	int error;
 
-	switch ((error = mii_phy_auto(sc, waitfor))) {
-	case EIO:
-		/*
-		 * Just assume we're not in full-duplex mode.
-		 * XXX Check link and try AUI/BNC?
-		 */
-		PHY_WRITE(sc, MII_BMCR, 0);
-		break;
-
+	switch ((error = mii_phy_auto(sc))) {
 	case EJUSTRETURN:
 		/* Flag that we need to program when it completes. */
 		tsc->sc_need_acomp = 1;
@@ -356,14 +377,14 @@ tlphy_auto(struct tlphy_softc *tsc, int waitfor)
 		tlphy_acomp(tsc);
 	}
 
-	return (error);
+	return error;
 }
 
 static void
 tlphy_acomp(struct tlphy_softc *tsc)
 {
 	struct mii_softc *sc = &tsc->sc_mii;
-	int aner, anlpar;
+	uint16_t aner, anar, anlpar, result;
 
 	tsc->sc_need_acomp = 0;
 
@@ -373,11 +394,12 @@ tlphy_acomp(struct tlphy_softc *tsc)
 	 * based on the link partner status.
 	 */
 
-	aner = PHY_READ(sc, MII_ANER);
+	PHY_READ(sc, MII_ANER, &aner);
 	if (aner & ANER_LPAN) {
-		anlpar = PHY_READ(sc, MII_ANLPAR) &
-		    PHY_READ(sc, MII_ANAR);
-		if (anlpar & ANAR_10_FD) {
+		PHY_READ(sc, MII_ANAR, &anar);
+		PHY_READ(sc, MII_ANLPAR, &anlpar);
+		result = anar & anlpar;
+		if (result & ANAR_10_FD) {
 			PHY_WRITE(sc, MII_BMCR, BMCR_FDX);
 			return;
 		}

@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_srat.c,v 1.3 2010/03/05 14:00:17 jruoho Exp $ */
+/* $NetBSD: acpi_srat.c,v 1.8 2019/12/27 12:51:57 ad Exp $ */
 
 /*
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_srat.c,v 1.3 2010/03/05 14:00:17 jruoho Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_srat.c,v 1.8 2019/12/27 12:51:57 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/kmem.h>
@@ -39,15 +39,9 @@ __KERNEL_RCSID(0, "$NetBSD: acpi_srat.c,v 1.3 2010/03/05 14:00:17 jruoho Exp $")
 #include <dev/acpi/acpivar.h>
 #include <dev/acpi/acpi_srat.h>
 
-static ACPI_TABLE_SRAT *srat;
+#include <uvm/uvm_extern.h>
 
-struct acpisrat_node {
-	acpisrat_nodeid_t nodeid;
-	uint32_t ncpus; /* Number of cpus in this node */
-	struct acpisrat_cpu **cpu; /* Array of cpus */
-	uint32_t nmems; /* Number of memory ranges in this node */
-	struct acpisrat_mem **mem; /* Array of memory ranges */
-};
+static ACPI_TABLE_SRAT *srat;
 
 static uint32_t nnodes; /* Number of NUMA nodes */
 static struct acpisrat_node *node_array; /* Array of NUMA nodes */
@@ -56,7 +50,6 @@ static struct acpisrat_cpu *cpu_array; /* Array of cpus */
 static uint32_t nmems; /* Number of Memory ranges */
 static struct acpisrat_mem *mem_array;
 
-
 struct cpulist {
 	struct acpisrat_cpu cpu;
 	TAILQ_ENTRY(cpulist) entry;
@@ -64,12 +57,11 @@ struct cpulist {
 
 static TAILQ_HEAD(, cpulist) cpulisthead;
 
-#define CPU_INIT		TAILQ_INIT(&cpulisthead);
+#define CPU_INIT()		TAILQ_INIT(&cpulisthead);
 #define CPU_FOREACH(cpu)	TAILQ_FOREACH(cpu, &cpulisthead, entry)
 #define CPU_ADD(cpu)		TAILQ_INSERT_TAIL(&cpulisthead, cpu, entry)
 #define CPU_REM(cpu)		TAILQ_REMOVE(&cpulisthead, cpu, entry)
-#define CPU_FIRST		TAILQ_FIRST(&cpulisthead)
-
+#define CPU_FIRST()		TAILQ_FIRST(&cpulisthead)
 
 struct memlist {
 	struct acpisrat_mem mem;
@@ -78,18 +70,18 @@ struct memlist {
 
 static TAILQ_HEAD(, memlist) memlisthead;
 
-#define MEM_INIT		TAILQ_INIT(&memlisthead)
+#define MEM_INIT()		TAILQ_INIT(&memlisthead)
 #define MEM_FOREACH(mem)	TAILQ_FOREACH(mem, &memlisthead, entry)
 #define MEM_ADD(mem)		TAILQ_INSERT_TAIL(&memlisthead, mem, entry)
 #define MEM_ADD_BEFORE(mem, b)	TAILQ_INSERT_BEFORE(b, mem, entry)
 #define MEM_REM(mem)		TAILQ_REMOVE(&memlisthead, mem, entry)
-#define MEM_FIRST		TAILQ_FIRST(&memlisthead)
+#define MEM_FIRST()		TAILQ_FIRST(&memlisthead)
 
 
 static struct cpulist *
 cpu_alloc(void)
 {
-	return kmem_zalloc(sizeof(struct cpulist), KM_NOSLEEP);
+	return kmem_zalloc(sizeof(struct cpulist), KM_SLEEP);
 }
 
 static void
@@ -98,25 +90,10 @@ cpu_free(struct cpulist *c)
 	kmem_free(c, sizeof(struct cpulist));
 }
 
-#if 0
-static struct cpulist *
-cpu_get(acpisrat_nodeid_t nodeid)
-{
-	struct cpulist *tmp;
-
-	CPU_FOREACH(tmp) {
-		if (tmp->cpu.nodeid == nodeid)
-			return tmp;
-	}
-
-	return NULL;
-}
-#endif
-
 static struct memlist *
 mem_alloc(void)
 {
-	return kmem_zalloc(sizeof(struct memlist), KM_NOSLEEP);
+	return kmem_zalloc(sizeof(struct memlist), KM_SLEEP);
 }
 
 static void
@@ -138,7 +115,10 @@ mem_get(acpisrat_nodeid_t nodeid)
 	return NULL;
 }
 
-
+/*
+ * Returns true if ACPI SRAT table is available. If table does not exist, all
+ * functions below have undefined behaviour.
+ */
 bool
 acpisrat_exist(void)
 {
@@ -190,6 +170,8 @@ acpisrat_parse(void)
 				continue;
 
 			srat_cpu = (ACPI_SRAT_CPU_AFFINITY *)subtable;
+			if ((srat_cpu->Flags & ACPI_SRAT_CPU_ENABLED) == 0)
+				break;
 			nodeid = (srat_cpu->ProximityDomainHi[2] << 24) |
 			    (srat_cpu->ProximityDomainHi[1] << 16) |
 			    (srat_cpu->ProximityDomainHi[0] << 8) |
@@ -210,6 +192,8 @@ acpisrat_parse(void)
 		case ACPI_SRAT_TYPE_MEMORY_AFFINITY:
 			srat_mem = (ACPI_SRAT_MEM_AFFINITY *)subtable;
 			nodeid = srat_mem->ProximityDomain;
+			if ((srat_mem->Flags & ACPI_SRAT_MEM_ENABLED) == 0)
+				break;
 
 			mementry = mem_alloc();
 			if (mementry == NULL)
@@ -224,14 +208,17 @@ acpisrat_parse(void)
 
 		case ACPI_SRAT_TYPE_X2APIC_CPU_AFFINITY:
 			srat_x2apic = (ACPI_SRAT_X2APIC_CPU_AFFINITY *)subtable;
+			if ((srat_x2apic->Flags & ACPI_SRAT_CPU_ENABLED) == 0)
+				break;
 			nodeid = srat_x2apic->ProximityDomain;
 
-			/* This table entry overrides
+			/*
+			 * This table entry overrides
 			 * ACPI_SRAT_TYPE_CPU_AFFINITY.
 			 */
 			if (!ignore_cpu_affinity) {
 				struct cpulist *citer;
-				while ((citer = CPU_FIRST) != NULL) {
+				while ((citer = CPU_FIRST()) != NULL) {
 					CPU_REM(citer);
 					cpu_free(citer);
 				}
@@ -267,14 +254,13 @@ acpisrat_quirks(void)
 
 	/* Some sanity checks. */
 
-	/* Deal with holes in the memory nodes.
-	 * BIOS doesn't enlist memory nodes which
-	 * don't have any memory modules plugged in.
-	 * This behaviour has been observed on AMD machines.
+	/*
+	 * Deal with holes in the memory nodes. BIOS doesn't enlist memory
+	 * nodes which don't have any memory modules plugged in. This behaviour
+	 * has been observed on AMD machines.
 	 *
-	 * Do that by searching for CPUs in NUMA nodes
-	 * which don't exist in the memory and then insert
-	 * a zero memory range for the missing node.
+	 * Do that by searching for CPUs in NUMA nodes which don't exist in the
+	 * memory and then insert a zero memory range for the missing node.
 	 */
 	CPU_FOREACH(citer) {
 		mem = mem_get(citer->cpu.nodeid);
@@ -297,6 +283,10 @@ acpisrat_quirks(void)
 	return 0;
 }
 
+/*
+ * Initializes parser. Must be the first function being called when table is
+ * available.
+ */
 int
 acpisrat_init(void)
 {
@@ -305,6 +295,9 @@ acpisrat_init(void)
 	return acpisrat_refresh();
 }
 
+/*
+ * Re-parse ACPI SRAT table. Useful after hotplugging cpu or RAM.
+ */
 int
 acpisrat_refresh(void)
 {
@@ -313,8 +306,8 @@ acpisrat_refresh(void)
 	struct memlist *miter;
 	uint32_t cnodes = 0, mnodes = 0;
 
-	CPU_INIT;
-	MEM_INIT;
+	CPU_INIT();
+	MEM_INIT();
 
 	rc = acpisrat_parse();
 	if (rc)
@@ -329,7 +322,6 @@ acpisrat_refresh(void)
 	if (rc)
 		return rc;
 
-	nnodes = 0;
 	ncpus = 0;
 	CPU_FOREACH(citer) {
 		cnodes = MAX(citer->cpu.nodeid, cnodes);
@@ -344,20 +336,17 @@ acpisrat_refresh(void)
 
 	nnodes = MAX(cnodes, mnodes) + 1;
 
+	if (nnodes == 0 || nmems == 0 || ncpus == 0) {
+		rc = ENOENT;
+		goto fail;
+	}
+
 	node_array = kmem_zalloc(nnodes * sizeof(struct acpisrat_node),
-	    KM_NOSLEEP);
-	if (node_array == NULL)
-		return ENOMEM;
-
+	    KM_SLEEP);
 	cpu_array = kmem_zalloc(ncpus * sizeof(struct acpisrat_cpu),
-	    KM_NOSLEEP);
-	if (cpu_array == NULL)
-		return ENOMEM;
-
+	    KM_SLEEP);
 	mem_array = kmem_zalloc(nmems * sizeof(struct acpisrat_mem),
-	    KM_NOSLEEP);
-	if (mem_array == NULL)
-		return ENOMEM;
+	    KM_SLEEP);
 
 	i = 0;
 	CPU_FOREACH(citer) {
@@ -376,15 +365,20 @@ acpisrat_refresh(void)
 	for (i = 0; i < nnodes; i++) {
 		node_array[i].nodeid = i;
 
-		node_array[i].cpu = kmem_zalloc(node_array[i].ncpus *
-		    sizeof(struct acpisrat_cpu *), KM_NOSLEEP);
-		node_array[i].mem = kmem_zalloc(node_array[i].nmems *
-		    sizeof(struct acpisrat_mem *), KM_NOSLEEP);
+		if (node_array[i].ncpus != 0) {
+			node_array[i].cpu = kmem_zalloc(node_array[i].ncpus *
+			    sizeof(struct acpisrat_cpu *), KM_SLEEP);
+		}
+		if (node_array[i].nmems != 0) {
+			node_array[i].mem = kmem_zalloc(node_array[i].nmems *
+			    sizeof(struct acpisrat_mem *), KM_SLEEP);
+		}
 
 		k = 0;
 		for (j = 0; j < ncpus; j++) {
 			if (cpu_array[j].nodeid != i)
 				continue;
+			KASSERT(node_array[i].cpu != NULL);
 			node_array[i].cpu[k] = &cpu_array[j];
 			k++;
 		}
@@ -393,25 +387,30 @@ acpisrat_refresh(void)
 		for (j = 0; j < nmems; j++) {
 			if (mem_array[j].nodeid != i)
 				continue;
+			KASSERT(node_array[i].mem != NULL);
 			node_array[i].mem[k] = &mem_array[j];
 			k++;
 		}
 	}
 
-	while ((citer = CPU_FIRST) != NULL) {
+ fail:
+	while ((citer = CPU_FIRST()) != NULL) {
 		CPU_REM(citer);
 		cpu_free(citer);
 	}
 
-	while ((miter = MEM_FIRST) != NULL) {
+	while ((miter = MEM_FIRST()) != NULL) {
 		MEM_REM(miter);
 		mem_free(miter);
 	}
 
-	return 0;
+	return rc;
 }
 
-
+/*
+ * Free allocated memory. Should be called when acpisrat is no longer of any
+ * use.
+ */
 int
 acpisrat_exit(void)
 {
@@ -445,7 +444,6 @@ acpisrat_exit(void)
 	return 0;
 }
 
-
 void
 acpisrat_dump(void)
 {
@@ -476,18 +474,49 @@ acpisrat_dump(void)
 	}
 }
 
+void
+acpisrat_load_uvm(void)
+{
+	uint32_t i, j, nn, nm;
+	struct acpisrat_mem m;
+
+	nn = acpisrat_nodes();
+	aprint_debug("SRAT: %u NUMA nodes\n", nn);
+	for (i = 0; i < nn; i++) {
+		nm = acpisrat_node_memoryranges(i);
+		for (j = 0; j < nm; j++) {
+			acpisrat_mem(i, j, &m);
+			aprint_debug("SRAT: node %u memory range %u (0x%"
+			    PRIx64" - 0x%"PRIx64" flags %u)\n",
+			    m.nodeid, j, m.baseaddress,
+			    m.baseaddress + m.length, m.flags);
+			uvm_page_numa_load(trunc_page(m.baseaddress),
+			    trunc_page(m.length), m.nodeid);
+		}
+	}
+}
+
+/*
+ * Get number of NUMA nodes.
+ */
 uint32_t
 acpisrat_nodes(void)
 {
 	return nnodes;
 }
 
+/*
+ * Get number of cpus in the node. 0 means, this is a cpu-less node.
+ */
 uint32_t
 acpisrat_node_cpus(acpisrat_nodeid_t nodeid)
 {
 	return node_array[nodeid].ncpus;
 }
 
+/*
+ * Get number of memory ranges in the node 0 means, this node has no RAM.
+ */
 uint32_t
 acpisrat_node_memoryranges(acpisrat_nodeid_t nodeid)
 {
@@ -508,4 +537,28 @@ acpisrat_mem(acpisrat_nodeid_t nodeid, uint32_t memrange,
 {
 	memcpy(mem, node_array[nodeid].mem[memrange],
 	    sizeof(struct acpisrat_mem));
+}
+
+/*
+ * Get a node from an APIC id (belonging to a cpu).
+ */
+struct acpisrat_node *
+acpisrat_get_node(uint32_t apicid)
+{
+	struct acpisrat_node *node;
+	struct acpisrat_cpu *cpu;
+	size_t i, n;
+
+	for (i = 0; i < nnodes; i++) {
+		node = &node_array[i];
+
+		for (n = 0; n < node->ncpus; n++) {
+			cpu = node->cpu[n];
+			if (cpu->apicid == apicid) {
+				return node;
+			}
+		}
+	}
+
+	return NULL;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_axenreg.h,v 1.3 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: if_axenreg.h,v 1.15 2019/07/31 09:13:16 mrg Exp $	*/
 /*	$OpenBSD: if_axenreg.h,v 1.1 2013/10/07 05:37:41 yuo Exp $	*/
 
 /*
@@ -23,15 +23,15 @@
 #define AXEN_REV_UA2		1
 
 
-/* recieve header */
+/* receive header */
 /*
  *                     +-multicast/broadcast
  *                     |    +-rx_ok
  *                     |    |     ++-----L3_type (1:ipv4, 0/2:ipv6)
  *        pkt_len(13)  |    |     ||+ ++-L4_type(0: icmp, 1: UDP, 4: TCP)
  * |765|43210 76543210|7654 3210 7654 3210|
- *  |+-Drop_err               |+-L4_err |+-L4_CSUM_ERR
- *  +--crc_err                +--L3_err +--L3_CSUM_ERR
+ *  | +-crc_err               |+-L4_err |+-L4_CSUM_ERR
+ *  +--drop_err                +--L3_err +--L3_CSUM_ERR
  *
  * ex) pkt_hdr 0x00680820
  *      drop_err, crc_err: none
@@ -55,8 +55,8 @@
  *  0x0850: ipv6 tcp (ssh)		0000 1000 0101 0000
  */
 
-#define	AXEN_RXHDR_CRC_ERR	(1 << 31)
-#define	AXEN_RXHDR_DROP_ERR	(1 << 30)
+#define	AXEN_RXHDR_DROP_ERR	(1 << 31)
+#define	AXEN_RXHDR_CRC_ERR	(1 << 29)
 #define AXEN_RXHDR_MCAST	(1 << 15)
 #define AXEN_RXHDR_RX_OK	(1 << 11)
 #define	AXEN_RXHDR_L3_ERR	(1 << 9)
@@ -72,7 +72,7 @@
 #define   AXEN_RXHDR_L4_TYPE_TCP	0x4
 
 /* L3 packet type (2bit) */
-#define AXEN_RXHDR_L3_TYPE_MASK	0x00000600
+#define AXEN_RXHDR_L3_TYPE_MASK	0x00000060
 #define AXEN_RXHDR_L3_TYPE_OFFSET	5
 #define   AXEN_RXHDR_L3_TYPE_UNDEF	0x0
 #define   AXEN_RXHDR_L3_TYPE_IPV4	0x1
@@ -153,7 +153,7 @@
 #define     AXEN_RXCTL_ACPT_ALL_MCAST		  0x0002
 #define     AXEN_RXCTL_HA8B			  0x0004
 #define     AXEN_RXCTL_AUTOB			  0x0008
-#define     AXEN_RXCTL_ACPT_BCAST		  0x0010
+#define     AXEN_RXCTL_ACPT_MCAST		  0x0010
 #define     AXEN_RXCTL_ACPT_PHY_MCAST		  0x0020
 #define     AXEN_RXCTL_START			  0x0080
 #define     AXEN_RXCTL_DROPCRCERR		  0x0100
@@ -210,47 +210,16 @@
 
 #define AXEN_TIMEOUT		1000
 
-#define AXEN_RX_LIST_CNT	1
-#define AXEN_TX_LIST_CNT	1
+#ifndef AXEN_RX_LIST_CNT
+#define AXEN_RX_LIST_CNT	4	/* 22 for SS mode in Linux driver */
+#endif
+#ifndef AXEN_TX_LIST_CNT
+#define AXEN_TX_LIST_CNT	4	/* 60 */
+#endif
 
 
 #define AXEN_CONFIG_NO		1
 #define AXEN_IFACE_IDX		0
-
-/*
- * The interrupt endpoint is currently unused
- * by the ASIX part.
- */
-#define AXEN_ENDPT_RX		0x0
-#define AXEN_ENDPT_TX		0x1
-#define AXEN_ENDPT_INTR		0x2
-#define AXEN_ENDPT_MAX		0x3
-
-struct axen_type {
-	struct usb_devno	axen_dev;
-	uint16_t		axen_flags;
-#define AX178A	0x0001		/* AX88178a */
-#define AX179	0x0002		/* AX88179 */
-};
-
-struct axen_softc;
-
-struct axen_chain {
-	struct axen_softc	*axen_sc;
-	struct usbd_xfer	*axen_xfer;
-	uint8_t			*axen_buf;
-	int			axen_accum;
-	int			axen_idx;
-};
-
-struct axen_cdata {
-	struct axen_chain	axen_tx_chain[AXEN_TX_LIST_CNT];
-	struct axen_chain	axen_rx_chain[AXEN_RX_LIST_CNT];
-	int			axen_tx_prod;
-	int			axen_tx_cons;
-	int			axen_tx_cnt;
-	int			axen_rx_prod;
-};
 
 struct axen_qctrl {
 	uint8_t			ctrl;
@@ -264,45 +233,3 @@ struct axen_sframe_hdr {
 	uint32_t		plen; /* packet length */
 	uint32_t		gso;
 } __packed;
-
-struct axen_softc {
-	device_t		axen_dev;
-	struct ethercom		axen_ec;
-	struct mii_data		axen_mii;
-	krndsource_t		rnd_source;
-	struct usbd_device *	axen_udev;
-	struct usbd_interface *	axen_iface;
-
-	uint16_t		axen_vendor;
-	uint16_t		axen_product;
-	uint16_t		axen_flags;
-
-	int			axen_ed[AXEN_ENDPT_MAX];
-	struct usbd_pipe	*axen_ep[AXEN_ENDPT_MAX];
-	int			axen_if_flags;
-	struct axen_cdata	axen_cdata;
-	struct callout		axen_stat_ch;
-
-	int			axen_refcnt;
-	bool			axen_dying;
-	bool			axen_attached;
-
-	struct usb_task		axen_tick_task;
-
-	krwlock_t		axen_mii_lock;
-
-	int			axen_link;
-
-	uint8_t			axen_ipgs[3];
-	int			axen_phyno;
-	struct timeval		axen_rx_notice;
-	u_int			axen_bufsz;
-	int			axen_rev;
-
-#define sc_if	axen_ec.ec_if
-};
-
-#define GET_MII(sc) (&(sc)->axen_mii)
-#define GET_IFP(sc) (&(sc)->sc_if)
-
-#define ETHER_ALIGN		2

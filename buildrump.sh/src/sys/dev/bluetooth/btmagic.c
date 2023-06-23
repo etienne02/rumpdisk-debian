@@ -1,4 +1,4 @@
-/*	$NetBSD: btmagic.c,v 1.16 2016/07/07 06:55:41 msaitoh Exp $	*/
+/*	$NetBSD: btmagic.c,v 1.21 2021/08/07 16:19:09 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -85,7 +85,7 @@
  *****************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btmagic.c,v 1.16 2016/07/07 06:55:41 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btmagic.c,v 1.21 2021/08/07 16:19:09 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -108,7 +108,7 @@ __KERNEL_RCSID(0, "$NetBSD: btmagic.c,v 1.16 2016/07/07 06:55:41 msaitoh Exp $")
 #include <dev/bluetooth/bthid.h>
 #include <dev/bluetooth/bthidev.h>
 
-#include <dev/usb/hid.h>
+#include <dev/hid/hid.h>
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdevs.h>
 
@@ -311,18 +311,18 @@ btmagic_attach(device_t parent, device_t self, void *aux)
 	 * extract config from proplist
 	 */
 	obj = prop_dictionary_get(aux, BTDEVladdr);
-	bdaddr_copy(&sc->sc_laddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_laddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(aux, BTDEVraddr);
-	bdaddr_copy(&sc->sc_raddr, prop_data_data_nocopy(obj));
+	bdaddr_copy(&sc->sc_raddr, prop_data_value(obj));
 
 	obj = prop_dictionary_get(aux, BTDEVmode);
 	if (prop_object_type(obj) == PROP_TYPE_STRING) {
-		if (prop_string_equals_cstring(obj, BTDEVauth))
+		if (prop_string_equals_string(obj, BTDEVauth))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_AUTH);
-		else if (prop_string_equals_cstring(obj, BTDEVencrypt))
+		else if (prop_string_equals_string(obj, BTDEVencrypt))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_ENCRYPT);
-		else if (prop_string_equals_cstring(obj, BTDEVsecure))
+		else if (prop_string_equals_string(obj, BTDEVsecure))
 			sockopt_setint(&sc->sc_mode, L2CAP_LM_SECURE);
 		else  {
 			aprint_error(" unknown %s\n", BTDEVmode);
@@ -330,7 +330,7 @@ btmagic_attach(device_t parent, device_t self, void *aux)
 		}
 
 		aprint_verbose(" %s %s", BTDEVmode,
-		    prop_string_cstring_nocopy(obj));
+		    prop_string_value(obj));
 	} else
 		sockopt_setint(&sc->sc_mode, 0);
 
@@ -406,7 +406,7 @@ btmagic_attach(device_t parent, device_t self, void *aux)
 	 */
 	wsma.accessops = &btmagic_wsmouse_accessops;
 	wsma.accesscookie = self;
-	sc->sc_wsmouse = config_found(self, &wsma, wsmousedevprint);
+	sc->sc_wsmouse = config_found(self, &wsma, wsmousedevprint, CFARGS_NONE);
 	if (sc->sc_wsmouse == NULL) {
 		aprint_error_dev(self, "failed to attach wsmouse\n");
 		return;
@@ -657,7 +657,7 @@ btmagic_sysctl_taptimeout(SYSCTLFN_ARGS)
 	if (error || newp == NULL)
 		return error;
 
-	if (t < max(1000 / hz, 1) || t > 999)
+	if (t < uimax(1000 / hz, 1) || t > 999)
 		return EINVAL;
 
 	sc->sc_taptimeout = t;

@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_stub.c,v 1.42 2015/08/28 07:18:39 knakahara Exp $	*/
+/*	$NetBSD: kern_stub.c,v 1.50 2020/08/01 02:04:55 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008 The NetBSD Foundation, Inc.
@@ -62,11 +62,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_stub.c,v 1.42 2015/08/28 07:18:39 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_stub.c,v 1.50 2020/08/01 02:04:55 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
-#include "opt_ptrace.h"
 #include "opt_ktrace.h"
+#include "opt_sysv.h"
+#include "opt_modular.h"
 #endif
 
 #include <sys/param.h>
@@ -87,12 +88,19 @@ bool default_bus_space_handle_is_equal(bus_space_tag_t, bus_space_handle_t,
     bus_space_handle_t);
 
 /*
- * Nonexistent system call-- signal process (may want to handle it).  Flag
- * error in case process won't see signal immediately (blocked or ignored).
+ * SYSV Semaphores, Shared Memory, Message Queues
  */
-#ifndef PTRACE
-__strong_alias(sys_ptrace,sys_nosys);
-#endif	/* PTRACE */
+#ifndef MODULAR
+#ifndef SYSVMSG
+__strong_alias(msgctl1,enosys);
+#endif
+#ifndef SYSVSHM
+__strong_alias(shmctl1,enosys);
+#endif
+#ifndef SYSVSEM
+ __strong_alias(semctl1,enosys);
+#endif
+#endif
 
 /*
  * ktrace stubs.  ktruser() goes to enosys as we want to fail the syscall,
@@ -177,6 +185,16 @@ __strong_alias(dosa_register,sys_nosys);
 __strong_alias(sa_stacks1,sys_nosys);
 
 /*
+ * Stubs for drivers.  See sys/conf.h.
+ */
+__strong_alias(devenodev,enodev);
+__strong_alias(deveopnotsupp,eopnotsupp);
+__strong_alias(devnullop,nullop);
+__strong_alias(ttyenodev,enodev);
+__strong_alias(ttyvenodev,voidop);
+__strong_alias(ttyvnullop,nullop);
+
+/*
  * Stubs for architectures that do not support kernel preemption.
  */
 #ifndef __HAVE_PREEMPTION
@@ -209,9 +227,9 @@ int
 sys_nosys(struct lwp *l, const void *v, register_t *retval)
 {
 
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	psignal(l->l_proc, SIGSYS);
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 	return ENOSYS;
 }
 
@@ -310,3 +328,7 @@ default_bus_space_is_equal(bus_space_tag_t t1, bus_space_tag_t t2)
 
 	return memcmp(&t1, &t2, sizeof(t1)) == 0;
 }
+
+/* Stubs for architectures with no kernel FPU access.  */
+__weak_alias(kthread_fpu_enter_md, voidop);
+__weak_alias(kthread_fpu_exit_md, voidop);

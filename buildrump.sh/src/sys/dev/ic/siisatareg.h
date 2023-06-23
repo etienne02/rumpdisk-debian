@@ -1,4 +1,4 @@
-/* $NetBSD: siisatareg.h,v 1.7 2011/11/02 16:03:01 jakllsch Exp $ */
+/* $NetBSD: siisatareg.h,v 1.12 2021/07/31 20:29:37 andvar Exp $ */
 
 /*
  * Copyright (c) 2007, 2008, 2009, 2010, 2011 Jonathan A. Kollasch.
@@ -141,7 +141,7 @@ struct siisata_prb {
 #define GR_GC_DEVSEL		__BIT(19)
 #define GR_GC_STOP		__BIT(18)
 #define GR_GC_TRDY		__BIT(17)
-#define GR_GC_M66EN		__BIT(16)	
+#define GR_GC_M66EN		__BIT(16)
 #define GR_GC_PXIE_MASK		__BITS(SIISATA_MAX_PORTS - 1, 0)
 #define GR_GC_PXIE(n)		__SHIFTIN(__BIT(n), GR_GC_PXIE_MASK)
 
@@ -161,9 +161,11 @@ struct siisata_prb {
 #define PRX(p,r) (PRO(p) + r)
 #define PRSX(p,s,o) (PRX(p, PR_SLOT_SIZE * s + o))
 
-#define PRSO_RTC	0x04		/* recieved transfer count */
+#define PRSO_RTC	0x04		/* received transfer count */
 #define PRSO_FIS	0x08		/* base of FIS */
 
+#define PRO_PMPSTS(i)	(0x0f80 + i * 8)
+#define PRO_PMPQACT(i)	(0x0f80 + i * 8 + 4)
 #define PRO_PCS		0x1000		/* (write) port control set */
 #define PRO_PS		PRO_PCS		/* (read) port status */
 #define PRO_PCC		0x1004		/* port control clear */
@@ -174,18 +176,20 @@ struct siisata_prb {
 #define PRO_PCEF	0x1020		/* port command execution fifo */
 #define PRO_PCE		0x1024		/* port command error */
 #define PRO_PFISC	0x1028		/* port FIS config */
-#define PRO_PCIRFIFOT	0x102c		/* pci request fifo threshhold */
+#define PRO_PCIRFIFOT	0x102c		/* pci request fifo threshold */
 #define PRO_P8B10BDEC	0x1040		/* port 8B/10B decode error counter */
 #define PRO_PCRCEC	0x1044		/* port crc error count */
 #define PRO_PHEC	0x1048		/* port handshake error count */
 #define PRO_PPHYC	0x1050		/* phy config */
 #define PRO_PSS		0x1800		/* port slot status */
 /* technically this is a shadow of the CAR */
-#define PRO_CAR		0x1c00
+#define PRO_CAR		0x1c00		/* command activation register */
 
-#define PRO_CARX(p,s)     (PRX(p, PRO_CAR) + s * sizeof(uint64_t))
+#define PRO_CARX(p,s)     (PRX(p, PRO_CAR) + (s) * sizeof(uint64_t))
 
 #define PRO_PCR		0x1e04		/* port context register */
+#define     PRO_PCR_SLOT(x)	(((x) & __BITS(4, 0)) >> 0) /* Slot */
+#define     PRO_PCR_PMP(x)	(((x) & __BITS(8, 5)) >> 5) /* PM Port */
 #define PRO_SCONTROL	0x1f00		/* SControl */
 #define PRO_SSTATUS	0x1f04		/* SStatus */
 #define PRO_SERROR	0x1f08		/* SError */
@@ -247,6 +251,8 @@ struct siisata_prb {
 #define PR_PC_PMP_ENABLE	__BIT(13)
 #define PR_PC_AIA		__BIT(14)
 #define PR_PC_LED_ON		__BIT(15)
+#define PR_PS_ACTIVE_SLOT_MASK	__BITS(20,16)
+#define PR_PS_ACTIVE_SLOT(x)	__SHIFTOUT((x), PR_PS_ACTIVE_SLOT_MASK)
 #define PR_PC_OOB_BYPASS	__BIT(25)
 #define PR_PS_PORT_READY	__BIT(31)
 

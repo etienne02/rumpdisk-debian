@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_syscalls_50.c,v 1.18 2014/09/05 09:21:54 matt Exp $	*/
+/*	$NetBSD: vfs_syscalls_50.c,v 1.26 2021/08/15 07:57:46 christos Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,13 +15,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -36,7 +29,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_50.c,v 1.18 2014/09/05 09:21:54 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_50.c,v 1.26 2021/08/15 07:57:46 christos Exp $");
+
+#if defined(_KERNEL_OPT)
+#include "opt_compat_netbsd.h"
+#include "opt_quota.h"
+#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,6 +51,9 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_50.c,v 1.18 2014/09/05 09:21:54 matt Ex
 #include <sys/dirent.h>
 #include <sys/kauth.h>
 #include <sys/time.h>
+#include <sys/syscall.h>
+#include <sys/syscallvar.h>
+#include <sys/syscallargs.h>
 #include <sys/vfs_syscalls.h>
 #ifndef LFS
 #define LFS
@@ -61,17 +62,26 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_syscalls_50.c,v 1.18 2014/09/05 09:21:54 matt Ex
 
 #include <ufs/lfs/lfs_extern.h>
 
-#include <sys/quota.h>
-#include <sys/quotactl.h>
-#include <ufs/ufs/quota1.h>
-
 #include <compat/common/compat_util.h>
+#include <compat/common/compat_mod.h>
 #include <compat/sys/time.h>
 #include <compat/sys/stat.h>
 #include <compat/sys/dirent.h>
 #include <compat/sys/mount.h>
 
-static void cvtstat(struct stat30 *, const struct stat *);
+static const struct syscall_package vfs_syscalls_50_syscalls[] = {
+	{ SYS_compat_50___stat30, 0, (sy_call_t *)compat_50_sys___stat30 },
+	{ SYS_compat_50___fstat30, 0, (sy_call_t *)compat_50_sys___fstat30 },
+	{ SYS_compat_50___lstat30, 0, (sy_call_t *)compat_50_sys___lstat30 },
+	{ SYS_compat_50___fhstat40, 0, (sy_call_t *)compat_50_sys___fhstat40 },
+	{ SYS_compat_50_utimes, 0, (sy_call_t *)compat_50_sys_utimes },
+	{ SYS_compat_50_lfs_segwait, 0,
+	    (sy_call_t *)compat_50_sys_lfs_segwait } ,
+	{ SYS_compat_50_futimes, 0, (sy_call_t *)compat_50_sys_futimes },
+	{ SYS_compat_50_lutimes, 0, (sy_call_t *)compat_50_sys_lutimes },
+	{ SYS_compat_50_mknod, 0, (sy_call_t *)compat_50_sys_mknod },
+	{ 0, 0, NULL }
+};
 
 /*
  * Convert from a new to an old stat structure.
@@ -80,6 +90,8 @@ static void
 cvtstat(struct stat30 *ost, const struct stat *st)
 {
 
+	/* Handle any padding. */
+	memset(ost, 0, sizeof(*ost));
 	ost->st_dev = st->st_dev;
 	ost->st_ino = st->st_ino;
 	ost->st_mode = st->st_mode;
@@ -118,8 +130,7 @@ compat_50_sys___stat30(struct lwp *l, const struct compat_50_sys___stat30_args *
 	if (error)
 		return error;
 	cvtstat(&osb, &sb);
-	error = copyout(&osb, SCARG(uap, ub), sizeof (osb));
-	return error;
+	return copyout(&osb, SCARG(uap, ub), sizeof(osb));
 }
 
 
@@ -142,8 +153,7 @@ compat_50_sys___lstat30(struct lwp *l, const struct compat_50_sys___lstat30_args
 	if (error)
 		return error;
 	cvtstat(&osb, &sb);
-	error = copyout(&osb, SCARG(uap, ub), sizeof (osb));
-	return error;
+	return copyout(&osb, SCARG(uap, ub), sizeof(osb));
 }
 
 /*
@@ -165,8 +175,7 @@ compat_50_sys___fstat30(struct lwp *l, const struct compat_50_sys___fstat30_args
 	if (error)
 		return error;
 	cvtstat(&osb, &sb);
-	error = copyout(&osb, SCARG(uap, sb), sizeof (osb));
-	return error;
+	return copyout(&osb, SCARG(uap, sb), sizeof(osb));
 }
 
 /* ARGSUSED */
@@ -186,8 +195,7 @@ compat_50_sys___fhstat40(struct lwp *l, const struct compat_50_sys___fhstat40_ar
 	if (error)
 		return error;
 	cvtstat(&osb, &sb);
-	error = copyout(&osb, SCARG(uap, sb), sizeof (osb));
-	return error;
+	return copyout(&osb, SCARG(uap, sb), sizeof(osb));
 }
 
 static int
@@ -276,6 +284,7 @@ compat_50_sys_lfs_segwait(struct lwp *l,
 		syscallarg(struct timeval50 *) tv;
 	} */
 #ifdef notyet
+/* XXX need to check presence of LFS at run-time XXX */
 	struct timeval atv;
 	struct timeval50 atv50;
 	fsid_t fsid;
@@ -314,115 +323,19 @@ compat_50_sys_mknod(struct lwp *l,
 		syscallarg(uint32_t) dev;
 	} */
 	return do_sys_mknod(l, SCARG(uap, path), SCARG(uap, mode),
-	    SCARG(uap, dev), retval, UIO_USERSPACE);
+	    SCARG(uap, dev), UIO_USERSPACE);
 }
 
-/* ARGSUSED */
-int   
-compat_50_sys_quotactl(struct lwp *l, const struct compat_50_sys_quotactl_args *uap, register_t *retval)
-{
-	/* {
-		syscallarg(const char *) path;
-		syscallarg(int) cmd;
-		syscallarg(int) uid;
-		syscallarg(void *) arg; 
-	} */
-	struct vnode *vp;
-	struct mount *mp;
-	int q1cmd;
-	int idtype;
-	char *qfile;
-	struct dqblk dqblk;
-	struct quotakey key;
-	struct quotaval blocks, files;
-	struct quotastat qstat;
-	int error;
+int             
+vfs_syscalls_50_init(void)
+{               
+        
+        return syscall_establish(NULL, vfs_syscalls_50_syscalls);
+}       
+        
+int
+vfs_syscalls_50_fini(void)
+{               
 
-	error = namei_simple_user(SCARG(uap, path),
-				NSM_FOLLOW_TRYEMULROOT, &vp);
-	if (error != 0)
-		return (error);       
-
-	mp = vp->v_mount;
-	q1cmd = SCARG(uap, cmd);
-	idtype = quota_idtype_from_ufs(q1cmd & SUBCMDMASK);
-
-	switch ((q1cmd & ~SUBCMDMASK) >> SUBCMDSHIFT) {
-	case Q_QUOTAON:
-		qfile = PNBUF_GET();
-		error = copyinstr(SCARG(uap, arg), qfile, PATH_MAX, NULL);
-		if (error != 0) {
-			PNBUF_PUT(qfile);
-			break;
-		}
-
-		error = vfs_quotactl_quotaon(mp, idtype, qfile);
-
-		PNBUF_PUT(qfile);
-		break;
-
-	case Q_QUOTAOFF:
-		error = vfs_quotactl_quotaoff(mp, idtype);
-		break;
-
-	case Q_GETQUOTA:
-		key.qk_idtype = idtype;
-		key.qk_id = SCARG(uap, uid);
-
-		key.qk_objtype = QUOTA_OBJTYPE_BLOCKS;
-		error = vfs_quotactl_get(mp, &key, &blocks);
-		if (error) {
-			break;
-		}
-
-		key.qk_objtype = QUOTA_OBJTYPE_FILES;
-		error = vfs_quotactl_get(mp, &key, &files);
-		if (error) {
-			break;
-		}
-
-		quotavals_to_dqblk(&blocks, &files, &dqblk);
-		error = copyout(&dqblk, SCARG(uap, arg), sizeof(dqblk));
-		break;
-		
-	case Q_SETQUOTA:
-		error = copyin(SCARG(uap, arg), &dqblk, sizeof(dqblk));
-		if (error) {
-			break;
-		}
-		dqblk_to_quotavals(&dqblk, &blocks, &files);
-
-		key.qk_idtype = idtype;
-		key.qk_id = SCARG(uap, uid);
-
-		key.qk_objtype = QUOTA_OBJTYPE_BLOCKS;
-		error = vfs_quotactl_put(mp, &key, &blocks);
-		if (error) {
-			break;
-		}
-
-		key.qk_objtype = QUOTA_OBJTYPE_FILES;
-		error = vfs_quotactl_put(mp, &key, &files);
-		break;
-		
-	case Q_SYNC:
-		/*
-		 * not supported but used only to see if quota is supported,
-		 * emulate with stat
-		 *
-		 * XXX should probably be supported
-		 */
-		(void)idtype; /* not used */
-
-		error = vfs_quotactl_stat(mp, &qstat);
-		break;
-
-	case Q_SETUSE:
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-
-	vrele(vp);
-	return error;
-}
+        return syscall_disestablish(NULL, vfs_syscalls_50_syscalls);
+}         

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -302,24 +302,12 @@ ObjectRepaired:
 
     if (PackageIndex != ACPI_NOT_PACKAGE_ELEMENT)
     {
-        /*
-         * The original object is a package element. We need to
-         * decrement the reference count of the original object,
-         * for removing it from the package.
-         *
-         * However, if the original object was just wrapped with a
-         * package object as part of the repair, we don't need to
-         * change the reference count.
-         */
+        /* Update reference count of new object */
+
         if (!(Info->ReturnFlags & ACPI_OBJECT_WRAPPED))
         {
             NewObject->Common.ReferenceCount =
                 ReturnObject->Common.ReferenceCount;
-
-            if (ReturnObject->Common.ReferenceCount > 1)
-            {
-                ReturnObject->Common.ReferenceCount--;
-            }
         }
 
         ACPI_DEBUG_PRINT ((ACPI_DB_REPAIR,
@@ -374,7 +362,7 @@ AcpiNsMatchSimpleRepair (
     ThisName = AcpiObjectRepairInfo;
     while (ThisName->ObjectConverter)
     {
-        if (ACPI_COMPARE_NAME (Node->Name.Ascii, ThisName->Name))
+        if (ACPI_COMPARE_NAMESEG (Node->Name.Ascii, ThisName->Name))
         {
             /* Check if we can actually repair this name/type combination */
 

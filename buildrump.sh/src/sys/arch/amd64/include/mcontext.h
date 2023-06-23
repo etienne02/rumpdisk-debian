@@ -1,4 +1,4 @@
-/*	$NetBSD: mcontext.h,v 1.18 2014/05/12 22:50:03 uebayasi Exp $	*/
+/*	$NetBSD: mcontext.h,v 1.20 2019/12/27 00:32:16 kamil Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -68,6 +68,7 @@ typedef struct {
 
 /* AMD64 ABI 128-bytes "red zone". */
 #define _UC_MACHINE_SP(uc)	((uc)->uc_mcontext.__gregs[_REG_RSP] - 128)
+#define _UC_MACHINE_FP(uc)	((uc)->uc_mcontext.__gregs[_REG_RBP])
 #define _UC_MACHINE_PC(uc)	((uc)->uc_mcontext.__gregs[_REG_RIP])
 #define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[_REG_RAX])
 
@@ -83,6 +84,11 @@ typedef struct {
 
 #define	__UCONTEXT_SIZE	784
 
+#if defined(_RTLD_SOURCE) || defined(_LIBC_SOURCE) || \
+    defined(__LIBPTHREAD_SOURCE__)
+#include <sys/tls.h>
+
+__BEGIN_DECLS
 static __inline void *
 __lwp_getprivate_fast(void)
 {
@@ -92,6 +98,9 @@ __lwp_getprivate_fast(void)
 
 	return __tmp;
 }
+__END_DECLS
+
+#endif
 
 #ifdef _KERNEL
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: xy.c,v 1.99 2015/04/26 15:15:20 mlelstv Exp $	*/
+/*	$NetBSD: xy.c,v 1.102 2021/08/07 16:19:17 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1995 Charles D. Cranor
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xy.c,v 1.99 2015/04/26 15:15:20 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xy.c,v 1.102 2021/08/07 16:19:17 thorpej Exp $");
 
 #undef XYC_DEBUG		/* full debug */
 #undef XYC_DIAG			/* extra sanity checks */
@@ -490,11 +490,8 @@ xycattach(device_t parent, device_t self, void *aux)
 
 	memset(xyc->iopbase, 0, XYC_MAXIOPB * sizeof(struct xy_iopb));
 
-	xyc->reqs = (struct xy_iorq *)
-	    malloc(XYC_MAXIOPB * sizeof(struct xy_iorq),
-	    M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (xyc->reqs == NULL)
-		panic("xyc malloc");
+	xyc->reqs = malloc(XYC_MAXIOPB * sizeof(struct xy_iorq),
+	    M_DEVBUF, M_WAITOK|M_ZERO);
 
 	/*
 	 * init iorq to iopb pointers, and non-zero fields in the
@@ -574,7 +571,7 @@ xycattach(device_t parent, device_t self, void *aux)
 	xa.booting = 1;
 
 	for (xa.driveno = 0; xa.driveno < XYC_MAXDEV; xa.driveno++)
-		(void) config_found(self, (void *) &xa, NULL);
+		(void) config_found(self, (void *) &xa, NULL, CFARGS_NONE);
 
 	/* start the watchdog clock */
 	callout_reset(&xyc->sc_tick_ch, XYC_TICKCNT, xyc_tick, xyc);

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_file64.c,v 1.55 2013/12/27 14:17:11 njoly Exp $	*/
+/*	$NetBSD: linux_file64.c,v 1.62 2019/08/23 07:53:36 maxv Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998, 2000, 2008 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_file64.c,v 1.55 2013/12/27 14:17:11 njoly Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_file64.c,v 1.62 2019/08/23 07:53:36 maxv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,6 +80,7 @@ static void bsd_to_linux_stat(struct stat *, struct linux_stat64 *);
 static void
 bsd_to_linux_stat(struct stat *bsp, struct linux_stat64 *lsp)
 {
+	memset(lsp, 0, sizeof(*lsp));
 	lsp->lst_dev     = linux_fakedev(bsp->st_dev, 0);
 	lsp->lst_ino     = bsp->st_ino;
 	lsp->lst_mode    = (linux_mode_t)bsp->st_mode;
@@ -291,7 +292,7 @@ linux_sys_getdents64(struct lwp *l, const struct linux_sys_getdents64_args *uap,
 		goto out1;
 
 	nbytes = SCARG(uap, count);
-	buflen = min(MAXBSIZE, nbytes);
+	buflen = uimin(MAXBSIZE, nbytes);
 	if (buflen < va.va_blocksize)
 		buflen = va.va_blocksize;
 	tbuf = malloc(buflen, M_TEMP, M_WAITOK);
@@ -325,8 +326,10 @@ again:
 	for (cookie = cookiebuf; len > 0; len -= reclen) {
 		bdp = (struct dirent *)inp;
 		reclen = bdp->d_reclen;
-		if (reclen & 3)
-			panic("linux_readdir");
+		if (reclen & 3) {
+			error = EIO;
+			goto out;
+		}
 		if (bdp->d_fileno == 0) {
 			inp += reclen;	/* it is a hole; squish it out */
 			if (cookie)
@@ -350,11 +353,13 @@ again:
 		 * we have to worry about touching user memory outside of
 		 * the copyout() call).
 		 */
+		memset(&idb, 0, sizeof(idb));
 		idb.d_ino = bdp->d_fileno;
 		idb.d_type = bdp->d_type;
 		idb.d_off = off;
 		idb.d_reclen = (u_short)linux_reclen;
-		strcpy(idb.d_name, bdp->d_name);
+		memcpy(idb.d_name, bdp->d_name, MIN(sizeof(idb.d_name),
+		   bdp->d_namlen + 1));
 		if ((error = copyout((void *)&idb, outp, linux_reclen)))
 			goto out;
 		/* advance past this real entry */

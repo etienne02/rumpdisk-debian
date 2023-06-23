@@ -1,4 +1,4 @@
-/*	$NetBSD: pserialize.h,v 1.1 2011/07/30 17:01:04 christos Exp $	*/
+/*	$NetBSD: pserialize.h,v 1.3 2019/12/03 05:07:49 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
@@ -35,7 +35,6 @@ struct pserialize;
 typedef struct pserialize *pserialize_t;
 
 void		pserialize_init(void);
-void		pserialize_switchpoint(void);
 
 pserialize_t	pserialize_create(void);
 void		pserialize_destroy(pserialize_t);
@@ -44,6 +43,8 @@ void		pserialize_perform(pserialize_t);
 int		pserialize_read_enter(void);
 void		pserialize_read_exit(int);
 
+bool		pserialize_in_read_section(void);
+bool		pserialize_not_in_read_section(void);
 #endif	/* _KERNEL */
 
 #endif	/* _SYS_PSERIALIZE_H_ */

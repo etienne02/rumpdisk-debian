@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_rename.c,v 1.21 2016/06/20 03:36:09 dholland Exp $	*/
+/*	$NetBSD: lfs_rename.c,v 1.24 2020/09/05 16:30:13 riastradh Exp $	*/
 /*  from NetBSD: ufs_rename.c,v 1.12 2015/03/27 17:27:56 riastradh Exp  */
 
 /*-
@@ -89,7 +89,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_rename.c,v 1.21 2016/06/20 03:36:09 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_rename.c,v 1.24 2020/09/05 16:30:13 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -108,11 +108,6 @@ __KERNEL_RCSID(0, "$NetBSD: lfs_rename.c,v 1.21 2016/06/20 03:36:09 dholland Exp
 #include <sys/signalvar.h>
 #include <sys/kauth.h>
 #include <sys/syslog.h>
-
-#include <uvm/uvm.h>
-#include <uvm/uvm_pmap.h>
-#include <uvm/uvm_stat.h>
-#include <uvm/uvm_pager.h>
 
 #include <miscfs/fifofs/fifo.h>
 #include <miscfs/genfs/genfs.h>
@@ -803,7 +798,7 @@ ulfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 	KASSERT((nlink_t)VTOI(fvp)->i_nlink < LINK_MAX);
 	VTOI(fvp)->i_nlink++;
 	DIP_ASSIGN(VTOI(fvp), nlink, VTOI(fvp)->i_nlink);
-	VTOI(fvp)->i_flag |= IN_CHANGE;
+	VTOI(fvp)->i_state |= IN_CHANGE;
 	error = lfs_update(fvp, NULL, NULL, UPDATE_DIROP);
 	if (error)
 		goto whymustithurtsomuch;
@@ -830,7 +825,7 @@ ulfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 			KASSERT((nlink_t)VTOI(tdvp)->i_nlink < LINK_MAX);
 			VTOI(tdvp)->i_nlink++;
 			DIP_ASSIGN(VTOI(tdvp), nlink, VTOI(tdvp)->i_nlink);
-			VTOI(tdvp)->i_flag |= IN_CHANGE;
+			VTOI(tdvp)->i_state |= IN_CHANGE;
 			error = lfs_update(tdvp, NULL, NULL, UPDATE_DIROP);
 			if (error) {
 				/*
@@ -841,7 +836,7 @@ ulfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 				VTOI(tdvp)->i_nlink--;
 				DIP_ASSIGN(VTOI(tdvp), nlink,
 				    VTOI(tdvp)->i_nlink);
-				VTOI(tdvp)->i_flag |= IN_CHANGE;
+				VTOI(tdvp)->i_state |= IN_CHANGE;
 				goto whymustithurtsomuch;
 			}
 		}
@@ -861,7 +856,7 @@ ulfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 				VTOI(tdvp)->i_nlink--;
 				DIP_ASSIGN(VTOI(tdvp), nlink,
 				    VTOI(tdvp)->i_nlink);
-				VTOI(tdvp)->i_flag |= IN_CHANGE;
+				VTOI(tdvp)->i_state |= IN_CHANGE;
 				(void)lfs_update(tdvp, NULL, NULL,
 				    UPDATE_WAIT | UPDATE_DIROP);
 			}
@@ -900,7 +895,7 @@ ulfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 			KASSERT(0 < VTOI(tdvp)->i_nlink);
 			VTOI(tdvp)->i_nlink--;
 			DIP_ASSIGN(VTOI(tdvp), nlink, VTOI(tdvp)->i_nlink);
-			VTOI(tdvp)->i_flag |= IN_CHANGE;
+			VTOI(tdvp)->i_state |= IN_CHANGE;
 		}
 
 		if (directory_p) {
@@ -1008,7 +1003,7 @@ whymustithurtsomuch:
 	KASSERT(0 < VTOI(fvp)->i_nlink);
 	VTOI(fvp)->i_nlink--;
 	DIP_ASSIGN(VTOI(fvp), nlink, VTOI(fvp)->i_nlink);
-	VTOI(fvp)->i_flag |= IN_CHANGE;
+	VTOI(fvp)->i_state |= IN_CHANGE;
 
 arghmybrainhurts:
 /*ihateyou:*/
@@ -1060,6 +1055,9 @@ lfs_gro_rename(struct mount *mp, kauth_cred_t cred,
 	error = ulfs_gro_rename(mp, cred,
 	    fdvp, fcnp, fde, fvp,
 	    tdvp, tcnp, tde, tvp);
+
+	if (tvp && VTOI(tvp)->i_nlink == 0)
+		lfs_orphan(VTOI(tvp)->i_lfs, VTOI(tvp)->i_number);
 
 	UNMARK_VNODE(fdvp);
 	UNMARK_VNODE(fvp);

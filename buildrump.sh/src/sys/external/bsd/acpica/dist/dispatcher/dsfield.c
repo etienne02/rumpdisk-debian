@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -48,6 +48,10 @@
 #include "acinterp.h"
 #include "acnamesp.h"
 #include "acparser.h"
+
+#ifdef ACPI_EXEC_APP
+#include "aecommon.h"
+#endif
 
 
 #define _COMPONENT          ACPI_DISPATCHER
@@ -197,7 +201,6 @@ AcpiDsCreateBufferField (
     if (WalkState->DeferredNode)
     {
         Node = WalkState->DeferredNode;
-        Status = AE_OK;
     }
     else
     {
@@ -205,6 +208,8 @@ AcpiDsCreateBufferField (
 
         if (!(WalkState->ParseFlags & ACPI_PARSE_EXECUTE))
         {
+            ACPI_ERROR ((AE_INFO,
+                "Parse execute mode is not set"));
             return_ACPI_STATUS (AE_AML_INTERNAL);
         }
 
@@ -228,9 +233,15 @@ AcpiDsCreateBufferField (
         Status = AcpiNsLookup (WalkState->ScopeInfo,
             Arg->Common.Value.String, ACPI_TYPE_ANY,
             ACPI_IMODE_LOAD_PASS1, Flags, WalkState, &Node);
-        if (ACPI_FAILURE (Status))
+        if ((WalkState->ParseFlags & ACPI_PARSE_DISASSEMBLE) &&
+            Status == AE_ALREADY_EXISTS)
         {
-            ACPI_ERROR_NAMESPACE (Arg->Common.Value.String, Status);
+            Status = AE_OK;
+        }
+        else if (ACPI_FAILURE (Status))
+        {
+            ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                Arg->Common.Value.String, Status);
             return_ACPI_STATUS (Status);
         }
     }
@@ -299,7 +310,7 @@ Cleanup:
  * FUNCTION:    AcpiDsGetFieldNames
  *
  * PARAMETERS:  Info            - CreateField info structure
- *  `           WalkState       - Current method state
+ *              WalkState       - Current method state
  *              Arg             - First parser arg for the field name list
  *
  * RETURN:      Status
@@ -318,6 +329,12 @@ AcpiDsGetFieldNames (
     ACPI_STATUS             Status;
     UINT64                  Position;
     ACPI_PARSE_OBJECT       *Child;
+
+#ifdef ACPI_EXEC_APP
+    ACPI_OPERAND_OBJECT     *ResultDesc;
+    ACPI_OPERAND_OBJECT     *ObjDesc;
+    char                    *NamePath;
+#endif
 
 
     ACPI_FUNCTION_TRACE_PTR (DsGetFieldNames, Info);
@@ -414,7 +431,8 @@ AcpiDsGetFieldNames (
                     WalkState, &Info->ConnectionNode);
                 if (ACPI_FAILURE (Status))
                 {
-                    ACPI_ERROR_NAMESPACE (Child->Common.Value.Name, Status);
+                    ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                        Child->Common.Value.Name, Status);
                     return_ACPI_STATUS (Status);
                 }
             }
@@ -430,7 +448,8 @@ AcpiDsGetFieldNames (
                 WalkState, &Info->FieldNode);
             if (ACPI_FAILURE (Status))
             {
-                ACPI_ERROR_NAMESPACE ((char *) &Arg->Named.Name, Status);
+                ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                    (char *) &Arg->Named.Name, Status);
                 return_ACPI_STATUS (Status);
             }
             else
@@ -451,6 +470,17 @@ AcpiDsGetFieldNames (
                     {
                         return_ACPI_STATUS (Status);
                     }
+#ifdef ACPI_EXEC_APP
+                    NamePath = AcpiNsGetExternalPathname (Info->FieldNode);
+                    if (ACPI_SUCCESS (AeLookupInitFileEntry (NamePath, &ObjDesc)))
+                    {
+                        AcpiExWriteDataToField (ObjDesc,
+                            AcpiNsGetAttachedObject (Info->FieldNode),
+                            &ResultDesc);
+                        AcpiUtRemoveReference (ObjDesc);
+                    }
+                    ACPI_FREE (NamePath);
+#endif
                 }
             }
 
@@ -529,7 +559,8 @@ AcpiDsCreateField (
 #endif
         if (ACPI_FAILURE (Status))
         {
-            ACPI_ERROR_NAMESPACE (Arg->Common.Value.Name, Status);
+            ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                Arg->Common.Value.Name, Status);
             return_ACPI_STATUS (Status);
         }
     }
@@ -548,6 +579,21 @@ AcpiDsCreateField (
     Info.RegionNode = RegionNode;
 
     Status = AcpiDsGetFieldNames (&Info, WalkState, Arg->Common.Next);
+    if (ACPI_FAILURE (Status))
+    {
+        return_ACPI_STATUS (Status);
+    }
+
+    if (Info.RegionNode->Object->Region.SpaceId == ACPI_ADR_SPACE_PLATFORM_COMM)
+    {
+        RegionNode->Object->Field.InternalPccBuffer =
+            ACPI_ALLOCATE_ZEROED(Info.RegionNode->Object->Region.Length);
+        if (!RegionNode->Object->Field.InternalPccBuffer)
+        {
+            return_ACPI_STATUS (AE_NO_MEMORY);
+        }
+    }
+
     return_ACPI_STATUS (Status);
 }
 
@@ -593,6 +639,8 @@ AcpiDsInitFieldObjects (
             return_ACPI_STATUS (AE_OK);
         }
 
+        ACPI_ERROR ((AE_INFO,
+            "Parse deferred mode is not set"));
         return_ACPI_STATUS (AE_AML_INTERNAL);
     }
 
@@ -640,6 +688,9 @@ AcpiDsInitFieldObjects (
         Flags |= ACPI_NS_TEMPORARY;
     }
 
+#ifdef ACPI_EXEC_APP
+        Flags |= ACPI_NS_OVERRIDE_IF_FOUND;
+#endif
     /*
      * Walk the list of entries in the FieldList
      * Note: FieldList can be of zero length. In this case, Arg will be NULL.
@@ -657,15 +708,14 @@ AcpiDsInitFieldObjects (
                 Flags, WalkState, &Node);
             if (ACPI_FAILURE (Status))
             {
-                ACPI_ERROR_NAMESPACE ((char *) &Arg->Named.Name, Status);
+                ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                    (char *) &Arg->Named.Name, Status);
                 if (Status != AE_ALREADY_EXISTS)
                 {
                     return_ACPI_STATUS (Status);
                 }
 
                 /* Name already exists, just ignore this error */
-
-                Status = AE_OK;
             }
 
             Arg->Common.Node = Node;
@@ -722,7 +772,8 @@ AcpiDsCreateBankField (
 #endif
         if (ACPI_FAILURE (Status))
         {
-            ACPI_ERROR_NAMESPACE (Arg->Common.Value.Name, Status);
+            ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+                Arg->Common.Value.Name, Status);
             return_ACPI_STATUS (Status);
         }
     }
@@ -735,7 +786,8 @@ AcpiDsCreateBankField (
         ACPI_NS_SEARCH_PARENT, WalkState, &Info.RegisterNode);
     if (ACPI_FAILURE (Status))
     {
-        ACPI_ERROR_NAMESPACE (Arg->Common.Value.String, Status);
+        ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+            Arg->Common.Value.String, Status);
         return_ACPI_STATUS (Status);
     }
 
@@ -808,7 +860,8 @@ AcpiDsCreateIndexField (
         ACPI_NS_SEARCH_PARENT, WalkState, &Info.RegisterNode);
     if (ACPI_FAILURE (Status))
     {
-        ACPI_ERROR_NAMESPACE (Arg->Common.Value.String, Status);
+        ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+            Arg->Common.Value.String, Status);
         return_ACPI_STATUS (Status);
     }
 
@@ -820,7 +873,8 @@ AcpiDsCreateIndexField (
         ACPI_NS_SEARCH_PARENT, WalkState, &Info.DataRegisterNode);
     if (ACPI_FAILURE (Status))
     {
-        ACPI_ERROR_NAMESPACE (Arg->Common.Value.String, Status);
+        ACPI_ERROR_NAMESPACE (WalkState->ScopeInfo,
+            Arg->Common.Value.String, Status);
         return_ACPI_STATUS (Status);
     }
 

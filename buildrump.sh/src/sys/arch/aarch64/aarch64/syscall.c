@@ -1,4 +1,4 @@
-/*	$NetBSD: syscall.c,v 1.1 2014/08/10 05:47:37 matt Exp $	*/
+/*	$NetBSD: syscall.c,v 1.6 2019/04/10 06:30:05 ryo Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,7 +29,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "opt_multiprocessor.h"
 /* DO NOT INCLUDE opt_compat_XXX.h */
 
 #include <sys/param.h>
@@ -38,11 +37,15 @@
 #include <sys/proc.h>
 #include <sys/reboot.h>
 #include <sys/systm.h>
+#include <sys/lwp.h>
 #include <sys/syscallvar.h>
 
 #include <uvm/uvm_extern.h>
 
-#include <aarch64/locore.h>
+#include <aarch64/userret.h>
+#include <aarch64/frame.h>
+#include <aarch64/machdep.h>
+#include <aarch64/armreg.h>
 
 #ifndef NARGREG
 #define	NARGREG		8		/* 8 args are in registers */
@@ -58,18 +61,18 @@
 #define EMULNAME(x)	(x)
 #define EMULNAMEU(x)	(x)
 
-__KERNEL_RCSID(0, "$NetBSD: syscall.c,v 1.1 2014/08/10 05:47:37 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: syscall.c,v 1.6 2019/04/10 06:30:05 ryo Exp $");
 
 void
 cpu_spawn_return(struct lwp *l)
 {
-	userret(l, l->l_md.md_utf);
+
+	userret(l);
 }
 
 void
-child_return(void *arg)
+md_child_return(struct lwp *l)
 {
-	struct lwp * const l = arg;
 	struct trapframe * const tf = l->l_md.md_utf;
 
 	tf->tf_reg[0] = 0;
@@ -77,8 +80,7 @@ child_return(void *arg)
 	tf->tf_spsr &= ~NZCV_C;
 	l->l_md.md_cpacr = CPACR_FPEN_NONE;
 
-	ktrsysret(SYS_fork, 0, 0);
-	/* Profiling? XXX */
+	userret(l);
 }
 #endif
 
@@ -98,7 +100,7 @@ EMULNAME(syscall)(struct trapframe *tf)
 	curcpu()->ci_data.cpu_nsyscall++;
 
 	size_t code = tf->tf_esr & 0xffff;
-	register_t *params = tf->tf_reg;
+	register_t *params = (void *)tf->tf_reg;
 	size_t nargs = NARGREG;
 
 	switch (code) {
@@ -145,7 +147,7 @@ EMULNAME(syscall)(struct trapframe *tf)
 				goto bad;
 			for (size_t i = 0; i < diff; i++) {
 				args[nargs + i] = args32[i];
-			} 
+			}
 		}
 		params = args;
 	}
@@ -214,7 +216,7 @@ EMULNAME(syscall)(struct trapframe *tf)
 		}
 	}
 
-	userret(l, tf);
+	userret(l);
 }
 
 void EMULNAME(syscall_intern)(struct proc *);

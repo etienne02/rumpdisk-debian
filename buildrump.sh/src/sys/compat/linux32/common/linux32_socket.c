@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_socket.c,v 1.25 2016/07/07 09:32:02 ozaki-r Exp $ */
+/*	$NetBSD: linux32_socket.c,v 1.31 2020/07/16 15:02:08 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -33,7 +33,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: linux32_socket.c,v 1.25 2016/07/07 09:32:02 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux32_socket.c,v 1.31 2020/07/16 15:02:08 msaitoh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -418,7 +418,6 @@ linux32_getifconf(struct lwp *l, register_t *retval, void *data)
 	struct linux32_ifreq ifr, *ifrp = NULL;
 	struct linux32_ifconf ifc;
 	struct ifnet *ifp;
-	struct ifaddr *ifa;
 	struct sockaddr *sa;
 	struct osockaddr *osa;
 	int space = 0, error;
@@ -434,14 +433,19 @@ linux32_getifconf(struct lwp *l, register_t *retval, void *data)
 
 	docopy = NETBSD32PTR64(ifc.ifc_req) != NULL;
 	if (docopy) {
+		if (ifc.ifc_len < 0)
+			return EINVAL;
+
 		space = ifc.ifc_len;
 		ifrp = NETBSD32PTR64(ifc.ifc_req);
 	}
+	memset(&ifr, 0, sizeof(ifr));
 
 	bound = curlwp_bind();
 	s = pserialize_read_enter();
 	IFNET_READER_FOREACH(ifp) {
-		psref_acquire(&psref, &ifp->if_psref, ifnet_psref_class);
+		struct ifaddr *ifa;
+		if_acquire(ifp, &psref);
 		pserialize_read_exit(s);
 
 		(void)strncpy(ifr.ifr_name, ifp->if_xname,
@@ -451,25 +455,35 @@ linux32_getifconf(struct lwp *l, register_t *retval, void *data)
 			goto release_exit;
 		}
 
+		s = pserialize_read_enter();
 		IFADDR_READER_FOREACH(ifa, ifp) {
+			struct psref psref_ifa;
+			ifa_acquire(ifa, &psref_ifa);
+			pserialize_read_exit(s);
+
 			sa = ifa->ifa_addr;
 			if (sa->sa_family != AF_INET ||
 			    sa->sa_len > sizeof(*osa))
-				continue;
+				goto next;
 			memcpy(&ifr.ifr_addr, sa, sa->sa_len);
 			osa = (struct osockaddr *)&ifr.ifr_addr;
 			osa->sa_family = sa->sa_family;
 			if (space >= sz) {
 				error = copyout(&ifr, ifrp, sz);
-				if (error != 0)
+				if (error != 0) {
+					ifa_release(ifa, &psref_ifa);
 					goto release_exit;
+				}
 				ifrp++;
 			}
 			space -= sz;
+		next:
+			s = pserialize_read_enter();
+			ifa_release(ifa, &psref_ifa);
 		}
 
-		s = pserialize_read_enter();
-		psref_release(&psref, &ifp->if_psref, ifnet_psref_class);
+		KASSERT(pserialize_in_read_section());
+		if_release(ifp, &psref);
 	}
 	pserialize_read_exit(s);
 	curlwp_bindx(bound);
@@ -482,7 +496,7 @@ linux32_getifconf(struct lwp *l, register_t *retval, void *data)
 	return copyout(&ifc, data, sizeof(ifc));
 
 release_exit:
-	psref_release(&psref, &ifp->if_psref, ifnet_psref_class);
+	if_release(ifp, &psref);
 	curlwp_bindx(bound);
 	return error;
 }

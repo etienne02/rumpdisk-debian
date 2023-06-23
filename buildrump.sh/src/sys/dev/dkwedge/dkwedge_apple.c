@@ -1,4 +1,4 @@
-/*	$NetBSD: dkwedge_apple.c,v 1.2 2015/01/24 02:58:56 christos Exp $	*/
+/*	$NetBSD: dkwedge_apple.c,v 1.6 2020/04/11 16:00:34 jdolecek Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dkwedge_apple.c,v 1.2 2015/01/24 02:58:56 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dkwedge_apple.c,v 1.6 2020/04/11 16:00:34 jdolecek Exp $");
 
 #include <sys/param.h>
 #ifdef _KERNEL
@@ -44,8 +44,8 @@ __KERNEL_RCSID(0, "$NetBSD: dkwedge_apple.c,v 1.2 2015/01/24 02:58:56 christos E
 #include <sys/errno.h>
 #include <sys/disk.h>
 #include <sys/vnode.h>
-#include <sys/malloc.h>
 #include <sys/bitops.h>
+#include <sys/buf.h>
 
 #include <sys/bootblock.h>
 
@@ -123,14 +123,6 @@ swap_apple_blockzeroblock(struct apple_blockzeroblock *ap)
 
 #define ASIZE	16384
  
-#ifdef _KERNEL
-#define	DKW_MALLOC(SZ)	malloc((SZ), M_DEVBUF, M_WAITOK)
-#define	DKW_FREE(PTR)	free((PTR), M_DEVBUF)
-#else
-#define	DKW_MALLOC(SZ)	malloc((SZ))
-#define	DKW_FREE(PTR)	free((PTR))
-#endif
-
 static struct {
 	const char *name;
 	const char *type;
@@ -143,22 +135,22 @@ static struct {
 static int
 dkwedge_discover_apple(struct disk *pdk, struct vnode *vp)
 {
-	size_t i;
+	size_t i, n;
 	int error;
-	void *buf;
-	uint32_t blocksize, offset, rsize;
+	struct buf *bp;
+	uint32_t blocksize, blockcount, offset, rsize;
 	struct apple_drvr_map *am;
 	struct apple_part_map_entry *ae;
 	struct apple_blockzeroblock ab;
 	const char *ptype;
 
-	buf = DKW_MALLOC(ASIZE);
-	if ((error = dkwedge_read(pdk, vp, 0, buf, ASIZE)) != 0) {
+	bp = geteblk(ASIZE);
+	if ((error = dkwedge_read(pdk, vp, 0, bp->b_data, ASIZE)) != 0) {
 		DPRINTF("%s: read @%u %d\n", __func__, 0, error);
 		goto out;
 	}
 
-	am = buf;
+	am = bp->b_data;
 	swap_apple_drvr_map(am);
 
 	error = ESRCH;
@@ -178,11 +170,20 @@ dkwedge_discover_apple(struct disk *pdk, struct vnode *vp)
 		goto out;
 	}
 
-	ae = buf;
-	for (offset = blocksize;; offset += rsize) {
+	/* XXX Clamp entries at 512 for now. */
+	blockcount = am->sbBlkCount;
+	if (blockcount > 512) {
+		aprint_error("%s: WARNING: clamping number of blocks to "
+		    "512 (was %u)\n", pdk->dk_name, blockcount);
+		blockcount = 512;
+	}
+
+	ae = bp->b_data;
+	offset = blocksize;
+	for (n = 0; n < blockcount; n++, offset += rsize) {
 		DPRINTF("%s: offset %x rsize %x\n", __func__, offset, rsize);
-		if ((error = dkwedge_read(pdk, vp, offset / DEV_BSIZE, buf,
-		    rsize)) != 0) {
+		if ((error = dkwedge_read(pdk, vp, offset / DEV_BSIZE,
+		    bp->b_data, rsize)) != 0) {
 			DPRINTF("%s: read @%u %d\n", __func__, offset,
 			    error);
 			goto out;
@@ -216,9 +217,10 @@ dkwedge_discover_apple(struct disk *pdk, struct vnode *vp)
 		}
 
 		struct dkwedge_info dkw;
+		memset(&dkw, 0, sizeof(dkw));
 
-		strcpy(dkw.dkw_ptype, ptype);
-		strcpy(dkw.dkw_parent, pdk->dk_name);
+		strlcpy(dkw.dkw_ptype, ptype, sizeof(dkw.dkw_ptype));
+		strlcpy(dkw.dkw_parent, pdk->dk_name, sizeof(dkw.dkw_parent));
 		dkw.dkw_offset = ae->pmPyPartStart;
 		dkw.dkw_size = ae->pmPartBlkCnt;
 		strlcpy(dkw.dkw_wname, ae->pmPartName, sizeof(dkw.dkw_wname));
@@ -234,7 +236,7 @@ dkwedge_discover_apple(struct disk *pdk, struct vnode *vp)
 	}
 
 out:
-	DKW_FREE(buf);
+	brelse(bp, 0);
 	DPRINTF("%s: return %d\n", __func__, error);
 	return error;
 }

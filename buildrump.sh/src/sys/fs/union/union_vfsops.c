@@ -1,4 +1,4 @@
-/*	$NetBSD: union_vfsops.c,v 1.75 2015/07/23 09:45:21 hannken Exp $	*/
+/*	$NetBSD: union_vfsops.c,v 1.81 2020/03/16 21:20:10 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1994 The Regents of the University of California.
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: union_vfsops.c,v 1.75 2015/07/23 09:45:21 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: union_vfsops.c,v 1.81 2020/03/16 21:20:10 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -94,11 +94,10 @@ __KERNEL_RCSID(0, "$NetBSD: union_vfsops.c,v 1.75 2015/07/23 09:45:21 hannken Ex
 #include <sys/kauth.h>
 #include <sys/module.h>
 
+#include <miscfs/genfs/genfs.h>
 #include <fs/union/union.h>
 
 MODULE(MODULE_CLASS_VFS, union, NULL);
-
-static struct sysctllog *union_sysctl_log;
 
 /*
  * Mount union filesystem
@@ -245,6 +244,7 @@ union_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 
 	mp->mnt_data = um;
 	vfs_getnewfsid(mp);
+	mp->mnt_lower = um->um_uppervp->v_mount;
 
 	error = set_statvfs_info( path, UIO_USERSPACE, NULL, UIO_USERSPACE,
 	    mp->mnt_op->vfs_name, mp, l);
@@ -319,6 +319,8 @@ union_unmount_selector(void *cl, struct vnode *vp)
 {
 	int *count = cl;
 
+	KASSERT(mutex_owned(vp->v_interlock));
+
 	*count += 1;
 	return false;
 }
@@ -387,7 +389,7 @@ union_unmount(struct mount *mp, int mntflags)
 }
 
 int
-union_root(struct mount *mp, struct vnode **vpp)
+union_root(struct mount *mp, int lktype, struct vnode **vpp)
 {
 	struct union_mount *um = MOUNTTOUNIONMOUNT(mp);
 	int error;
@@ -408,7 +410,7 @@ union_root(struct mount *mp, struct vnode **vpp)
 		return error;
 	}
 
-	vn_lock(*vpp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(*vpp, lktype | LK_RETRY);
 
 	return 0;
 }
@@ -484,7 +486,7 @@ union_sync(struct mount *mp, int waitfor,
 
 /*ARGSUSED*/
 int
-union_vget(struct mount *mp, ino_t ino,
+union_vget(struct mount *mp, ino_t ino, int lktype,
     struct vnode **vpp)
 {
 
@@ -534,12 +536,28 @@ struct vfsops union_vfsops = {
 	.vfs_done = union_done,
 	.vfs_snapshot = (void *)eopnotsupp,
 	.vfs_extattrctl = vfs_stdextattrctl,
-	.vfs_suspendctl = (void *)eopnotsupp,
+	.vfs_suspendctl = genfs_suspendctl,
 	.vfs_renamelock_enter = union_renamelock_enter,
 	.vfs_renamelock_exit = union_renamelock_exit,
 	.vfs_fsync = (void *)eopnotsupp,
 	.vfs_opv_descs = union_vnodeopv_descs
 };
+
+SYSCTL_SETUP(unionfs_sysctl_setup, "unionfs sysctl")
+{
+
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_NODE, "union",
+		       SYSCTL_DESCR("Union file system"),
+		       NULL, 0, NULL, 0,
+		       CTL_VFS, 15, CTL_EOL);
+	/*
+	 * XXX the "15" above could be dynamic, thereby eliminating
+	 * one more instance of the "number to vfs" mapping problem,
+	 * but "15" is the order as taken from sys/mount.h
+	 */
+}
 
 static int
 union_modcmd(modcmd_t cmd, void *arg)
@@ -551,23 +569,11 @@ union_modcmd(modcmd_t cmd, void *arg)
 		error = vfs_attach(&union_vfsops);
 		if (error != 0)
 			break;
-		sysctl_createv(&union_sysctl_log, 0, NULL, NULL,
-			       CTLFLAG_PERMANENT,
-			       CTLTYPE_NODE, "union",
-			       SYSCTL_DESCR("Union file system"),
-			       NULL, 0, NULL, 0,
-			       CTL_VFS, 15, CTL_EOL);
-		/*
-		 * XXX the "15" above could be dynamic, thereby eliminating
-		 * one more instance of the "number to vfs" mapping problem,
-		 * but "15" is the order as taken from sys/mount.h
-		 */
 		break;
 	case MODULE_CMD_FINI:
 		error = vfs_detach(&union_vfsops);
 		if (error != 0)
 			break;
-		sysctl_teardown(&union_sysctl_log);
 		break;
 	default:
 		error = ENOTTY;

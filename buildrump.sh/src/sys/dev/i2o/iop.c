@@ -1,4 +1,4 @@
-/*	$NetBSD: iop.c,v 1.87 2015/08/16 19:21:33 msaitoh Exp $	*/
+/*	$NetBSD: iop.c,v 1.92 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2001, 2002, 2007 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: iop.c,v 1.87 2015/08/16 19:21:33 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: iop.c,v 1.92 2021/08/07 16:19:11 thorpej Exp $");
 
 #include "iop.h"
 
@@ -57,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: iop.c,v 1.87 2015/08/16 19:21:33 msaitoh Exp $");
 #include <dev/i2o/iopreg.h>
 #include <dev/i2o/iopvar.h>
 
+#include "ioconf.h"
 #include "locators.h"
 
 #define POLL(ms, cond)				\
@@ -88,8 +89,6 @@ static u_long	iop_ictxhash;
 static void	*iop_sdh;
 static struct	i2o_systab *iop_systab;
 static int	iop_systab_size;
-
-extern struct cfdriver iop_cd;
 
 dev_type_open(iopopen);
 dev_type_close(iopclose);
@@ -393,11 +392,7 @@ iop_init(struct iop_softc *sc, const char *intrstr)
 #endif
 
 	/* Allocate message wrappers. */
-	im = malloc(sizeof(*im) * sc->sc_maxib, M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (im == NULL) {
-		aprint_error_dev(sc->sc_dev, "memory allocation failure\n");
-		goto bail_out;
-	}
+	im = malloc(sizeof(*im) * sc->sc_maxib, M_DEVBUF, M_WAITOK|M_ZERO);
 	state++;
 	sc->sc_ims = im;
 	SLIST_INIT(&sc->sc_im_freelist);
@@ -516,8 +511,7 @@ iop_config_interrupts(device_t self)
 		i = sizeof(struct i2o_systab_entry) * (niop - 1) +
 		    sizeof(struct i2o_systab);
 		iop_systab_size = i;
-		iop_systab = malloc(i, M_DEVBUF, M_NOWAIT|M_ZERO);
-
+		iop_systab = malloc(i, M_DEVBUF, M_WAITOK|M_ZERO);
 		iop_systab->numentries = niop;
 		iop_systab->version = I2O_VERSION_11;
 
@@ -589,8 +583,9 @@ iop_config_interrupts(device_t self)
 	ia.ia_class = I2O_CLASS_ANY;
 	ia.ia_tid = I2O_TID_IOP;
 	locs[IOPCF_TID] = I2O_TID_IOP;
-	config_found_sm_loc(self, "iop", locs, &ia, iop_print,
-		config_stdsubmatch);
+	config_found(self, &ia, iop_print,
+	    CFARGS(.submatch = config_stdsubmatch,
+		   .locators = locs));
 
 	/*
 	 * Start device configuration.
@@ -716,7 +711,7 @@ iop_reconfigure(struct iop_softc *sc, u_int chgind)
 	if (sc->sc_tidmap != NULL)
 		free(sc->sc_tidmap, M_DEVBUF);
 	sc->sc_tidmap = malloc(sc->sc_nlctent * sizeof(struct iop_tidmap),
-	    M_DEVBUF, M_NOWAIT|M_ZERO);
+	    M_DEVBUF, M_WAITOK|M_ZERO);
 
 	/* Allow 1 queued command per device while we're configuring. */
 	iop_adjqparam(sc, 1);
@@ -820,8 +815,9 @@ iop_configure_devices(struct iop_softc *sc, int mask, int maskval)
 
 		locs[IOPCF_TID] = ia.ia_tid;
 
-		dv = config_found_sm_loc(sc->sc_dev, "iop", locs, &ia,
-					 iop_print, config_stdsubmatch);
+		dv = config_found(sc->sc_dev, &ia, iop_print,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
 		if (dv != NULL) {
  			sc->sc_tidmap[i].it_flags |= IT_CONFIGURED;
 			strcpy(sc->sc_tidmap[i].it_dvname, device_xname(dv));
@@ -1108,8 +1104,7 @@ iop_hrt_get(struct iop_softc *sc)
 
 	size = sizeof(struct i2o_hrt) +
 	    (le16toh(hrthdr.numentries) - 1) * sizeof(struct i2o_hrt_entry);
-	hrt = (struct i2o_hrt *)malloc(size, M_DEVBUF, M_NOWAIT);
-
+	hrt = malloc(size, M_DEVBUF, M_WAITOK);
 	if ((rv = iop_hrt_get0(sc, hrt, size)) != 0) {
 		free(hrt, M_DEVBUF);
 		return (rv);
@@ -1171,10 +1166,7 @@ iop_lct_get(struct iop_softc *sc)
 	struct i2o_lct *lct;
 
 	esize = le32toh(sc->sc_status.expectedlctsize);
-	lct = (struct i2o_lct *)malloc(esize, M_DEVBUF, M_WAITOK);
-	if (lct == NULL)
-		return (ENOMEM);
-
+	lct = malloc(esize, M_DEVBUF, M_WAITOK);
 	if ((rv = iop_lct_get0(sc, lct, esize, 0)) != 0) {
 		free(lct, M_DEVBUF);
 		return (rv);
@@ -1183,10 +1175,7 @@ iop_lct_get(struct iop_softc *sc)
 	size = le16toh(lct->tablesize) << 2;
 	if (esize != size) {
 		free(lct, M_DEVBUF);
-		lct = (struct i2o_lct *)malloc(size, M_DEVBUF, M_WAITOK);
-		if (lct == NULL)
-			return (ENOMEM);
-
+		lct = malloc(size, M_DEVBUF, M_WAITOK);
 		if ((rv = iop_lct_get0(sc, lct, size, 0)) != 0) {
 			free(lct, M_DEVBUF);
 			return (rv);
@@ -1253,10 +1242,7 @@ iop_field_get_all(struct iop_softc *sc, int tid, int group, void *buf,
 	u_int32_t mb[IOP_MAX_MSG_SIZE / sizeof(u_int32_t)];
 
 	im = iop_msg_alloc(sc, (ii == NULL ? IM_WAIT : 0) | IM_NOSTATUS);
-	if ((pgop = malloc(sizeof(*pgop), M_DEVBUF, M_WAITOK)) == NULL) {
-		iop_msg_free(sc, im);
-		return (ENOMEM);
-	}
+	pgop = malloc(sizeof(*pgop), M_DEVBUF, M_WAITOK);
 	im->im_dvcontext = pgop;
 
 	mf = (struct i2o_util_params_op *)mb;
@@ -1315,11 +1301,7 @@ iop_field_set(struct iop_softc *sc, int tid, int group, void *buf,
 	totsize = sizeof(*pgop) + size;
 
 	im = iop_msg_alloc(sc, IM_WAIT);
-	if ((pgop = malloc(totsize, M_DEVBUF, M_WAITOK)) == NULL) {
-		iop_msg_free(sc, im);
-		return (ENOMEM);
-	}
-
+	pgop = malloc(totsize, M_DEVBUF, M_WAITOK);
 	mf = (struct i2o_util_params_op *)mb;
 	mf->msgflags = I2O_MSGFLAGS(i2o_util_params_op);
 	mf->msgfunc = I2O_MSGFUNC(tid, I2O_UTIL_PARAMS_SET);
@@ -1403,11 +1385,7 @@ iop_table_add_row(struct iop_softc *sc, int tid, int group, void *buf,
 	totsize = sizeof(*pgop) + sizeof(u_int16_t) * 2 + size;
 
 	im = iop_msg_alloc(sc, IM_WAIT);
-	if ((pgop = malloc(totsize, M_DEVBUF, M_WAITOK)) == NULL) {
-		iop_msg_free(sc, im);
-		return (ENOMEM);
-	}
-
+	pgop = malloc(totsize, M_DEVBUF, M_WAITOK);
 	mf = (struct i2o_util_params_op *)mb;
 	mf->msgflags = I2O_MSGFLAGS(i2o_util_params_op);
 	mf->msgfunc = I2O_MSGFUNC(tid, I2O_UTIL_PARAMS_SET);
@@ -2019,7 +1997,7 @@ iop_msg_map_bio(struct iop_softc *sc, struct iop_msg *im, u_int32_t *mb,
 
 			while (slen > 0) {
 				eaddr = (saddr + PAGE_SIZE) & ~(PAGE_SIZE - 1);
-				tlen = min(eaddr - saddr, slen);
+				tlen = uimin(eaddr - saddr, slen);
 				slen -= tlen;
 				*p++ = le32toh(saddr);
 				saddr = eaddr;
@@ -2587,9 +2565,6 @@ iop_passthrough(struct iop_softc *sc, struct ioppt *pt, struct proc *p)
 		}
 
 	mf = malloc(sc->sc_framesize, M_DEVBUF, M_WAITOK);
-	if (mf == NULL)
-		return (ENOMEM);
-
 	if ((rv = copyin(pt->pt_msg, mf, pt->pt_msglen)) != 0)
 		goto bad;
 

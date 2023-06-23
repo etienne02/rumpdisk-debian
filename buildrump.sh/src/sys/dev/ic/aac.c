@@ -1,4 +1,4 @@
-/*	$NetBSD: aac.c,v 1.44 2012/10/27 17:18:18 chs Exp $	*/
+/*	$NetBSD: aac.c,v 1.49 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2007 The NetBSD Foundation, Inc.
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aac.c,v 1.44 2012/10/27 17:18:18 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aac.c,v 1.49 2021/08/07 16:19:11 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -79,6 +79,7 @@ __KERNEL_RCSID(0, "$NetBSD: aac.c,v 1.44 2012/10/27 17:18:18 chs Exp $");
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
+#include <sys/module.h>
 
 #include <sys/bus.h>
 
@@ -87,6 +88,8 @@ __KERNEL_RCSID(0, "$NetBSD: aac.c,v 1.44 2012/10/27 17:18:18 chs Exp $");
 #include <dev/ic/aac_tables.h>
 
 #include "locators.h"
+
+#include "ioconf.h"
 
 static int	aac_new_intr(void *);
 static int	aac_alloc_commands(struct aac_softc *);
@@ -142,14 +145,10 @@ MALLOC_DEFINE(M_AACBUF, "aacbuf", "Buffers for aac(4)");
 
 static void	*aac_sdh;
 
-extern struct	cfdriver aac_cd;
-
 int
 aac_attach(struct aac_softc *sc)
 {
-	struct aac_attach_args aaca;
-	int i, rv;
-	int locs[AACCF_NLOCS];
+	int rv;
 
 	SIMPLEQ_INIT(&sc->sc_ccb_free);
 	SIMPLEQ_INIT(&sc->sc_ccb_queue);
@@ -183,18 +182,9 @@ aac_attach(struct aac_softc *sc)
 	aac_describe_controller(sc);
 
 	/*
-	 * Attach devices.
+	 * Attach devices
 	 */
-	for (i = 0; i < AAC_MAX_CONTAINERS; i++) {
-		if (!sc->sc_hdr[i].hd_present)
-			continue;
-		aaca.aaca_unit = i;
-
-		locs[AACCF_UNIT] = i;
-
-		config_found_sm_loc(sc->sc_dv, "aac", locs, &aaca,
-				    aac_print, config_stdsubmatch);
-	}
+	aac_devscan(sc);
 
 	/*
 	 * Enable interrupts, and register our shutdown hook.
@@ -204,6 +194,27 @@ aac_attach(struct aac_softc *sc)
 	if (aac_sdh != NULL)
 		shutdownhook_establish(aac_shutdown, NULL);
 	return (0);
+}
+
+int
+aac_devscan(struct aac_softc *sc)
+{
+	struct aac_attach_args aaca;
+	int i;
+	int locs[AACCF_NLOCS];
+
+	for (i = 0; i < AAC_MAX_CONTAINERS; i++) {
+		if (!sc->sc_hdr[i].hd_present)
+			continue;
+		aaca.aaca_unit = i;
+
+		locs[AACCF_UNIT] = i;
+
+		config_found(sc->sc_dv, &aaca, aac_print,
+		    CFARGS(.submatch = config_stdsubmatch,
+			   .locators = locs));
+	}
+	return 0;
 }
 
 static int
@@ -580,11 +591,7 @@ aac_init(struct aac_softc *sc)
 	}
 
 	sc->sc_aif_fib = malloc(sizeof(struct aac_fib), M_AACBUF,
-	    M_NOWAIT | M_ZERO);
-	if (sc->sc_aif_fib == NULL) {
-		aprint_error_dev(sc->sc_dv, "cannot alloc fib structure\n");
-		return (ENOMEM);
-	}
+	    M_WAITOK | M_ZERO);
 	if ((rv = bus_dmamap_create(sc->sc_dmat, sizeof(*sc->sc_common), 1,
 	    sizeof(*sc->sc_common), 0, BUS_DMA_NOWAIT | BUS_DMA_ALLOCNOW,
 	    &sc->sc_common_dmamap)) != 0) {
@@ -617,12 +624,7 @@ aac_init(struct aac_softc *sc)
 
 	TAILQ_INIT(&sc->sc_fibmap_tqh);
 	sc->sc_ccbs = malloc(sizeof(struct aac_ccb) * sc->sc_max_fibs, M_AACBUF,
-	    M_NOWAIT | M_ZERO);
-	if (sc->sc_ccbs == NULL) {
-		aprint_error_dev(sc->sc_dv, "memory allocation failure getting ccbs\n");
-		rv = ENOMEM;
-		goto bail_out;
-	}
+	    M_WAITOK | M_ZERO);
 	state++;
 	while (sc->sc_total_fibs < AAC_PREALLOCATE_FIBS(sc)) {
 		if (aac_alloc_commands(sc) != 0)
@@ -1750,3 +1752,33 @@ aac_print_fib(struct aac_softc *sc, struct aac_fib *fib,
 	}
 }
 #endif /* AAC_DEBUG */
+
+MODULE(MODULE_CLASS_DRIVER, aac, "pci");
+
+#ifdef _MODULE
+#include "ioconf.c"
+#endif
+
+static int
+aac_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error = 0;
+
+#ifdef _MODULE
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		error = config_init_component(cfdriver_ioconf_aac,
+		    cfattach_ioconf_aac, cfdata_ioconf_aac);
+		break;
+	case MODULE_CMD_FINI:
+		error = config_fini_component(cfdriver_ioconf_aac,
+		    cfattach_ioconf_aac, cfdata_ioconf_aac);
+		break;
+	default:
+		error = ENOTTY;
+		break;
+	}
+#endif
+
+	return error;
+}

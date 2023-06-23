@@ -1,4 +1,4 @@
-/*	$NetBSD: opt_rumpkernel.h,v 1.5 2016/04/15 01:35:26 ozaki-r Exp $	*/
+/*	$NetBSD: opt_rumpkernel.h,v 1.7 2021/07/14 03:19:24 ozaki-r Exp $	*/
 
 #ifndef __NetBSD__
 #define __NetBSD__
@@ -22,6 +22,8 @@
 
 #define MPLS	1
 
+#define CAN	1
+
 #define SOSEND_NO_LOAN
 
 #undef PIPE_SOCKETPAIR /* would need uipc_usrreq.c */
@@ -31,3 +33,6 @@
 #define WSEMUL_VT100
 
 #define PPPOE_SERVER
+
+#define ALTQ
+#define ALTQ_CBQ

@@ -1,4 +1,4 @@
-/*	$NetBSD: libkern.h,v 1.124 2016/07/07 06:55:43 msaitoh Exp $	*/
+/*	$NetBSD: libkern.h,v 1.143 2021/05/17 08:50:36 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -35,12 +35,16 @@
 #define _LIB_LIBKERN_LIBKERN_H_
 
 #ifdef _KERNEL_OPT
-#include "opt_diagnostic.h"
+#include "opt_kasan.h"
+#include "opt_kcsan.h"
+#include "opt_kmsan.h"
 #endif
 
 #include <sys/types.h>
 #include <sys/inttypes.h>
 #include <sys/null.h>
+
+#include <lib/libkern/strlist.h>
 
 #ifndef LIBKERN_INLINE
 #define LIBKERN_INLINE	static __inline
@@ -49,8 +53,8 @@
 
 LIBKERN_INLINE int imax(int, int) __unused;
 LIBKERN_INLINE int imin(int, int) __unused;
-LIBKERN_INLINE u_int max(u_int, u_int) __unused;
-LIBKERN_INLINE u_int min(u_int, u_int) __unused;
+LIBKERN_INLINE u_int uimax(u_int, u_int) __unused;
+LIBKERN_INLINE u_int uimin(u_int, u_int) __unused;
 LIBKERN_INLINE long lmax(long, long) __unused;
 LIBKERN_INLINE long lmin(long, long) __unused;
 LIBKERN_INLINE u_long ulmax(u_long, u_long) __unused;
@@ -97,12 +101,12 @@ lmin(long a, long b)
 	return (a < b ? a : b);
 }
 LIBKERN_INLINE u_int
-max(u_int a, u_int b)
+uimax(u_int a, u_int b)
 {
 	return (a > b ? a : b);
 }
 LIBKERN_INLINE u_int
-min(u_int a, u_int b)
+uimin(u_int a, u_int b)
 {
 	return (a < b ? a : b);
 }
@@ -335,7 +339,7 @@ tolower(int ch)
  * *fp does not match the type of struct bar::b_foo.
  * We skip the validation for coverity runs to avoid warnings.
  */
-#ifdef __COVERITY__
+#if defined(__COVERITY__) || defined(__LGTM_BOT__)
 #define __validate_container_of(PTR, TYPE, FIELD) 0
 #define __validate_const_container_of(PTR, TYPE, FIELD) 0
 #else
@@ -354,36 +358,73 @@ tolower(int ch)
     ((const TYPE *)(((const char *)(PTR)) - offsetof(TYPE, FIELD))	\
 	+ __validate_const_container_of(PTR, TYPE, FIELD))
 
-#define	MTPRNG_RLEN		624
-struct mtprng_state {
-	unsigned int mt_idx;
-	uint32_t mt_elem[MTPRNG_RLEN];
-	uint32_t mt_count;
-	uint32_t mt_sparse[3];
-};
-
 /* Prototypes for which GCC built-ins exist. */
 void	*memcpy(void *, const void *, size_t);
 int	 memcmp(const void *, const void *, size_t);
 void	*memset(void *, int, size_t);
 #if __GNUC_PREREQ__(2, 95) && !defined(_STANDALONE)
+#if defined(_KERNEL) && defined(KASAN)
+void	*kasan_memcpy(void *, const void *, size_t);
+int	 kasan_memcmp(const void *, const void *, size_t);
+void	*kasan_memset(void *, int, size_t);
+#define	memcpy(d, s, l)		kasan_memcpy(d, s, l)
+#define	memcmp(a, b, l)		kasan_memcmp(a, b, l)
+#define	memset(d, v, l)		kasan_memset(d, v, l)
+#elif defined(_KERNEL) && defined(KCSAN)
+void	*kcsan_memcpy(void *, const void *, size_t);
+int	 kcsan_memcmp(const void *, const void *, size_t);
+void	*kcsan_memset(void *, int, size_t);
+#define	memcpy(d, s, l)		kcsan_memcpy(d, s, l)
+#define	memcmp(a, b, l)		kcsan_memcmp(a, b, l)
+#define	memset(d, v, l)		kcsan_memset(d, v, l)
+#elif defined(_KERNEL) && defined(KMSAN)
+void	*kmsan_memcpy(void *, const void *, size_t);
+int	 kmsan_memcmp(const void *, const void *, size_t);
+void	*kmsan_memset(void *, int, size_t);
+#define	memcpy(d, s, l)		kmsan_memcpy(d, s, l)
+#define	memcmp(a, b, l)		kmsan_memcmp(a, b, l)
+#define	memset(d, v, l)		kmsan_memset(d, v, l)
+#else
 #define	memcpy(d, s, l)		__builtin_memcpy(d, s, l)
 #define	memcmp(a, b, l)		__builtin_memcmp(a, b, l)
-#endif
-#if __GNUC_PREREQ__(2, 95) && !defined(_STANDALONE)
 #define	memset(d, v, l)		__builtin_memset(d, v, l)
 #endif
+#endif
+void	*memmem(const void *, size_t, const void *, size_t);
 
 char	*strcpy(char *, const char *);
 int	 strcmp(const char *, const char *);
 size_t	 strlen(const char *);
-size_t	 strnlen(const char *, size_t);
-char	*strsep(char **, const char *);
 #if __GNUC_PREREQ__(2, 95) && !defined(_STANDALONE)
+#if defined(_KERNEL) && defined(KASAN)
+char	*kasan_strcpy(char *, const char *);
+int	 kasan_strcmp(const char *, const char *);
+size_t	 kasan_strlen(const char *);
+#define	strcpy(d, s)		kasan_strcpy(d, s)
+#define	strcmp(a, b)		kasan_strcmp(a, b)
+#define	strlen(a)		kasan_strlen(a)
+#elif defined(_KERNEL) && defined(KCSAN)
+char	*kcsan_strcpy(char *, const char *);
+int	 kcsan_strcmp(const char *, const char *);
+size_t	 kcsan_strlen(const char *);
+#define	strcpy(d, s)		kcsan_strcpy(d, s)
+#define	strcmp(a, b)		kcsan_strcmp(a, b)
+#define	strlen(a)		kcsan_strlen(a)
+#elif defined(_KERNEL) && defined(KMSAN)
+char	*kmsan_strcpy(char *, const char *);
+int	 kmsan_strcmp(const char *, const char *);
+size_t	 kmsan_strlen(const char *);
+#define	strcpy(d, s)		kmsan_strcpy(d, s)
+#define	strcmp(a, b)		kmsan_strcmp(a, b)
+#define	strlen(a)		kmsan_strlen(a)
+#else
 #define	strcpy(d, s)		__builtin_strcpy(d, s)
 #define	strcmp(a, b)		__builtin_strcmp(a, b)
 #define	strlen(a)		__builtin_strlen(a)
 #endif
+#endif
+size_t	 strnlen(const char *, size_t);
+char	*strsep(char **, const char *);
 
 /* Functions for which we always use built-ins. */
 #ifdef __GNUC__
@@ -392,12 +433,27 @@ char	*strsep(char **, const char *);
 
 /* These exist in GCC 3.x, but we don't bother. */
 char	*strcat(char *, const char *);
+char	*strchr(const char *, int);
+char	*strrchr(const char *, int);
+#if defined(_KERNEL) && defined(KASAN)
+char	*kasan_strcat(char *, const char *);
+char	*kasan_strchr(const char *, int);
+char	*kasan_strrchr(const char *, int);
+#define	strcat(d, s)		kasan_strcat(d, s)
+#define	strchr(s, c)		kasan_strchr(s, c)
+#define	strrchr(s, c)		kasan_strrchr(s, c)
+#elif defined(_KERNEL) && defined(KMSAN)
+char	*kmsan_strcat(char *, const char *);
+char	*kmsan_strchr(const char *, int);
+char	*kmsan_strrchr(const char *, int);
+#define	strcat(d, s)		kmsan_strcat(d, s)
+#define	strchr(s, c)		kmsan_strchr(s, c)
+#define	strrchr(s, c)		kmsan_strrchr(s, c)
+#endif
 size_t	 strcspn(const char *, const char *);
 char	*strncpy(char *, const char *, size_t);
 char	*strncat(char *, const char *, size_t);
 int	 strncmp(const char *, const char *, size_t);
-char	*strchr(const char *, int);
-char	*strrchr(const char *, int);
 char	*strstr(const char *, const char *);
 char	*strpbrk(const char *, const char *);
 size_t	 strspn(const char *, const char *);
@@ -419,7 +475,19 @@ int	inet_aton(const char *, struct in_addr *);
 char	*intoa(u_int32_t);
 #define inet_ntoa(a) intoa((a).s_addr)
 void	*memchr(const void *, int, size_t);
+
 void	*memmove(void *, const void *, size_t);
+#if defined(_KERNEL) && defined(KASAN)
+void	*kasan_memmove(void *, const void *, size_t);
+#define	memmove(d, s, l)	kasan_memmove(d, s, l)
+#elif defined(_KERNEL) && defined(KCSAN)
+void	*kcsan_memmove(void *, const void *, size_t);
+#define	memmove(d, s, l)	kcsan_memmove(d, s, l)
+#elif defined(_KERNEL) && defined(KMSAN)
+void	*kmsan_memmove(void *, const void *, size_t);
+#define	memmove(d, s, l)	kmsan_memmove(d, s, l)
+#endif
+
 int	 pmatch(const char *, const char *, const char **);
 #ifndef SMALL_RANDOM
 void	 srandom(unsigned long);
@@ -429,10 +497,6 @@ char	*setstate(char *);
 long	 random(void);
 void	 mi_vector_hash(const void * __restrict, size_t, uint32_t,
 	    uint32_t[3]);
-void	 mtprng_init32(struct mtprng_state *, uint32_t);
-void	 mtprng_initarray(struct mtprng_state *, const uint32_t *, size_t);
-uint32_t mtprng_rawrandom(struct mtprng_state *);
-uint32_t mtprng_random(struct mtprng_state *);
 int	 scanc(u_int, const u_char *, const u_char *, int);
 int	 skpc(int, size_t, u_char *);
 int	 strcasecmp(const char *, const char *);
@@ -448,6 +512,8 @@ intmax_t strtoi(const char * __restrict, char ** __restrict, int, intmax_t,
     intmax_t, int *);
 uintmax_t strtou(const char * __restrict, char ** __restrict, int, uintmax_t,
     uintmax_t, int *);
+void	 hexdump(void (*)(const char *, ...) __printflike(1, 2),
+    const char *, const void *, size_t);
 
 int	 snprintb(char *, size_t, const char *, uint64_t);
 int	 snprintb_m(char *, size_t, const char *, uint64_t, size_t);
@@ -476,23 +542,9 @@ int	strnvisx(char *, size_t, const char *, size_t, int);
 #define VIS_SAFE	0x20
 #define VIS_TRIM	0x40
 
-#ifdef notyet
-/*
- * LZF hashtable/state size: on uncompressible data and on a system with
- * a sufficiently large d-cache, a larger table produces a considerable
- * speed benefit.  On systems with small memory and caches, however...
- */
-#if defined(__vax__) || defined(__m68k__)
-#define LZF_HLOG 14
-#else
-#define LZF_HLOG 15
-#endif
-typedef const uint8_t *LZF_STATE[1 << LZF_HLOG];
-
-unsigned int lzf_compress_r (const void *const, unsigned int, void *,
-			     unsigned int, LZF_STATE);
-unsigned int lzf_decompress (const void *const, unsigned int, void *,
-			     unsigned int);
-#endif
+struct disklabel;
+void	disklabel_swap(struct disklabel *, struct disklabel *);
+uint16_t dkcksum(const struct disklabel *);
+uint16_t dkcksum_sized(const struct disklabel *, size_t);
 
 #endif /* !_LIB_LIBKERN_LIBKERN_H_ */

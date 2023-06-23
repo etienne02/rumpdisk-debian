@@ -1,4 +1,4 @@
-/*	$NetBSD: msiiep.c,v 1.46 2015/10/04 08:17:43 joerg Exp $ */
+/*	$NetBSD: msiiep.c,v 1.52 2021/08/07 16:19:05 thorpej Exp $ */
 
 /*
  * Copyright (c) 2001 Valeriy E. Ushakov
@@ -27,10 +27,10 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: msiiep.c,v 1.46 2015/10/04 08:17:43 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: msiiep.c,v 1.52 2021/08/07 16:19:05 thorpej Exp $");
 
 #include <sys/param.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/device.h>
@@ -72,7 +72,7 @@ CFATTACH_DECL_NEW(msiiep, 0, msiiep_match, msiiep_attach, NULL, NULL);
 
 
 /* sleep in idle spin */
-static void	msiiep_cpu_sleep(struct cpu_info *);
+static void	msiiep_cpu_sleep(void);
 volatile uint32_t *msiiep_mid = NULL;
 
 
@@ -232,16 +232,16 @@ msiiep_attach(device_t parent, device_t self, void *aux)
 
 	/* config timer/counter part of PCIC */
 	msa.msa_name = "timer";
-	config_found(self, &msa, NULL);
+	config_found(self, &msa, NULL, CFARGS_NONE);
 
 	/* config PCI tree */
 	msa.msa_name = "pcic";
-	config_found(self, &msa, NULL);
+	config_found(self, &msa, NULL, CFARGS_NONE);
 }
 
 /* ARGSUSED */
 void
-msiiep_cpu_sleep(struct cpu_info *ci)
+msiiep_cpu_sleep(void)
 {
 	uint32_t reg;
 
@@ -362,7 +362,8 @@ mspcic_attach(device_t parent, device_t self, void *aux)
 
 	mspcic_pci_scan(sc->sc_node);
 
-	config_found_ia(self, "pcibus", &pba, mspcic_print);
+	config_found(self, &pba, mspcic_print,
+	    CFARGS(.devhandle = prom_node_to_devhandle(sc->sc_node)));
 }
 
 
@@ -559,10 +560,7 @@ mspcic_intr_establish(bus_space_tag_t t, int line, int ipl,
 	struct intrhand *ih;
 	int pil;
 
-	ih = (struct intrhand *)
-		malloc(sizeof(struct intrhand), M_DEVBUF, M_NOWAIT);
-	if (ih == NULL)
-		return (NULL);
+	ih = kmem_alloc(sizeof(*ih), KM_SLEEP);
 
 	/* use pil set-up by prom */
 	pil = mspcic_assigned_interrupt(line);

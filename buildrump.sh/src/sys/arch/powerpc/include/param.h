@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.29 2013/01/29 15:47:16 kiyohara Exp $	*/
+/*	$NetBSD: param.h,v 1.34 2021/05/31 14:38:56 simonb Exp $	*/
 
 /*-
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -34,31 +34,39 @@
 #ifndef _POWERPC_PARAM_H
 #define	_POWERPC_PARAM_H
 
-#ifdef	_KERNEL
-#if defined(_KERNEL_OPT)
+#ifdef _KERNEL_OPT
+#include "opt_param.h"
 #include "opt_ppcarch.h"
-#endif
 #endif
 
 /*
- * Machine dependent constants for PowerPC (32-bit only currently)
+ * Machine dependent constants for PowerPC
  * For userland regardless of port, force MACHINE to be "powerpc"
  */
 #ifndef _KERNEL
 #undef MACHINE
 #endif
-#ifndef MACHINE
-#define	MACHINE		"powerpc"
+
+#ifdef _LP64
+# ifndef MACHINE
+#  define	MACHINE		"powerpc64"
+# endif
+# define	MACHINE_ARCH	"powerpc64"
+# define	MID_MACHINE	MID_POWERPC64
+#else
+# ifndef MACHINE
+#  define	MACHINE		"powerpc"
+# endif
+# define	MACHINE_ARCH	"powerpc"
+# define	MID_MACHINE	MID_POWERPC
 #endif
-#define	MACHINE_ARCH	"powerpc"
-#define	MID_MACHINE	MID_POWERPC
 
 /* PowerPC-specific macro to align a stack pointer (downwards). */
 #define	STACK_ALIGNBYTES	(16 - 1)	/* AltiVec */
 
 #ifdef PPC_IBM4XX
 #define	PGSHIFT		14	/* Use 16KB to reduce TLB thrashing */
-#define	UPAGES		2
+#define	UPAGES		1
 #else
 #define	PGSHIFT		12
 #define	UPAGES		4
@@ -66,12 +74,7 @@
 #define	NBPG		(1 << PGSHIFT)	/* Page size */
 #define	PGOFSET		(NBPG - 1)
 
-#define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
-#define	DEV_BSIZE	(1 << DEV_BSHIFT)
 #define	BLKDEV_IOSIZE	NBPG
-#ifndef MAXPHYS
-#define	MAXPHYS		(64 * 1024)	/* max raw I/O transfer size */
-#endif
 
 #define	USPACE		(UPAGES * NBPG)
 

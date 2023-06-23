@@ -1,4 +1,4 @@
-/* $NetBSD: if_skvar.h,v 1.18 2015/04/13 16:33:25 riastradh Exp $ */
+/* $NetBSD: if_skvar.h,v 1.20 2019/09/13 07:55:07 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -200,7 +200,8 @@ struct sk_softc {
 	int			sk_int_mod_pending;
 	bus_dma_tag_t		sc_dmatag;
 	struct sk_if_softc	*sk_if[2];
-	krndsource_t     rnd_source;
+	u_int8_t		rnd_attached;
+	krndsource_t		rnd_source;
 };
 
 /* Softc for each logical interface */
@@ -225,7 +226,7 @@ struct sk_if_softc {
 	bus_dmamap_t		sk_ring_map;
 	struct sk_softc		*sk_softc;	/* parent controller */
 	int			sk_tx_bmu;	/* TX BMU register */
-	int			sk_if_flags;
+	u_short			sk_if_flags;
 	kmutex_t		sk_jpool_mtx;
 	LIST_HEAD(__sk_jfreehead, sk_jpool_entry)	sk_jfree_listhead;
 	LIST_HEAD(__sk_jinusehead, sk_jpool_entry)	sk_jinuse_listhead;

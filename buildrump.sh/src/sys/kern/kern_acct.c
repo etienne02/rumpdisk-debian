@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_acct.c,v 1.94 2013/10/19 21:01:39 mrg Exp $	*/
+/*	$NetBSD: kern_acct.c,v 1.98 2021/06/29 22:40:53 dholland Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_acct.c,v 1.94 2013/10/19 21:01:39 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_acct.c,v 1.98 2021/06/29 22:40:53 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -152,7 +152,7 @@ encode_comp_t(u_long s, u_long us)
 	s += us / (1000000 / AHZ);	/* Maximize precision. */
 
 	while (s > MAXFRACT) {
-	rnd = s & (1 << (EXPSIZE - 1));	/* Round up? */
+		rnd = s & (1 << (EXPSIZE - 1));	/* Round up? */
 		s >>= EXPSIZE;		/* Base 8 exponent == 3 bit shift. */
 		exp++;
 	}
@@ -177,8 +177,6 @@ acct_chkfree(void)
 	fsblkcnt_t bavail;
 
 	sb = kmem_alloc(sizeof(*sb), KM_SLEEP);
-	if (sb == NULL)
-		return (ENOMEM);
 	error = VFS_STATVFS(acct_vp->v_mount, sb);
 	if (error != 0) {
 		kmem_free(sb, sizeof(*sb));
@@ -299,7 +297,7 @@ sys_acct(struct lwp *l, const struct sys_acct_args *uap, register_t *retval)
 		syscallarg(const char *) path;
 	} */
 	struct pathbuf *pb;
-	struct nameidata nd;
+	struct vnode *vp;
 	int error;
 
 	/* Make sure that the caller is root. */
@@ -319,18 +317,19 @@ sys_acct(struct lwp *l, const struct sys_acct_args *uap, register_t *retval)
 		if (error) {
 			return error;
 		}
-		NDINIT(&nd, LOOKUP, FOLLOW | TRYEMULROOT, pb);
-		if ((error = vn_open(&nd, FWRITE|O_APPEND, 0)) != 0) {
+		error = vn_open(NULL, pb, TRYEMULROOT, FWRITE|O_APPEND, 0,
+		    &vp, NULL, NULL);
+		if (error != 0) {
 			pathbuf_destroy(pb);
 			return error;
 		}
-		if (nd.ni_vp->v_type != VREG) {
-			VOP_UNLOCK(nd.ni_vp);
+		if (vp->v_type != VREG) {
+			VOP_UNLOCK(vp);
 			error = EACCES;
 			goto bad;
 		}
-		if ((error = VOP_GETATTR(nd.ni_vp, &va, l->l_cred)) != 0) {
-			VOP_UNLOCK(nd.ni_vp);
+		if ((error = VOP_GETATTR(vp, &va, l->l_cred)) != 0) {
+			VOP_UNLOCK(vp);
 			goto bad;
 		}
 
@@ -343,13 +342,13 @@ sys_acct(struct lwp *l, const struct sys_acct_args *uap, register_t *retval)
 #endif
 			vattr_null(&va);
 			va.va_size = size;
-			error = VOP_SETATTR(nd.ni_vp, &va, l->l_cred);
+			error = VOP_SETATTR(vp, &va, l->l_cred);
 			if (error != 0) {
-				VOP_UNLOCK(nd.ni_vp);
+				VOP_UNLOCK(vp);
 				goto bad;
 			}
 		}
-		VOP_UNLOCK(nd.ni_vp);
+		VOP_UNLOCK(vp);
 	}
 
 	rw_enter(&acct_lock, RW_WRITER);
@@ -368,7 +367,7 @@ sys_acct(struct lwp *l, const struct sys_acct_args *uap, register_t *retval)
 	 * and schedule the new free space watcher.
 	 */
 	acct_state = ACCT_ACTIVE;
-	acct_vp = nd.ni_vp;
+	acct_vp = vp;
 	acct_cred = l->l_cred;
 	kauth_cred_hold(acct_cred);
 
@@ -391,7 +390,7 @@ sys_acct(struct lwp *l, const struct sys_acct_args *uap, register_t *retval)
 	rw_exit(&acct_lock);
 	return (error);
  bad:
-	vn_close(nd.ni_vp, FWRITE, l->l_cred);
+	vn_close(vp, FWRITE, l->l_cred);
 	pathbuf_destroy(pb);
 	return error;
 }
@@ -472,12 +471,12 @@ acct_process(struct lwp *l)
 	acct.ac_gid = kauth_cred_getgid(l->l_cred);
 
 	/* (7) The terminal from which the process was started */
-	mutex_enter(proc_lock);
+	mutex_enter(&proc_lock);
 	if ((p->p_lflag & PL_CONTROLT) && p->p_pgrp->pg_session->s_ttyp)
 		acct.ac_tty = p->p_pgrp->pg_session->s_ttyp->t_dev;
 	else
 		acct.ac_tty = NODEV;
-	mutex_exit(proc_lock);
+	mutex_exit(&proc_lock);
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	acct.ac_flag = p->p_acflag;

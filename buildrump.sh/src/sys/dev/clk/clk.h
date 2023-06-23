@@ -1,4 +1,4 @@
-/* $NetBSD: clk.h,v 1.1 2015/12/05 13:31:07 jmcneill Exp $ */
+/* $NetBSD: clk.h,v 1.3 2018/04/01 21:11:01 bouyer Exp $ */
 
 /*-
  * Copyright (c) 2015 Jared D. McNeill <jmcneill@invisible.ca>
@@ -29,12 +29,14 @@
 #ifndef _DEV_CLK_CLK_H
 #define _DEV_CLK_CLK_H
 
+struct clk_domain;
 struct clk;
 
-struct clk *	clk_get(const char *);
+struct clk *	clk_get(struct clk_domain *, const char *);
 void		clk_put(struct clk *);
 u_int		clk_get_rate(struct clk *);
 int		clk_set_rate(struct clk *, u_int);
+u_int		clk_round_rate(struct clk *, u_int);
 int		clk_enable(struct clk *);
 int		clk_disable(struct clk *);
 int		clk_set_parent(struct clk *, struct clk *);

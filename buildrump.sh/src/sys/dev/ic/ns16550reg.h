@@ -1,4 +1,4 @@
-/*	$NetBSD: ns16550reg.h,v 1.11 2016/05/27 20:01:49 bouyer Exp $	*/
+/*	$NetBSD: ns16550reg.h,v 1.13 2019/01/11 23:10:41 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1991 The Regents of the University of California.
@@ -43,20 +43,25 @@
 #define	com_fifo	2	/* FIFO control (W) */
 #define	com_lctl	3	/* line control register (R/W) */
 #define	com_cfcr	3	/* line control register (R/W) */
+#define	com_lcr		com_cfcr
 #define	com_mcr		4	/* modem control register (R/W) */
 #define	com_lsr		5	/* line status register (R/W) */
 #define	com_msr		6	/* modem status register (R/W) */
 #define	com_scratch	7	/* scratch register (R/W) */
 
 /*
+ * Additional registers present on TI OMAP hardware
+ */
+#define	com_mdr1	8	/* mode definition register 1 (OMAP) */
+
+/*
  * Additional register present in NS16750 
  */
-#ifdef COM_16750
-#define com_usr		31	/* status register (R) */
-#endif
-#ifdef	COM_AWIN
-#define	com_usr		31	/* status register (R) */
-#define	com_tfl		32	/* transmit fifo level (R) */
-#define	com_rfl		33	/* receive fifo level (R) */
-#define	com_halt	41	/* halt tx (R/W) */
-#endif
+#define com_usr		31	/* status register (R) (16750/SUNXI) */
+
+/*
+ * Additional registers present on Allwinner hardware
+ */
+#define	com_tfl		32	/* transmit fifo level (R) (SUNXI) */
+#define	com_rfl		33	/* receive fifo level (R) (SUNXI) */
+#define	com_halt	41	/* halt tx (R/W) (SUNXI) */

@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_alloclist.c,v 1.26 2009/03/15 17:17:23 cegger Exp $	*/
+/*	$NetBSD: rf_alloclist.c,v 1.29 2021/07/23 00:54:45 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -37,7 +37,7 @@
  ***************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rf_alloclist.c,v 1.26 2009/03/15 17:17:23 cegger Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rf_alloclist.c,v 1.29 2021/07/23 00:54:45 oster Exp $");
 
 #include <dev/raidframe/raidframevar.h>
 
@@ -59,15 +59,17 @@ static void rf_ShutdownAllocList(void *);
 
 static void rf_ShutdownAllocList(void *ignored)
 {
-	pool_destroy(&rf_pools.alloclist);
+	pool_destroy(&rf_alloclist_pool);
 }
 
 int
 rf_ConfigureAllocList(RF_ShutdownList_t **listp)
 {
 
-	rf_pool_init(&rf_pools.alloclist, sizeof(RF_AllocListElem_t),
-		     "rf_alloclist_pl", RF_AL_FREELIST_MIN, RF_AL_FREELIST_MAX);
+	pool_init(&rf_alloclist_pool, sizeof(RF_AllocListElem_t), 0, 0, 0, "rf_alloclist_pl", NULL, IPL_BIO);
+	pool_sethiwat(&rf_alloclist_pool, RF_AL_FREELIST_MAX);
+	pool_prime(&rf_alloclist_pool, RF_AL_FREELIST_MIN);
+
 	rf_ShutdownCreate(listp, rf_ShutdownAllocList, NULL);
 
 	return (0);
@@ -115,16 +117,12 @@ rf_FreeAllocList(RF_AllocListElem_t *l)
 	while (l) {
 		temp = l;
 		l = l->next;
-		pool_put(&rf_pools.alloclist, temp);
+		pool_put(&rf_alloclist_pool, temp);
 	}
 }
 
 RF_AllocListElem_t *
 rf_real_MakeAllocList(void)
 {
-	RF_AllocListElem_t *p;
-
-	p = pool_get(&rf_pools.alloclist, PR_WAITOK);
-	memset((char *) p, 0, sizeof(RF_AllocListElem_t));
-	return (p);
+	return pool_get(&rf_alloclist_pool, PR_WAITOK | PR_ZERO);
 }

@@ -1,4 +1,4 @@
-/* $NetBSD: cgd_crypto.h,v 1.8 2015/04/25 12:55:04 riastradh Exp $ */
+/* $NetBSD: cgd_crypto.h,v 1.13 2020/06/29 23:36:06 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -35,17 +35,22 @@
 #ifdef _KERNEL
 #define CGD_CIPHER_DECRYPT	1
 #define CGD_CIPHER_ENCRYPT	2
+#define CGD_AES_BLOCK_SIZE	16
+#define CGD_3DES_BLOCK_SIZE	8
+#define CGD_BF_BLOCK_SIZE	8
+
+#define	CGD_BLOCKALIGN		16
 
 typedef void *(cfunc_init)(size_t, const void *, size_t *);
 typedef void  (cfunc_destroy)(void *);
-typedef void  (cfunc_cipher)(void *, struct uio *, struct uio *, const void *,
-				int);
+typedef void  (cfunc_cipher)(void *, void *, const void *, size_t,
+    const void *, int);
 
 struct cryptfuncs {
-	const char	 *cf_name;	/* cipher name */
-	cfunc_init	 *cf_init;	/* Initialisation function */
-	cfunc_destroy	 *cf_destroy;	/* destruction function */
-	cfunc_cipher	 *cf_cipher;	/* the cipher itself */
+	const char		 *cf_name;	/* cipher name */
+	cfunc_init		 *cf_init;	/* Initialisation function */
+	cfunc_destroy		 *cf_destroy;	/* destruction function */
+	cfunc_cipher		 *cf_cipher;	/* the cipher itself */
 };
 
 const struct cryptfuncs	*cryptfuncs_find(const char *);

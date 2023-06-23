@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.150 2014/08/12 20:27:10 joerg Exp $	*/
+/*	$NetBSD: trap.c,v 1.163 2020/07/15 08:58:52 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -31,12 +31,17 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.150 2014/08/12 20:27:10 joerg Exp $");
+#define	__UFETCHSTORE_PRIVATE
+#define	__UCAS_PRIVATE
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.163 2020/07/15 08:58:52 rin Exp $");
+
+#ifdef _KERNEL_OPT
 #include "opt_altivec.h"
 #include "opt_ddb.h"
-#include "opt_multiprocessor.h"
+#include "opt_ppcarch.h"
+#endif
 
 #include <sys/param.h>
 
@@ -64,13 +69,10 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.150 2014/08/12 20:27:10 joerg Exp $");
 #include <powerpc/spr.h>
 #include <powerpc/oea/spr.h>
 
-static int emulated_opcode(struct lwp *, struct trapframe *);
+static int emulate_privileged(struct lwp *, struct trapframe *);
 static int fix_unaligned(struct lwp *, struct trapframe *);
 static inline vaddr_t setusr(vaddr_t, size_t *);
 static inline void unsetusr(void);
-
-extern int do_ucas_32(volatile int32_t *, int32_t, int32_t, int32_t *);
-int ucas_32(volatile int32_t *, int32_t, int32_t, int32_t *);
 
 void trap(struct trapframe *);	/* Called from locore / trap_subr */
 /* Why are these not defined in a header? */
@@ -158,7 +160,7 @@ trap(struct trapframe *tf)
 					    trunc_page(va), false)) {
 					return;
 				}
-#if defined(DIAGNOSTIC) && !defined(PPC_OEA64) && !defined (PPC_IBM4XX)
+#if defined(DIAGNOSTIC) && !defined(PPC_OEA64)
 			} else if ((va >> ADDR_SR_SHFT) == USER_SR) {
 				printf("trap: kernel %s DSI trap @ %#lx by %#lx"
 				    " (DSISR %#x): USER_SR unset\n",
@@ -262,18 +264,28 @@ trap(struct trapframe *tf)
 			    tf->tf_dar, tf->tf_srr0, tf->tf_dsisr, rv);
 		}
 		KSI_INIT_TRAP(&ksi);
-		ksi.ksi_signo = SIGSEGV;
 		ksi.ksi_trap = EXC_DSI;
 		ksi.ksi_addr = (void *)tf->tf_dar;
-		ksi.ksi_code =
-		    (tf->tf_dsisr & DSISR_PROTECT ? SEGV_ACCERR : SEGV_MAPERR);
-		if (rv == ENOMEM) {
-			printf("UVM: pid %d.%d (%s), uid %d killed: "
-			       "out of swap\n",
-			       p->p_pid, l->l_lid, p->p_comm,
-			       l->l_cred ?
-			       kauth_cred_geteuid(l->l_cred) : -1);
+vm_signal:
+		switch (rv) {
+		case EINVAL:
+			ksi.ksi_signo = SIGBUS;
+			ksi.ksi_code = BUS_ADRERR;
+			break;
+		case EACCES:
+			ksi.ksi_signo = SIGSEGV;
+			ksi.ksi_code = SEGV_ACCERR;
+			break;
+		case ENOMEM:
 			ksi.ksi_signo = SIGKILL;
+			printf("UVM: pid %d.%d (%s), uid %d killed: "
+			       "out of swap\n", p->p_pid, l->l_lid, p->p_comm,
+			       l->l_cred ? kauth_cred_geteuid(l->l_cred) : -1);
+			break;
+		default:
+			ksi.ksi_signo = SIGSEGV;
+			ksi.ksi_code = SEGV_MAPERR;
+			break;
 		}
 		(*p->p_emul->e_trapsignal)(l, &ksi);
 		break;
@@ -323,12 +335,9 @@ trap(struct trapframe *tf)
 			    tf->tf_srr0, tf->tf_srr1);
 		}
 		KSI_INIT_TRAP(&ksi);
-		ksi.ksi_signo = SIGSEGV;
 		ksi.ksi_trap = EXC_ISI;
 		ksi.ksi_addr = (void *)tf->tf_srr0;
-		ksi.ksi_code = (rv == EACCES ? SEGV_ACCERR : SEGV_MAPERR);
-		(*p->p_emul->e_trapsignal)(l, &ksi);
-		break;
+		goto vm_signal;
 
 	case EXC_FPU|EXC_USER:
 		ci->ci_ev_fpu.ev_count++;
@@ -426,7 +435,7 @@ trap(struct trapframe *tf)
 				ksi.ksi_signo = SIGFPE;
 				ksi.ksi_code = fpu_get_fault_code();
 			} else if (tf->tf_srr1 & 0x40000) {
-				if (emulated_opcode(l, tf)) {
+				if (emulate_privileged(l, tf)) {
 					tf->tf_srr0 += 4;
 					break;
 				}
@@ -477,7 +486,7 @@ trap(struct trapframe *tf)
 	default:
 		printf("trap type %x at %lx\n", type, tf->tf_srr0);
 brain_damage2:
-#ifdef DDBX
+#if defined(DDB) && 0 /* XXX */
 		if (kdb_trap(type, tf))
 			return;
 #endif
@@ -529,6 +538,64 @@ unsetusr(void)
 	    ::	"n"(USER_SR), "r"(EMPTY_SEGMENT));
 }
 #endif
+
+#define	UFETCH(sz)							\
+int									\
+_ufetch_ ## sz(const uint ## sz ## _t *uaddr, uint ## sz ## _t *valp)	\
+{									\
+	struct faultbuf env;						\
+	vaddr_t p;							\
+	size_t seglen;							\
+	int rv;								\
+									\
+	if ((rv = setfault(&env)) != 0) {				\
+		goto out;						\
+	}								\
+	p = setusr((vaddr_t)uaddr, &seglen);				\
+	*valp = *(const volatile uint ## sz ## _t *)p;			\
+ out:									\
+	unsetusr();							\
+	curpcb->pcb_onfault = 0;					\
+	return rv;							\
+}
+
+UFETCH(8)
+UFETCH(16)
+UFETCH(32)
+#ifdef _LP64
+UFETCH(64)
+#endif
+
+#undef UFETCH
+
+#define	USTORE(sz)							\
+int									\
+_ustore_ ## sz(uint ## sz ## _t *uaddr, uint ## sz ## _t val)		\
+{									\
+	struct faultbuf env;						\
+	vaddr_t p;							\
+	size_t seglen;							\
+	int rv;								\
+									\
+	if ((rv = setfault(&env)) != 0) {				\
+		goto out;						\
+	}								\
+	p = setusr((vaddr_t)uaddr, &seglen);				\
+	*(volatile uint ## sz ## _t *)p = val;				\
+ out:									\
+	unsetusr();							\
+	curpcb->pcb_onfault = 0;					\
+	return rv;							\
+}
+
+USTORE(8)
+USTORE(16)
+USTORE(32)
+#ifdef _LP64
+USTORE(64)
+#endif
+
+#undef USTORE
 
 int
 copyin(const void *udaddr, void *kaddr, size_t len)
@@ -615,18 +682,17 @@ kcopy(const void *src, void *dst, size_t len)
 	return rv;
 }
 
+#if 0 /* XXX CPU configuration spaghetti */
 int
-ucas_32(volatile int32_t *uptr, int32_t old, int32_t new, int32_t *ret)
+_ucas_32(volatile uint32_t *uptr, uint32_t old, uint32_t new, uint32_t *ret)
 {
+	extern int do_ucas_32(volatile int32_t *, int32_t, int32_t, int32_t *);
 	vaddr_t uva = (vaddr_t)uptr;
 	vaddr_t p;
 	struct faultbuf env;
 	size_t seglen;
 	int rv;
 
-	if (uva & 3) {
-		return EFAULT;
-	}
 	if ((rv = setfault(&env)) != 0) {
 		unsetusr();
 		goto out;
@@ -640,8 +706,7 @@ out:
 	curpcb->pcb_onfault = 0;
 	return rv;
 }
-__strong_alias(ucas_ptr,ucas_32);
-__strong_alias(ucas_int,ucas_32);
+#endif
 
 int
 badaddr(void *addr, size_t size)
@@ -750,12 +815,12 @@ fix_unaligned(struct lwp *l, struct trapframe *tf)
 				memset(&pcb->pcb_fpu, 0, sizeof(pcb->pcb_fpu));
 				fpu_mark_used(l);
 			} else {
-				fpu_save();
+				fpu_save(l);
 			}
 
-				if (copyin((void *)tf->tf_dar, fpreg,
-				    sizeof(double)) != 0)
-					return -1;
+			if (copyin((void *)tf->tf_dar, fpreg,
+				   sizeof(double)) != 0)
+				return -1;
 
 			if (dsi->flags & DSI_OP_INDEXED) {
 			    /* do nothing */
@@ -796,12 +861,12 @@ fix_unaligned(struct lwp *l, struct trapframe *tf)
 				memset(&pcb->pcb_fpu, 0, sizeof(pcb->pcb_fpu));
 				fpu_mark_used(l);
 			} else {
-				fpu_save();
+				fpu_save(l);
 			}
 
-				if (copyout(fpreg, (void *)tf->tf_dar,
+			if (copyout(fpreg, (void *)tf->tf_dar,
 				    sizeof(double)) != 0)
-					return -1;
+				return -1;
 
 			if (dsi->flags & DSI_OP_INDEXED) {
 			    /* do nothing */
@@ -1011,10 +1076,11 @@ fix_unaligned(struct lwp *l, struct trapframe *tf)
 	return -1;
 }
 
-int
-emulated_opcode(struct lwp *l, struct trapframe *tf)
+static int
+emulate_privileged(struct lwp *l, struct trapframe *tf)
 {
 	uint32_t opcode;
+
 	if (copyin((void *)tf->tf_srr0, &opcode, sizeof(opcode)) != 0)
 		return 0;
 
@@ -1023,53 +1089,7 @@ emulated_opcode(struct lwp *l, struct trapframe *tf)
 		return 1;
 	}
 
-	if (OPC_MFMSR_P(opcode)) {
-		struct pcb * const pcb = lwp_getpcb(l);
-		register_t msr = tf->tf_srr1 & PSL_USERSRR1;
-
-		if (fpu_used_p(l))
-			msr |= PSL_FP;
-		msr |= (pcb->pcb_flags & (PCB_FE0|PCB_FE1));
-#ifdef ALTIVEC
-		if (vec_used_p(l))
-			msr |= PSL_VEC;
-#endif
-		tf->tf_fixreg[OPC_MFMSR_REG(opcode)] = msr;
-		return 1;
-	}
-
-#define	OPC_MTMSR_CODE		0x7c0000a8
-#define	OPC_MTMSR_MASK		0xfc1fffff
-#define	OPC_MTMSR		OPC_MTMSR_CODE
-#define	OPC_MTMSR_REG(o)	(((o) >> 21) & 0x1f)
-#define	OPC_MTMSR_P(o)		(((o) & OPC_MTMSR_MASK) == OPC_MTMSR_CODE)
-
-	if (OPC_MTMSR_P(opcode)) {
-		struct pcb * const pcb = lwp_getpcb(l);
-		register_t msr = tf->tf_fixreg[OPC_MTMSR_REG(opcode)];
-
-		/*
-		 * Don't let the user muck with bits he's not allowed to.
-		 */
-		if (!PSL_USEROK_P(msr))
-			return 0;
-		/*
-		 * For now, only update the FP exception mode.
-		 */
-		pcb->pcb_flags &= ~(PSL_FE0|PSL_FE1);
-		pcb->pcb_flags |= msr & (PSL_FE0|PSL_FE1);
-		/*
-		 * If we think we have the FPU, update SRR1 too.  If we're
-		 * wrong userret() will take care of it.
-		 */
-		if (tf->tf_srr1 & PSL_FP) {
-			tf->tf_srr1 &= ~(PSL_FE0|PSL_FE1);
-			tf->tf_srr1 |= msr & (PSL_FE0|PSL_FE1);
-		}
-		return 1;
-	}
-
-	return 0;
+	return emulate_mxmsr(l, tf, opcode);
 }
 
 int

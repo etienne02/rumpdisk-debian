@@ -1,4 +1,4 @@
-/* $NetBSD: coretemp.c,v 1.35 2016/07/07 06:55:40 msaitoh Exp $ */
+/* $NetBSD: coretemp.c,v 1.37 2020/03/27 09:47:03 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coretemp.c,v 1.35 2016/07/07 06:55:40 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coretemp.c,v 1.37 2020/03/27 09:47:03 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -265,14 +265,25 @@ coretemp_tjmax(device_t self)
 	model = CPUID_TO_MODEL(ci->ci_signature);
 	stepping = CPUID_TO_STEPPING(ci->ci_signature);
 
+	/*
+	 * Use 100C as the initial value.
+	 */
 	sc->sc_tjmax = 100;
 
-	/*
-	 * On some Core 2 CPUs, there is an undocumented
-	 * MSR that tells if Tj(max) is 100 or 85. Note
-	 * that MSR_IA32_EXT_CONFIG is not safe on all CPUs.
-	 */
-	if ((model == 0x0F && stepping >= 2) || (model == 0x0E)) {
+	if ((model == 0x0f && stepping >= 2) || (model == 0x0e)) {
+		/*
+		 * Check MSR_IA32_PLATFORM_ID(0x17) bit 28. It's not documented
+		 * in the datasheet, but the following page describes the
+		 * detail:
+		 *   http://software.intel.com/en-us/articles/
+		 *     mobile-intel-core2-processor-detection-table/
+		 *   Was: http://softwarecommunity.intel.com/Wiki/Mobility/
+		 *     720.htm
+		 */
+		if (rdmsr_safe(MSR_IA32_PLATFORM_ID, &msr) != 0)
+			goto notee;
+		if ((model < 0x17) && ((msr & __BIT(28)) == 0))
+			goto notee;
 
 		if (rdmsr_safe(MSR_IA32_EXT_CONFIG, &msr) == EFAULT)
 			return;
@@ -285,7 +296,14 @@ coretemp_tjmax(device_t self)
 		/* The mobile Penryn family. */
 		sc->sc_tjmax = 105;
 		return;
+	} else if (model == 0x1c) {
+		if (stepping == 0x0a) {
+			/* 45nm Atom D400, N400 and D500 series */
+			sc->sc_tjmax = 100;
+		} else
+			sc->sc_tjmax = 90;
 	} else {
+notee:
 		/*
 		 * Attempt to get Tj(max) from IA32_TEMPERATURE_TARGET,
 		 * but only consider the interval [70, 110] C as valid.

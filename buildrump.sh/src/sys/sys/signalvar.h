@@ -1,4 +1,4 @@
-/*	$NetBSD: signalvar.h,v 1.86 2014/05/15 07:11:30 uebayasi Exp $	*/
+/*	$NetBSD: signalvar.h,v 1.103 2020/11/01 18:51:03 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 1991, 1993
@@ -37,6 +37,11 @@
 #include <sys/siginfo.h>
 #include <sys/queue.h>
 #include <sys/mutex.h>
+#include <sys/stdbool.h>
+
+#ifndef _KERNEL
+#include <string.h>     /* Required for memset(3) and memcpy(3) prototypes */
+#endif /* _KERNEL */
 
 /*
  * Kernel signal definitions and data structures,
@@ -74,12 +79,13 @@ typedef struct sigpend {
  * Process signal state.
  */
 struct sigctx {
-	int		ps_signo;	/* for core dump/debugger XXX */
-	int		ps_code;	/* for core dump/debugger XXX */
-	int		ps_lwp;		/* for core dump/debugger XXX */
+	struct _ksiginfo ps_info;	/* for core dump/debugger XXX */
+	int		 ps_lwp;	/* for core dump/debugger XXX */
+	bool		 ps_faked;	/* for core dump/debugger XXX */
 	void		*ps_sigcode;	/* address of signal trampoline */
-	sigset_t	ps_sigignore;	/* Signals being ignored. */
-	sigset_t	ps_sigcatch;	/* Signals being caught by user. */
+	sigset_t	 ps_sigignore;	/* Signals being ignored. */
+	sigset_t	 ps_sigcatch;	/* Signals being caught by user. */
+	sigset_t	 ps_sigpass;	/* Signals evading the debugger. */
 };
 
 /* additional signal action values, used only temporarily/internally */
@@ -90,6 +96,18 @@ struct sigctx {
  */
 #define SIGACTION(p, sig)	(p->p_sigacts->sa_sigdesc[(sig)].sd_sigact)
 #define	SIGACTION_PS(ps, sig)	(ps->sa_sigdesc[(sig)].sd_sigact)
+
+/*
+ * Copy a sigaction structure without padding.
+ */
+static __inline void
+sigaction_copy(struct sigaction *dst, const struct sigaction *src)
+{
+	memset(dst, 0, sizeof(*dst));
+	dst->_sa_u._sa_handler = src->_sa_u._sa_handler;
+	memcpy(&dst->sa_mask, &src->sa_mask, sizeof(dst->sa_mask));
+	dst->sa_flags = src->sa_flags;
+}
 
 /*
  * Signal properties and actions.
@@ -111,7 +129,7 @@ struct sigctx {
 
 #include <sys/systm.h>			/* for copyin_t/copyout_t */
 
-extern sigset_t contsigmask, sigcantmask;
+extern sigset_t contsigmask, stopsigmask, sigcantmask;
 
 struct vnode;
 struct coredump_iostate;
@@ -120,6 +138,8 @@ struct coredump_iostate;
  * Machine-independent functions:
  */
 int	coredump_netbsd(struct lwp *, struct coredump_iostate *);
+int	coredump_netbsd32(struct lwp *, struct coredump_iostate *);
+int	real_coredump_netbsd(struct lwp *, struct coredump_iostate *);
 void	execsigs(struct proc *);
 int	issignal(struct lwp *);
 void	pgsignal(struct pgrp *, int, int);
@@ -135,6 +155,8 @@ void	killproc(struct proc *, const char *);
 void	setsigvec(struct proc *, int, struct sigaction *);
 int	killpg1(struct lwp *, struct ksiginfo *, int, int);
 void	proc_unstop(struct proc *p);
+void	eventswitch(int, int, int);
+void	eventswitchchild(struct proc *, int, int);
 
 int	sigaction1(struct lwp *, int, const struct sigaction *,
 	    struct sigaction *, const void *, int);
@@ -151,7 +173,7 @@ int	sigget(sigpend_t *, ksiginfo_t *, int, const sigset_t *);
 void	sigclear(sigpend_t *, const sigset_t *, ksiginfoq_t *);
 void	sigclearall(struct proc *, const sigset_t *, ksiginfoq_t *);
 
-void	kpsignal2(struct proc *, ksiginfo_t *);
+int	kpsignal2(struct proc *, ksiginfo_t *);
 
 void	signal_init(void);
 
@@ -183,18 +205,11 @@ void	sendsig_siginfo(const struct ksiginfo *, const sigset_t *);
 extern	struct pool ksiginfo_pool;
 
 /*
- * Modularity / compatibility.
- */
-extern void	(*sendsig_sigcontext_vec)(const struct ksiginfo *,
-					  const sigset_t *);
-extern int	(*coredump_vec)(struct lwp *, const char *);
-
-/*
  * firstsig:
  *
  * 	Return the first signal in a signal set.
  */
-static inline int
+static __inline int
 firstsig(const sigset_t *ss)
 {
 	int sig;
@@ -220,13 +235,13 @@ firstsig(const sigset_t *ss)
 	return (0);
 }
 
-static inline void
+static __inline void
 ksiginfo_queue_init(ksiginfoq_t *kq)
 {
 	TAILQ_INIT(kq);
 }
 
-static inline void
+static __inline void
 ksiginfo_queue_drain(ksiginfoq_t *kq)
 {
 	if (!TAILQ_EMPTY(kq))

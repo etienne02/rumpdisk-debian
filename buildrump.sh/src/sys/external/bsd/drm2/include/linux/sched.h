@@ -1,4 +1,4 @@
-/*	$NetBSD: sched.h,v 1.5 2014/11/08 19:27:40 nonaka Exp $	*/
+/*	$NetBSD: sched.h,v 1.15 2020/07/03 16:23:02 maxv Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,7 +36,14 @@
 #include <sys/kernel.h>
 #include <sys/proc.h>
 
+#include <asm/param.h>
+#include <asm/barrier.h>
+#include <asm/processor.h>
+#include <linux/errno.h>
+
 #define	TASK_COMM_LEN	MAXCOMLEN
+
+#define	MAX_SCHEDULE_TIMEOUT	(INT_MAX/2)	/* paranoia */
 
 #define	current	curproc
 
@@ -53,17 +60,34 @@ schedule_timeout_uninterruptible(long timeout)
 	int start, end;
 
 	if (cold) {
-		DELAY(timeout);
+		unsigned us;
+		if (hz <= 1000) {
+			unsigned ms = hztoms(MIN((unsigned long)timeout,
+			    mstohz(INT_MAX)));
+			us = MIN(ms, INT_MAX/1000)*1000;
+		} else if (hz <= 1000000) {
+			us = MIN(timeout, (INT_MAX/1000000)/hz)*hz*1000000;
+		} else {
+			us = timeout/(1000000/hz);
+		}
+		DELAY(us);
 		return 0;
 	}
 
-	start = hardclock_ticks;
-	/* XXX Integer truncation...not likely to matter here.  */
-	(void)kpause("loonix", false /*!intr*/, timeout, NULL);
-	end = hardclock_ticks;
+	start = getticks();
+	/* Caller is expected to loop anyway, so no harm in truncating.  */
+	(void)kpause("loonix", false /*!intr*/, MIN(timeout, INT_MAX), NULL);
+	end = getticks();
 
 	remain = timeout - (end - start);
 	return remain > 0 ? remain : 0;
+}
+
+static inline void
+cond_resched(void)
+{
+
+	preempt_point();
 }
 
 #endif  /* _LINUX_SCHED_H_ */

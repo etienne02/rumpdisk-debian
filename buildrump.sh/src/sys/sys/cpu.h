@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.41 2014/05/19 20:39:23 rmind Exp $	*/
+/*	$NetBSD: cpu.h,v 1.51 2020/06/15 18:04:42 ad Exp $	*/
 
 /*-
  * Copyright (c) 2007 YAMAMOTO Takashi,
@@ -50,19 +50,18 @@ void cpu_idle(void);
 #endif
 #endif
 
-/*
- * cpu_need_resched() must always be called with the target CPU
- * locked (via spc_lock() or another route), unless called locally.
- * If called locally, the caller need only be at IPL_SCHED.
- */
 #ifndef cpu_need_resched
-void cpu_need_resched(struct cpu_info *, int);
+void cpu_need_resched(struct cpu_info *, struct lwp *, int);
 #endif
 
-#ifndef cpu_did_resched
-#define	cpu_did_resched(l)	/* nothing */
-#endif
-
+/*
+ * CPU_INFO_ITERATOR() may be supplied by machine dependent code as it
+ * controls how the cpu_info structures are allocated.
+ *
+ * This macro must always iterate just the boot-CPU when the system has
+ * not attached any cpus via mi_cpu_attach() yet, and the "ncpu" variable
+ * is zero.
+ */
 #ifndef CPU_INFO_ITERATOR
 #define	CPU_INFO_ITERATOR		int
 #define	CPU_INFO_FOREACH(cii, ci)	\
@@ -91,6 +90,9 @@ bool	cpu_kpreempt_disabled(void);
 int	cpu_lwp_setprivate(struct lwp *, void *);
 void	cpu_intr_redistribute(void);
 u_int	cpu_intr_count(struct cpu_info *);
+void	cpu_topology_set(struct cpu_info *, u_int, u_int, u_int, u_int);
+void	cpu_topology_setspeed(struct cpu_info *, bool);
+void	cpu_topology_init(void);
 #endif
 
 #ifdef _KERNEL
@@ -100,13 +102,13 @@ extern struct cpu_info **cpu_infos;
 extern kcpuset_t *kcpuset_attached;
 extern kcpuset_t *kcpuset_running;
 
-static inline u_int
+static __inline u_int
 cpu_index(const struct cpu_info *ci)
 {
 	return ci->ci_index;
 }
 
-static inline char *
+static __inline char *
 cpu_name(struct cpu_info *ci)
 {
 	return ci->ci_data.cpu_name;
@@ -132,9 +134,13 @@ int cpu_ucode_md_open(firmware_handle_t *, int, const char *);
 #endif
 #endif	/* !_LOCORE */
 
-/* flags for cpu_need_resched */
-#define	RESCHED_LAZY		0x01	/* request a ctx switch */
-#define	RESCHED_IMMED		0x02	/* request an immediate ctx switch */
-#define	RESCHED_KPREEMPT	0x04	/* request in-kernel preemption */
+/*
+ * Flags for cpu_need_resched.  RESCHED_KPREEMPT must be greater than
+ * RESCHED_UPREEMPT; see sched_resched_cpu().
+ */
+#define	RESCHED_REMOTE		0x01	/* request is for a remote CPU */
+#define	RESCHED_IDLE		0x02	/* idle LWP observed */
+#define	RESCHED_UPREEMPT	0x04	/* immediate user ctx switch */
+#define	RESCHED_KPREEMPT	0x08	/* immediate kernel ctx switch */
 
 #endif	/* !_SYS_CPU_H_ */

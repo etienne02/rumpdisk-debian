@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -124,6 +124,61 @@ memcmp (
 
     return ((Count == ACPI_SIZE_MAX) ? 0 : ((unsigned char) *Buffer1 -
         (unsigned char) *Buffer2));
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    memmove
+ *
+ * PARAMETERS:  Dest        - Target of the copy
+ *              Src         - Source buffer to copy
+ *              Count       - Number of bytes to copy
+ *
+ * RETURN:      Dest
+ *
+ * DESCRIPTION: Copy arbitrary bytes of memory with respect to the overlapping
+ *
+ ******************************************************************************/
+
+void *
+memmove (
+    void                    *Dest,
+    const void              *Src,
+    ACPI_SIZE               Count)
+{
+    char                    *New = (char *) Dest;
+    char                    *Old = (char *) Src;
+
+
+    if (Old > New)
+    {
+        /* Copy from the beginning */
+
+        while (Count)
+        {
+            *New = *Old;
+            New++;
+            Old++;
+            Count--;
+        }
+    }
+    else if (Old < New)
+    {
+        /* Copy from the end */
+
+        New = New + Count - 1;
+        Old = Old + Count - 1;
+        while (Count)
+        {
+            *New = *Old;
+            New--;
+            Old--;
+            Count--;
+        }
+    }
+
+    return (Dest);
 }
 
 
@@ -226,6 +281,93 @@ strlen (
     }
 
     return (Length);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    strpbrk
+ *
+ * PARAMETERS:  String              - Null terminated string
+ *              Delimiters          - Delimiters to match
+ *
+ * RETURN:      The first occurrence in the string of any of the bytes in the
+ *              delimiters
+ *
+ * DESCRIPTION: Search a string for any of a set of the delimiters
+ *
+ ******************************************************************************/
+
+char *
+strpbrk (
+    const char              *String,
+    const char              *Delimiters)
+{
+    const char              *Delimiter;
+
+
+    for ( ; *String != '\0'; ++String)
+    {
+        for (Delimiter = Delimiters; *Delimiter != '\0'; Delimiter++)
+        {
+            if (*String == *Delimiter)
+            {
+                return (ACPI_CAST_PTR (char, String));
+            }
+        }
+    }
+
+    return (NULL);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    strtok
+ *
+ * PARAMETERS:  String              - Null terminated string
+ *              Delimiters          - Delimiters to match
+ *
+ * RETURN:      Pointer to the next token
+ *
+ * DESCRIPTION: Split string into tokens
+ *
+ ******************************************************************************/
+
+char*
+strtok (
+    char                    *String,
+    const char              *Delimiters)
+{
+    char                    *Begin = String;
+    static char             *SavedPtr;
+
+
+    if (Begin == NULL)
+    {
+        if (SavedPtr == NULL)
+        {
+            return (NULL);
+        }
+        Begin = SavedPtr;
+    }
+
+    SavedPtr = strpbrk (Begin, Delimiters);
+    while (SavedPtr == Begin)
+    {
+        *Begin++ = '\0';
+        SavedPtr = strpbrk (Begin, Delimiters);
+    }
+
+    if (SavedPtr)
+    {
+        *SavedPtr++ = '\0';
+        return (Begin);
+    }
+    else
+    {
+        return (NULL);
+    }
 }
 
 
@@ -512,7 +654,7 @@ strstr (
     char                    *String1,
     char                    *String2)
 {
-    UINT32                  Length;
+    ACPI_SIZE               Length;
 
 
     Length = strlen (String2);
@@ -539,7 +681,7 @@ strstr (
  * FUNCTION:    strtoul
  *
  * PARAMETERS:  String          - Null terminated string
- *              Terminater      - Where a pointer to the terminating byte is
+ *              Terminator      - Where a pointer to the terminating byte is
  *                                returned
  *              Base            - Radix of the string
  *

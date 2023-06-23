@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.host.mk,v 1.3 2016/02/20 15:18:46 christos Exp $
+#	$NetBSD: bsd.host.mk,v 1.5 2020/08/09 21:13:38 christos Exp $
 
 .if !defined(_BSD_HOST_MK_)
 _BSD_HOST_MK_=1
@@ -9,11 +9,16 @@ HOST_DBG?= -g
 HOST_DBG?= -O
 .endif
 
+.if ${MKDTRACE:Uno} != "no"
+# disable compiler options that interfere with dtrace
+HOST_DTRACE_OPTS?=	-fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-ipa-sra
+.endif
+
 # Helpers for cross-compiling
 HOST_CC?=	cc
 HOST_CFLAGS?=	${HOST_DBG}
-HOST_COMPILE.c?=${HOST_CC} ${HOST_CFLAGS} ${HOST_CPPFLAGS} -c
-HOST_COMPILE.cc?=      ${HOST_CXX} ${HOST_CXXFLAGS} ${HOST_CPPFLAGS} -c
+HOST_COMPILE.c?=${HOST_CC} ${HOST_CFLAGS} ${HOST_DTRACE_OPTS} ${HOST_CPPFLAGS} -c
+HOST_COMPILE.cc?=      ${HOST_CXX} ${HOST_CXXFLAGS} ${HOST_DTRACE_OPTS} ${HOST_CPPFLAGS} -c
 HOST_LINK.cc?=  ${HOST_CXX} ${HOST_CXXFLAGS} ${HOST_CPPFLAGS} ${HOST_LDFLAGS}
 .if defined(HOSTPROG_CXX)
 HOST_LINK.c?=   ${HOST_LINK.cc}
@@ -58,6 +63,10 @@ HOST_MKDEPCXX?=	${TOOLDIR}/bin/${_TOOL_PREFIX}host-mkdep
 .else
 HOST_MKDEP?=	CC=${HOST_CC:Q} mkdep
 HOST_MKDEPCXX?=	CC=${HOST_CXX:Q} mkdep
+.endif
+
+.if ${HOST_OSTYPE:MLinux*}
+HOST_CPPFLAGS+=-D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
 .endif
 
 .if ${NEED_OWN_INSTALL_TARGET} != "no"

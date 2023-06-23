@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.4 2015/08/20 11:05:01 christos Exp $
+# $NetBSD: Makefile,v 1.15 2020/10/18 19:56:42 christos Exp $
 
 .include "../Makefile.inc"
 
@@ -19,5 +19,14 @@ SRCS+=	pf_table.c
 SRCS+=	tcp_rndiss.c
 
 CPPFLAGS+=	-I${S}/dist/pf -I${S} -DINET6 -DINET
+
+WARNS=	3
+
+.if defined(HAVE_GCC) && ${HAVE_GCC} >= 7 && ${ACTIVE_CC} == "gcc"
+COPTS.pf.c+=	-Wno-error=implicit-fallthrough
+.endif
+COPTS.pf.c+=   ${NO_ADDR_OF_PACKED_MEMBER}
+COPTS.pf_norm.c+=   ${NO_ADDR_OF_PACKED_MEMBER}
+COPTS.pf_table.c+=   ${NO_ADDR_OF_PACKED_MEMBER}
 
 .include <bsd.kmodule.mk>

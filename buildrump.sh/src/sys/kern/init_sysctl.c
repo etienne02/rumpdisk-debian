@@ -1,4 +1,4 @@
-/*	$NetBSD: init_sysctl.c,v 1.211 2016/05/31 05:44:19 pgoyette Exp $ */
+/*	$NetBSD: init_sysctl.c,v 1.227 2020/09/20 12:51:57 skrll Exp $ */
 
 /*-
  * Copyright (c) 2003, 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -30,43 +30,43 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.211 2016/05/31 05:44:19 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: init_sysctl.c,v 1.227 2020/09/20 12:51:57 skrll Exp $");
 
 #include "opt_sysv.h"
 #include "opt_compat_netbsd.h"
 #include "opt_modular.h"
+#include "opt_gprof.h"
 #include "pty.h"
 
-#include <sys/types.h>
 #include <sys/param.h>
-#include <sys/sysctl.h>
-#include <sys/cpu.h>
-#include <sys/errno.h>
-#include <sys/systm.h>
-#include <sys/kernel.h>
-#include <sys/unistd.h>
-#include <sys/disklabel.h>
+#include <sys/types.h>
+
+#include <dev/cons.h>
+#include <sys/conf.h>
 #include <sys/cprng.h>
-#include <sys/vnode.h>
+#include <sys/cpu.h>
+#include <sys/device.h>
+#include <sys/disklabel.h>
+#include <sys/errno.h>
+#include <sys/exec.h>
+#include <sys/filedesc.h>
+#include <sys/file.h>
+#include <sys/kauth.h>
+#include <sys/kernel.h>
+#include <sys/kmem.h>
+#include <sys/ktrace.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
-#include <dev/cons.h>
-#include <sys/socketvar.h>
-#include <sys/file.h>
-#include <sys/filedesc.h>
-#include <sys/tty.h>
-#include <sys/kmem.h>
 #include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
-#include <sys/exec.h>
-#include <sys/conf.h>
-#include <sys/device.h>
+#include <sys/socketvar.h>
 #include <sys/stat.h>
-#include <sys/kauth.h>
-#include <sys/ktrace.h>
-
-#include <sys/cpu.h>
+#include <sys/sysctl.h>
+#include <sys/systm.h>
+#include <sys/tty.h>
+#include <sys/unistd.h>
+#include <sys/vnode_impl.h>     /* For vfs_drainvnodes(). */
 
 int security_setidcore_dump;
 char security_setidcore_path[MAXPATHLEN] = "/var/crash/%n.core";
@@ -107,11 +107,9 @@ dcopyout(struct lwp *l, const void *kaddr, void *uaddr, size_t len)
 	return error;
 }
 
-#ifdef DIAGNOSTIC
-static int sysctl_kern_trigger_panic(SYSCTLFN_PROTO);
-#endif
 static int sysctl_kern_maxvnodes(SYSCTLFN_PROTO);
 static int sysctl_kern_messages(SYSCTLFN_PROTO);
+static int sysctl_kern_boottime(SYSCTLFN_PROTO);
 static int sysctl_kern_rtc_offset(SYSCTLFN_PROTO);
 static int sysctl_kern_maxproc(SYSCTLFN_PROTO);
 static int sysctl_kern_hostid(SYSCTLFN_PROTO);
@@ -237,7 +235,7 @@ SYSCTL_SETUP(sysctl_kern_setup, "sysctl kern subtree setup")
 		       CTLFLAG_PERMANENT,
 		       CTLTYPE_STRUCT, "boottime",
 		       SYSCTL_DESCR("System boot time"),
-		       NULL, 0, &boottime, sizeof(boottime),
+		       sysctl_kern_boottime, 0, NULL, sizeof(struct timespec),
 		       CTL_KERN, KERN_BOOTTIME, CTL_EOL);
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_IMMEDIATE,
@@ -498,14 +496,6 @@ SYSCTL_SETUP(sysctl_kern_setup, "sysctl kern subtree setup")
 		       SYSCTL_DESCR("Perform a crash dump on system panic"),
 		       NULL, 0, &dumponpanic, 0,
 		       CTL_KERN, KERN_DUMP_ON_PANIC, CTL_EOL);
-#ifdef DIAGNOSTIC
-	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
-		       CTLTYPE_INT, "panic_now",
-		       SYSCTL_DESCR("Trigger a panic"),
-		       sysctl_kern_trigger_panic, 0, NULL, 0,
-		       CTL_KERN, CTL_CREATE, CTL_EOL);
-#endif
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT,
 		       CTLTYPE_INT, "root_partition",
@@ -631,7 +621,7 @@ struct ctldebug /* debug0, */ /* debug1, */ debug2, debug3, debug4;
 struct ctldebug debug5, debug6, debug7, debug8, debug9;
 struct ctldebug debug10, debug11, debug12, debug13, debug14;
 struct ctldebug debug15, debug16, debug17, debug18, debug19;
-static struct ctldebug *debugvars[CTL_DEBUG_MAXID] = {
+static struct ctldebug *debugvars[] = {
 	&debug0, &debug1, &debug2, &debug3, &debug4,
 	&debug5, &debug6, &debug7, &debug8, &debug9,
 	&debug10, &debug11, &debug12, &debug13, &debug14,
@@ -665,7 +655,7 @@ SYSCTL_SETUP(sysctl_debug_setup, "sysctl debug subtree setup")
 
 	 */
 
-	for (i = 0; i < CTL_DEBUG_MAXID; i++) {
+	for (i = 0; i < __arraycount(debugvars); i++) {
 		cdp = debugvars[i];
 		if (cdp->debugname == NULL || cdp->debugvar == NULL)
 			continue;
@@ -702,27 +692,6 @@ SYSCTL_SETUP(sysctl_debug_setup, "sysctl debug subtree setup")
  * ********************************************************************
  */
 
-#ifdef DIAGNOSTIC
-static int
-sysctl_kern_trigger_panic(SYSCTLFN_ARGS)
-{
-	int newtrig, error;
-	struct sysctlnode node;
-
-	newtrig = 0;
-	node = *rnode;
-	node.sysctl_data = &newtrig;
-	error = sysctl_lookup(SYSCTLFN_CALL(&node));
-	if (error || newp == NULL)
-		return (error);
-
-	if (newtrig != 0)
-		panic("Panic triggered");
-
-	return (error);
-}
-#endif
-
 /*
  * sysctl helper routine for kern.maxvnodes.  Drain vnodes if
  * new value is lower than desiredvnodes and then calls reinit
@@ -756,13 +725,12 @@ sysctl_kern_maxvnodes(SYSCTLFN_ARGS)
 
 	old_vnodes = desiredvnodes;
 	desiredvnodes = new_vnodes;
-	error = vfs_drainvnodes(new_vnodes);
+	error = vfs_drainvnodes();
 	if (error) {
 		desiredvnodes = old_vnodes;
 		return (error);
 	}
 	vfs_reinit();
-	nchreinit();
 
 	return (0);
 }
@@ -797,7 +765,7 @@ sysctl_kern_messages(SYSCTLFN_ARGS)
 	case AB_NORMAL:
 	default:
 		messageverbose = 2;
-}
+	}
 
 	node = *rnode;
 	node.sysctl_data = &messageverbose;
@@ -831,6 +799,21 @@ sysctl_kern_messages(SYSCTLFN_ARGS)
 	boothowto = newboothowto;
 
 	return (0);
+}
+
+/*
+ * sysctl helper routine for the kern.boottime node
+ */
+static int
+sysctl_kern_boottime(SYSCTLFN_ARGS)
+{
+	struct sysctlnode node;
+	struct timespec ts;
+
+	getnanoboottime(&ts);
+	node = *rnode;
+	node.sysctl_data = &ts;
+	return (sysctl_lookup(SYSCTLFN_CALL(&node)));
 }
 
 /*
@@ -889,6 +872,13 @@ sysctl_kern_maxproc(SYSCTLFN_ARGS)
 	if (nmaxproc > cpu_maxproc())
 		return (EINVAL);
 #endif
+	error = 0;
+#ifdef __HAVE_MAXPROC_HOOK
+	error = cpu_maxproc_hook(nmaxproc);
+#endif
+	if (error)
+		return error;
+
 	maxproc = nmaxproc;
 
 	return (0);
@@ -1000,8 +990,6 @@ sysctl_kern_cptime(SYSCTLFN_ARGS)
 	}
 
 	cp_time = kmem_alloc(node.sysctl_size, KM_SLEEP);
-	if (cp_time == NULL)
-		return (ENOMEM);
 	node.sysctl_data = cp_time;
 	memset(cp_time, 0, node.sysctl_size);
 
@@ -1092,13 +1080,13 @@ sysctl_kern_lwp(SYSCTLFN_ARGS)
 
 	sysctl_unlock();
 	if (pid == -1) {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		PROCLIST_FOREACH(p, &allproc) {
 			/* Grab a hold on the process. */
 			if (!rw_tryenter(&p->p_reflock, RW_READER)) {
 				continue;
 			}
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 
 			mutex_enter(p->p_lock);
 			LIST_FOREACH(l2, &p->p_lwps, l_sibling) {
@@ -1114,7 +1102,7 @@ sysctl_kern_lwp(SYSCTLFN_ARGS)
 					 * struct kinfo_proc2.
 					 */
 					error = dcopyout(l, &klwp, dp,
-					    min(sizeof(klwp), elem_size));
+					    uimin(sizeof(klwp), elem_size));
 					if (error) {
 						rw_exit(&p->p_reflock);
 						goto cleanup;
@@ -1140,21 +1128,21 @@ sysctl_kern_lwp(SYSCTLFN_ARGS)
 			mutex_exit(p->p_lock);
 
 			/* Drop reference to process. */
-			mutex_enter(proc_lock);
+			mutex_enter(&proc_lock);
 			rw_exit(&p->p_reflock);
 		}
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 	} else {
-		mutex_enter(proc_lock);
+		mutex_enter(&proc_lock);
 		p = proc_find(pid);
 		if (p == NULL) {
 			error = ESRCH;
-			mutex_exit(proc_lock);
+			mutex_exit(&proc_lock);
 			goto cleanup;
 		}
 		/* Grab a hold on the process. */
 		gotit = rw_tryenter(&p->p_reflock, RW_READER);
-		mutex_exit(proc_lock);
+		mutex_exit(&proc_lock);
 		if (!gotit) {
 			error = ESRCH;
 			goto cleanup;
@@ -1172,7 +1160,7 @@ sysctl_kern_lwp(SYSCTLFN_ARGS)
 				 * the size of a struct kinfo_proc2.
 				 */
 				error = dcopyout(l, &klwp, dp,
-				    min(sizeof(klwp), elem_size));
+				    uimin(sizeof(klwp), elem_size));
 				if (error) {
 					rw_exit(&p->p_reflock);
 					goto cleanup;
@@ -1409,8 +1397,6 @@ sysctl_kern_cpid(SYSCTLFN_ARGS)
 	}
 
 	cp_id = kmem_alloc(node.sysctl_size, KM_SLEEP);
-	if (cp_id == NULL)
-		return (ENOMEM);
 	node.sysctl_data = cp_id;
 	memset(cp_id, 0, node.sysctl_size);
 
@@ -1563,6 +1549,7 @@ sysctl_consdev(SYSCTLFN_ARGS)
 static void
 fill_lwp(struct lwp *l, struct kinfo_lwp *kl)
 {
+	const bool allowaddr = get_expose_address(curproc);
 	struct proc *p = l->l_proc;
 	struct timeval tv;
 
@@ -1572,8 +1559,8 @@ fill_lwp(struct lwp *l, struct kinfo_lwp *kl)
 
 	kl->l_forw = 0;
 	kl->l_back = 0;
-	kl->l_laddr = PTRTOUINT64(l);
-	kl->l_addr = PTRTOUINT64(l->l_addr);
+	COND_SET_VALUE(kl->l_laddr, PTRTOUINT64(l), allowaddr);
+	COND_SET_VALUE(kl->l_addr, PTRTOUINT64(l->l_addr), allowaddr);
 	kl->l_stat = l->l_stat;
 	kl->l_lid = l->l_lid;
 	kl->l_flag = L_INMEM;
@@ -1590,7 +1577,7 @@ fill_lwp(struct lwp *l, struct kinfo_lwp *kl)
 	kl->l_usrpri = l->l_priority;
 	if (l->l_wchan)
 		strncpy(kl->l_wmesg, l->l_wmesg, sizeof(kl->l_wmesg));
-	kl->l_wchan = PTRTOUINT64(l->l_wchan);
+	COND_SET_VALUE(kl->l_wchan, PTRTOUINT64(l->l_wchan), allowaddr);
 	kl->l_cpuid = cpu_index(l->l_cpu);
 	bintime2timeval(&l->l_rtime, &tv);
 	kl->l_rtime_sec = tv.tv_sec;

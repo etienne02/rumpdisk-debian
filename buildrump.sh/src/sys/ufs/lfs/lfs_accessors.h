@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_accessors.h,v 1.46 2016/06/20 03:25:46 dholland Exp $	*/
+/*	$NetBSD: lfs_accessors.h,v 1.50 2020/09/07 02:28:12 riastradh Exp $	*/
 
 /*  from NetBSD: lfs.h,v 1.165 2015/07/24 06:59:32 dholland Exp  */
 /*  from NetBSD: dinode.h,v 1.25 2016/01/22 23:06:10 dholland Exp  */
@@ -218,6 +218,31 @@
 
 
 /*
+ * Suppress spurious warnings -- we use
+ *
+ *	type *foo = &obj->member;
+ *
+ * in macros to verify that obj->member has the right type.  When the
+ * object is a packed structure with misaligned members, this causes
+ * some compiles to squeal that taking the address might lead to
+ * undefined behaviour later on -- which is helpful in general, not
+ * relevant in this case, because we don't do anything with foo
+ * afterward; we only declare it to get a type check and then we
+ * discard it.
+ */
+#ifdef __GNUC__
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Waddress-of-packed-member"
+#elif __GNUC_PREREQ__(9,0)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+#endif
+
+
+
+/*
  * directories
  */
 
@@ -274,17 +299,7 @@ static __inline uint64_t
 lfs_dir_getino(const STRUCT_LFS *fs, const LFS_DIRHEADER *dh)
 {
 	if (fs->lfs_is64) {
-		uint64_t ino;
-
-		/*
-		 * XXX we can probably write this in a way that's both
-		 * still legal and generates better code.
-		 */
-		memcpy(&ino, &dh->u_64.dh_inoA, sizeof(dh->u_64.dh_inoA));
-		memcpy((char *)&ino + sizeof(dh->u_64.dh_inoA),
-		       &dh->u_64.dh_inoB,
-		       sizeof(dh->u_64.dh_inoB));
-		return LFS_SWAP_uint64_t(fs, ino);
+		return LFS_SWAP_uint64_t(fs, dh->u_64.dh_ino);
 	} else {
 		return LFS_SWAP_uint32_t(fs, dh->u_32.dh_ino);
 	}
@@ -331,16 +346,7 @@ static __inline void
 lfs_dir_setino(STRUCT_LFS *fs, LFS_DIRHEADER *dh, uint64_t ino)
 {
 	if (fs->lfs_is64) {
-
-		ino = LFS_SWAP_uint64_t(fs, ino);
-		/*
-		 * XXX we can probably write this in a way that's both
-		 * still legal and generates better code.
-		 */
-		memcpy(&dh->u_64.dh_inoA, &ino, sizeof(dh->u_64.dh_inoA));
-		memcpy(&dh->u_64.dh_inoB,
-		       (char *)&ino + sizeof(dh->u_64.dh_inoA),
-		       sizeof(dh->u_64.dh_inoB));
+		dh->u_64.dh_ino = LFS_SWAP_uint64_t(fs, ino);
 	} else {
 		dh->u_32.dh_ino = LFS_SWAP_uint32_t(fs, ino);
 	}
@@ -504,10 +510,10 @@ lfs_dino_getdb(STRUCT_LFS *fs, union lfs_dinode *dip, unsigned ix)
 {
 	KASSERT(ix < ULFS_NDADDR);
 	if (fs->lfs_is64) {
-		return LFS_SWAP_uint64_t(fs, dip->u_64.di_db[ix]);
+		return LFS_SWAP_int64_t(fs, dip->u_64.di_db[ix]);
 	} else {
 		/* note: this must sign-extend or UNWRITTEN gets trashed */
-		return (int32_t)LFS_SWAP_uint32_t(fs, dip->u_32.di_db[ix]);
+		return (int32_t)LFS_SWAP_int32_t(fs, dip->u_32.di_db[ix]);
 	}
 }
 
@@ -516,10 +522,10 @@ lfs_dino_getib(STRUCT_LFS *fs, union lfs_dinode *dip, unsigned ix)
 {
 	KASSERT(ix < ULFS_NIADDR);
 	if (fs->lfs_is64) {
-		return LFS_SWAP_uint64_t(fs, dip->u_64.di_ib[ix]);
+		return LFS_SWAP_int64_t(fs, dip->u_64.di_ib[ix]);
 	} else {
 		/* note: this must sign-extend or UNWRITTEN gets trashed */
-		return (int32_t)LFS_SWAP_uint32_t(fs, dip->u_32.di_ib[ix]);
+		return (int32_t)LFS_SWAP_int32_t(fs, dip->u_32.di_ib[ix]);
 	}
 }
 
@@ -528,7 +534,7 @@ lfs_dino_setdb(STRUCT_LFS *fs, union lfs_dinode *dip, unsigned ix, daddr_t val)
 {
 	KASSERT(ix < ULFS_NDADDR);
 	if (fs->lfs_is64) {
-		dip->u_64.di_db[ix] = LFS_SWAP_uint64_t(fs, val);
+		dip->u_64.di_db[ix] = LFS_SWAP_int64_t(fs, val);
 	} else {
 		dip->u_32.di_db[ix] = LFS_SWAP_uint32_t(fs, val);
 	}
@@ -539,7 +545,7 @@ lfs_dino_setib(STRUCT_LFS *fs, union lfs_dinode *dip, unsigned ix, daddr_t val)
 {
 	KASSERT(ix < ULFS_NIADDR);
 	if (fs->lfs_is64) {
-		dip->u_64.di_ib[ix] = LFS_SWAP_uint64_t(fs, val);
+		dip->u_64.di_ib[ix] = LFS_SWAP_int64_t(fs, val);
 	} else {
 		dip->u_32.di_ib[ix] = LFS_SWAP_uint32_t(fs, val);
 	}
@@ -619,31 +625,31 @@ lfs_iblock_set(STRUCT_LFS *fs, void *block, unsigned ix, daddr_t val)
  * "struct inode" associated definitions
  */
 
-#define LFS_SET_UINO(ip, flags) do {					\
-	if (((flags) & IN_ACCESSED) && !((ip)->i_flag & IN_ACCESSED))	\
+#define LFS_SET_UINO(ip, states) do {					\
+	if (((states) & IN_ACCESSED) && !((ip)->i_state & IN_ACCESSED))	\
 		lfs_sb_adduinodes((ip)->i_lfs, 1);			\
-	if (((flags) & IN_CLEANING) && !((ip)->i_flag & IN_CLEANING))	\
+	if (((states) & IN_CLEANING) && !((ip)->i_state & IN_CLEANING))	\
 		lfs_sb_adduinodes((ip)->i_lfs, 1);			\
-	if (((flags) & IN_MODIFIED) && !((ip)->i_flag & IN_MODIFIED))	\
+	if (((states) & IN_MODIFIED) && !((ip)->i_state & IN_MODIFIED))	\
 		lfs_sb_adduinodes((ip)->i_lfs, 1);			\
-	(ip)->i_flag |= (flags);					\
+	(ip)->i_state |= (states);					\
 } while (0)
 
-#define LFS_CLR_UINO(ip, flags) do {					\
-	if (((flags) & IN_ACCESSED) && ((ip)->i_flag & IN_ACCESSED))	\
+#define LFS_CLR_UINO(ip, states) do {					\
+	if (((states) & IN_ACCESSED) && ((ip)->i_state & IN_ACCESSED))	\
 		lfs_sb_subuinodes((ip)->i_lfs, 1);			\
-	if (((flags) & IN_CLEANING) && ((ip)->i_flag & IN_CLEANING))	\
+	if (((states) & IN_CLEANING) && ((ip)->i_state & IN_CLEANING))	\
 		lfs_sb_subuinodes((ip)->i_lfs, 1);			\
-	if (((flags) & IN_MODIFIED) && ((ip)->i_flag & IN_MODIFIED))	\
+	if (((states) & IN_MODIFIED) && ((ip)->i_state & IN_MODIFIED))	\
 		lfs_sb_subuinodes((ip)->i_lfs, 1);			\
-	(ip)->i_flag &= ~(flags);					\
+	(ip)->i_state &= ~(states);					\
 	if (lfs_sb_getuinodes((ip)->i_lfs) < 0) {			\
 		panic("lfs_uinodes < 0");				\
 	}								\
 } while (0)
 
 #define LFS_ITIMES(ip, acc, mod, cre) \
-	while ((ip)->i_flag & (IN_ACCESS | IN_CHANGE | IN_UPDATE | IN_MODIFY)) \
+	while ((ip)->i_state & (IN_ACCESS | IN_CHANGE | IN_UPDATE | IN_MODIFY)) \
 		lfs_itimes(ip, acc, mod, cre)
 
 /*
@@ -672,7 +678,7 @@ lfs_iblock_set(STRUCT_LFS *fs, void *block, unsigned ix, daddr_t val)
 #define	LFS_SEGENTRY(SP, F, IN, BP) do {				\
 	int _e;								\
 	SHARE_IFLOCK(F);						\
-	VTOI((F)->lfs_ivnode)->i_flag |= IN_ACCESS;			\
+	VTOI((F)->lfs_ivnode)->i_state |= IN_ACCESS;			\
 	if ((_e = bread((F)->lfs_ivnode,				\
 	    ((IN) / lfs_sb_getsepb(F)) + lfs_sb_getcleansz(F),		\
 	    lfs_sb_getbsize(F), 0, &(BP))) != 0)			\
@@ -825,7 +831,7 @@ lfs_ii_setblock(STRUCT_LFS *fs, IINFO *iip, uint64_t block)
 #define	LFS_IENTRY(IP, F, IN, BP) do {					\
 	int _e;								\
 	SHARE_IFLOCK(F);						\
-	VTOI((F)->lfs_ivnode)->i_flag |= IN_ACCESS;			\
+	VTOI((F)->lfs_ivnode)->i_state |= IN_ACCESS;			\
 	if ((_e = bread((F)->lfs_ivnode,				\
 	(IN) / lfs_sb_getifpb(F) + lfs_sb_getcleansz(F) + lfs_sb_getsegtabsz(F), \
 	lfs_sb_getbsize(F), 0, &(BP))) != 0)				\
@@ -941,7 +947,7 @@ lfs_ci_shiftdirtytoclean(STRUCT_LFS *fs, CLEANERINFO *cip, unsigned num)
 #define LFS_CLEANERINFO(CP, F, BP) do {					\
 	int _e;								\
 	SHARE_IFLOCK(F);						\
-	VTOI((F)->lfs_ivnode)->i_flag |= IN_ACCESS;			\
+	VTOI((F)->lfs_ivnode)->i_state |= IN_ACCESS;			\
 	_e = bread((F)->lfs_ivnode,					\
 	    (daddr_t)0, lfs_sb_getbsize(F), 0, &(BP));			\
 	if (_e)								\
@@ -1526,6 +1532,17 @@ lfs_blocks_sub(STRUCT_LFS *fs, union lfs_blocks *bp1, union lfs_blocks *bp2)
  */
 #define LFS_NRESERVE(F) (lfs_btofsb((F), (2 * ULFS_NIADDR + 3) << lfs_sb_getbshift(F)))
 
+
+/*
+ * Suppress spurious clang warnings
+ */
+#ifdef __GNUC__
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif __GNUC_PREREQ__(9,0)
+#pragma GCC diagnostic pop
+#endif
+#endif
 
 
 #endif /* _UFS_LFS_LFS_ACCESSORS_H_ */

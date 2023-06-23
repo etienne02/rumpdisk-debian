@@ -1,4 +1,4 @@
-/*	$NetBSD: arcmsr.c,v 1.36 2016/06/19 21:12:44 dholland Exp $ */
+/*	$NetBSD: arcmsr.c,v 1.43 2021/08/07 16:19:14 thorpej Exp $ */
 /*	$OpenBSD: arc.c,v 1.68 2007/10/27 03:28:27 dlg Exp $ */
 
 /*
@@ -21,7 +21,7 @@
 #include "bio.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arcmsr.c,v 1.36 2016/06/19 21:12:44 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arcmsr.c,v 1.43 2021/08/07 16:19:14 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -241,6 +241,7 @@ arc_attach(device_t parent, device_t self, void *aux)
 	adapt->adapt_max_periph = adapt->adapt_openings;
 	adapt->adapt_minphys = arc_minphys;		
 	adapt->adapt_request = arc_scsi_cmd;
+	adapt->adapt_flags = SCSIPI_ADAPT_MPSAFE;
 
 	memset(chan, 0, sizeof(*chan));
 	chan->chan_adapter = adapt;
@@ -254,7 +255,8 @@ arc_attach(device_t parent, device_t self, void *aux)
 	 * Save the device_t returned, because we could to attach
 	 * devices via the management interface.
 	 */
-	sc->sc_scsibus_dv = config_found(self, &sc->sc_chan, scsiprint);
+	sc->sc_scsibus_dv = config_found(self, &sc->sc_chan, scsiprint,
+	    CFARGS_NONE);
 
 	/* enable interrupts */
 	arc_write(sc, ARC_REG_INTRMASK,
@@ -544,7 +546,7 @@ arc_scsi_cmd_done(struct arc_softc *sc, struct arc_ccb *ccb, uint32_t reg)
 		case SCSI_CHECK:
 			memset(&xs->sense, 0, sizeof(xs->sense));
 			memcpy(&xs->sense, cmd->sense_data,
-			    min(ARC_MSG_SENSELEN, sizeof(xs->sense)));
+			    uimin(ARC_MSG_SENSELEN, sizeof(xs->sense)));
 			xs->sense.scsi_sense.response_code =
 			    SSD_RCODE_VALID | 0x70;
 			xs->status = SCSI_CHECK;
@@ -625,8 +627,10 @@ arc_map_pci_resources(device_t self, struct pci_attach_args *pa)
 		goto unmap;
 	}
 
-	sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_BIO,
-	    arc_intr, sc);
+	pci_intr_setattr(pa->pa_pc, &ih, PCI_INTR_MPSAFE, true);
+
+	sc->sc_ih = pci_intr_establish_xname(pa->pa_pc, ih, IPL_BIO,
+	    arc_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error(": unable to map interrupt [2]\n");
 		goto unmap;
@@ -1880,9 +1884,9 @@ arc_create_sensors(void *arg)
 
 bad:
 	sysmon_envsys_destroy(sc->sc_sme);
-	kmem_free(sc->sc_arc_sensors, slen);
-
 	sc->sc_sme = NULL;
+
+	kmem_free(sc->sc_arc_sensors, slen);
 	sc->sc_arc_sensors = NULL;
 
 	kthread_exit(0);
@@ -2031,10 +2035,7 @@ arc_dmamem_alloc(struct arc_softc *sc, size_t size)
 	struct arc_dmamem		*adm;
 	int				nsegs;
 
-	adm = kmem_zalloc(sizeof(*adm), KM_NOSLEEP);
-	if (adm == NULL)
-		return NULL;
-
+	adm = kmem_zalloc(sizeof(*adm), KM_SLEEP);
 	adm->adm_size = size;
 
 	if (bus_dmamap_create(sc->sc_dmat, size, 1, size, 0,

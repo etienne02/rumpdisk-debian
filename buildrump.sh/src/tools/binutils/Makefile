@@ -1,6 +1,6 @@
-#	$NetBSD: Makefile,v 1.25 2016/01/26 17:47:57 christos Exp $
+#	$NetBSD: Makefile,v 1.32 2021/05/07 23:00:04 christos Exp $
 
-.include <bsd.own.mk>
+.include <bsd.hostinit.mk>
 
 MODULE=		binutils
 
@@ -13,7 +13,7 @@ BRANDING?=	\
 
 CONFIGURE_ARGS=	--target=${MACHINE_GNU_PLATFORM} --disable-nls \
 		--program-transform-name="s,^,${MACHINE_GNU_PLATFORM}-," \
-		--disable-werror \
+		--disable-werror --enable-initfini-array=yes \
 		${BRANDING}
 
 build/gas/m68k-parse.c: ${GNUHOSTDIST}/gas/m68k-parse.c
@@ -34,7 +34,9 @@ INSTALL_TARGET+=install-gprof
 
 .include "${.CURDIR}/../Makefile.gnuhost"
 
-CCADDFLAGS=	-I${DESTDIR}/usr/include -L${DESTDIR}/lib -L${DESTDIR}/usr/lib -B${DESTDIR}/usr/lib/
+CCADDFLAGS=	-I${GNUHOSTDIST}/include  -I${DESTDIR}/usr/include
+CCADDFLAGS+=	-B${DESTDIR}/usr/lib/
+LDADDFLAGS=	-L${DESTDIR}/lib -L${DESTDIR}/usr/lib
 
 # Force avoiding possibly non-executable install-sh.
 CONFIGURE_ENV+= ac_cv_path_mkdir="${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-install -d"
@@ -55,7 +57,8 @@ native-binutils: .native/.configure_done
 			CC=${CC:Q}' '${CCADDFLAGS:Q} \
 			CXX=${CXX:Q}' '${CCADDFLAGS:Q} \
 			CPP=${CPP:Q}' '-I${DESTDIR}/usr/include \
-			CFLAGS= CPPFLAGS= CXXFLAGS= LDFLAGS= \
+			CFLAGS= CPPFLAGS= CXXFLAGS= \
+			LDFLAGS=${LDADDFLAGS:Q} \
 			MSGFMT=${TOOLDIR}/bin/${_TOOL_PREFIX}msgfmt \
 			XGETTEXT=${TOOLDIR}/bin/${_TOOL_PREFIX}xgettext \
 			LIBS=-lintl \
@@ -65,6 +68,7 @@ native-binutils: .native/.configure_done
 			--build=`${GNUHOSTDIST}/config.guess` \
 			--host=${MACHINE_GNU_PLATFORM} \
 			--target=${MACHINE_GNU_PLATFORM} \
+			--enable-initfini-array=yes \
 			${BRANDING} \
 		)
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \

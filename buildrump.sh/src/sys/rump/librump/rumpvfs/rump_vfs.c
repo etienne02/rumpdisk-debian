@@ -1,4 +1,4 @@
-/*	$NetBSD: rump_vfs.c,v 1.84 2016/01/26 23:12:18 pooka Exp $	*/
+/*	$NetBSD: rump_vfs.c,v 1.93 2020/04/25 15:42:15 bouyer Exp $	*/
 
 /*
  * Copyright (c) 2008 Antti Kantee.  All Rights Reserved.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.84 2016/01/26 23:12:18 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.93 2020/04/25 15:42:15 bouyer Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -47,6 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD: rump_vfs.c,v 1.84 2016/01/26 23:12:18 pooka Exp $");
 #include <sys/vfs_syscalls.h>
 #include <sys/vnode.h>
 #include <sys/wapbl.h>
+#include <sys/bufq.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -120,12 +121,13 @@ RUMP_COMPONENT(RUMP__FACTION_VFS)
 		bufpages = rump_physmemlimit / (20 * PAGE_SIZE);
 	}
 
+	bufq_init();
+	fstrans_init();
 	vfsinit();
 	bufinit();
 	cwd_sys_init();
 	lf_init();
 	spec_init();
-	fstrans_init();
 
 	root_device = &rump_rootdev;
 
@@ -169,6 +171,7 @@ RUMP_COMPONENT(RUMP__FACTION_VFS)
 		}
 	}
 
+	module_init_class(MODULE_CLASS_BUFQ);
 	module_init_class(MODULE_CLASS_VFS);
 
 	/*
@@ -379,7 +382,7 @@ int
 rump_vp_getref(struct vnode *vp)
 {
 
-	return vp->v_usecount;
+	return vrefcnt(vp);
 }
 
 void
@@ -396,6 +399,13 @@ rump_vp_interlock(struct vnode *vp)
 	mutex_enter(vp->v_interlock);
 }
 
+void
+rump_vp_vmobjlock(struct vnode *vp, int write)
+{
+
+	rw_enter(vp->v_uobj.vmobjlock, write ? RW_WRITER : RW_READER);
+}
+
 int
 rump_vfs_unmount(struct mount *mp, int mntflags)
 {
@@ -408,7 +418,7 @@ rump_vfs_root(struct mount *mp, struct vnode **vpp, int lock)
 {
 	int rv;
 
-	rv = VFS_ROOT(mp, vpp);
+	rv = VFS_ROOT(mp, LK_EXCLUSIVE, vpp);
 	if (rv)
 		return rv;
 
@@ -436,7 +446,7 @@ int
 rump_vfs_fhtovp(struct mount *mp, struct fid *fid, struct vnode **vpp)
 {
 
-	return VFS_FHTOVP(mp, fid, vpp);
+	return VFS_FHTOVP(mp, fid, LK_EXCLUSIVE, vpp);
 }
 
 int
@@ -460,7 +470,7 @@ rump_vfs_syncwait(struct mount *mp)
 {
 	int n;
 
-	n = buf_syncwait();
+	n = vfs_syncwait();
 	if (n)
 		printf("syncwait: unsynced buffers: %d\n", n);
 }
@@ -472,6 +482,8 @@ static bool
 rump_print_selector(void *cl, struct vnode *vp)
 {
 	int *full = cl;
+
+	KASSERT(mutex_owned(vp->v_interlock));
 
 	vfs_vnode_print(vp, *full, (void *)rumpuser_dprintf);
 	return false;

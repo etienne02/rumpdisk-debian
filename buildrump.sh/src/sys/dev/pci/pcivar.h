@@ -1,4 +1,4 @@
-/*	$NetBSD: pcivar.h,v 1.108 2016/07/11 06:14:51 knakahara Exp $	*/
+/*	$NetBSD: pcivar.h,v 1.115 2021/05/12 23:22:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1996, 1997 Christopher G. Demetriou.  All rights reserved.
@@ -131,7 +131,7 @@ struct pcibus_attach_args {
  * This is used by <machine/pci_machdep.h> to access the pba_pc member.  It
  * can't use it directly since pcibus_attach_args has yet to be defined.
  */
-static inline pci_chipset_tag_t
+static __inline pci_chipset_tag_t
 pcibus_attach_args_pc(struct pcibus_attach_args *pba)
 {
 	return pba->pba_pc;
@@ -173,7 +173,7 @@ struct pci_attach_args {
  * This is used by <machine/pci_machdep.h> to access the pa_pc member.  It
  * can't use it directly since pci_attach_args has yet to be defined.
  */
-static inline pci_chipset_tag_t
+static __inline pci_chipset_tag_t
 pci_attach_args_pc(const struct pci_attach_args *pa)
 {
 	return pa->pa_pc;
@@ -208,8 +208,8 @@ struct pci_quirkdata {
 	pci_product_id_t	product;	/* Product ID */
 	int			quirks;		/* quirks; see below */
 };
-#define	PCI_QUIRK_MULTIFUNCTION		1
-#define	PCI_QUIRK_MONOFUNCTION		2
+#define	PCI_QUIRK_MULTIFUNCTION		__BIT(0)
+#define	PCI_QUIRK_MONOFUNCTION		__BIT(1)
 #define	PCI_QUIRK_SKIP_FUNC(n)		(4 << n)
 #define	PCI_QUIRK_SKIP_FUNC0		PCI_QUIRK_SKIP_FUNC(0)
 #define	PCI_QUIRK_SKIP_FUNC1		PCI_QUIRK_SKIP_FUNC(1)
@@ -219,9 +219,32 @@ struct pci_quirkdata {
 #define	PCI_QUIRK_SKIP_FUNC5		PCI_QUIRK_SKIP_FUNC(5)
 #define	PCI_QUIRK_SKIP_FUNC6		PCI_QUIRK_SKIP_FUNC(6)
 #define	PCI_QUIRK_SKIP_FUNC7		PCI_QUIRK_SKIP_FUNC(7)
+#define	PCI_QUIRK_HASEXTCNF		__BIT(10)
+#define	PCI_QUIRK_NOEXTCNF		__BIT(11)
 
 struct pci_conf_state {
 	pcireg_t reg[16];
+
+	/* For PCI-X */
+	pcireg_t x_csr;		/* Upper 16bits. Lower 16bits are read only */
+
+	/* For PCIe */
+	uint16_t e_dcr;
+	uint16_t e_lcr;
+	uint16_t e_slcr;
+	uint16_t e_rcr;
+	uint16_t e_dcr2;
+	uint16_t e_lcr2;
+
+	/* For MSI */
+	pcireg_t msi_ctl;	/* Upper 16bits. Lower 16bits are read only */
+	pcireg_t msi_maddr;
+	pcireg_t msi_maddr64_hi;
+	pcireg_t msi_mdata;
+	pcireg_t msi_mask;
+
+	/* For MSI-X */
+	pcireg_t msix_ctl;	/* Upper 16bits. Lower 16bits are read only */
 };
 
 struct pci_range {
@@ -254,7 +277,34 @@ struct pci_softc {
 #define PCI_SC_DEVICESC(d, f) sc_devices[(d) * 8 + (f)]
 };
 
+/*
+ * pci-bus-get-child-devhandle device call
+ *
+ *	Called to get the device handle for a device, represented
+ *	by the pcitag_t with the PCI segment represented by the
+ *	pci_chipset_tag_t.  The PCI bus's device_t is the one
+ *	passed to device_call(), and the device whose handle is
+ *	being requested must be a direct child of that bus,
+ *	otherwise the behavior is undefined.
+ *
+ *	Call returns 0 if successful, or an error code upon failure:
+ *
+ *	ENOTSUP		The device handle implementation for the
+ *			PCI bus does not support this device call.
+ *
+ *	ENODEV		The PCI device represented by the pcitag_t
+ *			was not found in a bus-scoped search of the
+ *			platform device tree.
+ */
+struct pci_bus_get_child_devhandle_args {
+	pci_chipset_tag_t pc;		/* IN */
+	pcitag_t tag;			/* IN */
+	devhandle_t devhandle;		/* OUT */
+};
+
 extern struct cfdriver pci_cd;
+
+extern bool pci_mapreg_map_enable_decode;
 
 int pcibusprint(void *, const char *);
 
@@ -273,7 +323,6 @@ int	pci_mapreg_submap(const struct pci_attach_args *, int, pcireg_t, int,
 	    bus_size_t, bus_size_t, bus_space_tag_t *, bus_space_handle_t *, 
 	    bus_addr_t *, bus_size_t *);
 
-
 int pci_find_rom(const struct pci_attach_args *, bus_space_tag_t,
 	    bus_space_handle_t, bus_size_t,
 	    int, bus_space_handle_t *, bus_size_t *);
@@ -290,6 +339,23 @@ int	pci_msix_count(pci_chipset_tag_t, pcitag_t);
 /*
  * Helper functions for autoconfiguration.
  */
+
+#define	PCI_COMPAT_EOL_VALUE	(0xffffffffU)
+#define	PCI_COMPAT_EOL		{ .id = PCI_COMPAT_EOL_VALUE }
+
+const struct device_compatible_entry *
+	pci_compatible_lookup_id(pcireg_t,
+	    const struct device_compatible_entry *);
+const struct device_compatible_entry *
+	pci_compatible_lookup(const struct pci_attach_args *,
+	    const struct device_compatible_entry *);
+int	pci_compatible_match(const struct pci_attach_args *,
+	    const struct device_compatible_entry *);
+const struct device_compatible_entry *
+	pci_compatible_lookup_subsys(const struct pci_attach_args *,
+	    const struct device_compatible_entry *);
+int	pci_compatible_match_subsys(const struct pci_attach_args *,
+	    const struct device_compatible_entry *);
 #ifndef PCI_MACHDEP_ENUMERATE_BUS
 int	pci_enumerate_bus(struct pci_softc *, const int *,
 	    int (*)(const struct pci_attach_args *), struct pci_attach_args *);
@@ -361,8 +427,19 @@ typedef enum {
 pci_intr_type_t
 	pci_intr_type(pci_chipset_tag_t, pci_intr_handle_t);
 int	pci_intr_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
-		       int *, pci_intr_type_t);
+	    int *, pci_intr_type_t);
 void	pci_intr_release(pci_chipset_tag_t, pci_intr_handle_t *, int);
+int	pci_intx_alloc(const struct pci_attach_args *, pci_intr_handle_t **);
+int	pci_msi_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
+	    int *);
+int	pci_msi_alloc_exact(const struct pci_attach_args *,
+	    pci_intr_handle_t **, int);
+int	pci_msix_alloc(const struct pci_attach_args *, pci_intr_handle_t **,
+	    int *);
+int	pci_msix_alloc_exact(const struct pci_attach_args *,
+	    pci_intr_handle_t **, int);
+int	pci_msix_alloc_map(const struct pci_attach_args *, pci_intr_handle_t **,
+	    u_int *, int);
 #endif
 
 /*

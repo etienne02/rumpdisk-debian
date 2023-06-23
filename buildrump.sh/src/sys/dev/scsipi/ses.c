@@ -1,4 +1,4 @@
-/*	$NetBSD: ses.c,v 1.49 2016/07/14 10:19:06 msaitoh Exp $ */
+/*	$NetBSD: ses.c,v 1.51 2019/03/08 08:35:58 msaitoh Exp $ */
 /*
  * Copyright (C) 2000 National Aeronautics & Space Administration
  * All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ses.c,v 1.49 2016/07/14 10:19:06 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ses.c,v 1.51 2019/03/08 08:35:58 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_scsi.h"
@@ -150,7 +150,7 @@ const struct cdevsw ses_cdevsw = {
 	.d_mmap = nommap,
 	.d_kqfilter = nokqfilter,
 	.d_discard = nodiscard,
-	.d_flag = D_OTHER
+	.d_flag = D_OTHER | D_MPSAFE
 };
 
 static int ses_runcmd(struct ses_softc *, char *, int, char *, int *);
@@ -552,7 +552,7 @@ ses_log(struct ses_softc *ssc, const char *fmt, ...)
 /*
  * Is this a device that supports enclosure services?
  *
- * It's a a pretty simple ruleset- if it is device type 0x0D (13), it's
+ * It's a pretty simple ruleset- if it is device type 0x0D (13), it's
  * an SES device. If it happens to be an old UNISYS SEN device, we can
  * handle that too.
  */

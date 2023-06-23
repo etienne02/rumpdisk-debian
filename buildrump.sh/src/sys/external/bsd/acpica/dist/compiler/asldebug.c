@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -56,6 +56,44 @@ UtDumpParseOpName (
     ACPI_PARSE_OBJECT       *Op,
     UINT32                  Level,
     UINT32                  DataLength);
+
+static char *
+UtCreateEscapeSequences (
+    char                    *InString);
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    CvDbgPrint
+ *
+ * PARAMETERS:  Type                - Type of output
+ *              Fmt                 - Printf format string
+ *              ...                 - variable printf list
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Print statement for debug messages within the converter.
+ *
+ ******************************************************************************/
+
+void
+CvDbgPrint (
+    char                    *Fmt,
+    ...)
+{
+    va_list                 Args;
+
+
+    if (!AcpiGbl_CaptureComments || !AcpiGbl_DebugAslConversion)
+    {
+        return;
+    }
+
+    va_start (Args, Fmt);
+    (void) vfprintf (AcpiGbl_ConvDebugFile, Fmt, Args);
+    va_end (Args);
+    return;
+}
 
 
 /*******************************************************************************
@@ -93,7 +131,7 @@ UtDumpIntegerOp (
     case 8: /* Dword */
 
         DbgPrint (ASL_TREE_OUTPUT,
-            "%*.*X", IntegerLength, IntegerLength, Op->Asl.Value.Integer);
+            "%*.*X", IntegerLength, IntegerLength, (UINT32) Op->Asl.Value.Integer);
         break;
 
     case 16: /* Qword and Integer */
@@ -130,7 +168,6 @@ UtDumpStringOp (
 
 
     String = Op->Asl.Value.String;
-
     if (Op->Asl.ParseOpcode != PARSEOP_STRING_LITERAL)
     {
         /*
@@ -152,10 +189,92 @@ UtDumpStringOp (
         return;
     }
 
+    String = UtCreateEscapeSequences (String);
+
     /* Emit the ParseOp name, leaving room for the string */
 
     UtDumpParseOpName (Op, Level, strlen (String));
     DbgPrint (ASL_TREE_OUTPUT, "%s", String);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    UtCreateEscapeSequences
+ *
+ * PARAMETERS:  InString            - ASCII string to be expanded
+ *
+ * RETURN:      Expanded string
+ *
+ * DESCRIPTION: Expand all non-printable ASCII bytes (0-0x1F) to escape
+ *              sequences. For example, hex 14 becomes \x14
+ *
+ * NOTE:        Since this function is used for debug output only, it does
+ *              not attempt to translate into the "known" escape sequences
+ *              such as \a, \f, \t, etc.
+ *
+ ******************************************************************************/
+
+static char *
+UtCreateEscapeSequences (
+    char                    *InString)
+{
+    char                    *String = InString;
+    char                    *OutString;
+    char                    *OutStringPtr;
+    UINT32                  InStringLength = 0;
+    UINT32                  EscapeCount = 0;
+
+
+    /*
+     * Determine up front how many escapes are within the string.
+     * Obtain the input string length while doing so.
+     */
+    while (*String)
+    {
+        if ((*String <= 0x1F) || (*String >= 0x7F))
+        {
+            EscapeCount++;
+        }
+
+        InStringLength++;
+        String++;
+    }
+
+    if (!EscapeCount)
+    {
+        return (InString); /* No escapes, nothing to do */
+    }
+
+    /* New string buffer, 3 extra chars per escape (4 total) */
+
+    OutString = UtLocalCacheCalloc (InStringLength + (EscapeCount * 3));
+    OutStringPtr = OutString;
+
+    /* Convert non-ascii or non-printable chars to escape sequences */
+
+    while (*InString)
+    {
+        if ((*InString <= 0x1F) || (*InString >= 0x7F))
+        {
+            /* Insert a \x hex escape sequence */
+
+            OutStringPtr[0] = '\\';
+            OutStringPtr[1] = 'x';
+            OutStringPtr[2] = AcpiUtHexToAsciiChar (*InString, 4);
+            OutStringPtr[3] = AcpiUtHexToAsciiChar (*InString, 0);
+            OutStringPtr += 4;
+        }
+        else /* Normal ASCII character */
+        {
+            *OutStringPtr = *InString;
+            OutStringPtr++;
+        }
+
+        InString++;
+    }
+
+    return (OutString);
 }
 
 

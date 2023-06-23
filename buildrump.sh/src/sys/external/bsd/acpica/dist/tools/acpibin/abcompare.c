@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2021, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  * NO WARRANTY
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
  * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
  * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
@@ -42,7 +42,6 @@
  */
 
 #include "acpibin.h"
-#include "acapps.h"
 
 
 ACPI_TABLE_HEADER           Header1;
@@ -415,6 +414,7 @@ AbCompareAmlFiles (
     {
         /* Display header information */
 
+        printf ("Comparing %s to %s\n", File1Path, File2Path);
         AbPrintHeadersInfo (&Header1, &Header2);
     }
 
@@ -426,6 +426,16 @@ AbCompareAmlFiles (
 
     /* Do the byte-by-byte compare */
 
+    printf ("Compare offset: %u\n", AbGbl_CompareOffset);
+    if (AbGbl_CompareOffset)
+    {
+        if (fseek (File2, AbGbl_CompareOffset, SEEK_CUR))
+        {
+            printf ("Seek error on file %s\n", File2Path);
+            goto Exit2;
+        }
+    }
+
     Actual1 = fread (&Char1, 1, 1, File1);
     Actual2 = fread (&Char2, 1, 1, File2);
     Offset = sizeof (ACPI_TABLE_HEADER);
@@ -434,10 +444,10 @@ AbCompareAmlFiles (
     {
         if (Char1 != Char2)
         {
-            printf ("Error - Byte mismatch at offset %8.8X: 0x%2.2X 0x%2.2X\n",
+            printf ("Error - Byte mismatch at offset %8.4X: 0x%2.2X 0x%2.2X\n",
                 Offset, Char1, Char2);
             Mismatches++;
-            if (Mismatches > 100)
+            if ((Mismatches > 100) && (!AbGbl_DisplayAllMiscompares))
             {
                 printf ("100 Mismatches: Too many mismatches\n");
                 goto Exit2;
@@ -472,7 +482,10 @@ AbCompareAmlFiles (
     }
 
     printf ("%u Mismatches found\n", Mismatches);
-    Status = 0;
+    if (Mismatches == 0)
+    {
+        Status = 0;
+    }
 
 Exit2:
     fclose (File2);
@@ -498,7 +511,7 @@ AbGetFile (
 {
     FILE                    *File;
     UINT32                  Size;
-    char                    *Buffer = NULL;
+    char                    *DataBuffer = NULL;
     size_t                  Actual;
 
 
@@ -522,8 +535,8 @@ AbGetFile (
 
     /* Allocate a buffer for the entire file */
 
-    Buffer = calloc (Size, 1);
-    if (!Buffer)
+    DataBuffer = calloc (Size, 1);
+    if (!DataBuffer)
     {
         printf ("Could not allocate buffer of size %u\n", Size);
         goto ErrorExit;
@@ -531,12 +544,12 @@ AbGetFile (
 
     /* Read the entire file */
 
-    Actual = fread (Buffer, 1, Size, File);
+    Actual = fread (DataBuffer, 1, Size, File);
     if (Actual != Size)
     {
         printf ("Could not read the input file %s\n", Filename);
-        free (Buffer);
-        Buffer = NULL;
+        free (DataBuffer);
+        DataBuffer = NULL;
         goto ErrorExit;
     }
 
@@ -544,7 +557,7 @@ AbGetFile (
 
 ErrorExit:
     fclose (File);
-    return (Buffer);
+    return (DataBuffer);
 }
 
 

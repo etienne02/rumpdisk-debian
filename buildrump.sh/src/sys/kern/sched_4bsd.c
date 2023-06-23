@@ -1,7 +1,8 @@
-/*	$NetBSD: sched_4bsd.c,v 1.30 2014/06/24 10:08:45 maxv Exp $	*/
+/*	$NetBSD: sched_4bsd.c,v 1.45 2021/08/09 19:57:57 andvar Exp $	*/
 
-/*-
- * Copyright (c) 1999, 2000, 2004, 2006, 2007, 2008 The NetBSD Foundation, Inc.
+/*
+ * Copyright (c) 1999, 2000, 2004, 2006, 2007, 2008, 2019, 2020
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,7 +32,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*-
+/*
  * Copyright (c) 1982, 1986, 1990, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -68,11 +69,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sched_4bsd.c,v 1.30 2014/06/24 10:08:45 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sched_4bsd.c,v 1.45 2021/08/09 19:57:57 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_lockdebug.h"
-#include "opt_perfctrs.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,14 +80,12 @@ __KERNEL_RCSID(0, "$NetBSD: sched_4bsd.c,v 1.30 2014/06/24 10:08:45 maxv Exp $")
 #include <sys/cpu.h>
 #include <sys/proc.h>
 #include <sys/kernel.h>
-#include <sys/signalvar.h>
 #include <sys/resourcevar.h>
 #include <sys/sched.h>
 #include <sys/sysctl.h>
-#include <sys/kauth.h>
 #include <sys/lockdebug.h>
-#include <sys/kmem.h>
 #include <sys/intr.h>
+#include <sys/atomic.h>
 
 static void updatepri(struct lwp *);
 static void resetpriority(struct lwp *);
@@ -95,60 +93,79 @@ static void resetpriority(struct lwp *);
 extern unsigned int sched_pstats_ticks; /* defined in kern_synch.c */
 
 /* Number of hardclock ticks per sched_tick() */
-static int rrticks;
+u_int sched_rrticks __read_mostly;
 
 /*
  * Force switch among equal priority processes every 100ms.
- * Called from hardclock every hz/10 == rrticks hardclock ticks.
- *
- * There's no need to lock anywhere in this routine, as it's
- * CPU-local and runs at IPL_SCHED (called from clock interrupt).
+ * Called from hardclock every hz/10 == sched_rrticks hardclock ticks.
  */
 /* ARGSUSED */
 void
 sched_tick(struct cpu_info *ci)
 {
 	struct schedstate_percpu *spc = &ci->ci_schedstate;
+	pri_t pri = PRI_NONE;
 	lwp_t *l;
 
-	spc->spc_ticks = rrticks;
+	spc->spc_ticks = sched_rrticks;
 
 	if (CURCPU_IDLE_P()) {
-		cpu_need_resched(ci, 0);
+		spc_lock(ci);
+		sched_resched_cpu(ci, MAXPRI_KTHREAD, true);
+		/* spc now unlocked */
 		return;
 	}
-	l = ci->ci_data.cpu_onproc;
+	l = ci->ci_onproc;
 	if (l == NULL) {
 		return;
 	}
+	/*
+	 * Can only be spc_lwplock or a turnstile lock at this point
+	 * (if we interrupted priority inheritance trylock dance).
+	 */
+	KASSERT(l->l_mutex != spc->spc_mutex);
 	switch (l->l_class) {
 	case SCHED_FIFO:
 		/* No timeslicing for FIFO jobs. */
 		break;
 	case SCHED_RR:
 		/* Force it into mi_switch() to look for other jobs to run. */
-		cpu_need_resched(ci, RESCHED_KPREEMPT);
+		pri = MAXPRI_KERNEL_RT;
 		break;
 	default:
 		if (spc->spc_flags & SPCF_SHOULDYIELD) {
 			/*
 			 * Process is stuck in kernel somewhere, probably
-			 * due to buggy or inefficient code.  Force a 
+			 * due to buggy or inefficient code.  Force a
 			 * kernel preemption.
 			 */
-			cpu_need_resched(ci, RESCHED_KPREEMPT);
+			pri = MAXPRI_KERNEL_RT;
 		} else if (spc->spc_flags & SPCF_SEENRR) {
 			/*
 			 * The process has already been through a roundrobin
 			 * without switching and may be hogging the CPU.
 			 * Indicate that the process should yield.
 			 */
+			pri = MAXPRI_KTHREAD;
 			spc->spc_flags |= SPCF_SHOULDYIELD;
-			cpu_need_resched(ci, 0);
+		} else if ((spc->spc_flags & SPCF_1STCLASS) == 0) {
+			/*
+			 * For SMT or asymmetric systems push a little
+			 * harder: if this is not a 1st class CPU, try to
+			 * find a better one to run this LWP.
+			 */
+			pri = MAXPRI_KTHREAD;
+			spc->spc_flags |= SPCF_SHOULDYIELD;
 		} else {
 			spc->spc_flags |= SPCF_SEENRR;
 		}
 		break;
+	}
+
+	if (pri != PRI_NONE) {
+		spc_lock(ci);
+		sched_resched_cpu(ci, pri, true);
+		/* spc now unlocked */
 	}
 }
 
@@ -167,74 +184,93 @@ sched_tick(struct cpu_info *ci)
 #define	ESTCPU_SHIFT	11
 #define	ESTCPU_MAX	((PRIO_MAX - 2) << ESTCPU_SHIFT)
 #define	ESTCPU_ACCUM	(1 << (ESTCPU_SHIFT - 1))
-#define	ESTCPULIM(e)	min((e), ESTCPU_MAX)
+#define	ESTCPULIM(e)	uimin((e), ESTCPU_MAX)
 
 /*
- * Constants for digital decay and forget:
- *	90% of (l_estcpu) usage in 5 * loadav time
- *	95% of (l_pctcpu) usage in 60 seconds (load insensitive)
- *          Note that, as ps(1) mentions, this can let percentages
- *          total over 100% (I've seen 137.9% for 3 processes).
+ * The main parameter used by this algorithm is 'l_estcpu'. It is an estimate
+ * of the recent CPU utilization of the thread.
+ *
+ * l_estcpu is:
+ *  - increased each time the hardclock ticks and the thread is found to
+ *    be executing, in sched_schedclock() called from hardclock()
+ *  - decreased (filtered) on each sched tick, in sched_pstats_hook()
+ * If the lwp is sleeping for more than a second, we don't touch l_estcpu: it
+ * will be updated in sched_setrunnable() when the lwp wakes up, in burst mode
+ * (ie, we decrease it n times).
  *
  * Note that hardclock updates l_estcpu and l_cpticks independently.
  *
- * We wish to decay away 90% of l_estcpu in (5 * loadavg) seconds.
- * That is, the system wants to compute a value of decay such
- * that the following for loop:
- * 	for (i = 0; i < (5 * loadavg); i++)
- * 		l_estcpu *= decay;
- * will compute
- * 	l_estcpu *= 0.1;
- * for all values of loadavg:
+ * -----------------------------------------------------------------------------
+ *
+ * Here we describe how l_estcpu is decreased.
+ *
+ * Constants for digital decay (filter):
+ *     90% of l_estcpu usage in (5 * loadavg) seconds
+ *
+ * We wish to decay away 90% of l_estcpu in (5 * loadavg) seconds. That is, we
+ * want to compute a value of decay such that the following loop:
+ *     for (i = 0; i < (5 * loadavg); i++)
+ *         l_estcpu *= decay;
+ * will result in
+ *     l_estcpu *= 0.1;
+ * for all values of loadavg.
  *
  * Mathematically this loop can be expressed by saying:
- * 	decay ** (5 * loadavg) ~= .1
+ *     decay ** (5 * loadavg) ~= .1
  *
- * The system computes decay as:
- * 	decay = (2 * loadavg) / (2 * loadavg + 1)
+ * And finally, the corresponding value of decay we're using is:
+ *     decay = (2 * loadavg) / (2 * loadavg + 1)
  *
- * We wish to prove that the system's computation of decay
- * will always fulfill the equation:
- * 	decay ** (5 * loadavg) ~= .1
+ * -----------------------------------------------------------------------------
+ *
+ * Now, let's prove that the value of decay stated above will always fulfill
+ * the equation:
+ *     decay ** (5 * loadavg) ~= .1
  *
  * If we compute b as:
- * 	b = 2 * loadavg
+ *     b = 2 * loadavg
  * then
- * 	decay = b / (b + 1)
+ *     decay = b / (b + 1)
  *
  * We now need to prove two things:
- *	1) Given factor ** (5 * loadavg) ~= .1, prove factor == b/(b+1)
- *	2) Given b/(b+1) ** power ~= .1, prove power == (5 * loadavg)
+ *     1) Given [factor ** (5 * loadavg) =~ .1], prove [factor == b/(b+1)].
+ *     2) Given [b/(b+1) ** power =~ .1], prove [power == (5 * loadavg)].
  *
  * Facts:
- *         For x close to zero, exp(x) =~ 1 + x, since
- *              exp(x) = 0! + x**1/1! + x**2/2! + ... .
- *              therefore exp(-1/b) =~ 1 - (1/b) = (b-1)/b.
- *         For x close to zero, ln(1+x) =~ x, since
- *              ln(1+x) = x - x**2/2 + x**3/3 - ...     -1 < x < 1
- *              therefore ln(b/(b+1)) = ln(1 - 1/(b+1)) =~ -1/(b+1).
- *         ln(.1) =~ -2.30
+ *   * For x real: exp(x) = 0! + x**1/1! + x**2/2! + ...
+ *     Therefore, for x close to zero, exp(x) =~ 1 + x.
+ *     In turn, for b large enough, exp(-1/b) =~ 1 - (1/b) = (b-1)/b.
+ *
+ *   * For b large enough, (b-1)/b =~ b/(b+1).
+ *
+ *   * For x belonging to [-1;1[, ln(1-x) = - x - x**2/2 - x**3/3 - ...
+ *     Therefore ln(b/(b+1)) = ln(1 - 1/(b+1)) =~ -1/(b+1).
+ *
+ *   * ln(0.1) =~ -2.30
  *
  * Proof of (1):
- *    Solve (factor)**(power) =~ .1 given power (5*loadav):
- *	solving for factor,
- *      ln(factor) =~ (-2.30/5*loadav), or
- *      factor =~ exp(-1/((5/2.30)*loadav)) =~ exp(-1/(2*loadav)) =
- *          exp(-1/b) =~ (b-1)/b =~ b/(b+1).                    QED
+ *     factor ** (5 * loadavg) =~ 0.1
+ *  => ln(factor) =~ -2.30 / (5 * loadavg)
+ *  => factor =~ exp(-1 / ((5 / 2.30) * loadavg))
+ *            =~ exp(-1 / (2 * loadavg))
+ *            =~ exp(-1 / b)
+ *            =~ (b - 1) / b
+ *            =~ b / (b + 1)
+ *            =~ (2 * loadavg) / ((2 * loadavg) + 1)
  *
  * Proof of (2):
- *    Solve (factor)**(power) =~ .1 given factor == (b/(b+1)):
- *	solving for power,
- *      power*ln(b/(b+1)) =~ -2.30, or
- *      power =~ 2.3 * (b + 1) = 4.6*loadav + 2.3 =~ 5*loadav.  QED
+ *     (b / (b + 1)) ** power =~ .1
+ *  => power * ln(b / (b + 1)) =~ -2.30
+ *  => power * (-1 / (b + 1)) =~ -2.30
+ *  => power =~ 2.30 * (b + 1)
+ *  => power =~ 4.60 * loadavg + 2.30
+ *  => power =~ 5 * loadavg
  *
- * Actual power values for the implemented algorithm are as follows:
- *      loadav: 1       2       3       4
- *      power:  5.68    10.32   14.94   19.55
+ * Conclusion: decay = (2 * loadavg) / (2 * loadavg + 1)
  */
 
-/* calculations for digital decay to forget 90% of usage in 5*loadav sec */
-#define	loadfactor(loadav)	(2 * (loadav) / ncpu)
+/* See calculations above */
+#define	loadfactor(loadavg)  (2 * (loadavg))
 
 static fixpt_t
 decay_cpu(fixpt_t loadfac, fixpt_t estcpu)
@@ -250,22 +286,24 @@ decay_cpu(fixpt_t loadfac, fixpt_t estcpu)
 	if (__predict_true(loadfac <= FIXPT_MAX / ESTCPU_MAX)) {
 		return estcpu * loadfac / (loadfac + FSCALE);
 	}
-#endif /* !defined(_LP64) */
+#endif
 
 	return (uint64_t)estcpu * loadfac / (loadfac + FSCALE);
 }
 
-/*
- * For all load averages >= 1 and max l_estcpu of (255 << ESTCPU_SHIFT),
- * sleeping for at least seven times the loadfactor will decay l_estcpu to
- * less than (1 << ESTCPU_SHIFT).
- *
- * note that our ESTCPU_MAX is actually much smaller than (255 << ESTCPU_SHIFT).
- */
 static fixpt_t
 decay_cpu_batch(fixpt_t loadfac, fixpt_t estcpu, unsigned int n)
 {
 
+	/*
+	 * For all load averages >= 1 and max l_estcpu of (255 << ESTCPU_SHIFT),
+	 * if we slept for at least seven times the loadfactor, we will decay
+	 * l_estcpu to less than (1 << ESTCPU_SHIFT), and therefore we can
+	 * return zero directly.
+	 *
+	 * Note that our ESTCPU_MAX is actually much smaller than
+	 * (255 << ESTCPU_SHIFT).
+	 */
 	if ((n << FSHIFT) >= 7 * loadfac) {
 		return 0;
 	}
@@ -299,13 +337,14 @@ sched_pstats_hook(struct lwp *l, int batch)
 			return;
 		}
 	}
-	loadfac = 2 * (averunnable.ldavg[0]);
+
+	loadfac = loadfactor(averunnable.ldavg[0]);
 	l->l_estcpu = decay_cpu(loadfac, l->l_estcpu);
 	resetpriority(l);
 }
 
 /*
- * Recalculate the priority of a process after it has slept for a while.
+ * Recalculate the priority of an LWP after it has slept for a while.
  */
 static void
 updatepri(struct lwp *l)
@@ -383,10 +422,9 @@ resetpriority(struct lwp *l)
  * is running (linearly), and decays away exponentially, at a rate which is
  * proportionally slower when the system is busy.  The basic principle is
  * that the system will 90% forget that the process used a lot of CPU time
- * in 5 * loadav seconds.  This causes the system to favor processes which
+ * in (5 * loadavg) seconds.  This causes the system to favor processes which
  * haven't run much recently, and to round-robin among other processes.
  */
-
 void
 sched_schedclock(struct lwp *l)
 {
@@ -496,7 +534,7 @@ static int
 sysctl_sched_rtts(SYSCTLFN_ARGS)
 {
 	struct sysctlnode node;
-	int rttsms = hztoms(rrticks);
+	int rttsms = hztoms(sched_rrticks);
 
 	node = *rnode;
 	node.sysctl_data = &rttsms;
@@ -517,7 +555,7 @@ SYSCTL_SETUP(sysctl_sched_4bsd_setup, "sysctl sched setup")
 	if (node == NULL)
 		return;
 
-	rrticks = hz / 10;
+	sched_rrticks = hz / 10;
 
 	sysctl_createv(NULL, 0, &node, NULL,
 		CTLFLAG_PERMANENT,

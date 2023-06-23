@@ -1,4 +1,4 @@
-/* 	$NetBSD: i82093reg.h,v 1.4 2013/01/26 17:37:39 dyoung Exp $ */
+/* 	$NetBSD: i82093reg.h,v 1.6 2019/06/19 06:32:46 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -50,6 +50,8 @@
 
 #define	IOAPIC_REG		0x0000
 #define IOAPIC_DATA		0x0010
+#define IOAPIC_EOI		0x0040
+#define		IOAPIC_EOI_MASK		0x000000ff
 
 /*
  * Internal I/O APIC registers.
@@ -79,8 +81,9 @@
  * Redirection table registers.
  */
 
-#define IOAPIC_REDHI(pin)	(0x11 + ((pin)<<1))
-#define IOAPIC_REDLO(pin)	(0x10 + ((pin)<<1))
+#define IOAPIC_REDTBL		0x10
+#define IOAPIC_REDHI(pin)	(IOAPIC_REDTBL + ((pin) << 1) + 1)
+#define IOAPIC_REDLO(pin)	(IOAPIC_REDTBL + ((pin) << 1))
 
 #define IOAPIC_REDHI_DEST_SHIFT		24	   /* destination. */
 #define IOAPIC_REDHI_DEST_MASK		0xff000000

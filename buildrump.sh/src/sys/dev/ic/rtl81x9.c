@@ -1,4 +1,4 @@
-/*	$NetBSD: rtl81x9.c,v 1.100 2016/06/10 13:27:13 ozaki-r Exp $	*/
+/*	$NetBSD: rtl81x9.c,v 1.111 2020/03/12 03:01:46 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998
@@ -86,7 +86,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtl81x9.c,v 1.100 2016/06/10 13:27:13 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtl81x9.c,v 1.111 2020/03/12 03:01:46 thorpej Exp $");
 
 
 #include <sys/param.h>
@@ -133,8 +133,8 @@ static void rtk_mii_send(struct rtk_softc *, uint32_t, int);
 static int rtk_mii_readreg(struct rtk_softc *, struct rtk_mii_frame *);
 static int rtk_mii_writereg(struct rtk_softc *, struct rtk_mii_frame *);
 
-static int rtk_phy_readreg(device_t, int, int);
-static void rtk_phy_writereg(device_t, int, int, int);
+static int rtk_phy_readreg(device_t, int, int, uint16_t *);
+static int rtk_phy_writereg(device_t, int, int, uint16_t);
 static void rtk_phy_statchg(struct ifnet *);
 static void rtk_tick(void *);
 
@@ -242,7 +242,7 @@ rtk_mii_sync(struct rtk_softc *sc)
 {
 	int i;
 
-	MII_SET(RTK_MII_DIR|RTK_MII_DATAOUT);
+	MII_SET(RTK_MII_DIR | RTK_MII_DATAOUT);
 
 	for (i = 0; i < 32; i++) {
 		MII_SET(RTK_MII_CLK);
@@ -281,7 +281,7 @@ rtk_mii_send(struct rtk_softc *sc, uint32_t bits, int cnt)
 static int
 rtk_mii_readreg(struct rtk_softc *sc, struct rtk_mii_frame *frame)
 {
-	int i, ack, s;
+	int i, ack, s, rv = 0;
 
 	s = splnet();
 
@@ -311,7 +311,7 @@ rtk_mii_readreg(struct rtk_softc *sc, struct rtk_mii_frame *frame)
 	rtk_mii_send(sc, frame->mii_regaddr, 5);
 
 	/* Idle bit */
-	MII_CLR((RTK_MII_CLK|RTK_MII_DATAOUT));
+	MII_CLR((RTK_MII_CLK | RTK_MII_DATAOUT));
 	DELAY(1);
 	MII_SET(RTK_MII_CLK);
 	DELAY(1);
@@ -337,6 +337,7 @@ rtk_mii_readreg(struct rtk_softc *sc, struct rtk_mii_frame *frame)
 			MII_SET(RTK_MII_CLK);
 			DELAY(1);
 		}
+		rv = -1;
 		goto fail;
 	}
 
@@ -360,9 +361,7 @@ rtk_mii_readreg(struct rtk_softc *sc, struct rtk_mii_frame *frame)
 
 	splx(s);
 
-	if (ack)
-		return 1;
-	return 0;
+	return rv;
 }
 
 /*
@@ -412,16 +411,16 @@ rtk_mii_writereg(struct rtk_softc *sc, struct rtk_mii_frame *frame)
 }
 
 static int
-rtk_phy_readreg(device_t self, int phy, int reg)
+rtk_phy_readreg(device_t self, int phy, int reg, uint16_t *val)
 {
 	struct rtk_softc *sc = device_private(self);
 	struct rtk_mii_frame frame;
-	int rval;
+	int rv;
 	int rtk8139_reg;
 
 	if ((sc->sc_quirk & RTKQ_8129) == 0) {
 		if (phy != 7)
-			return 0;
+			return -1;
 
 		switch (reg) {
 		case MII_BMCR:
@@ -439,27 +438,32 @@ rtk_phy_readreg(device_t self, int phy, int reg)
 		case MII_ANLPAR:
 			rtk8139_reg = RTK_LPAR;
 			break;
+		case MII_PHYIDR1:
+		case MII_PHYIDR2:
+			*val = 0;
+			return 0;
 		default:
 #if 0
 			printf("%s: bad phy register\n", device_xname(self));
 #endif
-			return 0;
+			return -1;
 		}
-		rval = CSR_READ_2(sc, rtk8139_reg);
-		return rval;
+		*val = CSR_READ_2(sc, rtk8139_reg);
+		return 0;
 	}
 
 	memset(&frame, 0, sizeof(frame));
 
 	frame.mii_phyaddr = phy;
 	frame.mii_regaddr = reg;
-	rtk_mii_readreg(sc, &frame);
+	rv = rtk_mii_readreg(sc, &frame);
+	*val = frame.mii_data;
 
-	return frame.mii_data;
+	return rv;
 }
 
-static void
-rtk_phy_writereg(device_t self, int phy, int reg, int data)
+static int
+rtk_phy_writereg(device_t self, int phy, int reg, uint16_t val)
 {
 	struct rtk_softc *sc = device_private(self);
 	struct rtk_mii_frame frame;
@@ -467,7 +471,7 @@ rtk_phy_writereg(device_t self, int phy, int reg, int data)
 
 	if ((sc->sc_quirk & RTKQ_8129) == 0) {
 		if (phy != 7)
-			return;
+			return -1;
 
 		switch (reg) {
 		case MII_BMCR:
@@ -489,19 +493,19 @@ rtk_phy_writereg(device_t self, int phy, int reg, int data)
 #if 0
 			printf("%s: bad phy register\n", device_xname(self));
 #endif
-			return;
+			return -1;
 		}
-		CSR_WRITE_2(sc, rtk8139_reg, data);
-		return;
+		CSR_WRITE_2(sc, rtk8139_reg, val);
+		return 0;
 	}
 
 	memset(&frame, 0, sizeof(frame));
 
 	frame.mii_phyaddr = phy;
 	frame.mii_regaddr = reg;
-	frame.mii_data = data;
+	frame.mii_data = val;
 
-	rtk_mii_writereg(sc, &frame);
+	return rtk_mii_writereg(sc, &frame);
 }
 
 static void
@@ -520,14 +524,13 @@ rtk_phy_statchg(struct ifnet *ifp)
 void
 rtk_setmulti(struct rtk_softc *sc)
 {
-	struct ifnet *ifp;
+	struct ethercom *ec = &sc->ethercom;
+	struct ifnet *ifp = &ec->ec_if;
 	uint32_t hashes[2] = { 0, 0 };
 	uint32_t rxfilt;
 	struct ether_multi *enm;
 	struct ether_multistep step;
 	int h, mcnt;
-
-	ifp = &sc->ethercom.ec_if;
 
 	rxfilt = CSR_READ_4(sc, RTK_RXCFG);
 
@@ -546,21 +549,25 @@ rtk_setmulti(struct rtk_softc *sc)
 	CSR_WRITE_4(sc, RTK_MAR4, 0);
 
 	/* now program new ones */
-	ETHER_FIRST_MULTI(step, &sc->ethercom, enm);
+	ETHER_LOCK(ec);
+	ETHER_FIRST_MULTI(step, ec, enm);
 	mcnt = 0;
 	while (enm != NULL) {
 		if (memcmp(enm->enm_addrlo, enm->enm_addrhi,
-		    ETHER_ADDR_LEN) != 0)
+		    ETHER_ADDR_LEN) != 0) {
+			ETHER_UNLOCK(ec);
 			goto allmulti;
+		}
 
 		h = rtk_calchash(enm->enm_addrlo);
 		if (h < 32)
-			hashes[0] |= (1 << h);
+			hashes[0] |= __BIT(h);
 		else
-			hashes[1] |= (1 << (h - 32));
+			hashes[1] |= __BIT(h - 32);
 		mcnt++;
 		ETHER_NEXT_MULTI(step, enm);
 	}
+	ETHER_UNLOCK(ec);
 
 	ifp->if_flags &= ~IFF_ALLMULTI;
 
@@ -612,6 +619,7 @@ rtk_attach(struct rtk_softc *sc)
 {
 	device_t self = sc->sc_dev;
 	struct ifnet *ifp;
+	struct mii_data * const mii = &sc->mii;
 	struct rtk_tx_desc *txd;
 	uint16_t val;
 	uint8_t eaddr[ETHER_ADDR_LEN];
@@ -619,6 +627,7 @@ rtk_attach(struct rtk_softc *sc)
 	int i, addr_len;
 
 	callout_init(&sc->rtk_tick_ch, 0);
+	callout_setfunc(&sc->rtk_tick_ch, rtk_tick, sc);
 
 	/*
 	 * Check EEPROM type 9346 or 9356.
@@ -651,7 +660,7 @@ rtk_attach(struct rtk_softc *sc)
 
 	if ((error = bus_dmamem_map(sc->sc_dmat, &sc->sc_dmaseg, sc->sc_dmanseg,
 	    RTK_RXBUFLEN + 16, (void **)&sc->rtk_rx_buf,
-	    BUS_DMA_NOWAIT|BUS_DMA_COHERENT)) != 0) {
+	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(self,
 		    "can't map recv buffer, error = %d\n", error);
 		goto fail_1;
@@ -667,7 +676,7 @@ rtk_attach(struct rtk_softc *sc)
 
 	if ((error = bus_dmamap_load(sc->sc_dmat, sc->recv_dmamap,
 	    sc->rtk_rx_buf, RTK_RXBUFLEN + 16,
-	    NULL, BUS_DMA_READ|BUS_DMA_NOWAIT)) != 0) {
+	    NULL, BUS_DMA_READ | BUS_DMA_NOWAIT)) != 0) {
 		aprint_error_dev(self,
 		    "can't load recv buffer DMA map, error = %d\n", error);
 		goto fail_3;
@@ -715,28 +724,27 @@ rtk_attach(struct rtk_softc *sc)
 	/*
 	 * Do ifmedia setup.
 	 */
-	sc->mii.mii_ifp = ifp;
-	sc->mii.mii_readreg = rtk_phy_readreg;
-	sc->mii.mii_writereg = rtk_phy_writereg;
-	sc->mii.mii_statchg = rtk_phy_statchg;
-	sc->ethercom.ec_mii = &sc->mii;
-	ifmedia_init(&sc->mii.mii_media, IFM_IMASK, ether_mediachange,
+	mii->mii_ifp = ifp;
+	mii->mii_readreg = rtk_phy_readreg;
+	mii->mii_writereg = rtk_phy_writereg;
+	mii->mii_statchg = rtk_phy_statchg;
+	sc->ethercom.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
 	    ether_mediastatus);
-	mii_attach(self, &sc->mii, 0xffffffff,
-	    MII_PHY_ANY, MII_OFFSET_ANY, 0);
+	mii_attach(self, mii, 0xffffffff, MII_PHY_ANY, MII_OFFSET_ANY, 0);
 
 	/* Choose a default media. */
-	if (LIST_FIRST(&sc->mii.mii_phys) == NULL) {
-		ifmedia_add(&sc->mii.mii_media, IFM_ETHER|IFM_NONE, 0, NULL);
-		ifmedia_set(&sc->mii.mii_media, IFM_ETHER|IFM_NONE);
-	} else {
-		ifmedia_set(&sc->mii.mii_media, IFM_ETHER|IFM_AUTO);
-	}
+	if (LIST_FIRST(&mii->mii_phys) == NULL) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
+	} else
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
 
 	/*
 	 * Call MI attach routines.
 	 */
 	if_attach(ifp);
+	if_deferred_start_init(ifp, NULL);
 	ether_ifattach(ifp, eaddr);
 
 	rnd_attach_source(&sc->rnd_source, device_xname(self),
@@ -822,13 +830,13 @@ rtk_detach(struct rtk_softc *sc)
 	/* Detach all PHYs. */
 	mii_detach(&sc->mii, MII_PHY_ANY, MII_OFFSET_ANY);
 
-	/* Delete all remaining media. */
-	ifmedia_delete_instance(&sc->mii.mii_media, IFM_INST_ANY);
-
 	rnd_detach_source(&sc->rnd_source);
 
 	ether_ifdetach(ifp);
 	if_detach(ifp);
+
+	/* Delete all remaining media. */
+	ifmedia_fini(&sc->mii.mii_media);
 
 	for (i = 0; i < RTK_TX_LIST_CNT; i++) {
 		txd = &sc->rtk_tx_descs[i];
@@ -947,7 +955,7 @@ rtk_rxeof(struct rtk_softc *sc)
 		if ((rxstat & RTK_RXSTAT_RXOK) == 0 ||
 		    total_len < ETHER_MIN_LEN ||
 		    total_len > (MCLBYTES - RTK_ETHER_ALIGN)) {
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 
 			/*
 			 * submitted by:[netbsd-pcmcia:00484]
@@ -957,12 +965,12 @@ rtk_rxeof(struct rtk_softc *sc)
 			 *
 			 */
 #if 0
-			if (rxstat & (RTK_RXSTAT_BADSYM|RTK_RXSTAT_RUNT|
-			    RTK_RXSTAT_GIANT|RTK_RXSTAT_CRCERR|
+			if (rxstat & (RTK_RXSTAT_BADSYM | RTK_RXSTAT_RUNT |
+			    RTK_RXSTAT_GIANT | RTK_RXSTAT_CRCERR |
 			    RTK_RXSTAT_ALIGNERR)) {
 				CSR_WRITE_2(sc, RTK_COMMAND, RTK_CMD_TX_ENB);
 				CSR_WRITE_2(sc, RTK_COMMAND,
-				    RTK_CMD_TX_ENB|RTK_CMD_RX_ENB);
+				    RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
 				CSR_WRITE_4(sc, RTK_RXCFG, RTK_RXCFG_CONFIG);
 				CSR_WRITE_4(sc, RTK_RXADDR,
 				    sc->recv_dmamap->dm_segs[0].ds_addr);
@@ -1023,15 +1031,16 @@ rtk_rxeof(struct rtk_softc *sc)
 		if (m == NULL) {
 			printf("%s: unable to allocate Rx mbuf\n",
 			    device_xname(sc->sc_dev));
-			ifp->if_ierrors++;
+			if_statinc(ifp, if_ierrors);
 			goto next_packet;
 		}
+		MCLAIM(m, &sc->ethercom.ec_rx_mowner);
 		if (total_len > (MHLEN - RTK_ETHER_ALIGN)) {
 			MCLGET(m, M_DONTWAIT);
 			if ((m->m_flags & M_EXT) == 0) {
 				printf("%s: unable to allocate Rx cluster\n",
 				    device_xname(sc->sc_dev));
-				ifp->if_ierrors++;
+				if_statinc(ifp, if_ierrors);
 				m_freem(m);
 				m = NULL;
 				goto next_packet;
@@ -1073,9 +1082,6 @@ rtk_rxeof(struct rtk_softc *sc)
 		if (m == NULL)
 			continue;
 
-		ifp->if_ipackets++;
-
-		bpf_mtap(ifp, m);
 		/* pass it on. */
 		if_percpuq_enqueue(ifp->if_percpuq, m);
 	}
@@ -1100,8 +1106,8 @@ rtk_txeof(struct rtk_softc *sc)
 	 */
 	while ((txd = SIMPLEQ_FIRST(&sc->rtk_tx_dirty)) != NULL) {
 		txstat = CSR_READ_4(sc, txd->txd_txstat);
-		if ((txstat & (RTK_TXSTAT_TX_OK|
-		    RTK_TXSTAT_TX_UNDERRUN|RTK_TXSTAT_TXABRT)) == 0)
+		if ((txstat & (RTK_TXSTAT_TX_OK |
+		    RTK_TXSTAT_TX_UNDERRUN | RTK_TXSTAT_TXABRT)) == 0)
 			break;
 
 		SIMPLEQ_REMOVE_HEAD(&sc->rtk_tx_dirty, txd_q);
@@ -1112,12 +1118,14 @@ rtk_txeof(struct rtk_softc *sc)
 		m_freem(txd->txd_mbuf);
 		txd->txd_mbuf = NULL;
 
-		ifp->if_collisions += (txstat & RTK_TXSTAT_COLLCNT) >> 24;
+		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
+		if_statadd_ref(nsr, if_collisions,
+		    (txstat & RTK_TXSTAT_COLLCNT) >> 24);
 
 		if (txstat & RTK_TXSTAT_TX_OK)
-			ifp->if_opackets++;
+			if_statinc_ref(nsr, if_opackets);
 		else {
-			ifp->if_oerrors++;
+			if_statinc_ref(nsr, if_oerrors);
 
 			/*
 			 * Increase Early TX threshold if underrun occurred.
@@ -1139,9 +1147,10 @@ rtk_txeof(struct rtk_softc *sc)
 				printf("\n");
 #endif
 			}
-			if (txstat & (RTK_TXSTAT_TXABRT|RTK_TXSTAT_OUTOFWIN))
+			if (txstat & (RTK_TXSTAT_TXABRT | RTK_TXSTAT_OUTOFWIN))
 				CSR_WRITE_4(sc, RTK_TXCFG, RTK_TXCFG_CONFIG);
 		}
+		IF_STAT_PUTREF(ifp);
 		SIMPLEQ_INSERT_TAIL(&sc->rtk_tx_free, txd, txd_q);
 		ifp->if_flags &= ~IFF_OACTIVE;
 	}
@@ -1191,7 +1200,7 @@ rtk_intr(void *arg)
 		if (status & RTK_ISR_RX_ERR)
 			rtk_rxeof(sc);
 
-		if (status & (RTK_ISR_TX_OK|RTK_ISR_TX_ERR))
+		if (status & (RTK_ISR_TX_OK | RTK_ISR_TX_ERR))
 			rtk_txeof(sc);
 
 		if (status & RTK_ISR_SYSTEM_ERR) {
@@ -1203,8 +1212,7 @@ rtk_intr(void *arg)
 	/* Re-enable interrupts. */
 	CSR_WRITE_2(sc, RTK_IMR, RTK_INTRS);
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
-		rtk_start(ifp);
+	if_schedule_deferred_start(ifp);
 
 	rnd_add_uint32(&sc->rnd_source, status);
 
@@ -1241,13 +1249,14 @@ rtk_start(struct ifnet *ifp)
 		if ((mtod(m_head, uintptr_t) & 3) != 0 ||
 		    m_head->m_pkthdr.len < ETHER_PAD_LEN ||
 		    bus_dmamap_load_mbuf(sc->sc_dmat, txd->txd_dmamap,
-			m_head, BUS_DMA_WRITE|BUS_DMA_NOWAIT) != 0) {
+			m_head, BUS_DMA_WRITE | BUS_DMA_NOWAIT) != 0) {
 			MGETHDR(m_new, M_DONTWAIT, MT_DATA);
 			if (m_new == NULL) {
 				printf("%s: unable to allocate Tx mbuf\n",
 				    device_xname(sc->sc_dev));
 				break;
 			}
+			MCLAIM(m_new, &sc->ethercom.ec_rx_mowner);
 			if (m_head->m_pkthdr.len > MHLEN) {
 				MCLGET(m_new, M_DONTWAIT);
 				if ((m_new->m_flags & M_EXT) == 0) {
@@ -1271,7 +1280,7 @@ rtk_start(struct ifnet *ifp)
 			}
 			error = bus_dmamap_load_mbuf(sc->sc_dmat,
 			    txd->txd_dmamap, m_new,
-			    BUS_DMA_WRITE|BUS_DMA_NOWAIT);
+			    BUS_DMA_WRITE | BUS_DMA_NOWAIT);
 			if (error) {
 				printf("%s: unable to load Tx buffer, "
 				    "error = %d\n",
@@ -1284,7 +1293,7 @@ rtk_start(struct ifnet *ifp)
 		 * If there's a BPF listener, bounce a copy of this frame
 		 * to him.
 		 */
-		bpf_mtap(ifp, m_head);
+		bpf_mtap(ifp, m_head, BPF_D_OUT);
 		if (m_new != NULL) {
 			m_freem(m_head);
 			m_head = m_new;
@@ -1356,7 +1365,7 @@ rtk_init(struct ifnet *ifp)
 	/*
 	 * Enable transmit and receive.
 	 */
-	CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB|RTK_CMD_RX_ENB);
+	CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
 
 	/*
 	 * Set the initial TX and RX configuration.
@@ -1402,9 +1411,9 @@ rtk_init(struct ifnet *ifp)
 	CSR_WRITE_4(sc, RTK_MISSEDPKT, 0);
 
 	/* Enable receiver and transmitter. */
-	CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB|RTK_CMD_RX_ENB);
+	CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_TX_ENB | RTK_CMD_RX_ENB);
 
-	CSR_WRITE_1(sc, RTK_CFG1, RTK_CFG1_DRVLOAD|RTK_CFG1_FULLDUPLEX);
+	CSR_WRITE_1(sc, RTK_CFG1, RTK_CFG1_DRVLOAD | RTK_CFG1_FULLDUPLEX);
 
 	/*
 	 * Set current media.
@@ -1415,7 +1424,7 @@ rtk_init(struct ifnet *ifp)
 	ifp->if_flags |= IFF_RUNNING;
 	ifp->if_flags &= ~IFF_OACTIVE;
 
-	callout_reset(&sc->rtk_tick_ch, hz, rtk_tick, sc);
+	callout_schedule(&sc->rtk_tick_ch, hz);
 
  out:
 	if (error) {
@@ -1457,7 +1466,7 @@ rtk_watchdog(struct ifnet *ifp)
 	sc = ifp->if_softc;
 
 	printf("%s: watchdog timeout\n", device_xname(sc->sc_dev));
-	ifp->if_oerrors++;
+	if_statinc(ifp, if_oerrors);
 	rtk_txeof(sc);
 	rtk_rxeof(sc);
 	rtk_init(ifp);
@@ -1508,5 +1517,5 @@ rtk_tick(void *arg)
 	mii_tick(&sc->mii);
 	splx(s);
 
-	callout_reset(&sc->rtk_tick_ch, hz, rtk_tick, sc);
+	callout_schedule(&sc->rtk_tick_ch, hz);
 }

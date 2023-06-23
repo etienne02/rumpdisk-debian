@@ -1,7 +1,7 @@
-/* $NetBSD: vfs_getcwd.c,v 1.50 2014/02/07 15:29:22 hannken Exp $ */
+/* $NetBSD: vfs_getcwd.c,v 1.61 2021/06/29 22:39:21 dholland Exp $ */
 
 /*-
- * Copyright (c) 1999 The NetBSD Foundation, Inc.
+ * Copyright (c) 1999, 2020 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_getcwd.c,v 1.50 2014/02/07 15:29:22 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_getcwd.c,v 1.61 2021/06/29 22:39:21 dholland Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,7 +87,7 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_getcwd.c,v 1.50 2014/02/07 15:29:22 hannken Exp 
  * On exit, *uvpp is either NULL or is a locked vnode reference.
  */
 static int
-getcwd_scandir(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
+getcwd_scandir(struct vnode *lvp, struct vnode **uvpp, char **bpp,
     char *bufp, struct lwp *l)
 {
 	int     error = 0;
@@ -101,11 +101,13 @@ getcwd_scandir(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
 	ino_t   fileno;
 	struct vattr va;
 	struct vnode *uvp = NULL;
-	struct vnode *lvp = *lvpp;
 	kauth_cred_t cred = l->l_cred;
 	struct componentname cn;
 	int len, reclen;
 	tries = 0;
+
+	/* Need exclusive for UFS VOP_GETATTR (itimes) & VOP_LOOKUP. */
+	KASSERT(VOP_ISLOCKED(lvp) == LK_EXCLUSIVE);
 
 	/*
 	 * If we want the filename, get some info we need while the
@@ -114,8 +116,7 @@ getcwd_scandir(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
 	if (bufp != NULL) {
 		error = VOP_GETATTR(lvp, &va, cred);
 		if (error) {
-			vput(lvp);
-			*lvpp = NULL;
+			VOP_UNLOCK(lvp);
 			*uvpp = NULL;
 			return error;
 		}
@@ -130,28 +131,17 @@ getcwd_scandir(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
 	cn.cn_cred = cred;
 	cn.cn_nameptr = "..";
 	cn.cn_namelen = 2;
-	cn.cn_consume = 0;
 
 	/* At this point, lvp is locked  */
 	error = VOP_LOOKUP(lvp, uvpp, &cn);
-	vput(lvp);
+	VOP_UNLOCK(lvp);
 	if (error) {
-		*lvpp = NULL;
 		*uvpp = NULL;
 		return error;
 	}
 	uvp = *uvpp;
-	/* Now lvp is unlocked, try to lock uvp */
-	error = vn_lock(uvp, LK_EXCLUSIVE);
-	if (error) {
-		*lvpp = NULL;
-		*uvpp = NULL;
-		return error;
-	}
-
 	/* If we don't care about the pathname, we're done */
 	if (bufp == NULL) {
-		*lvpp = NULL;
 		return 0;
 	}
 
@@ -162,6 +152,14 @@ getcwd_scandir(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
 	if (dirbuflen < va.va_blocksize)
 		dirbuflen = va.va_blocksize;
 	dirbuf = kmem_alloc(dirbuflen, KM_SLEEP);
+
+	/* Now lvp is unlocked, try to lock uvp */
+	error = vn_lock(uvp, LK_SHARED);
+	if (error) {
+		vrele(uvp);
+		*uvpp = NULL;
+		return error;
+	}
 
 #if 0
 unionread:
@@ -211,7 +209,8 @@ unionread:
 				reclen = dp->d_reclen;
 
 				/* check for malformed directory.. */
-				if (reclen < _DIRENT_MINSIZE(dp)) {
+				if (reclen < _DIRENT_MINSIZE(dp) ||
+				    reclen > len) {
 					error = EINVAL;
 					goto out;
 				}
@@ -253,73 +252,21 @@ unionread:
 		vput(tvp);
 		vref(uvp);
 		*uvpp = uvp;
-		vn_lock(uvp, LK_EXCLUSIVE | LK_RETRY);
+		vn_lock(uvp, LK_SHARED | LK_RETRY);
 		goto unionread;
 	}
 #endif
 	error = ENOENT;
 
 out:
-	*lvpp = NULL;
+	VOP_UNLOCK(uvp);
 	kmem_free(dirbuf, dirbuflen);
-	return error;
-}
-
-/*
- * Look in the vnode-to-name reverse cache to see if
- * we can find things the easy way.
- *
- * XXX vget failure path is untested.
- *
- * On entry, *lvpp is a locked vnode reference.
- * On exit, one of the following is the case:
- *	0) Both *lvpp and *uvpp are NULL and failure is returned.
- * 	1) *uvpp is NULL, *lvpp remains locked and -1 is returned (cache miss)
- *	2) *uvpp is a locked vnode reference, *lvpp is vput and NULL'ed
- *	   and 0 is returned (cache hit)
- */
-
-static int
-getcwd_getcache(struct vnode **lvpp, struct vnode **uvpp, char **bpp,
-    char *bufp)
-{
-	struct vnode *lvp, *uvp = NULL;
-	int error;
-
-	lvp = *lvpp;
-
-	/*
-	 * This returns 0 on a cache hit, -1 on a clean cache miss,
-	 * or an errno on other failure.
-	 */
-	error = cache_revlookup(lvp, uvpp, bpp, bufp);
-	if (error) {
-		if (error != -1) {
-			vput(lvp);
-			*lvpp = NULL;
-			*uvpp = NULL;
-		}
-		return error;
-	}
-	uvp = *uvpp;
-
-	/*
-	 * Since we're going up, we have to release the current lock
-	 * before we take the parent lock.
-	 */
-
-	VOP_UNLOCK(lvp);
-	vn_lock(uvp, LK_EXCLUSIVE | LK_RETRY);
-	vrele(lvp);
-	*lvpp = NULL;
-
 	return error;
 }
 
 /*
  * common routine shared by sys___getcwd() and vn_isunder()
  */
-
 int
 getcwd_common(struct vnode *lvp, struct vnode *rvp, char **bpp, char *bufp,
     int limit, int flags, struct lwp *l)
@@ -329,7 +276,7 @@ getcwd_common(struct vnode *lvp, struct vnode *rvp, char **bpp, char *bufp,
 	struct vnode *uvp = NULL;
 	char *bp = NULL;
 	int error;
-	int perms = VEXEC;
+	accmode_t accmode = VEXEC;
 
 	error = 0;
 	if (rvp == NULL) {
@@ -344,11 +291,10 @@ getcwd_common(struct vnode *lvp, struct vnode *rvp, char **bpp, char *bufp,
 	/*
 	 * Error handling invariant:
 	 * Before a `goto out':
-	 *	lvp is either NULL, or locked and held.
-	 *	uvp is either NULL, or locked and held.
+	 *	lvp is either NULL, or held.
+	 *	uvp is either NULL, or held.
 	 */
 
-	vn_lock(lvp, LK_EXCLUSIVE | LK_RETRY);
 	if (bufp)
 		bp = *bpp;
 
@@ -368,63 +314,93 @@ getcwd_common(struct vnode *lvp, struct vnode *rvp, char **bpp, char *bufp,
 		 * access check here is optional, depending on
 		 * whether or not caller cares.
 		 */
-		if (flags & GETCWD_CHECK_ACCESS) {
-			error = VOP_ACCESS(lvp, perms, cred);
-			if (error)
-				goto out;
-			perms = VEXEC|VREAD;
-		}
+		int chkaccess = (flags & GETCWD_CHECK_ACCESS);
+		bool locked = false;
 
 		/*
 		 * step up if we're a covered vnode..
+		 * check access on the first vnode only.
 		 */
-		while (lvp->v_vflag & VV_ROOT) {
-			struct vnode *tvp;
-
-			if (lvp == rvp)
-				goto out;
-
-			tvp = lvp;
-			lvp = lvp->v_mount->mnt_vnodecovered;
-			vput(tvp);
-			/*
-			 * hodie natus est radici frater
-			 */
-			if (lvp == NULL) {
-				error = ENOENT;
-				goto out;
+		if (lvp->v_vflag & VV_ROOT) {
+			vn_lock(lvp, LK_SHARED | LK_RETRY);
+			if (chkaccess) {
+				error = VOP_ACCESS(lvp, accmode, cred);
+				if (error) {
+					VOP_UNLOCK(lvp);
+					goto out;
+				}
+				chkaccess = 0;
 			}
-			vref(lvp);
-			error = vn_lock(lvp, LK_EXCLUSIVE | LK_RETRY);
-			if (error != 0) {
-				vrele(lvp);
-				lvp = NULL;
-				goto out;
+			while (lvp->v_vflag & VV_ROOT) {
+				struct vnode *tvp;
+
+				if (lvp == rvp) {
+					VOP_UNLOCK(lvp);
+					goto out;
+				}
+
+				tvp = lvp->v_mount->mnt_vnodecovered;
+				/*
+				 * hodie natus est radici frater
+				 */
+				if (tvp == NULL) {
+					VOP_UNLOCK(lvp);
+					error = ENOENT;
+					goto out;
+				}
+				vref(tvp);
+				vput(lvp);
+				lvp = tvp;
+				if (lvp->v_vflag & VV_ROOT)
+					vn_lock(lvp, LK_SHARED | LK_RETRY);
 			}
 		}
+
+		/* Do we need to check access to the directory? */
+		if (chkaccess && !cache_have_id(lvp)) {
+			/* Need exclusive for UFS VOP_GETATTR (itimes) & VOP_LOOKUP. */
+			vn_lock(lvp, LK_EXCLUSIVE | LK_RETRY);
+			error = VOP_ACCESS(lvp, accmode, cred);
+			if (error) {
+				VOP_UNLOCK(lvp);
+				goto out;
+			}
+			chkaccess = 0;
+			locked = true;
+		}
+
 		/*
 		 * Look in the name cache; if that fails, look in the
 		 * directory..
 		 */
-		error = getcwd_getcache(&lvp, &uvp, &bp, bufp);
+		error = cache_revlookup(lvp, &uvp, &bp, bufp, chkaccess,
+		    accmode);
 		if (error == -1) {
+			if (!locked) {
+				locked = true;
+				vn_lock(lvp, LK_EXCLUSIVE | LK_RETRY);
+			}
 			if (lvp->v_type != VDIR) {
+				VOP_UNLOCK(lvp);
 				error = ENOTDIR;
 				goto out;
 			}
-			error = getcwd_scandir(&lvp, &uvp, &bp, bufp, l);
+			error = getcwd_scandir(lvp, &uvp, &bp, bufp, l);
+			/* lvp now unlocked */
+		} else if (locked) {
+			VOP_UNLOCK(lvp);
 		}
 		if (error)
 			goto out;
 #if DIAGNOSTIC
-		if (lvp != NULL)
-			panic("getcwd: oops, forgot to null lvp");
 		if (bufp && (bp <= bufp)) {
 			panic("getcwd: oops, went back too far");
 		}
 #endif
+		accmode = VEXEC | VREAD;
 		if (bp)
 			*(--bp) = '/';
+		vrele(lvp);
 		lvp = uvp;
 		uvp = NULL;
 		limit--;
@@ -434,9 +410,9 @@ out:
 	if (bpp)
 		*bpp = bp;
 	if (uvp)
-		vput(uvp);
+		vrele(uvp);
 	if (lvp)
-		vput(lvp);
+		vrele(lvp);
 	vrele(rvp);
 	return error;
 }
@@ -510,9 +486,6 @@ sys___getcwd(struct lwp *l, const struct sys___getcwd_args *uap, register_t *ret
 		return ERANGE;
 
 	path = kmem_alloc(len, KM_SLEEP);
-	if (!path)
-		return ENOMEM;
-
 	bp = &path[len];
 	bend = bp;
 	*(--bp) = '\0';
@@ -541,9 +514,8 @@ out:
 }
 
 /*
- * Try to find a pathname for a vnode. Since there is no mapping
- * vnode -> parent directory, this needs the NAMECACHE_ENTER_REVERSE
- * option to work (to make cache_revlookup succeed). Caller holds a
+ * Try to find a pathname for a vnode.  Since there is no mapping vnode ->
+ * parent directory, this needs the namecache to succeed.  Caller holds a
  * reference to the vnode.
  */
 int
@@ -555,16 +527,12 @@ vnode_to_path(char *path, size_t len, struct vnode *vp, struct lwp *curl,
 	char *bp, *bend;
 	struct vnode *dvp;
 
-	KASSERT(vp->v_usecount > 0);
+	KASSERT(vrefcnt(vp) > 0);
 
 	bp = bend = &path[len];
 	*(--bp) = '\0';
 
-	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	if (error != 0)
-		return error;
-	error = cache_revlookup(vp, &dvp, &bp, path);
-	VOP_UNLOCK(vp);
+	error = cache_revlookup(vp, &dvp, &bp, path, false, 0);
 	if (error != 0)
 		return (error == -1 ? ENOENT : error);
 
@@ -572,6 +540,8 @@ vnode_to_path(char *path, size_t len, struct vnode *vp, struct lwp *curl,
 	error = getcwd_common(dvp, NULL, &bp, path, len / 2,
 	    GETCWD_CHECK_ACCESS, curl);
 	vrele(dvp);
+	if (error != 0)
+		return error;
 
 	/*
 	 * Strip off emulation path for emulated processes looking at
@@ -587,7 +557,7 @@ vnode_to_path(char *path, size_t len, struct vnode *vp, struct lwp *curl,
 	lenused = bend - bp;
 
 	memcpy(path, bp, lenused);
-	path[lenused] = 0;
+	path[lenused] = '\0';
 
 	return 0;
 }

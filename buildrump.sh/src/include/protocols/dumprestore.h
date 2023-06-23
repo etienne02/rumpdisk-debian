@@ -1,4 +1,4 @@
-/*	$NetBSD: dumprestore.h,v 1.18 2016/01/22 23:11:50 dholland Exp $	*/
+/*	$NetBSD: dumprestore.h,v 1.20 2021/06/19 13:56:34 christos Exp $	*/
 
 /*
  * Copyright (c) 1980, 1993
@@ -68,7 +68,7 @@
 #endif
 #define CHECKSUM	(int)84446
 
-union u_spcl {
+extern union u_spcl {
 	char dummy[TP_BSIZE];
 	struct	s_spcl {
 		int32_t	c_type;		    /* record type (see below) */
@@ -95,7 +95,8 @@ union u_spcl {
 				int64_t __uc_birthtime;
 				int64_t __uc_atime;
 				int64_t __uc_mtime;
-				int32_t __uc_spare4[7];
+				int32_t __uc_extsize;
+				int32_t __uc_spare4[6];
 				uint32_t __uc_file_flags;
 				int32_t __uc_spare5[2];
 				uint32_t __uc_uid;
@@ -125,6 +126,7 @@ union u_spcl {
 #define c_mode		__c_ino.__uc_ino.__uc_mode
 #define c_spare1	__c_ino.__uc_ino.__uc_spare1
 #define c_size		__c_ino.__uc_ino.__uc_size
+#define c_extsize	__c_ino.__uc_ino.__uc_extsize
 #define c_old_atime	__c_ino.__uc_ino.__uc_old_atime
 #define c_atime		__c_ino.__uc_ino.__uc_atime
 #define c_atimensec	__c_ino.__uc_ino.__uc_atimensec

@@ -1,4 +1,4 @@
-/*	$NetBSD: locore_mips1.S,v 1.91 2016/07/27 09:32:35 skrll Exp $	*/
+/*	$NetBSD: locore_mips1.S,v 1.95 2020/08/22 05:52:00 simonb Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -57,7 +57,7 @@
 #include <mips/asm.h>
 #include <mips/cpuregs.h>
 
-RCSID("$NetBSD: locore_mips1.S,v 1.91 2016/07/27 09:32:35 skrll Exp $")
+RCSID("$NetBSD: locore_mips1.S,v 1.95 2020/08/22 05:52:00 simonb Exp $")
 
 #include "assym.h"
 
@@ -73,6 +73,9 @@ RCSID("$NetBSD: locore_mips1.S,v 1.91 2016/07/27 09:32:35 skrll Exp $")
 #define	_MFC0	mfc0
 #define	_MTC0	mtc0
 
+#if defined(__mips_n32) || defined(__mips_n64)
+#error MIPS1 does not support N32/N64.
+#endif
 
 #define MIPSX(name)	__CONCAT(mips1_,name)
 
@@ -1035,6 +1038,7 @@ LEAF_NOPROFILE(MIPSX(kern_tlb_miss))
 	tlbwr					# write random TLB
 	j	k1
 	 rfe
+	.set	at
 END(MIPSX(kern_tlb_miss))
 
 #if 0
@@ -1368,7 +1372,7 @@ LEAF(MIPSX(tlb_invalidate_all))
 END(MIPSX(tlb_invalidate_all))
 
 /*
- * u_int mipsN_tlb_record_asids(u_long *bitmap, uint32_t asid_mask)
+ * u_int mipsN_tlb_record_asids(u_long *bitmap, uint32_t asid_max)
  *
  * Scan the random part of the TLB looking at non-global entries and
  * record each ASID in use into the bitmap.  Additionally, return the
@@ -1402,7 +1406,8 @@ LEAF(MIPSX(tlb_record_asids))
 	nop
 	and	t0, MIPS1_TLB_PID
 	srl	t0, MIPS1_TLB_PID_SHIFT		# shift to low bits
-	and	t0, a1				# focus on asid_mask
+	bgt	t0, a1, 4f			# > ASID max? skip
+	 nop
 
 	srl	a2, t0, 3 + LONG_SCALESHIFT	# drop low 5 bits
 	sll	a2, LONG_SCALESHIFT		# make an index for the bitmap

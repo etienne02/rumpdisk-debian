@@ -1,4 +1,4 @@
-/*	$NetBSD: w83795g.c,v 1.2 2014/04/13 12:42:47 christos Exp $	*/
+/*	$NetBSD: w83795g.c,v 1.5 2021/08/07 16:19:11 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2013 Soren S. Jorvang.  All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: w83795g.c,v 1.2 2014/04/13 12:42:47 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: w83795g.c,v 1.5 2021/08/07 16:19:11 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -155,7 +155,7 @@ w83795g_match(device_t parent, cfdata_t match, void *aux)
 	if ((bank & BANKSEL_HBACS && vend == VENDOR_NUVOTON_ID_HI) ||
 	   (~bank & BANKSEL_HBACS && vend == VENDOR_NUVOTON_ID_LO))
 		if (chip == CHIP_W83795G && deva == DEVICEA_A)
-			return 1;
+			return I2C_MATCH_ADDRESS_AND_PROBE;
 
 	return 0;
 }
@@ -263,7 +263,7 @@ w83795g_attach(device_t parent, device_t self, void *aux)
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
 
-	config_found(self, &gba, gpiobus_print);
+	config_found(self, &gba, gpiobus_print, CFARGS_NONE);
 }
 
 static void

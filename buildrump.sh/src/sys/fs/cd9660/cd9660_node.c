@@ -1,4 +1,4 @@
-/*	$NetBSD: cd9660_node.c,v 1.34 2014/11/10 18:46:33 maxv Exp $	*/
+/*	$NetBSD: cd9660_node.c,v 1.38 2017/05/26 14:34:19 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1989, 1994
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cd9660_node.c,v 1.34 2014/11/10 18:46:33 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cd9660_node.c,v 1.38 2017/05/26 14:34:19 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -56,8 +56,6 @@ __KERNEL_RCSID(0, "$NetBSD: cd9660_node.c,v 1.34 2014/11/10 18:46:33 maxv Exp $"
 #include <fs/cd9660/cd9660_node.h>
 #include <fs/cd9660/cd9660_mount.h>
 #include <fs/cd9660/iso_rrip.h>
-
-extern int prtactive;	/* 1 => print out reclaim of active vnodes */
 
 struct pool cd9660_node_pool;
 
@@ -102,7 +100,7 @@ cd9660_done(void)
 int
 cd9660_inactive(void *v)
 {
-	struct vop_inactive_args /* {
+	struct vop_inactive_v2_args /* {
 		struct vnode *a_vp;
 		bool *a_recycle;
 	} */ *ap = v;
@@ -116,7 +114,6 @@ cd9660_inactive(void *v)
 	 */
 	ip->i_flag = 0;
 	*ap->a_recycle = (ip->inode.iso_mode == 0);
-	VOP_UNLOCK(vp);
 	return error;
 }
 
@@ -126,19 +123,14 @@ cd9660_inactive(void *v)
 int
 cd9660_reclaim(void *v)
 {
-	struct vop_reclaim_args /* {
+	struct vop_reclaim_v2_args /* {
 		struct vnode *a_vp;
 		struct lwp *a_l;
 	} */ *ap = v;
 	struct vnode *vp = ap->a_vp;
-	struct iso_node *ip = VTOI(vp);
 
-	if (prtactive && vp->v_usecount > 1)
-		vprint("cd9660_reclaim: pushing active", vp);
-	/*
-	 * Remove the inode from the vnode cache.
-	 */
-	vcache_remove(vp->v_mount, &ip->i_number, sizeof(ip->i_number));
+	VOP_UNLOCK(vp);
+
 	/*
 	 * Purge old data structures associated with the inode.
 	 */
