@@ -56,7 +56,7 @@ override_dh_auto_configure-arch:
 override_dh_auto_build-arch:
 	dh_testdir -a
 	mkdir -p obj
-	cd buildrump.sh/src && HOST_CC=gcc TARGET_CC=$(DEB_HOST_GNU_TYPE)-gcc TARGET_CXX=$(DEB_HOST_GNU_TYPE)-gcc TARGET_LD=$(DEB_HOST_GNU_TYPE)-ld \
+	cd buildrump.sh/src && HOST_CC=gcc TARGET_CC=$(DEB_HOST_GNU_TYPE)-gcc TARGET_CXX=$(DEB_HOST_GNU_TYPE)-gcc TARGET_LD=$(DEB_HOST_GNU_TYPE)-ld TARGET_MIG=$(DEB_HOST_GNU_TYPE)-mig \
             TARGET_LDADD="-B/usr/lib/$(DEB_HOST_MULTIARCH) -L/usr/lib/$(DEB_HOST_MULTIARCH) -L/lib/$(DEB_HOST_MULTIARCH)" \
             _GCC_CRTENDS= _GCC_CRTEND= _GCC_CRTBEGINS= _GCC_CRTBEGIN= _GCC_CRTI= _GCC_CRTN= \
             BSDOBJDIR=$(CURDIR)/obj \
@@ -69,6 +69,7 @@ override_dh_auto_build-arch:
 				-V CPPFLAGS="-I../../obj/destdir.$(DEB_HOST_ARCH_CPU)/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1" \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable -Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=array-bounds -Wno-error=stringop-overflow" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
+                -V MIG=mig \
                 -V _GCC_CRTENDS=" " -V _GCC_CRTEND=" " \
                 -V _GCC_CRTBEGINS=" " -V _GCC_CRTBEGIN=" " \
                 -V _GCC_CRTI=" " -V _GCC_CRTN=" " \
