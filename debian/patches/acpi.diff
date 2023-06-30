@@ -9,7 +9,7 @@
  RUMPCOMP_USER_CPPFLAGS+=-I${PCIDIR} -I${DESTDIR}/usr/include
  RUMPCOMP_CPPFLAGS+=	-I${PCIDIR} -I${DESTDIR}/usr/include
  CPPFLAGS+=		-I${PCIDIR}
- MIG=mig
+ LDFLAGS+= -lmachuser -Wl,--no-as-needed -lpciaccess -Wl,--as-needed
 @@ -16,3 +16,11 @@
  			-user mach_debugUser.c \
  			-server /dev/null \
