@@ -39,7 +39,7 @@ override_dh_auto_clean:
                 -V TOOLS_BUILDRUMP=yes \
                 -V MKBINUTILS=no -V MKGCC=no -V MKGDB=no -V MKGROFF=no \
                 -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
-                -U -u -T ./obj/tooldir -m $(DEB_HOST_ARCH_CPU) cleandir ) ; \
+                -U -u -T ./obj/tooldir -m $(DEB_HOST_ARCH_CPU) cleandir || true ) ; \
 	fi
 	rm -fr obj
 	-find buildrump.sh/src -type f -name .depend -or -name \*.d | xargs -L512 rm -f

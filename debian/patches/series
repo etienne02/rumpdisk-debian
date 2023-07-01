@@ -20,3 +20,4 @@ crossbuild
 clean_libpci
 random
 non-fhs-shell
+clean_external
