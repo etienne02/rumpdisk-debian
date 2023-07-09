@@ -37,7 +37,7 @@ override_dh_auto_clean:
             BSDOBJDIR=$(CURDIR)/obj \
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes \
-                -V MKBINUTILS=no -V MKGCC=no -V MKGDB=no -V MKGROFF=no \
+                -V MKBINUTILS=no -V MKGCC=no -V MKGDB=no -V MKGROFF=no -V MKDTRACE=no -V MKZFS=no \
                 -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -U -u -T ./obj/tooldir -m $(DEB_HOST_ARCH_CPU) cleandir || true ) ; \
 	fi
@@ -47,6 +47,7 @@ override_dh_auto_clean:
 	rm -f buildrump.sh/src/lib/librumpuser/config.log
 	rm -f buildrump.sh/src/lib/librumpuser/config.status
 	rm -f buildrump.sh/src/lib/librumpuser/rumpuser_config.h
+	rm -f buildrump.sh/src/mig
 
 override_dh_auto_configure-arch:
 	dh_testdir -a
@@ -62,7 +63,7 @@ override_dh_auto_build-arch:
             BSDOBJDIR=$(CURDIR)/obj \
             ./build.sh \
                 -V TOOLS_BUILDRUMP=yes \
-                -V MKBINUTILS=no -V MKGDB=no -V MKGROFF=no \
+                -V MKBINUTILS=no -V MKGDB=no -V MKGROFF=no -V MKDTRACE=no -V MKZFS=no \
                 -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \

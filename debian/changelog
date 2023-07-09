@@ -1,3 +1,10 @@
+rumpkernel (0~20211031+repack-2) UNRELEASED; urgency=medium
+
+  * rules: Fix make clean. set MKDTRACE and MKZFS to no to avoid cross-build
+    failure.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 09 Jul 2023 13:45:32 +0200
+
 rumpkernel (0~20211031+repack-1) unreleased; urgency=medium
 
   [ Janneke Nieuwenhuizen ]
