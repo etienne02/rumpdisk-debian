@@ -1,7 +1,9 @@
-rumpkernel (0~20211031+repack-2) UNRELEASED; urgency=medium
+rumpkernel (0~20211031+repack-2) unreleased; urgency=medium
 
   * rules: Fix make clean. set MKDTRACE and MKZFS to no to avoid cross-build
     failure.
+  * patches/ata-rump.diff: Fix computing the devnumber according to
+    i386/amd64.
 
  -- Samuel Thibault <sthibault@debian.org>  Sun, 09 Jul 2023 13:45:32 +0200
 
