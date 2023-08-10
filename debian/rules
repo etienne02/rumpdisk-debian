@@ -14,7 +14,7 @@ LDFLAGS ?= $(shell dpkg-buildflags --get LDFLAGS)
 CFLAGS ?= $(shell dpkg-buildflags --get CFLAGS) $(HOST_CFLAGS)
 
 # Some files use -Wno-format, which then conflicts
-CFLAGS := $(filter-out -Werror=format-security,$(CFLAGS))
+CFLAGS := $(filter-out -Werror=format-security,$(CFLAGS)) -fno-omit-frame-pointer
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
