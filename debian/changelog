@@ -1,8 +1,11 @@
-rumpkernel (0~20211031+repack-3) UNRELEASED; urgency=medium
+rumpkernel (0~20211031+repack-3) unreleased; urgency=medium
 
   * rules: Pass -fno-omit-frame-pointer to get traces from gnumach.
+  * patches/PAE: Fix rumpdisk with PAE.
+  * control: Bump gnumach-dev build-dep accordingly.
+  * rules: Define PAE.
 
- -- Samuel Thibault <sthibault@debian.org>  Thu, 10 Aug 2023 22:35:39 +0200
+ -- Samuel Thibault <sthibault@debian.org>  Mon, 28 Aug 2023 21:06:05 +0000
 
 rumpkernel (0~20211031+repack-2) unreleased; urgency=medium
 

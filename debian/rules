@@ -67,7 +67,7 @@ override_dh_auto_build-arch:
                 -V TOPRUMP="$(CURDIR)/buildrump.sh/src/sys/rump" \
                 -V BUILDRUMP_CPPFLAGS="-Wno-error=stringop-overread" \
                 -V RUMPUSER_EXTERNAL_DPLIBS=pthread \
-				-V CPPFLAGS="-I../../obj/destdir.$(DEB_HOST_ARCH_CPU)/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1" \
+				-V CPPFLAGS="-I../../obj/destdir.$(DEB_HOST_ARCH_CPU)/usr/include -D_FILE_OFFSET_BITS=64 -DRUMP_REGISTER_T=int -DRUMPUSER_CONFIG=yes -DNO_PCI_MSI_MSIX=yes -DNUSB_DMA=1 -DPAE" \
                 -V CWARNFLAGS="-Wno-error=maybe-uninitialized -Wno-error=address-of-packed-member -Wno-error=unused-variable -Wno-error=stack-protector -Wno-error=array-parameter -Wno-error=array-bounds -Wno-error=stringop-overflow" \
                 -V LIBCRTBEGIN=" " -V LIBCRTEND=" " -V LIBCRT0=" " -V LIBCRTI=" " \
                 -V MIG=mig \
