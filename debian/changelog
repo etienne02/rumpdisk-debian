@@ -1,3 +1,9 @@
+rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
+
+  * patches/PAE: Fix 64bit build of PAE support.
+
+ -- Samuel Thibault <sthibault@debian.org>  Tue, 19 Sep 2023 18:29:43 +0200
+
 rumpkernel (0~20211031+repack-3) unreleased; urgency=medium
 
   * rules: Pass -fno-omit-frame-pointer to get traces from gnumach.
