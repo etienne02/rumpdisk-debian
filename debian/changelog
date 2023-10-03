@@ -1,6 +1,8 @@
 rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
 
   * patches/PAE: Fix 64bit build of PAE support.
+  * rules: Make blhc happier by disabling format-security rather that not
+    enabling it.
 
  -- Samuel Thibault <sthibault@debian.org>  Tue, 19 Sep 2023 18:29:43 +0200
 
