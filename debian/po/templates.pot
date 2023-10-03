@@ -1,0 +1,108 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the rumpkernel package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: rumpkernel\n"
+"Report-Msgid-Bugs-To: rumpkernel@packages.debian.org\n"
+"POT-Creation-Date: 2023-10-03 10:03+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=CHARSET\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: multiselect
+#. Description
+#: ../librumpdev-audio0.templates.linux:1001
+msgid "Linux modules to blacklist:"
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../librumpdev-audio0.templates.linux:1001
+msgid ""
+"The audio hardware in your system is currently being used by the following "
+"Linux audio driver modules. If you want to use your audio hardware with Rump "
+"drivers, the corresponding Linux audio modules need to be blacklisted."
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../librumpdev-audio0.templates.linux:1001
+msgid ""
+"The modules you select here will be automatically blacklisted after next "
+"system reboot."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../librumpdev-pci0.templates.linux:1001
+msgid "Automatically configure hugepages?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../librumpdev-pci0.templates.linux:1001
+msgid ""
+"Rump drivers for PCI devices need spare hugepages in order to obtain access "
+"to DMA-safe (i.e. physically-contigous) memory. A detailed explanation is "
+"available at:"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../librumpdev-pci0.templates.linux:1001
+#, no-c-format
+msgid ""
+"  https://github.com/rumpkernel/wiki/wiki/Howto%3A-Accessing-PCI-devices-"
+"from-userspace"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../librumpdev-pci0.templates.linux:1001
+msgid ""
+"If you plan on using Rump drivers for PCI devices, you can either configure "
+"them manually or have this script automatically configure them for you."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../librumpdev-pci0.templates.linux:2001
+msgid "Number of hugepages available to userland:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../librumpdev-pci0.templates.linux:2001
+msgid ""
+"From this menu you can define the number of hugepages that you wish to make "
+"available to userland applications (a reasonable default value has been "
+"selected for you)."
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../librumpdev-pci0.templates.linux:2001
+msgid "Note: If you see errors like:"
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../librumpdev-pci0.templates.linux:2001
+msgid "  \"iwn0: could not allocate TX ring DMA memory\""
+msgstr ""
+
+#. Type: string
+#. Description
+#: ../librumpdev-pci0.templates.linux:2001
+msgid ""
+"when trying to use Rump PCI drivers, it's possible that you need to set a "
+"large value here."
+msgstr ""

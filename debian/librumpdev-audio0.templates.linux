@@ -1,7 +1,7 @@
 Template: librumpdev-audio/linux-modules
 Type: multiselect
 Choices: ${CHOICES}
-Description: Linux modules to blacklist:
+_Description: Linux modules to blacklist:
  The audio hardware in your system is currently being used by the
  following Linux audio driver modules. If you want to use your audio
  hardware with Rump drivers, the corresponding Linux audio modules

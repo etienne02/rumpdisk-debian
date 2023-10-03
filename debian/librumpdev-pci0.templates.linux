@@ -1,7 +1,7 @@
 Template: librumpdev-pci/hugepages
 Type: boolean
 Default: true
-Description: Automatically configure hugepages?
+_Description: Automatically configure hugepages?
  Rump drivers for PCI devices need spare hugepages in order to obtain
  access to DMA-safe (i.e. physically-contigous) memory. A detailed
  explanation is available at:
@@ -15,7 +15,7 @@ Description: Automatically configure hugepages?
 Template: librumpdev-pci/nr_hugepages
 Type: string
 Default: 64
-Description: Number of hugepages available to userland:
+_Description: Number of hugepages available to userland:
  From this menu you can define the number of hugepages that you wish
  to make available to userland applications (a reasonable default value
  has been selected for you).

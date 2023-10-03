@@ -2,7 +2,7 @@ Source: rumpkernel
 Priority: extra
 Maintainer: Robert Millan <rmh@debian.org>
 Build-Depends:
- debhelper (>= 8.0.0),
+ debhelper (>= 8.0.0), po-debconf,
  autotools-dev,
  zlib1g-dev,
  libc0.3 (>= 2.31-2) [hurd-any],
