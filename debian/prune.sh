@@ -27,3 +27,5 @@ cp -a sys/external/bsd sys/external/isc sys/external-safe
 rm -rf sys/external # 29M
 mv sys/external-safe sys/external
 
+# To avoid source-contains-prebuilt-ms-help-file
+rm -f buildrump.sh/src/common/dist/zlib/contrib/dotzlib/DotZLib.chm
