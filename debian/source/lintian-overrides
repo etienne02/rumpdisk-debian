@@ -1,0 +1,4 @@
+# Yes, they have long lines
+source-is-missing [buildrump.sh/src/usr.sbin/syslogd/howto.html]
+source-is-missing [buildrump.sh/src/usr.sbin/syslogd/index.html]
+source-is-missing [buildrump.sh/src/usr.sbin/syslogd/sign.html]
