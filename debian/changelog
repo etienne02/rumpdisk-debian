@@ -6,6 +6,8 @@ rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
   * source/lintian-overrides: Ignore spurious warning.
   * Add po-debconf infrastructure.
   * prune.sh: Avoid source-contains-prebuilt-ms-help-file warning.
+  * patches/vm_allocate_contiguous_align: Work-around allocating with
+    alignment larger than a page.
 
  -- Samuel Thibault <sthibault@debian.org>  Tue, 19 Sep 2023 18:29:43 +0200
 

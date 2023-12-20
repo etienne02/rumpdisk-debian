@@ -22,3 +22,4 @@ random
 non-fhs-shell
 clean_external
 PAE
+vm_allocate_contiguous_align
