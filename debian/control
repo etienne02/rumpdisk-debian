@@ -1,5 +1,5 @@
 Source: rumpkernel
-Priority: extra
+Priority: optional
 Maintainer: Robert Millan <rmh@debian.org>
 Build-Depends:
  debhelper (>= 8.0.0), po-debconf,

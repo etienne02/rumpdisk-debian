@@ -8,6 +8,7 @@ rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
   * prune.sh: Avoid source-contains-prebuilt-ms-help-file warning.
   * patches/vm_allocate_contiguous_align: Work-around allocating with
     alignment larger than a page.
+  * control: Replace extra priority with optional.
 
  -- Samuel Thibault <sthibault@debian.org>  Tue, 19 Sep 2023 18:29:43 +0200
 
