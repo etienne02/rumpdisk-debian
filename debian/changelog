@@ -1,4 +1,4 @@
-rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
+rumpkernel (0~20211031+repack-4) unreleased; urgency=medium
 
   * patches/PAE: Fix 64bit build of PAE support.
   * rules: Make blhc happier by disabling format-security rather that not
@@ -9,8 +9,9 @@ rumpkernel (0~20211031+repack-4) UNRELEASED; urgency=medium
   * patches/vm_allocate_contiguous_align: Work-around allocating with
     alignment larger than a page.
   * control: Replace extra priority with optional.
+  * patches/err: Better error reporting.
 
- -- Samuel Thibault <sthibault@debian.org>  Tue, 19 Sep 2023 18:29:43 +0200
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 21 Jan 2024 16:54:04 +0000
 
 rumpkernel (0~20211031+repack-3) unreleased; urgency=medium
 
