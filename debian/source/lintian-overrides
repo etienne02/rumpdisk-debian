@@ -2,3 +2,5 @@
 source-is-missing [buildrump.sh/src/usr.sbin/syslogd/howto.html]
 source-is-missing [buildrump.sh/src/usr.sbin/syslogd/index.html]
 source-is-missing [buildrump.sh/src/usr.sbin/syslogd/sign.html]
+# It is meant for unreleased indeed
+bad-distribution-in-changes-file unreleased
