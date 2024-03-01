@@ -7,7 +7,7 @@ Build-Depends:
  zlib1g-dev,
  libc0.3 (>= 2.31-2) [hurd-any],
  libpciaccess-dev (>= 0.16-1+hurd.4~) [hurd-any],
- gnumach-dev (>= 2:1.8+git20230526-4~) [hurd-any],
+ gnumach-dev (>= 2:1.8+git20240130~) [hurd-any],
  mig [hurd-any],
 Standards-Version: 3.9.6
 Section: libs

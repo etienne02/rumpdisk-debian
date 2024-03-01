@@ -10,6 +10,9 @@ rumpkernel (0~20211031+repack-4) unreleased; urgency=medium
     alignment larger than a page.
   * control: Replace extra priority with optional.
   * patches/err: Better error reporting.
+  * patches/vm_pages_phys.diff: Use vm_pages_phys to efficiently get physical
+    addresses.
+  * control: Bump gnumach build-dep accordingly.
 
  -- Samuel Thibault <sthibault@debian.org>  Sun, 21 Jan 2024 16:54:04 +0000
 
