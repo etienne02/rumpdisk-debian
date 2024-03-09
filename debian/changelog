@@ -1,3 +1,9 @@
+rumpkernel (0~20211031+repack-5) UNRELEASED; urgency=medium
+
+  * patches/vm_pages_phys.diff: Fix cross-building with mig.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sat, 09 Mar 2024 19:59:48 +0100
+
 rumpkernel (0~20211031+repack-4) unreleased; urgency=medium
 
   * patches/PAE: Fix 64bit build of PAE support.

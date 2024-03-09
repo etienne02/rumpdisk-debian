@@ -17,7 +17,7 @@ Index: rumpkernel/pci-userspace/src-gnu/Makefile.inc
 +gnumachUser.c:
 +	echo '#include <mach/gnumach.defs>' \
 +		| ${CC} -E -x c - -o - \
-+		| mig -cc cat - /dev/null -subrprefix __ \
++		| $(MIG) -cc cat - /dev/null -subrprefix __ \
 +			-user gnumachUser.c \
 +			-server /dev/null \
 +			-header gnumach_U.h
