@@ -1,0 +1,12 @@
+Index: rumpkernel/buildrump.sh/src/sys/rump/librump/rumpnet/net_stub.c
+===================================================================
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/librump/rumpnet/net_stub.c
++++ rumpkernel/buildrump.sh/src/sys/rump/librump/rumpnet/net_stub.c
+@@ -120,7 +120,3 @@ __weak_alias(in6mask0,rumpnet_stub);
+ __weak_alias(altq_detach,rumpnet_stub);
+ __weak_alias(altq_disable,rumpnet_stub);
+ __weak_alias(tbr_dequeue,rumpnet_stub);
+-
+-struct ifnet_head ifnet_list;
+-struct pslist_head ifnet_pslist;
+-kmutex_t ifnet_mtx;

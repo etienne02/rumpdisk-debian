@@ -1,5 +1,10 @@
 rumpkernel (0~20211031+repack-5) UNRELEASED; urgency=medium
 
+  [ Etienne Brateau ]
+  * patches/rumpnet_remove_struct_declaration_duplication.diff: remove symbol
+    duplication with rumpnet.
+
+  [ Samuel Thibault ]
   * patches/vm_pages_phys.diff: Fix cross-building with mig.
 
  -- Samuel Thibault <sthibault@debian.org>  Sat, 09 Mar 2024 19:59:48 +0100

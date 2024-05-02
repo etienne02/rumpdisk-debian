@@ -25,3 +25,4 @@ PAE
 vm_allocate_contiguous_align
 err
 vm_pages_phys.diff
+rumpnet_remove_struct_declaration_duplication.diff
