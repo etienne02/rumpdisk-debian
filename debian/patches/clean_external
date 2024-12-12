@@ -1,13 +1,11 @@
 We have dropped various source that is useless to use, so ignore cleaning them.
 
-Index: rumpkernel/buildrump.sh/src/build.sh
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/build.sh
-+++ rumpkernel/buildrump.sh/src/build.sh
-@@ -2533,7 +2533,7 @@ main()
+--- a/buildrump.sh/src/build.sh
++++ b/buildrump.sh/src/build.sh
+@@ -2767,7 +2767,7 @@
  			;;
  
- 		cleandir|obj|sourcesets|syspkgs|params)
+ 		cleandir|obj|sourcesets|syspkgs|params|show-params)
 -			${runcmd} "${makewrapper}" ${parallel} ${op} ||
 +			${runcmd} "${makewrapper}" -k ${parallel} ${op} ||
  			    bomb "Failed to make ${op}"

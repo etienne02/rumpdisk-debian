@@ -1,8 +1,6 @@
-Index: rumpkernel/buildrump.sh/src/sys/rump/include/sys/bus.h
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/sys/rump/include/sys/bus.h
-+++ rumpkernel/buildrump.sh/src/sys/rump/include/sys/bus.h
-@@ -68,4 +68,12 @@ typedef struct {
+--- a/buildrump.sh/src/sys/rump/include/sys/bus.h
++++ b/buildrump.sh/src/sys/rump/include/sys/bus.h
+@@ -68,4 +68,12 @@
  
  #include <sys/bus_proto.h>
  
@@ -15,11 +13,9 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/include/sys/bus.h
 +#define BUS_ADDR_LO32(a)        ((uint32_t) __SHIFTOUT(a, __BITS(0,31)))
 +
  #endif /* _SYS_RUMP_BUS_H_ */
-Index: rumpkernel/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-+++ rumpkernel/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
-@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: ahcisata_cor
+--- a/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
++++ b/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
+@@ -36,6 +36,7 @@
  #include <sys/disklabel.h>
  #include <sys/proc.h>
  #include <sys/buf.h>
@@ -27,11 +23,9 @@ Index: rumpkernel/buildrump.sh/src/sys/dev/ic/ahcisata_core.c
  
  #include <dev/ata/atareg.h>
  #include <dev/ata/satavar.h>
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-===================================================================
---- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
-@@ -8,6 +8,7 @@ RUMPDEVCOMP=	audio bpf cgd disk dm drvct
+--- a/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
++++ b/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
+@@ -8,6 +8,7 @@
  RUMPUSBDEVS=	ualea ubt ucom ugenhc ulpt umass usb
  
  RUMPPCIDEVS=	pci pci_if_iwn pci_if_pcn pci_if_wm
@@ -39,10 +33,8 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/Makefile.rumpdevcomp
  RUMPPCIDEVS+=	pci_piixide
  RUMPPCIDEVS+=	pci_usbhc
  RUMPPCIDEVS+=	pci_virtio virtio_if_vioif virtio_ld virtio_viornd
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
-===================================================================
 --- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioconf
 @@ -0,0 +1,11 @@
 +ioconf ahcisata
 +
@@ -55,10 +47,8 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/AHCISATA.ioc
 +
 +# AHCI support
 +ahcisata*	at pci? dev ? function ? flags 0x0000
-Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
-===================================================================
 --- /dev/null
-+++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
 @@ -0,0 +1,20 @@
 +RUMPTOP=${TOPRUMP}
 +
@@ -80,3 +70,9 @@ Index: rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/Makefile
 +.include "${RUMPTOP}/Makefile.rump"
 +.include <bsd.lib.mk>
 +.include <bsd.klinks.mk>
+--- /dev/null
++++ b/buildrump.sh/src/sys/rump/dev/lib/libpci_ahcisata/opt_ahcisata.h
+@@ -0,0 +1,3 @@
++#define AHCISATA_REMOVE_EXTRA_DELAY 1
++#define AHCISATA_EXTRA_DELAY_MS 500
++

@@ -1,8 +1,6 @@
-diff --git a/buildrump.sh/src/build.sh b/buildrump.sh/src/build.sh
-index fb13abdcc..8f81fb568 100755
 --- a/buildrump.sh/src/build.sh
 +++ b/buildrump.sh/src/build.sh
-@@ -2195,6 +2195,121 @@ installworld()
+@@ -2397,6 +2397,121 @@
  	statusmsg "Successful installworld to ${dir}"
  }
  
@@ -124,7 +122,7 @@ index fb13abdcc..8f81fb568 100755
  # Run rump build&link tests.
  #
  # To make this feasible for running without having to install includes and
-@@ -2260,14 +2375,14 @@ dorump()
+@@ -2475,14 +2590,14 @@
  	# one little, two little, three little backslashes ...
  	md_quirks="$(echo ${md_quirks} | sed 's,\\,\\\\,g'";s/'//g" )"
  	${runcmd} cd "${TOP}" || bomb "cd to ${TOP} failed"
@@ -136,13 +134,13 @@ index fb13abdcc..8f81fb568 100755
  	for set in ${RUMP_LIBSETS} ; do
  		IFS="${oIFS}"
 -		${runcmd} ${tool_ld} -nostdlib -L${DESTDIR}/usr/lib	\
--		    -static --whole-archive -lpthread -lc ${set} 2>&1 -o /tmp/rumptest.$$ | \
+-		    -static --whole-archive ${set} --no-whole-archive -lpthread -lc 2>&1 -o /tmp/rumptest.$$ | \
 +		${runcmd} ${tool_cc} -nostdlib -L${DESTDIR}/usr/lib 	\
 +		    -static --whole-archive -lpthread -lc -lgcc ${set} 2>&1 -o /tmp/rumptest.$$ | \
  		      awk -v quirks="${md_quirks}" '
  			/undefined reference/ &&
  			    !/more undefined references.*follow/{
-@@ -2485,16 +2600,26 @@ main()
+@@ -2727,16 +2842,26 @@
  			;;
  
  		rump)
@@ -175,11 +173,9 @@ index fb13abdcc..8f81fb568 100755
  			dorump "${op}"
  			;;
  
-diff --git a/buildrump.sh/src/tools/Makefile b/buildrump.sh/src/tools/Makefile
-index 177cd1846..1ab0135b5 100644
 --- a/buildrump.sh/src/tools/Makefile
 +++ b/buildrump.sh/src/tools/Makefile
-@@ -100,10 +100,10 @@ SUBDIR=	host-mkdep compat binstall date \
+@@ -102,10 +102,10 @@
  .if ${TOOLS_BUILDRUMP} == "no"
  SUBDIR+= cap_mkdb crunchgen ctags gencat hexdump \
  		${LINT_BITS} \
@@ -187,7 +183,7 @@ index 177cd1846..1ab0135b5 100644
 +		makewhatis nbperf .WAIT uudecode
  .endif
  
--SUBDIR+= cat rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
+-SUBDIR+= cat gzip rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
 +SUBDIR+= mtree cat rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
  .if ${TOOLS_BUILDRUMP} == "no"
  SUBDIR+= xz-include .WAIT grep xz-lib pax .WAIT libprop
